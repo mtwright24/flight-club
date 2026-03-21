@@ -1,0 +1,224 @@
+app/(screens)/nonrev.tsx(8,10): error TS2724: '"../../src/lib/supabase/loads"' has no exported member named 'createRequest'. Did you mean 'createLoadRequest'?
+app/(screens)/nonrev.tsx(65,29): error TS2339: Property 'card' does not exist on type '{ container: { flex: number; backgroundColor: string; }; header: { flexDirection: "row"; justifyContent: "space-between"; alignItems: "center"; paddingHorizontal: number; paddingTop: number; paddingBottom: number; backgroundColor: string; }; ... 32 more ...; dateQuickChipText: { ...; }; }'.
+app/(screens)/nonrev.tsx(66,31): error TS2339: Property 'cardTitle' does not exist on type '{ container: { flex: number; backgroundColor: string; }; header: { flexDirection: "row"; justifyContent: "space-between"; alignItems: "center"; paddingHorizontal: number; paddingTop: number; paddingBottom: number; backgroundColor: string; }; ... 32 more ...; dateQuickChipText: { ...; }; }'.
+app/(screens)/nonrev.tsx(68,31): error TS2551: Property 'sectionRow' does not exist on type '{ container: { flex: number; backgroundColor: string; }; header: { flexDirection: "row"; justifyContent: "space-between"; alignItems: "center"; paddingHorizontal: number; paddingTop: number; paddingBottom: number; backgroundColor: string; }; ... 32 more ...; dateQuickChipText: { ...; }; }'. Did you mean 'section'?
+app/(screens)/nonrev.tsx(76,31): error TS2551: Property 'sectionRow' does not exist on type '{ container: { flex: number; backgroundColor: string; }; header: { flexDirection: "row"; justifyContent: "space-between"; alignItems: "center"; paddingHorizontal: number; paddingTop: number; paddingBottom: number; backgroundColor: string; }; ... 32 more ...; dateQuickChipText: { ...; }; }'. Did you mean 'section'?
+app/(screens)/nonrev.tsx(90,31): error TS2551: Property 'sectionRow' does not exist on type '{ container: { flex: number; backgroundColor: string; }; header: { flexDirection: "row"; justifyContent: "space-between"; alignItems: "center"; paddingHorizontal: number; paddingTop: number; paddingBottom: number; backgroundColor: string; }; ... 32 more ...; dateQuickChipText: { ...; }; }'. Did you mean 'section'?
+app/(tabs)/index.tsx(52,34): error TS2345: Argument of type 'UserProfile | null' is not assignable to parameter of type 'SetStateAction<null>'.
+  Type 'UserProfile' is not assignable to type 'SetStateAction<null>'.
+    Type 'UserProfile' provides no match for the signature '(prevState: null): null'.
+app/(tabs)/index.tsx(80,30): error TS2339: Property 'first_name' does not exist on type 'never'.
+app/(tabs)/index.tsx(81,30): error TS2339: Property 'full_name' does not exist on type 'never'.
+app/(tabs)/index.tsx(86,63): error TS2339: Property 'base' does not exist on type 'never'.
+app/(tabs)/index.tsx(86,94): error TS2339: Property 'fleet' does not exist on type 'never'.
+app/(tabs)/profile.tsx(40,9): error TS2353: Object literal may only specify known properties, and 'name' does not exist in type '(prevState: null) => null'.
+app/(tabs)/profile.tsx(89,16): error TS2345: Argument of type 'any[]' is not assignable to parameter of type 'SetStateAction<never[]>'.
+  Type 'any[]' is not assignable to type 'never[]'.
+    Type 'any' is not assignable to type 'never'.
+app/(tabs)/profile.tsx(95,16): error TS2345: Argument of type 'string[]' is not assignable to parameter of type 'SetStateAction<never[]>'.
+  Type 'string[]' is not assignable to type 'never[]'.
+    Type 'string' is not assignable to type 'never'.
+app/(tabs)/profile.tsx(176,65): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.
+    Argument of type 'Element' is not assignable to parameter of type 'ConcatArray<never>'.
+      Type 'ReactElement<any, any>' is missing the following properties from type 'ConcatArray<never>': length, join, slice
+  Overload 2 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.
+    Argument of type 'Element' is not assignable to parameter of type 'ConcatArray<never>'.
+      Type 'ReactElement<any, any>' is missing the following properties from type 'ConcatArray<never>': length, join, slice
+app/(tabs)/profile.tsx(218,59): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.
+    Argument of type 'Element' is not assignable to parameter of type 'ConcatArray<never>'.
+      Type 'ReactElement<any, any>' is missing the following properties from type 'ConcatArray<never>': length, join, slice
+  Overload 2 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.
+    Argument of type 'Element' is not assignable to parameter of type 'ConcatArray<never>'.
+      Type 'ReactElement<any, any>' is missing the following properties from type 'ConcatArray<never>': length, join, slice
+app/(tabs)/profile.tsx(238,31): error TS2339: Property 'bio' does not exist on type 'never'.
+app/(tabs)/profile.tsx(238,42): error TS2339: Property 'bio' does not exist on type 'never'.
+app/_layout.tsx(54,20): error TS2345: Argument of type 'Session | null' is not assignable to parameter of type 'SetStateAction<null>'.
+  Type 'Session' is not assignable to type 'SetStateAction<null>'.
+    Type 'Session' provides no match for the signature '(prevState: null): null'.
+app/_layout.tsx(66,18): error TS2345: Argument of type 'Session | null' is not assignable to parameter of type 'SetStateAction<null>'.
+  Type 'Session' is not assignable to type 'SetStateAction<null>'.
+    Type 'Session' provides no match for the signature '(prevState: null): null'.
+app/_layout.tsx(89,30): error TS2339: Property 'user' does not exist on type 'never'.
+app/_layout.tsx(94,27): error TS2339: Property 'user' does not exist on type 'never'.
+app/_layout.tsx(95,30): error TS2339: Property 'user' does not exist on type 'never'.
+app/_layout.tsx(117,34): error TS2339: Property 'user' does not exist on type 'never'.
+app/_layout.tsx(121,32): error TS2339: Property 'user' does not exist on type 'never'.
+app/_layout.tsx(155,15): error TS2353: Object literal may only specify known properties, and 'animationEnabled' does not exist in type 'ExtendedStackNavigationOptions | ((prop: { route: RouteProp<ParamListBase, string>; navigation: any; }) => ExtendedStackNavigationOptions)'.
+app/_layout.tsx(163,15): error TS2353: Object literal may only specify known properties, and 'animationEnabled' does not exist in type 'ExtendedStackNavigationOptions | ((prop: { route: RouteProp<ParamListBase, string>; navigation: any; }) => ExtendedStackNavigationOptions)'.
+app/_layout.tsx(171,15): error TS2353: Object literal may only specify known properties, and 'animationEnabled' does not exist in type 'ExtendedStackNavigationOptions | ((prop: { route: RouteProp<ParamListBase, string>; navigation: any; }) => ExtendedStackNavigationOptions)'.
+app/_layout.tsx(179,15): error TS2353: Object literal may only specify known properties, and 'animationEnabled' does not exist in type 'ExtendedStackNavigationOptions | ((prop: { route: RouteProp<ParamListBase, string>; navigation: any; }) => ExtendedStackNavigationOptions)'.
+app/complete-setup/index.tsx(65,15): error TS2345: Argument of type 'string[]' is not assignable to parameter of type 'SetStateAction<never[]>'.
+  Type 'string[]' is not assignable to type 'never[]'.
+    Type 'string' is not assignable to type 'never'.
+app/complete-setup/index.tsx(208,15): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ years_of_service: string; fleet: string; commuter_status: string; languages: string; hometown: string; interests: string; recommendations: string; personalization: string; state: string; }'.
+  No index signature with a parameter of type 'string' was found on type '{ years_of_service: string; fleet: string; commuter_status: string; languages: string; hometown: string; interests: string; recommendations: string; personalization: string; state: string; }'.
+app/create-post.tsx(21,34): error TS2339: Property 'MediaType' does not exist on type 'typeof import("/Users/marcuswright/Desktop/projects/flight-club/node_modules/expo-image-picker/build/ImagePicker")'.
+app/create-post.tsx(22,71): error TS2339: Property 'MediaType' does not exist on type 'typeof import("/Users/marcuswright/Desktop/projects/flight-club/node_modules/expo-image-picker/build/ImagePicker")'.
+app/create-room.tsx(148,45): error TS2322: Type '{ title: string; showBell: boolean; }' is not assignable to type 'IntrinsicAttributes & Props'.
+  Property 'showBell' does not exist on type 'IntrinsicAttributes & Props'.
+app/dm-thread.tsx(112,67): error TS2339: Property 'mediaImage' does not exist on type '{ bubbleRow: { flexDirection: "row"; alignItems: "flex-end"; marginBottom: number; }; bubbleRowMe: { justifyContent: "flex-end"; }; bubbleRowOther: { justifyContent: "flex-start"; }; bubble: { ...; }; ... 6 more ...; iconCircle: { ...; }; }'.
+app/dm-thread.tsx(115,33): error TS2339: Property 'mediaPlaceholder' does not exist on type '{ bubbleRow: { flexDirection: "row"; alignItems: "flex-end"; marginBottom: number; }; bubbleRowMe: { justifyContent: "flex-end"; }; bubbleRowOther: { justifyContent: "flex-start"; }; bubble: { ...; }; ... 6 more ...; iconCircle: { ...; }; }'.
+app/dm-thread.tsx(119,29): error TS2339: Property 'postShareCard' does not exist on type '{ bubbleRow: { flexDirection: "row"; alignItems: "flex-end"; marginBottom: number; }; bubbleRowMe: { justifyContent: "flex-end"; }; bubbleRowOther: { justifyContent: "flex-start"; }; bubble: { ...; }; ... 6 more ...; iconCircle: { ...; }; }'.
+app/dm-thread.tsx(126,35): error TS2339: Property 'postShareLabel' does not exist on type '{ bubbleRow: { flexDirection: "row"; alignItems: "flex-end"; marginBottom: number; }; bubbleRowMe: { justifyContent: "flex-end"; }; bubbleRowOther: { justifyContent: "flex-start"; }; bubble: { ...; }; ... 6 more ...; iconCircle: { ...; }; }'.
+app/dm-thread.tsx(127,35): error TS2339: Property 'postShareText' does not exist on type '{ bubbleRow: { flexDirection: "row"; alignItems: "flex-end"; marginBottom: number; }; bubbleRowMe: { justifyContent: "flex-end"; }; bubbleRowOther: { justifyContent: "flex-start"; }; bubble: { ...; }; ... 6 more ...; iconCircle: { ...; }; }'.
+app/edit-profile.tsx(56,44): error TS2339: Property 'username' does not exist on type 'never'.
+app/edit-profile.tsx(74,23): error TS2345: Argument of type 'ImagePickerAsset' is not assignable to parameter of type 'SetStateAction<null>'.
+  Type 'ImagePickerAsset' provides no match for the signature '(prevState: null): null'.
+app/edit-profile.tsx(77,22): error TS2345: Argument of type 'ImagePickerAsset' is not assignable to parameter of type 'SetStateAction<null>'.
+  Type 'ImagePickerAsset' provides no match for the signature '(prevState: null): null'.
+app/edit-profile.tsx(91,53): error TS2339: Property 'uri' does not exist on type 'never'.
+app/edit-profile.tsx(102,50): error TS2339: Property 'uri' does not exist on type 'never'.
+app/edit-profile.tsx(139,31): error TS2339: Property 'full_name' does not exist on type 'never'.
+app/edit-profile.tsx(140,28): error TS2339: Property 'username' does not exist on type 'never'.
+app/edit-profile.tsx(141,23): error TS2339: Property 'bio' does not exist on type 'never'.
+app/edit-profile.tsx(142,24): error TS2339: Property 'role' does not exist on type 'never'.
+app/edit-profile.tsx(143,27): error TS2339: Property 'airline' does not exist on type 'never'.
+app/edit-profile.tsx(144,24): error TS2339: Property 'base' does not exist on type 'never'.
+app/edit-profile.tsx(145,25): error TS2339: Property 'fleet' does not exist on type 'never'.
+app/edit-profile.tsx(199,142): error TS2339: Property 'username' does not exist on type 'never'.
+app/home.tsx(123,30): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
+app/home.tsx(124,22): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
+app/home.tsx(128,23): error TS2345: Argument of type 'NotificationPreview[]' is not assignable to parameter of type 'SetStateAction<NotificationItem[]>'.
+  Type 'NotificationPreview[]' is not assignable to type 'NotificationItem[]'.
+    Type 'NotificationPreview' is not assignable to type 'NotificationItem'.
+      Types of property 'actor_id' are incompatible.
+        Type 'string | null' is not assignable to type 'string'.
+          Type 'null' is not assignable to type 'string'.
+app/home.tsx(143,55): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
+app/home.tsx(144,19): error TS2345: Argument of type '(prev: NotificationItem[]) => (NotificationPreview | NotificationItem)[]' is not assignable to parameter of type 'SetStateAction<NotificationItem[]>'.
+  Type '(prev: NotificationItem[]) => (NotificationPreview | NotificationItem)[]' is not assignable to type '(prevState: NotificationItem[]) => NotificationItem[]'.
+    Type '(NotificationPreview | NotificationItem)[]' is not assignable to type 'NotificationItem[]'.
+      Type 'NotificationPreview | NotificationItem' is not assignable to type 'NotificationItem'.
+        Type 'NotificationPreview' is not assignable to type 'NotificationItem'.
+          Types of property 'actor_id' are incompatible.
+            Type 'string | null' is not assignable to type 'string'.
+              Type 'null' is not assignable to type 'string'.
+app/home.tsx(199,19): error TS2345: Argument of type 'NotificationPreview[]' is not assignable to parameter of type 'SetStateAction<NotificationItem[]>'.
+  Type 'NotificationPreview[]' is not assignable to type 'NotificationItem[]'.
+    Type 'NotificationPreview' is not assignable to type 'NotificationItem'.
+      Types of property 'actor_id' are incompatible.
+        Type 'string | null' is not assignable to type 'string'.
+          Type 'null' is not assignable to type 'string'.
+app/home.tsx(282,40): error TS7031: Binding element 'item' implicitly has an 'any' type.
+app/home.tsx(308,44): error TS2345: Argument of type 'string' is not assignable to parameter of type '"/" | "/crew-exchange" | "/crew-rest-calculator" | "/non-rev-loads" | "/crashpads" | "/utility" | "/crew-rooms" | "/notifications" | "/messages-inbox" | RelativePathString | ... 393 more ... | { ...; }'.
+app/home.tsx(328,56): error TS2345: Argument of type 'NotificationItem' is not assignable to parameter of type 'Notification'.
+  Property 'user_id' is missing in type 'NotificationItem' but required in type 'Notification'.
+app/home.tsx(329,40): error TS2345: Argument of type 'string' is not assignable to parameter of type '"/" | "/crew-exchange" | "/crew-rest-calculator" | "/non-rev-loads" | "/crashpads" | "/utility" | "/crew-rooms" | "/notifications" | "/messages-inbox" | RelativePathString | ... 393 more ... | { ...; }'.
+app/loads/search.tsx(56,47): error TS2353: Object literal may only specify known properties, and 'color' does not exist in type 'ViewStyle | RecursiveArray<ViewStyle | Falsy | RegisteredStyle<ViewStyle>>'.
+app/loads/search.tsx(135,8): error TS2613: Module '"/Users/marcuswright/Desktop/projects/flight-club/src/components/loads/FlightCard"' has no default export. Did you mean to use 'import { FlightCard } from "/Users/marcuswright/Desktop/projects/flight-club/src/components/loads/FlightCard"' instead?
+app/loads/search.tsx(201,9): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'void' is not assignable to type 'ReactNode'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'void' is not assignable to type 'ReactNode'.
+app/loads/wallet.tsx(44,31): error TS2345: Argument of type 'string | PostgrestError' is not assignable to parameter of type 'SetStateAction<string>'.
+  Type 'PostgrestError' is not assignable to type 'SetStateAction<string>'.
+app/notifications.tsx(178,18): error TS2339: Property 'data' does not exist on type '{ title: string; }'.
+app/profile/[id].tsx(54,11): error TS2353: Object literal may only specify known properties, and 'name' does not exist in type '(prevState: null) => null'.
+app/profile/[id].tsx(101,18): error TS2345: Argument of type 'any[]' is not assignable to parameter of type 'SetStateAction<never[]>'.
+  Type 'any[]' is not assignable to type 'never[]'.
+    Type 'any' is not assignable to type 'never'.
+app/profile/[id].tsx(106,48): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+app/profile/[id].tsx(107,18): error TS2345: Argument of type 'string[]' is not assignable to parameter of type 'SetStateAction<never[]>'.
+  Type 'string[]' is not assignable to type 'never[]'.
+    Type 'string' is not assignable to type 'never'.
+app/profile/[id].tsx(111,49): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+app/profile/[id].tsx(150,16): error TS2345: Argument of type 'any[]' is not assignable to parameter of type 'SetStateAction<never[]>'.
+  Type 'any[]' is not assignable to type 'never[]'.
+    Type 'any' is not assignable to type 'never'.
+app/profile/[id].tsx(194,106): error TS2304: Cannot find name 'me'.
+app/profile/[id].tsx(204,64): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+app/profile/[id].tsx(212,66): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+app/profile/[id].tsx(230,64): error TS2531: Object is possibly 'null'.
+app/profile/[id].tsx(238,66): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+app/profile/[id].tsx(243,46): error TS18046: 'err' is of type 'unknown'.
+app/profile/[id].tsx(269,65): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.
+    Argument of type 'Element' is not assignable to parameter of type 'ConcatArray<never>'.
+      Type 'ReactElement<any, any>' is missing the following properties from type 'ConcatArray<never>': length, join, slice
+  Overload 2 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.
+    Argument of type 'Element' is not assignable to parameter of type 'ConcatArray<never>'.
+      Type 'ReactElement<any, any>' is missing the following properties from type 'ConcatArray<never>': length, join, slice
+app/profile/[id].tsx(292,38): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+app/profile/[id].tsx(294,40): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+app/profile/[id].tsx(310,59): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+app/profile/[id].tsx(344,59): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.
+    Argument of type 'Element' is not assignable to parameter of type 'ConcatArray<never>'.
+      Type 'ReactElement<any, any>' is missing the following properties from type 'ConcatArray<never>': length, join, slice
+  Overload 2 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.
+    Argument of type 'Element' is not assignable to parameter of type 'ConcatArray<never>'.
+      Type 'ReactElement<any, any>' is missing the following properties from type 'ConcatArray<never>': length, join, slice
+app/profile/[id].tsx(362,31): error TS2339: Property 'bio' does not exist on type 'never'.
+app/profile/[id].tsx(362,42): error TS2339: Property 'bio' does not exist on type 'never'.
+app/search.tsx(92,3): error TS1117: An object literal cannot have multiple properties with the same name.
+app/search.tsx(159,27): error TS2552: Cannot find name 'RNTextInput'. Did you mean 'TextInput'?
+app/search.tsx(446,11): error TS2322: Type 'string | null' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+app/search.tsx(480,6): error TS2304: Cannot find name 'SearchResultRow'.
+app/search.tsx(643,21): error TS2322: Type 'string | null | undefined' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+components/CreatePostSheet.tsx(23,35): error TS2339: Property 'MediaType' does not exist on type 'typeof import("/Users/marcuswright/Desktop/projects/flight-club/node_modules/expo-image-picker/build/ImagePicker")'.
+components/CreatePostSheet.tsx(24,72): error TS2339: Property 'MediaType' does not exist on type 'typeof import("/Users/marcuswright/Desktop/projects/flight-club/node_modules/expo-image-picker/build/ImagePicker")'.
+src/components/loads/FlightCard.tsx(62,13): error TS2322: Type '{ bg: string; text: string; }' is not assignable to type 'string'.
+src/components/loads/FlightCard.tsx(62,17): error TS2448: Block-scoped variable 'colors' used before its declaration.
+src/components/loads/FlightCard.tsx(62,17): error TS2454: Variable 'colors' is used before being assigned.
+src/components/loads/FlightCard.tsx(91,28): error TS2304: Cannot find name 'pillColors'.
+src/components/posts/PostsFeed.tsx(497,9): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: FlatListProps<RoomPost>): FlatList<RoomPost>', gave the following error.
+    Type 'ReactNode' is not assignable to type 'ComponentType<any> | ReactElement<unknown, string | JSXElementConstructor<any>> | null | undefined'.
+      Type 'string' is not assignable to type 'ComponentType<any> | ReactElement<unknown, string | JSXElementConstructor<any>> | null | undefined'.
+  Overload 2 of 2, '(props: FlatListProps<RoomPost>, context: any): FlatList<RoomPost>', gave the following error.
+    Type 'ReactNode' is not assignable to type 'ComponentType<any> | ReactElement<unknown, string | JSXElementConstructor<any>> | null | undefined'.
+      Type 'string' is not assignable to type 'ComponentType<any> | ReactElement<unknown, string | JSXElementConstructor<any>> | null | undefined'.
+src/components/posts/PostsFeed.tsx(526,10): error TS2741: Property 'postId' is missing in type '{ visible: boolean; postContent: string; onClose: () => void; }' but required in type 'ShareModalProps'.
+src/components/posts/ReactionTray.tsx(14,3): error TS2740: Type '{}' is missing the following properties from type 'Record<ReactionType, number>': solid, love, dead, yikes, and 5 more.
+src/context/ThemeContext.tsx(24,53): error TS2345: Argument of type '({ colorScheme }: { colorScheme: string; }) => void' is not assignable to parameter of type 'AppearanceListener'.
+  Types of parameters '__0' and 'preferences' are incompatible.
+    Type 'AppearancePreferences' is not assignable to type '{ colorScheme: string; }'.
+      Types of property 'colorScheme' are incompatible.
+        Type 'string | null | undefined' is not assignable to type 'string'.
+          Type 'undefined' is not assignable to type 'string'.
+src/context/ThemeContext.tsx(25,18): error TS2345: Argument of type 'string' is not assignable to parameter of type 'SetStateAction<"light" | "dark">'.
+src/context/ThemeContext.tsx(30,16): error TS2345: Argument of type 'string' is not assignable to parameter of type 'SetStateAction<"light" | "dark">'.
+src/context/ThemeContext.tsx(35,44): error TS2322: Type 'string' is not assignable to type 'ThemeMode'.
+src/hooks/useCrewRooms.ts(84,22): error TS2345: Argument of type 'boolean | null' is not assignable to parameter of type 'SetStateAction<boolean>'.
+  Type 'null' is not assignable to type 'SetStateAction<boolean>'.
+src/lib/supabase/rooms.ts(533,31): error TS2367: This comparison appears to be unintentional because the types '"fleet" | "swap" | "crashpad" | "airline" | "layover" | "general" | "commuters" | "private"' and '"local"' have no overlap.
+src/lib/supabase/rooms.ts(550,32): error TS2367: This comparison appears to be unintentional because the types '"base" | "swap" | "crashpad" | "airline" | "layover" | "general" | "commuters" | "private"' and '"aircraft"' have no overlap.
+src/lib/supabase/socialFeedComments.ts(27,47): error TS7006: Parameter 'postId' implicitly has an 'any' type.
+src/lib/supabase/socialFeedComments.ts(27,55): error TS7006: Parameter 'userId' implicitly has an 'any' type.
+src/lib/supabase/socialFeedComments.ts(27,63): error TS7006: Parameter 'body' implicitly has an 'any' type.
+src/lib/supabase/socialFeedComments.ts(89,47): error TS7006: Parameter 'postId' implicitly has an 'any' type.
+src/lib/supabase/socialFeedComments.ts(227,44): error TS7006: Parameter 'postId' implicitly has an 'any' type.
+src/lib/supabase/socialFeedComments.ts(227,52): error TS7006: Parameter 'userId' implicitly has an 'any' type.
+src/lib/supabase/socialFeedComments.ts(237,44): error TS7006: Parameter 'postId' implicitly has an 'any' type.
+src/lib/supabase/socialFeedComments.ts(237,52): error TS7006: Parameter 'userId' implicitly has an 'any' type.
+src/lib/supabase/socialFeedComments.ts(237,60): error TS7006: Parameter 'content' implicitly has an 'any' type.
+src/screens/AccountSettingsScreen.tsx(19,60): error TS2344: Type 'typeof View' does not satisfy the constraint '(...args: any) => any'.
+  Type 'typeof View' provides no match for the signature '(...args: any): any'.
+src/screens/AccountSettingsScreen.tsx(106,29): error TS2339: Property 'title' does not exist on type '{ container: { padding: number; }; headerBar: { flexDirection: "row"; alignItems: "center"; justifyContent: "center"; paddingVertical: number; borderBottomWidth: number; borderBottomColor: string; backgroundColor: string; marginBottom: number; }; ... 15 more ...; saveText: { ...; }; }'.
+src/screens/FeedScreen.tsx(120,16): error TS2345: Argument of type 'any[]' is not assignable to parameter of type 'SetStateAction<never[]>'.
+  Type 'any[]' is not assignable to type 'never[]'.
+    Type 'any' is not assignable to type 'never'.
+src/screens/FeedScreen.tsx(390,13): error TS2322: Type '(refresh?: boolean) => Promise<void>' is not assignable to type '(postId: string) => void'.
+  Types of parameters 'refresh' and 'postId' are incompatible.
+    Type 'string' is not assignable to type 'boolean | undefined'.
+src/screens/FeedScreen.tsx(559,9): error TS2740: Type '{ [reaction: string]: number; }' is missing the following properties from type 'Record<ReactionType, number>': solid, love, dead, yikes, and 5 more.
+src/screens/PostMediaViewerScreen.tsx(553,8): error TS2741: Property 'postId' is missing in type '{ visible: boolean; postContent: string; onClose: () => void; }' but required in type 'ShareModalProps'.
+src/screens/RoomHomeScreen.tsx(319,3): error TS1117: An object literal cannot have multiple properties with the same name.
+src/screens/RoomHomeScreenImpl.tsx(654,9): error TS2740: Type '{ [reaction: string]: number; }' is missing the following properties from type 'Record<ReactionType, number>': solid, love, dead, yikes, and 5 more.
+src/screens/SocialPostDetailScreen.tsx(170,12): error TS2741: Property 'postId' is missing in type '{ visible: boolean; postContent: any; onClose: () => void; }' but required in type 'ShareModalProps'.
