@@ -75,6 +75,12 @@ export default function MenuScreen() {
           <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
         </Pressable>
 
+        <Pressable style={styles.menuItem} onPress={() => router.push('/home-shortcuts')}>
+          <Ionicons name="pin-outline" size={24} color={colors.textPrimary} />
+          <Text style={styles.menuText}>Home shortcuts</Text>
+          <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+        </Pressable>
+
         <Pressable style={styles.menuItem} onPress={() => router.push('/notifications-settings')}>
           <Ionicons name="settings-outline" size={24} color={colors.textPrimary} />
           <Text style={styles.menuText}>Notification Settings</Text>

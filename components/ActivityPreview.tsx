@@ -25,6 +25,11 @@ interface ActivityPreviewProps {
   onPressViewAll: () => void;
   loading: boolean;
   error?: string | null;
+  /** Hide duplicate header/footer when nested under another Activity section (e.g. tab Home). */
+  embedded?: boolean;
+  /** When embedded and the list is empty, friendlier copy than a generic error. */
+  embeddedEmptyTitle?: string;
+  embeddedEmptySubtitle?: string;
 }
 
 const ActivityPreview: React.FC<ActivityPreviewProps> = ({
@@ -34,15 +39,23 @@ const ActivityPreview: React.FC<ActivityPreviewProps> = ({
   onPressViewAll,
   loading,
   error,
+  embedded = false,
+  embeddedEmptyTitle,
+  embeddedEmptySubtitle,
 }) => {
+  const emptyTitle = embeddedEmptyTitle ?? 'No recent activity';
+  const emptySubtitle =
+    embeddedEmptySubtitle ?? 'Open notifications for your full history and settings.';
   return (
-    <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <Text style={styles.headerTitle}>ACTIVITY</Text>
-        <Pressable onPress={onPressViewAll} style={styles.viewAllBtn} hitSlop={8}>
-          <Text style={styles.viewAllText}>View All {'>'}</Text>
-        </Pressable>
-      </View>
+    <View style={[styles.container, embedded && styles.containerEmbedded]}>
+      {!embedded ? (
+        <View style={styles.headerRow}>
+          <Text style={styles.headerTitle}>ACTIVITY</Text>
+          <Pressable onPress={onPressViewAll} style={styles.viewAllBtn} hitSlop={8}>
+            <Text style={styles.viewAllText}>View All {'>'}</Text>
+          </Pressable>
+        </View>
+      ) : null}
       {loading ? (
         <View style={styles.loadingRow}>
           <ActivityIndicator size="small" color="#B5161E" />
@@ -50,10 +63,21 @@ const ActivityPreview: React.FC<ActivityPreviewProps> = ({
       ) : error ? (
         <View style={styles.emptyRow}>
           <Text style={styles.emptyText}>{error}</Text>
+          {embedded ? (
+            <Pressable onPress={onPressViewAll} style={styles.embeddedEmptyCta} hitSlop={8}>
+              <Text style={styles.embeddedEmptyCtaText}>Open notifications</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : items.length === 0 ? (
         <View style={styles.emptyRow}>
-          <Text style={styles.emptyText}>No activity yet</Text>
+          <Text style={styles.emptyText}>{embedded ? emptyTitle : 'No activity yet'}</Text>
+          {embedded ? <Text style={styles.emptySubtext}>{emptySubtitle}</Text> : null}
+          {embedded ? (
+            <Pressable onPress={onPressViewAll} style={styles.embeddedEmptyCta} hitSlop={8}>
+              <Text style={styles.embeddedEmptyCtaText}>View all</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : (
         <FlatList
@@ -89,14 +113,14 @@ const ActivityPreview: React.FC<ActivityPreviewProps> = ({
           scrollEnabled={false}
         />
       )}
-      {unreadCount > 0 && !loading && (
+      {!embedded && unreadCount > 0 && !loading && (
         <View style={styles.seeAllRow}>
           <Pressable onPress={onPressViewAll} style={styles.seeAllBtn} hitSlop={8}>
             <Text style={styles.seeAllText}>See all ({unreadCount})</Text>
           </Pressable>
         </View>
       )}
-      {unreadCount === 0 && items.length > 0 && !loading && (
+      {!embedded && unreadCount === 0 && items.length > 0 && !loading && (
         <View style={styles.caughtUpRow}>
           <Text style={styles.caughtUpText}>You’re all caught up</Text>
         </View>
@@ -118,6 +142,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
+  },
+  containerEmbedded: {
+    marginHorizontal: 0,
+    marginTop: 0,
+    borderRadius: 14,
+    elevation: 0,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
   },
   headerRow: {
     flexDirection: 'row',
@@ -244,6 +279,27 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     color: '#6B7280',
+    textAlign: 'center',
+  },
+  emptySubtext: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 18,
+    paddingHorizontal: 12,
+  },
+  embeddedEmptyCta: {
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: 'rgba(181, 22, 30, 0.08)',
+  },
+  embeddedEmptyCtaText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#B5161E',
   },
 });
 

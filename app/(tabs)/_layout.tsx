@@ -86,7 +86,7 @@ export default function TabsLayout() {
           height: 64,
         },
         tabBarLabelStyle: {
-          fontSize: 11,
+          fontSize: 10,
           marginTop: 2,
           marginBottom: 4,
           fontWeight: '700',
@@ -109,7 +109,7 @@ export default function TabsLayout() {
         name="crew-rooms"
         options={{
           title: 'Crew Rooms',
-          tabBarLabel: 'Crew Room',
+          tabBarLabel: 'Crew Rooms',
       header: () => <CrewRoomsHeaderNav />,
           tabBarIcon: ({ focused, color }) => (
             <Ionicons name={focused ? 'chatbubbles' : 'chatbubbles-outline'} size={24} color={color} />

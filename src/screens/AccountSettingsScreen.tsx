@@ -3,6 +3,7 @@
 
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 
 
@@ -16,6 +17,7 @@ const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || '
 const stateOptions = ['', 'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'];
 
 export default function AccountSettingsScreen() {
+  const router = useRouter();
     type Section = { key: string; render: () => React.ReactElement };
   type Profile = {
     legal_first_name: string;
@@ -188,6 +190,9 @@ export default function AccountSettingsScreen() {
     ) },
     { key: 'preferences', render: () => (
       <View style={styles.section}><Text style={styles.sectionTitle}>Preferences</Text>
+        <Pressable style={styles.linkRow} onPress={() => router.push('/home-shortcuts')}>
+          <Text style={styles.linkLabel}>Home screen shortcuts</Text>
+        </Pressable>
         <View style={styles.toggleRow}><Text style={styles.toggleLabel}>Autoplay Media</Text>
           <Switch value={profile.autoplay_media} onValueChange={(v: boolean) => setProfile((p: Profile) => ({ ...p, autoplay_media: v }))} /></View>
         <View style={styles.toggleRow}><Text style={styles.toggleLabel}>Sound & Vibration</Text>

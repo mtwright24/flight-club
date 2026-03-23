@@ -9,22 +9,50 @@ function isMissingNotificationsTable(error: unknown): boolean {
   return code === 'PGRST205' || message.includes("Could not find the table 'public.notifications'");
 }
 
-export async function getRecentNotifications(userId: string, limit = 4): Promise<NotificationPreview[]> {
-  const { data, error } = await supabase
-    .from('notifications')
-    .select('*, actor:actor_id(display_name, avatar_url)')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (error) {
-    if (isMissingNotificationsTable(error)) return [];
-    throw error;
-  }
+function mapNotificationRows(data: any[] | null): NotificationPreview[] {
   return (data || []).map((n: any) => ({
     ...n,
     actor_avatar_url: n.actor?.avatar_url,
     summary: getNotificationSummary(n),
   }));
+}
+
+/**
+ * Loads recent notifications for Home / previews. Never throws: returns [] on failure
+ * so UI can show a graceful empty state. Retries without actor embed if the join fails
+ * (common when FK/embed hints differ from the live schema).
+ */
+export async function getRecentNotifications(userId: string, limit = 4): Promise<NotificationPreview[]> {
+  const base = () =>
+    supabase.from('notifications').select('*, actor:actor_id(display_name, avatar_url)').eq('user_id', userId);
+
+  const { data, error } = await base().order('created_at', { ascending: false }).limit(limit);
+
+  if (!error) {
+    return mapNotificationRows(data);
+  }
+
+  if (isMissingNotificationsTable(error)) {
+    return [];
+  }
+
+  const { data: dataPlain, error: errPlain } = await supabase
+    .from('notifications')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (!errPlain) {
+    return mapNotificationRows(dataPlain);
+  }
+
+  if (isMissingNotificationsTable(errPlain)) {
+    return [];
+  }
+
+  console.warn('[getRecentNotifications] Falling back to empty list:', errPlain.message || errPlain);
+  return [];
 }
 
 export async function getUnreadCount(userId: string): Promise<number> {
