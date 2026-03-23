@@ -1,9 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, RefreshControl, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Pressable, RefreshControl, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { fetchNotifications, markAllNotificationsRead, markNotificationsRead, Notification, resolveNotificationRoute } from '../lib/notifications';
+import {
+  fetchNotifications,
+  markAllNotificationsRead,
+  markNotificationsRead,
+  notificationPathToHref,
+  Notification,
+  resolveNotificationRoute,
+} from '../lib/notifications';
 import { useAuth } from '../src/hooks/useAuth';
 import { supabase } from '../src/lib/supabaseClient';
 import { colors, spacing } from '../src/styles/theme';
@@ -95,8 +102,13 @@ export default function NotificationsScreen() {
   };
 
   const handlePress = async (notification: Notification) => {
-    if (!notification.is_read) await markNotificationsRead([notification.id]);
-    router.push(resolveNotificationRoute(notification) as any);
+    if (!notification.is_read) {
+      await markNotificationsRead([notification.id]);
+      setNotifications((prev) =>
+        prev.map((x) => (x.id === notification.id ? { ...x, is_read: true } : x)),
+      );
+    }
+    router.push(notificationPathToHref(resolveNotificationRoute(notification)));
   };
 
   const handleMarkAllRead = async () => {
@@ -189,9 +201,20 @@ export default function NotificationsScreen() {
         <Pressable onPress={() => router.back()} style={styles.headerBtn}>
           <Ionicons name="arrow-back" size={24} color={colors.cardBg} />
         </Pressable>
-        <Text style={styles.headerTitle}>Notifications</Text>
+        <Text
+          style={styles.headerTitle}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+          {...(Platform.OS === 'ios'
+            ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.82 }
+            : {})}
+        >
+          Notifications
+        </Text>
         <Pressable onPress={handleMarkAllRead} style={styles.headerBtn}>
-          <Text style={styles.markAll}>Mark all read</Text>
+          <Text style={styles.markAll} numberOfLines={1}>
+            Mark all read
+          </Text>
         </Pressable>
       </View>
       <View style={{ flex: 1, backgroundColor: colors.screenBg }}>
@@ -267,15 +290,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.headerRed,
-    height: 60,
+    minHeight: 60,
+    paddingVertical: 6,
     paddingHorizontal: spacing.lg,
     borderBottomLeftRadius: 14,
     borderBottomRightRadius: 14,
     justifyContent: 'space-between',
   },
-  headerBtn: { padding: 8, minWidth: 44, alignItems: 'center' },
-  headerTitle: { color: colors.cardBg, fontSize: 18, fontWeight: '800' },
-  markAll: { color: colors.cardBg, fontWeight: '700', fontSize: 13 },
+  headerBtn: { padding: 8, minWidth: 44, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: {
+    flex: 1,
+    minWidth: 0,
+    marginHorizontal: 6,
+    textAlign: 'center',
+    color: colors.cardBg,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  markAll: { color: colors.cardBg, fontWeight: '700', fontSize: 13, flexShrink: 1, textAlign: 'right' },
   item: {
     flexDirection: 'row',
     alignItems: 'center',

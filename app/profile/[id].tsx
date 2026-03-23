@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ProfileHeaderSection from '../../components/ProfileHeaderSection';
@@ -141,6 +141,17 @@ export default function ProfileScreen() {
     })();
   }, [profileId]);
 
+  const handleStartDm = useCallback(async () => {
+    try {
+      const me = await getMyProfile();
+      if (!me?.id || !profileId) return;
+      const { conversationId } = await startDirectConversation(me.id, profileId);
+      router.push({ pathname: '/dm-thread', params: { conversationId: String(conversationId) } });
+    } catch (err: any) {
+      Alert.alert('Unable to start message', err?.message || 'Please try again.');
+    }
+  }, [profileId, router]);
+
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
@@ -266,7 +277,9 @@ export default function ProfileScreen() {
                         console.log('Follow button error:', err);
                       }
                     }}
-                    onMessage={() => {}}
+                    onMessage={handleStartDm}
+                    onPressAvatar={isSelf ? () => router.push('/edit-profile') : undefined}
+                    router={router}
                   />
                 ) : (
                   <View style={{height:180, justifyContent:'center', alignItems:'center'}}>
@@ -334,16 +347,9 @@ export default function ProfileScreen() {
                   setFollowingStatus(await getIsFollowing(profileId));
                 }
               }}
-              onMessage={async () => {
-                try {
-                  const me = await getMyProfile();
-                  if (!me?.id || !profileId) return;
-                  const { conversationId } = await startDirectConversation(me.id, profileId);
-                  router.push({ pathname: '/dm-thread', params: { conversationId } });
-                } catch (err: any) {
-                  Alert.alert('Unable to start message', err?.message || 'Please try again.');
-                }
-              }}
+              onMessage={handleStartDm}
+              onPressAvatar={isSelf ? () => router.push('/edit-profile') : undefined}
+              router={router}
             />
           ) : (
             <View style={{height:180, justifyContent:'center', alignItems:'center'}}>

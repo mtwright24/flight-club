@@ -6,13 +6,31 @@ import { ActivityIndicator, Dimensions, FlatList, Image, Pressable, StyleSheet, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ActivityPreview, { NotificationItem } from '../components/ActivityPreview';
 import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts, getTrendingRooms, getUnreadCounts } from '../lib/home';
-import { getRecentNotifications, getUnreadCount, markNotificationRead, resolveNotificationRoute, subscribeToNotifications } from '../lib/notifications-preview';
-import type { Notification } from '../lib/notifications';
+import {
+  notificationPathToHref,
+  resolveNotificationRoute,
+  type Notification,
+} from '../lib/notifications';
+import { getRecentNotifications, markNotificationRead, subscribeToNotifications } from '../lib/notifications-preview';
 import type { NotificationPreview } from '../lib/notifications-preview';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { COLORS, SHADOW, SPACING } from '../src/styles/theme';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
+
+function formatActivityTimeAgo(dateString: string) {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffMins < 1) return 'now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
 
 /** Map NotificationPreview → NotificationItem for ActivityPreview; add user_id for resolveNotificationRoute. */
 function mapPreviewToItem(
@@ -24,6 +42,7 @@ function mapPreviewToItem(
     ...p,
     actor_id: p.actor_id ?? '',
     user_id: base.user_id ?? currentUserId,
+    timeLabel: formatActivityTimeAgo(p.created_at),
   } as NotificationItem & { user_id: string };
 }
 
@@ -39,7 +58,6 @@ export default function HomeScreen() {
   const [activity, setActivity] = useState<NotificationItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
   const [activityError, setActivityError] = useState<string | null>(null);
-  const [unreadCount, setUnreadCount] = useState(0);
   const activitySubRef = React.useRef<any>(null);
 
   const [posts, setPosts] = useState<any[]>([]);
@@ -140,14 +158,10 @@ export default function HomeScreen() {
     let mounted = true;
     setActivityLoading(true);
     setActivityError(null);
-    Promise.all([
-      getRecentNotifications(effectiveUserId, 4),
-      getUnreadCount(effectiveUserId),
-    ])
-      .then(([items, unread]) => {
+    getRecentNotifications(effectiveUserId, 4)
+      .then((items) => {
         if (mounted) {
           setActivity(items.map((p) => mapPreviewToItem(p, effectiveUserId)));
-          setUnreadCount(unread);
         }
       })
       .catch((e) => {
@@ -165,7 +179,11 @@ export default function HomeScreen() {
       setActivity((prev) =>
         [mapPreviewToItem(n, effectiveUserId), ...prev].slice(0, 4),
       );
-      setUnreadCount((c) => c + 1);
+      void getUnreadCounts(effectiveUserId)
+        .then((counts) => {
+          if (mounted) setUnread(counts);
+        })
+        .catch(() => {});
     });
     return () => {
       mounted = false;
@@ -215,12 +233,8 @@ export default function HomeScreen() {
 
       setActivityLoading(true);
       setActivityError(null);
-      const [items, unreadCountNext] = await Promise.all([
-        getRecentNotifications(userId, 4),
-        getUnreadCount(userId),
-      ]);
+      const items = await getRecentNotifications(userId, 4);
       setActivity(items.map((p) => mapPreviewToItem(p, userId)));
-      setUnreadCount(unreadCountNext);
       setActivityLoading(false);
 
       setPostsLoading(true);
@@ -278,9 +292,9 @@ export default function HomeScreen() {
       route: '/crashpads',
     },
     {
-      label: 'Utility Hub',
+      label: 'Utility\nHub',
       icon: require('../assets/images/auth/brand/icon-utility-hub.png'),
-      route: '/utility',
+      route: '/(screens)/utility',
     },
   ];
 
@@ -340,7 +354,7 @@ export default function HomeScreen() {
         return (
           <ActivityPreview
             items={activity}
-            unreadCount={unreadCount}
+            unreadCount={unread.notifications}
             loading={activityLoading}
             error={activityError}
             onPressItem={async (notification) => {
@@ -349,10 +363,13 @@ export default function HomeScreen() {
                 setActivity((prev) =>
                   prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n)),
                 );
-                setUnreadCount((c) => (notification.is_read ? c : Math.max(0, c - 1)));
+                setUnread((prev) => ({
+                  ...prev,
+                  notifications: notification.is_read ? prev.notifications : Math.max(0, prev.notifications - 1),
+                }));
                 const notifForRoute = notification as NotificationItem & { user_id: string };
                 const route = resolveNotificationRoute(notifForRoute as Notification);
-                if (route) router.push(route as Href);
+                router.push(notificationPathToHref(route));
               } catch (e) {
                 // Optionally show error
               }
@@ -399,7 +416,7 @@ export default function HomeScreen() {
       default:
         return null;
     }
-  }, [profile, profileLoading, profileError, tiles, activity, activityLoading, activityError, posts, postsLoading, postsError, rooms, roomsLoading, roomsError, awards, awardsLoading, awardsError, router]);
+  }, [profile, profileLoading, profileError, tiles, activity, activityLoading, activityError, unread.notifications, posts, postsLoading, postsError, rooms, roomsLoading, roomsError, awards, awardsLoading, awardsError, router]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['left', 'right', 'top']}>

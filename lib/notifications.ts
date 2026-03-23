@@ -1,3 +1,4 @@
+import type { Href } from 'expo-router';
 import { supabase } from '../src/lib/supabaseClient';
 
 let missingNotificationsTableLogged = false;
@@ -24,9 +25,16 @@ export type Notification = {
 type NotificationCategory = 'social' | 'messages' | 'housing' | 'crew' | 'system';
 
 export async function fetchNotifications(page = 1, pageSize = 30): Promise<Notification[]> {
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  if (authError || !user?.id) return [];
+
   const { data, error } = await supabase
     .from('notifications')
     .select('*, actor:actor_id(display_name, avatar_url)')
+    .eq('user_id', user.id)
     .order('created_at', { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
 
@@ -72,10 +80,17 @@ export async function markNotificationsRead(ids: string[]): Promise<void> {
 }
 
 export async function markAllNotificationsRead(): Promise<void> {
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  if (authError || !user?.id) return;
+
   const { error } = await supabase
     .from('notifications')
     .update({ is_read: true })
-    .eq('is_read', false);
+    .eq('is_read', false)
+    .eq('user_id', user.id);
 
   if (error) {
     const code = (error as any).code;
@@ -136,9 +151,36 @@ export function resolveNotificationRoute(n: Notification): string {
       return `/crew-rooms/${n.entity_id}`;
     case 'profile':
       return `/profile/${n.entity_id}`;
+    case 'conversation':
+      return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}`;
     default:
       return '/';
   }
+}
+
+/**
+ * Map stored notification routes (often `/dm-thread?conversationId=…`) to Expo Router hrefs
+ * so params are passed reliably (matches in-app DM navigation).
+ */
+export function notificationPathToHref(path: string): Href {
+  const trimmed = (path || '').trim();
+  if (!trimmed || trimmed === '/') return '/';
+
+  const tryDm = (pathname: string, query: string) => {
+    const base = pathname.replace(/^\//, '') || pathname;
+    if (base !== 'dm-thread') return null;
+    const conversationId = new URLSearchParams(query).get('conversationId');
+    if (!conversationId) return null;
+    return { pathname: '/dm-thread' as const, params: { conversationId: String(conversationId) } };
+  };
+
+  const q = trimmed.indexOf('?');
+  if (q !== -1) {
+    const mapped = tryDm(trimmed.slice(0, q), trimmed.slice(q + 1));
+    if (mapped) return mapped;
+  }
+
+  return trimmed as Href;
 }
 
 export async function createNotification(input: {

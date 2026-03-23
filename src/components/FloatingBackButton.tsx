@@ -3,23 +3,44 @@ import { Pressable, StyleSheet, View, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import { useSegments } from 'expo-router';
+import { usePathname, useSegments } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { colors } from '../theme/colors';
 
-const HEADER_HEIGHT = 56;
+/** Matches SectionHeader / AppHeader `headerWrap` height for vertical alignment. */
+const HEADER_HEIGHT = 60;
+
+/** True when user is on a bottom-tab root (no inner stack pushed). */
+function isBottomTabRootScreen(segments: readonly string[]): boolean {
+  const tabsIdx = segments.indexOf('(tabs)');
+  if (tabsIdx === -1) return false;
+  const tail = segments.slice(tabsIdx + 1);
+  if (tail.length === 0) return true;
+  if (tail.length === 1) {
+    const s = tail[0];
+    return s === 'index' || s === 'crew-tools' || s === 'feed' || s === 'profile' || s === 'crew-rooms';
+  }
+  if (tail.length === 2 && tail[0] === 'crew-rooms' && tail[1] === 'index') {
+    return true;
+  }
+  return false;
+}
 
 export default function FloatingBackButton() {
   const insets = useSafeAreaInsets();
   const navigation: any = useNavigation();
   const segments = useSegments();
+  const pathname = usePathname();
 
   const canGoBack = typeof navigation?.canGoBack === 'function' ? navigation.canGoBack() : false;
 
-  // Determine if current route is a root tab screen: segments like ['(tabs)']
-  const isRootTab = segments.length === 1 && segments[0] === '(tabs)';
+  const path = (pathname || '/').replace(/\/$/, '') || '/';
+  // These screens already render a primary back control in the red header row.
+  if (path === '/search' || path === '/notifications') {
+    return null;
+  }
 
-  if (!canGoBack || isRootTab) return null;
+  if (!canGoBack || isBottomTabRootScreen(segments)) return null;
 
   const top = insets.top + HEADER_HEIGHT + 10;
 

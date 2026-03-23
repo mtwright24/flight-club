@@ -23,7 +23,7 @@ const tiles = [
     icon: require('../../assets/images/auth/brand/icon-crashpads-housing.png'),
   },
   {
-    label: 'Utility Hub',
+    label: 'Utility\nHub',
     icon: require('../../assets/images/auth/brand/icon-utility-hub.png'),
   },
 ];
@@ -88,6 +88,9 @@ export default function DashboardHome() {
           )}
         </View>
 
+        <View style={styles.quickAccessBlock}>
+          <Text style={styles.quickAccessLabel}>QUICK ACCESS</Text>
+        </View>
         <View style={styles.grid}>
           {tiles.map(({ label, icon }) => (
             <Pressable
@@ -97,7 +100,8 @@ export default function DashboardHome() {
                 if (label.includes('Schedule')) router.push('/crew-exchange');
                 else if (label.includes('Non-Rev')) router.push('/loads');
                 else if (label.includes('Crashpads')) router.push('/(screens)/crashpads');
-                else router.push('/(screens)/utility');
+                else if (label.includes('Utility') || label.includes('Hub'))
+                  router.push('/(screens)/utility');
               }}
             >
               <Image source={icon} style={styles.tileIcon} resizeMode="contain" />
@@ -108,7 +112,7 @@ export default function DashboardHome() {
           ))}
         </View>
 
-        <Section title="ACTIVITY" rightAction="View All >" />
+        <Section title="ACTIVITY" rightAction="View All >" onRightActionPress={() => router.push('/notifications')} />
         <Section title="TRENDING POSTS" />
         <Section title="TRENDING CHAT ROOMS" />
         <Section title="MONTHLY AWARDS" />
@@ -117,13 +121,29 @@ export default function DashboardHome() {
   );
 }
 
-function Section({ title, rightAction }: { title: string; rightAction?: string }) {
+function Section({
+  title,
+  rightAction,
+  onRightActionPress,
+}: {
+  title: string;
+  rightAction?: string;
+  onRightActionPress?: () => void;
+}) {
   if (title === 'ACTIVITY') {
     return (
       <View style={styles.section}>
         <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>{title}</Text>
-          {rightAction ? <Text style={styles.sectionAction}>{rightAction}</Text> : null}
+          {rightAction ? (
+            onRightActionPress ? (
+              <Pressable onPress={onRightActionPress} accessibilityRole="button" accessibilityLabel="View all activity">
+                <Text style={styles.sectionAction}>{rightAction}</Text>
+              </Pressable>
+            ) : (
+              <Text style={styles.sectionAction}>{rightAction}</Text>
+            )
+          ) : null}
         </View>
         <ActivityModule />
       </View>
@@ -171,6 +191,7 @@ function Section({ title, rightAction }: { title: string; rightAction?: string }
 }
 
 function TrendingPostsRow() {
+  const router = useRouter();
   const TREND_BIG_W = 290;
   const TREND_LIVE_W = 190;
   const TREND_CARD_H = 175;
@@ -229,7 +250,7 @@ function TrendingPostsRow() {
             SHADOW.soft,
             { width: TREND_BIG_W, height: TREND_CARD_H },
           ]}
-          onPress={() => console.log('Trending post pressed', post.id)}
+          onPress={() => router.push(`/post/${post.id}`)}
         >
           <View style={styles.trendingTopRow}>
             <View style={styles.trendingAvatarWrap}>
@@ -258,7 +279,7 @@ function TrendingPostsRow() {
           SHADOW.soft,
           { width: TREND_LIVE_W, height: TREND_CARD_H },
         ]}
-        onPress={() => console.log('Live chat pressed')}
+        onPress={() => router.push('/(tabs)/crew-rooms')}
       >
         <View style={styles.liveTopRow}>
           <Text style={styles.liveTitle}>Live Chat</Text>
@@ -283,6 +304,7 @@ function TrendingPostsRow() {
 }
 
 function TrendingChatRoomsRow() {
+  const router = useRouter();
   const CHAT_CARD_W = 260;
   const CHAT_CARD_H = 150;
   const GAP = 12;
@@ -357,7 +379,9 @@ function TrendingChatRoomsRow() {
         <Pressable
           key={room.id}
           style={[styles.chatCard, SHADOW.soft, { width: CHAT_CARD_W, height: CHAT_CARD_H }]}
-          onPress={() => console.log('Trending chat room pressed', room.id)}
+          onPress={() =>
+            router.push({ pathname: '/(tabs)/crew-rooms/room-home', params: { roomId: room.id } })
+          }
         >
           <View style={styles.chatTopRow}>
             <Text style={styles.chatTitle} numberOfLines={1} ellipsizeMode="tail">
@@ -455,7 +479,7 @@ function AwardCard({ award, router }: { award: any; router: any }) {
   return (
     <Pressable
       style={styles.awardCard}
-      onPress={() => console.log('Open award', award.id)}
+      onPress={() => router.push(`/profile/${award.user.id}`)}
     >
       <ImageBackground
         source={award.skin}
@@ -468,7 +492,7 @@ function AwardCard({ award, router }: { award: any; router: any }) {
             style={styles.awardAvatarAbsolute}
             onPress={(e: any) => {
               if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
-              console.log('Open profile', award.user.id);
+              router.push(`/profile/${award.user.id}`);
             }}
           >
             <Image
@@ -489,6 +513,7 @@ function AwardCard({ award, router }: { award: any; router: any }) {
 }
 
 function ActivityModule() {
+  const router = useRouter();
   const items = [
     {
       icon: require('../../assets/images/brand/activity-reply.png'),
@@ -521,7 +546,7 @@ function ActivityModule() {
       <View style={styles.activityTopRow}>
         <Pressable
           style={styles.avatarStack}
-          onPress={() => console.log('Activity avatar row pressed')}
+          onPress={() => router.push('/notifications')}
         >
           {avatars.map((uri, index) => (
             <View key={uri} style={[styles.avatar, { marginLeft: index === 0 ? 0 : -12 }]}>
@@ -531,7 +556,7 @@ function ActivityModule() {
         </Pressable>
         <Pressable
           style={styles.ctaButton}
-          onPress={() => console.log('Activity big +count pressed')}
+          onPress={() => router.push('/notifications')}
         >
           <ImageBackground
             source={require('../../assets/images/brand/activity-btn-pill.png')}
@@ -549,7 +574,7 @@ function ActivityModule() {
           <Pressable
             key={item.text}
             style={[styles.activityPill, SHADOW.soft]}
-            onPress={() => console.log(`Activity pill ${index + 1} pressed`)}
+            onPress={() => router.push('/notifications')}
           >
             <Image source={item.icon} style={styles.activityBadge} resizeMode="contain" />
             <Text style={styles.activityText} numberOfLines={2} ellipsizeMode="tail">
@@ -630,6 +655,15 @@ const styles = StyleSheet.create({
     color: COLORS.text2,
     marginTop: 4,
     fontSize: 14,
+  },
+  quickAccessBlock: {
+    marginBottom: SPACING.sm,
+  },
+  quickAccessLabel: {
+    color: COLORS.red,
+    fontWeight: '700',
+    fontSize: 12,
+    letterSpacing: 0.5,
   },
   grid: {
     flexDirection: 'row',

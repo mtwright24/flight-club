@@ -1,6 +1,7 @@
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { FlatList, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getUnreadCounts } from '../lib/home';
@@ -8,6 +9,17 @@ import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useAuth } from '../src/hooks/useAuth';
 import { fetchInbox, fetchMessageRequestsInbox } from '../src/lib/supabase/dms';
 import { supabase } from '../src/lib/supabaseClient';
+
+function lastMessageSnippet(lastMsg: any): string {
+  if (!lastMsg) return 'No messages yet.';
+  const body = typeof lastMsg.body === 'string' ? lastMsg.body.trim() : '';
+  if (body) return lastMsg.body;
+  const t = lastMsg.message_type;
+  if (t === 'image') return 'Photo';
+  if (t === 'video') return 'Video';
+  if (t === 'post_share') return 'Shared a post';
+  return 'Message';
+}
 
 export default function MessagesInboxScreen() {
   const { session } = useAuth();
@@ -37,16 +49,15 @@ export default function MessagesInboxScreen() {
     setLoading(false);
   }, [userId]);
 
-  useEffect(() => {
-    loadInbox();
-  }, [loadInbox]);
-
-  useEffect(() => {
-    if (!userId) return;
-    getUnreadCounts(userId)
-      .then((counts) => setUnread(counts))
-      .catch(() => setUnread({ notifications: 0, messages: 0 }));
-  }, [userId]);
+  useFocusEffect(
+    useCallback(() => {
+      if (!userId) return;
+      void loadInbox();
+      void getUnreadCounts(userId)
+        .then((counts) => setUnread(counts))
+        .catch(() => setUnread({ notifications: 0, messages: 0 }));
+    }, [userId, loadInbox])
+  );
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -63,7 +74,10 @@ export default function MessagesInboxScreen() {
     const lastMsg = item.last_message;
     const isUnread = lastMsg && lastMsg.sender_id !== userId && !lastMsg.is_read;
     return (
-      <Pressable style={styles.row} onPress={() => router.push({ pathname: '/dm-thread', params: { conversationId: item.id } })}>
+      <Pressable
+        style={styles.row}
+        onPress={() => router.push({ pathname: '/dm-thread', params: { conversationId: String(item.id) } })}
+      >
         <Pressable
           style={styles.avatarWrap}
           onPress={() => other?.user_id && router.push(`/profile/${other.user_id}`)}
@@ -80,7 +94,7 @@ export default function MessagesInboxScreen() {
           >
             <Text style={styles.name}>{other?.profile?.display_name || 'User'}</Text>
           </Pressable>
-          <Text style={styles.snippet} numberOfLines={1}>{lastMsg?.body || 'No messages yet.'}</Text>
+          <Text style={styles.snippet} numberOfLines={1}>{lastMessageSnippet(lastMsg)}</Text>
         </View>
         {isUnread && <View style={styles.unreadDot} />}
         <Ionicons name="chevron-forward" size={20} color="#64748b" />
@@ -95,7 +109,7 @@ export default function MessagesInboxScreen() {
         bellCount={unread.notifications}
         dmCount={unread.messages}
         onPressBell={() => router.push('/notifications')}
-        onPressMessage={() => {}}
+        onPressMessage={() => router.push('/new-message')}
         onPressMenu={() => router.push('/menu')}
       />
       <View style={styles.container}>
@@ -153,7 +167,7 @@ export default function MessagesInboxScreen() {
                           <View style={styles.info}>
                             <Text style={styles.name}>{other?.profile?.display_name || 'User'}</Text>
                             <Text style={styles.snippet} numberOfLines={1}>
-                              {lastMsg?.body || 'Message request'}
+                              {lastMsg ? lastMessageSnippet(lastMsg) : 'Message request'}
                             </Text>
                           </View>
                           <View style={styles.requestActions}>

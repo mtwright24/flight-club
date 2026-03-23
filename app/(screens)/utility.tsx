@@ -1,22 +1,5 @@
-import React from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { useRouter } from 'expo-router';
+import UtilityHubPlaceholderScreen from '../../src/screens/UtilityHubPlaceholderScreen';
 
-export default function UtilityScreen() {
-  const router = useRouter();
-  return (
-    <View style={styles.wrap}>
-      <Text style={styles.header}>Utility Hub</Text>
-      <Pressable style={styles.backBtn} onPress={() => router.back()}>
-        <Text style={styles.backText}>Back</Text>
-      </Pressable>
-    </View>
-  );
+export default function UtilityScreensRoute() {
+  return <UtilityHubPlaceholderScreen />;
 }
-
-const styles = StyleSheet.create({
-  wrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff', padding: 24 },
-  header: { fontSize: 24, fontWeight: '700', marginBottom: 16 },
-  backBtn: { borderWidth: 1, borderRadius: 10, padding: 12 },
-  backText: { fontSize: 16, fontWeight: '600' },
-});

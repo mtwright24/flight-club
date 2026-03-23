@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, Image, ImageBackground, Platform } from 'react-native';
+import { View, StyleSheet, Image, ImageBackground, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { authTheme } from '../../styles/authTheme';
@@ -63,10 +63,24 @@ const AuthBackground: React.FC<AuthBackgroundProps> = ({ children, safeTop = tru
         </View>
         <ScreenGloss />
         {/* Main content area (children) */}
-        <SafeAreaView style={[styles.safe, { paddingTop: safeTop ? authTheme.spacing.xl : 0 }]}> 
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: contentPadding }}>
-            {children}
-          </View>
+        <SafeAreaView
+          style={[styles.safe, { paddingTop: safeTop ? authTheme.spacing.xl : 0 }]}
+          edges={['top', 'left', 'right', 'bottom']}
+        >
+          <KeyboardAvoidingView style={styles.kav} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <ScrollView
+              contentContainerStyle={[
+                styles.scrollContent,
+                { padding: contentPadding },
+              ]}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
+              {children}
+            </ScrollView>
+          </KeyboardAvoidingView>
         </SafeAreaView>
       </ImageBackground>
     </View>
@@ -76,6 +90,12 @@ const AuthBackground: React.FC<AuthBackgroundProps> = ({ children, safeTop = tru
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: authTheme.colors.bgRedTop, position: 'relative' },
   safe: { flex: 1 },
+  kav: { flex: 1 },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   spotlightWrap: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',

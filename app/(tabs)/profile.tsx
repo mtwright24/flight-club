@@ -161,6 +161,7 @@ export default function ProfileScreen() {
                     followingStatus={followingStatus}
                     onFollow={() => setFollowingStatus(!followingStatus)}
                     onMessage={handleMessageButton}
+                    onPressAvatar={isSelf ? () => router.push('/edit-profile') : undefined}
                     router={router}
                   />
                 ) : (
@@ -203,6 +204,7 @@ export default function ProfileScreen() {
               followingStatus={followingStatus}
               onFollow={() => setFollowingStatus(!followingStatus)}
               onMessage={handleMessageButton}
+              onPressAvatar={isSelf ? () => router.push('/edit-profile') : undefined}
               router={router}
             />
           ) : (

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
 import { useAuth } from '../../src/hooks/useAuth';
 import { createHousingListing, insertHousingListingPhoto, updateHousingListingCoverPhoto } from '../../src/lib/housing';
@@ -130,9 +131,15 @@ export default function PostHousingAvailabilityScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.background }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['bottom', 'left', 'right']}>
       <FlightClubHeader title="Post Housing Availability" showLogo={false} />
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
         <Text style={styles.helper}>
           Share a crashpad, crew room, or apartment you have available. Photos and clear rules help crew quickly understand if it''s a fit.
         </Text>
@@ -525,7 +532,8 @@ export default function PostHousingAvailabilityScreen() {
           </Text>
         </Pressable>
       </View>
-    </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 

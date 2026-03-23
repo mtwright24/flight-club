@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, radius, spacing } from '../styles/theme';
 
@@ -36,7 +36,7 @@ export default function AppHeader({ title, showLogo = true, bellCount = 0, dmCou
   return (
     <SafeAreaView style={styles.safe} edges={['left','right','top']}>
       <View style={styles.headerWrap}>
-        <View style={styles.leftRow}>
+        <View style={[styles.leftRow, title ? styles.leftRowFlex : undefined]}>
           {showLogo && !title ? (
             <Image
               source={require('../../assets/images/auth/brand/flightclub-header.png')}
@@ -44,7 +44,16 @@ export default function AppHeader({ title, showLogo = true, bellCount = 0, dmCou
               resizeMode="contain"
             />
           ) : title ? (
-            <Text style={[styles.title, styles.titleNoLogo]}>{title}</Text>
+            <Text
+              style={[styles.title, styles.titleNoLogo]}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+              {...(Platform.OS === 'ios'
+                ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.82 }
+                : {})}
+            >
+              {title}
+            </Text>
           ) : null}
         </View>
         <View style={styles.rightRow}>
@@ -60,15 +69,19 @@ export default function AppHeader({ title, showLogo = true, bellCount = 0, dmCou
           </Pressable>
           <Pressable onPress={handleBell} style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]} accessibilityLabel="Notifications">
             <Ionicons name="notifications-outline" size={26} color={colors.cardBg} />
-            <View style={[styles.badge, { top: -4, right: -4 }]}> 
-              <Text style={styles.badgeText}>{bellCount}</Text>
-            </View>
+            {bellCount > 0 ? (
+              <View style={[styles.badge, { top: -4, right: -4 }]}>
+                <Text style={styles.badgeText}>{bellCount > 99 ? '99+' : bellCount}</Text>
+              </View>
+            ) : null}
           </Pressable>
           <Pressable onPress={handleMessage} style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]} accessibilityLabel="Messages">
             <Ionicons name="chatbubble-ellipses-outline" size={26} color={colors.cardBg} />
-            <View style={[styles.badge, { top: -4, right: -4 }]}> 
-              <Text style={styles.badgeText}>{dmCount}</Text>
-            </View>
+            {dmCount > 0 ? (
+              <View style={[styles.badge, { top: -4, right: -4 }]}>
+                <Text style={styles.badgeText}>{dmCount > 99 ? '99+' : dmCount}</Text>
+              </View>
+            ) : null}
           </Pressable>
           <Pressable onPress={handleMenu} style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]} accessibilityLabel="Menu">
             <Ionicons name="menu" size={26} color={colors.cardBg} />
@@ -93,6 +106,7 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: radius.md,
   },
   leftRow: { flexDirection: 'row', alignItems: 'center' },
+  leftRowFlex: { flex: 1, minWidth: 0 },
   rightRow: {
     flexDirection: 'row',
     alignItems: 'center',

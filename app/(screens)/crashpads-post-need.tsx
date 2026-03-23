@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
 import { useAuth } from '../../src/hooks/useAuth';
 import { createHousingNeedPost } from '../../src/lib/housing';
@@ -41,9 +42,15 @@ export default function PostHousingNeedScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.background }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['bottom', 'left', 'right']}>
       <FlightClubHeader title="Post Housing Need" showLogo={false} />
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
         <Text style={styles.helper}>
           Tell Flight Club what you''re looking for. Pad leaders and hosts can reach out when they have a match.
         </Text>
@@ -175,7 +182,8 @@ export default function PostHousingNeedScreen() {
           </Text>
         </Pressable>
       </View>
-    </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 

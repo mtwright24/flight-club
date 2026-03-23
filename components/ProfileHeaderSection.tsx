@@ -17,10 +17,23 @@ type ProfileHeaderSectionProps = {
   profileIsPrivate?: boolean;
   onFollow: () => void;
   onMessage: () => void;
+  /** When set, avatar is tappable (e.g. self → edit profile). Omit to avoid a dead-press affordance. */
+  onPressAvatar?: () => void;
   router?: any;
 };
 
-export default function ProfileHeaderSection({ user, stats, isSelf, followingStatus, followRequestPending, profileIsPrivate, onFollow, onMessage, router }: ProfileHeaderSectionProps) {
+export default function ProfileHeaderSection({
+  user,
+  stats,
+  isSelf,
+  followingStatus,
+  followRequestPending,
+  profileIsPrivate,
+  onFollow,
+  onMessage,
+  onPressAvatar,
+  router,
+}: ProfileHeaderSectionProps) {
   return (
     <View>
       <ImageBackground
@@ -33,9 +46,20 @@ export default function ProfileHeaderSection({ user, stats, isSelf, followingSta
       <View style={{ alignItems: 'center', marginTop: -48 }}>
         <View style={{ width: 104, height: 104, borderRadius: 52, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, elevation: 2 }}>
           <View style={{ position: 'absolute', width: 112, height: 112, borderRadius: 56, borderWidth: 4, borderColor: '#B5161E', top: -4, left: -4 }} />
-          <Pressable style={{ width: 96, height: 96, borderRadius: 48, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
-            <Image source={{ uri: user.avatar }} style={{ width: 96, height: 96, borderRadius: 48 }} />
-          </Pressable>
+          {onPressAvatar ? (
+            <Pressable
+              onPress={onPressAvatar}
+              accessibilityRole="button"
+              accessibilityLabel="Edit profile photo"
+              style={{ width: 96, height: 96, borderRadius: 48, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Image source={{ uri: user.avatar }} style={{ width: 96, height: 96, borderRadius: 48 }} />
+            </Pressable>
+          ) : (
+            <View style={{ width: 96, height: 96, borderRadius: 48, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+              <Image source={{ uri: user.avatar }} style={{ width: 96, height: 96, borderRadius: 48 }} />
+            </View>
+          )}
         </View>
       </View>
       <View style={{ alignItems: 'center', marginTop: 12 }}>

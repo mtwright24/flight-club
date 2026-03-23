@@ -3,7 +3,8 @@ import * as ImagePicker from 'expo-image-picker';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { checkUsernameAvailable, getMyProfile, updateProfile } from '../lib/profile';
 import { uploadAvatar, uploadCover } from '../lib/storage';
 
@@ -11,6 +12,7 @@ const brandRed = '#B5161E';
 
 export default function EditProfileScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState<Awaited<ReturnType<typeof getMyProfile>> | null>(null);
@@ -155,15 +157,22 @@ export default function EditProfileScreen() {
     hasChanges;
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: '#F8FAFC' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#F8FAFC' }} edges={['top', 'left', 'right', 'bottom']}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={{ flex: 1 }}>
           {/* Header */}
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 18, borderBottomWidth: 1, borderBottomColor: '#E5E7EB', backgroundColor: '#fff' }}>
             <Pressable onPress={() => router.back()}><Text style={{ fontSize: 18, color: brandRed }}>{'<'}</Text></Pressable>
             <Text style={{ fontSize: 18, fontWeight: '700', color: '#0f172a' }}>Edit Profile</Text>
+            <View style={{ width: 24 }} />
           </View>
-          <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: 24 }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+          >
             {/* Cover photo */}
             <View style={{ alignItems: 'center', marginTop: 18 }}>
               {cover ? (
@@ -217,14 +226,26 @@ export default function EditProfileScreen() {
               {/* TODO: Add toggles for public visibility fields, wired to backend/store */}
             </View>
           </ScrollView>
-          {/* Save button fixed at bottom */}
-          <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 18, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#E5E7EB', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, elevation: 8 }}>
+          <View
+            style={{
+              paddingHorizontal: 18,
+              paddingTop: 12,
+              paddingBottom: Math.max(insets.bottom, 12),
+              backgroundColor: '#fff',
+              borderTopWidth: 1,
+              borderTopColor: '#E5E7EB',
+              shadowColor: '#000',
+              shadowOpacity: 0.06,
+              shadowRadius: 8,
+              elevation: 8,
+            }}
+          >
             <Pressable onPress={handleSave} disabled={!canSave} style={{ backgroundColor: canSave ? brandRed : '#FECACA', paddingVertical: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ fontSize: 16, fontWeight: '700', color: '#fff' }}>Save</Text>
             </Pressable>
           </View>
         </View>
-      </TouchableWithoutFeedback>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }

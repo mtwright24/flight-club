@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Keyboard, Pressable, RefreshControl, StyleSheet as RNStyleSheet, ScrollView, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Keyboard, Platform, Pressable, RefreshControl, StyleSheet as RNStyleSheet, ScrollView, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { SearchResultRowDefault, SearchResultRow as SearchResultRowExplicit } from '../components/SearchResultRow';
 import {
@@ -298,8 +298,7 @@ export default function SearchScreen() {
   };
 
   const handleFilterPress = () => {
-    // Simple stub bottom sheet: for now, show a basic alert-like state
-    // Real implementation can replace this with a proper ActionSheet
+    Alert.alert('Coming soon', 'Search filters are not available yet.');
   };
 
   const handlePressResult = useCallback(
@@ -317,6 +316,10 @@ export default function SearchScreen() {
       }
       if (item.type === 'person' && item.id) {
         router.push(`/profile/${item.id}`);
+      } else if (item.type === 'room' && item.id) {
+        router.push({ pathname: '/(tabs)/crew-rooms/room-home', params: { roomId: item.id } });
+      } else if (item.type === 'post' && item.id) {
+        router.push(`/post/${item.id}`);
       } else {
         router.push(item.route as any);
       }
@@ -326,6 +329,18 @@ export default function SearchScreen() {
 
   const handlePressRecent = useCallback(
     (recent: RecentSearchItem) => {
+      if (recent.type === 'person' && recent.id) {
+        router.push(`/profile/${recent.id}`);
+        return;
+      }
+      if (recent.type === 'room' && recent.id) {
+        router.push({ pathname: '/(tabs)/crew-rooms/room-home', params: { roomId: recent.id } });
+        return;
+      }
+      if (recent.type === 'post' && recent.id) {
+        router.push(`/post/${recent.id}`);
+        return;
+      }
       router.push(recent.route as any);
     },
     [router]
@@ -533,7 +548,16 @@ export default function SearchScreen() {
           >
             <Ionicons name="chevron-back" size={24} color={colors.cardBg} />
           </Pressable>
-          <Text style={styles.headerTitle}>Search</Text>
+          <Text
+            style={styles.headerTitle}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            {...(Platform.OS === 'ios'
+              ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.82 }
+              : {})}
+          >
+            Search
+          </Text>
           <Pressable
             onPress={handleFilterPress}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -674,10 +698,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: colors.headerRed,
+    minHeight: 60,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 6,
+    borderBottomLeftRadius: 14,
+    borderBottomRightRadius: 14,
   },
   headerTitle: {
+    flex: 1,
+    minWidth: 0,
+    marginHorizontal: 8,
+    textAlign: 'center',
     fontSize: 18,
     fontWeight: '800',
     color: colors.cardBg,

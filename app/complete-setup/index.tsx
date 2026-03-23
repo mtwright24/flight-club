@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import DropDownPicker from 'react-native-dropdown-picker';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -120,7 +120,7 @@ export default function CompleteSetupScreen() {
 
 	if (loading) {
 		return (
-			<SafeAreaView style={{ flex: 1, backgroundColor: colors.screenBg }} edges={['top']}>
+			<SafeAreaView style={{ flex: 1, backgroundColor: colors.screenBg }} edges={['top', 'bottom', 'left', 'right']}>
 				<View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
 					<ActivityIndicator size="large" color={colors.headerRed} />
 				</View>
@@ -129,7 +129,7 @@ export default function CompleteSetupScreen() {
 	}
 
 	return (
-		<SafeAreaView style={{ flex: 1, backgroundColor: colors.screenBg }} edges={['top']}>
+		<SafeAreaView style={{ flex: 1, backgroundColor: colors.screenBg }} edges={['top', 'bottom', 'left', 'right']}>
 			<View style={styles.header}>
 				<Pressable onPress={() => router.back()} style={styles.headerBtn}>
 					<Text style={styles.headerBack}>{'<'}</Text>
@@ -137,7 +137,13 @@ export default function CompleteSetupScreen() {
 				<Text style={styles.headerTitle}>Complete Your Setup</Text>
 				<View style={{ width: 40 }} />
 			</View>
-			<View style={{ padding: spacing.md }}>
+			<KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+			<ScrollView
+				keyboardShouldPersistTaps="handled"
+				keyboardDismissMode="on-drag"
+				contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl }}
+				showsVerticalScrollIndicator={false}
+			>
 				<Text style={styles.sectionTitle}>Missing Items</Text>
 				{missing.length === 0 ? (
 					<Text style={styles.completeText}>All setup items are complete!</Text>
@@ -223,7 +229,8 @@ export default function CompleteSetupScreen() {
 				<Pressable style={styles.saveButton} onPress={handleSave} disabled={saving}>
 					<Text style={styles.saveText}>{saving ? 'Saving...' : 'Save'}</Text>
 				</Pressable>
-			</View>
+			</ScrollView>
+			</KeyboardAvoidingView>
 		</SafeAreaView>
 	);
 }

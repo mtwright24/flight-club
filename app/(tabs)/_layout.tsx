@@ -32,6 +32,20 @@ function CrewRoomsHeaderNav() {
   );
 }
 
+function CrewToolsHeaderNav() {
+  const router = useRouter();
+  const unread = useNotificationsBadge();
+  return (
+    <SectionHeader
+      title="Crew Tools"
+      notificationCount={unread}
+      dmCount={0} // TODO: wire up real count
+      onPressBell={() => router.push('/notifications')}
+      onPressMessage={() => router.push('/messages-inbox')}
+    />
+  );
+}
+
 function SocialFeedHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
@@ -95,9 +109,21 @@ export default function TabsLayout() {
         name="crew-rooms"
         options={{
           title: 'Crew Rooms',
+          tabBarLabel: 'Crew Room',
       header: () => <CrewRoomsHeaderNav />,
           tabBarIcon: ({ focused, color }) => (
             <Ionicons name={focused ? 'chatbubbles' : 'chatbubbles-outline'} size={24} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="crew-tools"
+        options={{
+          title: 'Crew Tools',
+          tabBarLabel: 'Crew Tools',
+          header: () => <CrewToolsHeaderNav />,
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? 'grid' : 'grid-outline'} size={24} color={color} />
           ),
         }}
       />

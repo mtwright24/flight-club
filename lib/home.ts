@@ -77,14 +77,22 @@ export async function getRecentActivity(userId: string): Promise<any[]> {
 
 // F) Unread counts
 export async function getUnreadCounts(userId: string): Promise<{ notifications: number; messages: number }> {
-  // Notifications: support both is_read (new) and read (legacy) columns by checking both if present.
-  const { count: notifCount } = await supabase
+  // Notifications: count unread for this user only; fail soft if table/column missing (same as badge helpers).
+  let notifCount = 0;
+  const { count, error: notifError } = await supabase
     .from('notifications')
     .select('id', { count: 'exact', head: true })
     .eq('user_id', userId)
-    // Prefer is_read=false if column exists; if your table uses `read` instead,
-    // adjust this filter in your database or add a view/alias.
     .eq('is_read', false as any);
+  if (!notifError) {
+    notifCount = count ?? 0;
+  } else {
+    const code = (notifError as any).code;
+    const message = String((notifError as any).message || '');
+    if (code !== 'PGRST205' && !message.includes("Could not find the table 'public.notifications'")) {
+      console.warn('[getUnreadCounts] notifications count failed:', notifError);
+    }
+  }
 
   // Unread DMs: count messages in conversations where the user is a participant,
   // is_read = false and sender is not the current user.
@@ -109,5 +117,5 @@ export async function getUnreadCounts(userId: string): Promise<{ notifications: 
     messageCount = 0;
   }
 
-  return { notifications: notifCount || 0, messages: messageCount };
+  return { notifications: notifCount, messages: messageCount };
 }

@@ -56,6 +56,25 @@ export async function canDM(currentUserId: string, targetUserId: string): Promis
   return !!follow;
 }
 
+/** PostgREST embeds use table names as JSON keys (e.g. dm_messages), not arbitrary aliases. */
+function nestedDmMessages(convo: any): any[] {
+  const raw = convo?.dm_messages ?? convo?.messages;
+  return Array.isArray(raw) ? raw : [];
+}
+
+function nestedDmParticipants(convo: any): any[] {
+  const raw = convo?.dm_conversation_participants ?? convo?.conversation_participants;
+  return Array.isArray(raw) ? raw : [];
+}
+
+function sortThreadsNewestFirst<T extends { last_message?: { created_at?: string } | null; updated_at?: string | null; created_at?: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const timeA = new Date(a.last_message?.created_at || a.updated_at || a.created_at || 0).getTime();
+    const timeB = new Date(b.last_message?.created_at || b.updated_at || b.created_at || 0).getTime();
+    return timeB - timeA;
+  });
+}
+
 // Fetch all DM conversations for a user (inbox)
 // Returns: [{ id, participants: [{user_id, profile}], last_message }]
 export async function fetchInbox(userId: string) {
@@ -80,39 +99,46 @@ export async function fetchInbox(userId: string) {
 
   if (error) throw error;
 
-  const mapped = (data || []).map((row: any) => {
-    const convo = row.dm_conversations;
-    const allMessages = convo.messages || [];
-    const lastMessage = allMessages.length
-      ? allMessages.reduce((latest: any, m: any) =>
-          !latest || new Date(m.created_at) > new Date(latest.created_at) ? m : latest,
-        null as any
-        )
-      : null;
+  const mapped = (data || [])
+    .map((row: any) => {
+      const convoRaw = row.dm_conversations;
+      const convo = Array.isArray(convoRaw) ? convoRaw[0] : convoRaw;
+      if (!convo?.id) return null;
 
-    return {
-      id: convo.id,
-      participants: (convo.conversation_participants || []).map((p: any) => ({
-        user_id: p.user_id,
-        profile: p.profiles || null,
-      })),
-      last_message: lastMessage
-        ? {
-            id: lastMessage.id,
-            sender_id: lastMessage.sender_id,
-            body: lastMessage.message_text ?? '',
-            created_at: lastMessage.created_at,
-            is_read: lastMessage.is_read,
-            message_type: lastMessage.message_type,
-            media_url: lastMessage.media_url,
-            post_id: lastMessage.post_id,
-          }
-        : null,
-    };
-  });
+      const allMessages = nestedDmMessages(convo);
+      const lastMessage = allMessages.length
+        ? allMessages.reduce((latest: any, m: any) =>
+            !latest || new Date(m.created_at) > new Date(latest.created_at) ? m : latest,
+          null as any
+          )
+        : null;
+
+      return {
+        id: convo.id,
+        created_at: convo.created_at,
+        updated_at: convo.updated_at,
+        participants: nestedDmParticipants(convo).map((p: any) => ({
+          user_id: p.user_id,
+          profile: p.profiles || null,
+        })),
+        last_message: lastMessage
+          ? {
+              id: lastMessage.id,
+              sender_id: lastMessage.sender_id,
+              body: lastMessage.message_text ?? '',
+              created_at: lastMessage.created_at,
+              is_read: lastMessage.is_read,
+              message_type: lastMessage.message_type,
+              media_url: lastMessage.media_url,
+              post_id: lastMessage.post_id,
+            }
+          : null,
+      };
+    })
+    .filter(Boolean) as any[];
 
   // Filter out conversations that are pending message requests for this user
-  return mapped.filter((c: any) => !pendingConversationIds.has(c.id));
+  return sortThreadsNewestFirst(mapped.filter((c: any) => !pendingConversationIds.has(c.id)));
 }
 
 // Fetch DM conversations that are pending as message requests for this user
@@ -138,36 +164,45 @@ export async function fetchMessageRequestsInbox(userId: string) {
 
   if (error) throw error;
 
-  return (data || []).map((row: any) => {
-    const convo = row.dm_conversations;
-    const allMessages = convo.messages || [];
-    const lastMessage = allMessages.length
-      ? allMessages.reduce((latest: any, m: any) =>
-          !latest || new Date(m.created_at) > new Date(latest.created_at) ? m : latest,
-        null as any
-        )
-      : null;
+  const mapped = (data || [])
+    .map((row: any) => {
+      const convoRaw = row.dm_conversations;
+      const convo = Array.isArray(convoRaw) ? convoRaw[0] : convoRaw;
+      if (!convo?.id) return null;
 
-    return {
-      id: convo.id,
-      participants: (convo.conversation_participants || []).map((p: any) => ({
-        user_id: p.user_id,
-        profile: p.profiles || null,
-      })),
-      last_message: lastMessage
-        ? {
-            id: lastMessage.id,
-            sender_id: lastMessage.sender_id,
-            body: lastMessage.message_text ?? '',
-            created_at: lastMessage.created_at,
-            is_read: lastMessage.is_read,
-            message_type: lastMessage.message_type,
-            media_url: lastMessage.media_url,
-            post_id: lastMessage.post_id,
-          }
-        : null,
-    };
-  });
+      const allMessages = nestedDmMessages(convo);
+      const lastMessage = allMessages.length
+        ? allMessages.reduce((latest: any, m: any) =>
+            !latest || new Date(m.created_at) > new Date(latest.created_at) ? m : latest,
+          null as any
+          )
+        : null;
+
+      return {
+        id: convo.id,
+        created_at: convo.created_at,
+        updated_at: convo.updated_at,
+        participants: nestedDmParticipants(convo).map((p: any) => ({
+          user_id: p.user_id,
+          profile: p.profiles || null,
+        })),
+        last_message: lastMessage
+          ? {
+              id: lastMessage.id,
+              sender_id: lastMessage.sender_id,
+              body: lastMessage.message_text ?? '',
+              created_at: lastMessage.created_at,
+              is_read: lastMessage.is_read,
+              message_type: lastMessage.message_type,
+              media_url: lastMessage.media_url,
+              post_id: lastMessage.post_id,
+            }
+          : null,
+      };
+    })
+    .filter(Boolean) as any[];
+
+  return sortThreadsNewestFirst(mapped);
 }
 
 // Fetch all messages in a DM thread

@@ -7,6 +7,7 @@ import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { Platform } from 'react-native';
+import { notificationPathToHref } from '../../lib/notifications';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from './useAuth';
 
@@ -67,7 +68,7 @@ export function usePushNotifications() {
       const data: any = response.notification.request.content.data || {};
       if (data.route) {
         try {
-          router.push(data.route as any);
+          router.push(notificationPathToHref(String(data.route)));
         } catch (err) {
           console.log('[Push] Failed to route from notification', err);
         }

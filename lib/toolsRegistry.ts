@@ -46,10 +46,18 @@ export const toolsRegistry: ToolEntry[] = [
   {
     id: 'utility-hub',
     title: 'Utility Hub',
-    keywords: ['tools', 'utilities', 'hub', 'quick', 'shortcuts'],
-    description: 'Jump into Flight Club’s collection of crew tools.',
-    route: '/utility',
+    keywords: ['utility', 'utilities', 'hub', 'quick', 'shortcuts'],
+    description: 'Home quick-access placeholder (separate from the Crew Tools tab).',
+    route: '/(screens)/utility',
     iconName: 'grid-outline',
+  },
+  {
+    id: 'crew-tools',
+    title: 'Crew Tools',
+    keywords: ['tools', 'crew tools', 'ecosystem', 'catalog', 'utilities'],
+    description: 'Open the Crew Tools tab — main tools pillar in the bottom navigation.',
+    route: '/(tabs)/crew-tools',
+    iconName: 'apps-outline',
   },
   {
     id: 'crew-rooms',

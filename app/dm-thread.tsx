@@ -13,7 +13,12 @@ import { pickAndUploadMessageMedia } from '../src/lib/uploadMessageMedia';
 export default function DMThread() {
   const { session } = useAuth();
   const userId = session?.user?.id;
-  const { conversationId } = useLocalSearchParams();
+  const rawConversationId = useLocalSearchParams<{ conversationId?: string | string[] }>().conversationId;
+  const conversationId = useMemo(() => {
+    if (typeof rawConversationId === 'string') return rawConversationId;
+    if (Array.isArray(rawConversationId) && rawConversationId[0]) return rawConversationId[0];
+    return '';
+  }, [rawConversationId]);
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<any[]>([]);
@@ -25,14 +30,20 @@ export default function DMThread() {
   const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
-    if (!conversationId || !userId) return;
+    if (!conversationId) {
+      setLoading(false);
+      setMessages([]);
+      setParticipants([]);
+      return;
+    }
+    if (!userId) return;
 
     let unsubscribe: (() => void) | null = null;
 
     const loadThread = async () => {
       setLoading(true);
       try {
-        const thread = await fetchThread(conversationId as string, userId);
+        const thread = await fetchThread(conversationId, userId);
         setMessages(thread.messages);
         setParticipants(thread.participants);
       } catch (e) {
@@ -41,7 +52,7 @@ export default function DMThread() {
       }
       setLoading(false);
 
-      unsubscribe = subscribeToConversationMessages(conversationId as string, (msg) => {
+      unsubscribe = subscribeToConversationMessages(conversationId, (msg) => {
         setMessages((prev) => {
           if (prev.find((m: any) => m.id === msg.id)) return prev;
           return [...prev, msg];
@@ -61,7 +72,7 @@ export default function DMThread() {
     if (!input.trim() || !conversationId || !userId) return;
     setSending(true);
     try {
-      await sendMessage(conversationId as string, userId, input.trim());
+      await sendMessage(conversationId, userId, input.trim());
       setInput('');
     } catch (e) {}
     setSending(false);
@@ -94,6 +105,30 @@ export default function DMThread() {
       loadSharedPosts();
     }
   }, [messages, sharedPosts]);
+
+  if (!conversationId) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#B5161E' }} edges={['left', 'right', 'top']}>
+        <FlightClubHeader
+          title="Direct Message"
+          showLogo={false}
+          bellCount={0}
+          dmCount={0}
+          onPressBell={() => router.push('/notifications')}
+          onPressMessage={() => router.push('/messages-inbox')}
+          onPressMenu={() => router.push('/menu')}
+        />
+        <View style={{ flex: 1, backgroundColor: '#fff', padding: 24, justifyContent: 'center' }}>
+          <Text style={{ fontSize: 16, color: '#64748b', textAlign: 'center', marginBottom: 16 }}>
+            This conversation could not be opened.
+          </Text>
+          <Pressable onPress={() => router.replace('/messages-inbox')} style={{ alignSelf: 'center', padding: 12 }}>
+            <Text style={{ color: '#B5161E', fontWeight: '700' }}>Back to Messages</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   const renderItem = ({ item }: { item: any }) => {
     const isMe = item.sender_id === userId;
@@ -172,10 +207,10 @@ export default function DMThread() {
             onPress={async () => {
               if (!conversationId) return;
               setUploading(true);
-              const result = await pickAndUploadMessageMedia(conversationId as string, 'camera');
+              const result = await pickAndUploadMessageMedia(conversationId, 'camera');
               setUploading(false);
               if (result.success && result.url && userId) {
-                await sendMessage(conversationId as string, userId, '', {
+                await sendMessage(conversationId, userId, '', {
                   messageType: result.type === 'video' ? 'video' : 'image',
                   mediaUrl: result.url,
                 });
@@ -200,10 +235,10 @@ export default function DMThread() {
             onPress={async () => {
               if (!conversationId) return;
               setUploading(true);
-              const result = await pickAndUploadMessageMedia(conversationId as string, 'library');
+              const result = await pickAndUploadMessageMedia(conversationId, 'library');
               setUploading(false);
               if (result.success && result.url && userId) {
-                await sendMessage(conversationId as string, userId, '', {
+                await sendMessage(conversationId, userId, '', {
                   messageType: result.type === 'video' ? 'video' : 'image',
                   mediaUrl: result.url,
                 });

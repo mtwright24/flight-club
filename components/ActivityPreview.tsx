@@ -14,6 +14,8 @@ export interface NotificationItem {
   data?: any;
   actor_avatar_url?: string;
   summary: string;
+  /** Relative time for display (same engine as Home trending cards). */
+  timeLabel?: string;
 }
 
 interface ActivityPreviewProps {
@@ -78,7 +80,7 @@ const ActivityPreview: React.FC<ActivityPreviewProps> = ({
                 <Text style={styles.summary} numberOfLines={2}>{item.summary}</Text>
               </View>
               <View style={styles.rightCol}>
-                <Text style={styles.timeAgo}>{item.created_at}</Text>
+                <Text style={styles.timeAgo}>{item.timeLabel ?? item.created_at}</Text>
                 {!item.is_read && <View style={styles.unreadDot} />}
               </View>
             </Pressable>

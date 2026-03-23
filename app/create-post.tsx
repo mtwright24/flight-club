@@ -58,11 +58,11 @@ export default function CreatePostScreen() {
   }
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.BG }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <SafeAreaView style={{ flex: 1 }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.BG }} edges={['top', 'bottom', 'left', 'right']}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <FlightClubHeader title="Create Post" />
-        <ScrollView 
-          contentContainerStyle={styles.container}
+        <ScrollView
+          contentContainerStyle={[styles.container, { flexGrow: 1, paddingBottom: 32 }]}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
         >
@@ -97,8 +97,8 @@ export default function CreatePostScreen() {
             <Text style={styles.primaryBtnText}>{uploading ? 'Posting...' : 'Post'}</Text>
           </Pressable>
         </ScrollView>
-      </SafeAreaView>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 

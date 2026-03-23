@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useAuth } from '../src/hooks/useAuth';
@@ -14,6 +14,7 @@ export default function NewMessageScreen() {
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<any[]>([]);
+  const [openingUserId, setOpeningUserId] = useState<string | null>(null);
   const router = useRouter();
 
   const handleSearch = useCallback(async (text: string) => {
@@ -44,17 +45,22 @@ export default function NewMessageScreen() {
   }, [userId]);
 
   const handleSelect = async (targetUser: any) => {
-    if (!userId) return;
+    if (!userId || openingUserId) return;
+    const tid = targetUser?.id as string | undefined;
+    if (!tid) return;
+    setOpeningUserId(tid);
     try {
-      const { conversationId } = await startDirectConversation(userId, targetUser.id);
-      router.push({ pathname: '/dm-thread', params: { conversationId } });
+      const { conversationId } = await startDirectConversation(userId, tid);
+      router.push({ pathname: '/dm-thread', params: { conversationId: String(conversationId) } });
     } catch (e: any) {
       Alert.alert('Unable to start message', e?.message || 'Please try again.');
+    } finally {
+      setOpeningUserId(null);
     }
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#B5161E' }} edges={['left', 'right', 'top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#B5161E' }} edges={['left', 'right', 'top', 'bottom']}>
       <FlightClubHeader
         title="New Message"
         showLogo={false}
@@ -64,49 +70,59 @@ export default function NewMessageScreen() {
         onPressMessage={() => router.push('/messages-inbox')}
         onPressMenu={() => router.push('/menu')}
       />
-      <View style={styles.searchRow}>
-        <Ionicons name="search" size={18} color="#64748b" style={{ marginRight: 8 }} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search crew…"
-          placeholderTextColor="#94a3b8"
-          value={search}
-          onChangeText={handleSearch}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      </View>
-      {searching ? (
-        <ActivityIndicator style={{ marginTop: 24 }} />
-      ) : (
-        <FlatList
-          data={results}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <TouchableOpacity style={styles.row} onPress={() => handleSelect(item)}>
-              {item.avatar_url ? (
-                <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
-              ) : (
-                <Ionicons name="person-circle" size={40} color="#cbd5e1" style={{ marginRight: 14 }} />
-              )}
-              <View>
-                <Text style={styles.name}>{item.display_name || 'Crew Member'}</Text>
-                {item.username ? (
-                  <Text style={styles.username}>@{item.username}</Text>
-                ) : null}
-              </View>
-            </TouchableOpacity>
-          )}
-          ListEmptyComponent={
-            search.trim() ? <Text style={styles.empty}>No crew found.</Text> : <Text style={styles.empty}>Start typing to search.</Text>
-          }
-        />
-      )}
+      <KeyboardAvoidingView style={styles.body} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={styles.searchRow}>
+          <Ionicons name="search" size={18} color="#64748b" style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search crew…"
+            placeholderTextColor="#94a3b8"
+            value={search}
+            onChangeText={handleSearch}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+        {searching ? (
+          <ActivityIndicator style={{ marginTop: 24 }} />
+        ) : (
+          <FlatList
+            style={{ flex: 1 }}
+            data={results}
+            keyExtractor={(item) => item.id}
+            keyboardDismissMode="on-drag"
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[styles.row, openingUserId === item.id && { opacity: 0.5 }]}
+                disabled={!!openingUserId}
+                onPress={() => handleSelect(item)}
+              >
+                {item.avatar_url ? (
+                  <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
+                ) : (
+                  <Ionicons name="person-circle" size={40} color="#cbd5e1" style={{ marginRight: 14 }} />
+                )}
+                <View>
+                  <Text style={styles.name}>{item.display_name || 'Crew Member'}</Text>
+                  {item.username ? (
+                    <Text style={styles.username}>@{item.username}</Text>
+                  ) : null}
+                </View>
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              search.trim() ? <Text style={styles.empty}>No crew found.</Text> : <Text style={styles.empty}>Start typing to search.</Text>
+            }
+          />
+        )}
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  body: { flex: 1, backgroundColor: '#fff' },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20, marginTop: 12, marginBottom: 8 },
   header: { fontSize: 22, fontWeight: '900', color: '#0f172a' },
   searchRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f1f5f9', borderRadius: 12, marginHorizontal: 20, marginBottom: 10, paddingHorizontal: 12, paddingVertical: 6 },
