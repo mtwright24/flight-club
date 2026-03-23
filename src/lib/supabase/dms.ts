@@ -75,6 +75,29 @@ function sortThreadsNewestFirst<T extends { last_message?: { created_at?: string
   });
 }
 
+// Generate a UUID v4 client-side (needed to insert dm_conversations without relying on RETURNING).
+function generateUuidV4(): string {
+  const cryptoAny: any = (globalThis as any).crypto;
+  if (cryptoAny?.randomUUID && typeof cryptoAny.randomUUID === 'function') {
+    return cryptoAny.randomUUID();
+  }
+
+  const bytes = new Uint8Array(16);
+  if (cryptoAny?.getRandomValues && typeof cryptoAny.getRandomValues === 'function') {
+    cryptoAny.getRandomValues(bytes);
+  } else {
+    // Fallback: still produces a valid UUID format, but is less cryptographically strong.
+    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+
+  // Set version to 4 and variant to RFC4122.
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 // Fetch all DM conversations for a user (inbox)
 // Returns: [{ id, participants: [{user_id, profile}], last_message }]
 export async function fetchInbox(userId: string) {
@@ -224,11 +247,17 @@ export async function fetchThread(conversationId: string, userId: string) {
   if (pError) throw pError;
 
   // Mark messages as read for this user (simplified: mark all incoming as read)
-  await supabase
-    .from('dm_messages')
-    .update({ is_read: true })
-    .eq('conversation_id', conversationId)
-    .neq('sender_id', userId);
+  try {
+    await supabase
+      .from('dm_messages')
+      .update({ is_read: true })
+      .eq('conversation_id', conversationId)
+      .neq('sender_id', userId);
+  } catch (e) {
+    // RLS update policy for dm_messages might not exist yet; failing to mark read should
+    // not prevent showing the thread on reload.
+    console.log('[DM] mark messages read failed (non-fatal):', e);
+  }
 
   const messages: DMMessage[] = (messagesData || []).map((m: any) => ({
     id: m.id,
@@ -364,20 +393,20 @@ export async function getOrCreateDirectConversation(userId1: string, userId2: st
   }
 
   // No existing 1:1 conversation – create one
-  const { data: convo, error: cError } = await supabase
-    .from('dm_conversations')
-    .insert({})
-    .select()
-    .single();
+  const conversationId = generateUuidV4();
 
-  if (cError) throw cError;
+  // Insert without RETURNING/select: avoids RLS visibility dependency on participants existing yet.
+  const { error: cError } = await supabase.from('dm_conversations').insert({ id: conversationId });
+  if (cError) {
+    throw cError;
+  }
 
   await supabase.from('dm_conversation_participants').insert([
-    { conversation_id: convo.id, user_id: userId1 },
-    { conversation_id: convo.id, user_id: userId2 },
+    { conversation_id: conversationId, user_id: userId1 },
+    { conversation_id: conversationId, user_id: userId2 },
   ]);
 
-  return convo.id as string;
+  return conversationId;
 }
 
 // Convenience helper that applies privacy rules and, if necessary,

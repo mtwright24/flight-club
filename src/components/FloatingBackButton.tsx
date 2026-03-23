@@ -36,7 +36,7 @@ export default function FloatingBackButton() {
 
   const path = (pathname || '/').replace(/\/$/, '') || '/';
   // These screens already render a primary back control in the red header row.
-  if (path === '/search' || path === '/notifications') {
+  if (path === '/search' || path === '/notifications' || path === '/dm-thread') {
     return null;
   }
 

@@ -14,7 +14,9 @@ export async function pickAndUploadMessageMedia(
         : ImagePicker.launchImageLibraryAsync;
 
     const result = await pickerFn({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      // Avoid deprecated Expo ImagePicker.MediaTypeOptions usage.
+      // We only support sending images and videos in DMs.
+      mediaTypes: ['images', 'videos'] as any,
       allowsEditing: source === 'camera',
       quality: 0.8,
     });
