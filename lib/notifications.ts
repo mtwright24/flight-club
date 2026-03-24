@@ -15,6 +15,8 @@ export type Notification = {
   title?: string | null;
   body?: string | null;
   is_read: boolean;
+  /** Some live schemas use `read` instead of `is_read` for the recipient flag. */
+  read?: boolean;
   /** Optional JSON payload; omit if `notifications.data` column is not deployed. */
   data?: any;
   actor?: {
@@ -22,6 +24,22 @@ export type Notification = {
     avatar_url?: string;
   };
 };
+
+/** Normalize `data` when PostgREST returns a string or null. */
+export function parseNotificationData(n: Pick<Notification, 'data'>): Record<string, unknown> {
+  const d = n.data;
+  if (d == null) return {};
+  if (typeof d === 'string') {
+    try {
+      const parsed = JSON.parse(d) as unknown;
+      return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof d === 'object') return d as Record<string, unknown>;
+  return {};
+}
 
 type NotificationCategory = 'social' | 'messages' | 'housing' | 'crew' | 'system';
 
@@ -175,7 +193,10 @@ export async function fetchUnreadNotificationsCount(): Promise<number> {
 }
 
 export function resolveNotificationRoute(n: Notification): string {
-  if (n.data?.route) return n.data.route;
+  const data = parseNotificationData(n);
+  const fromData = typeof data.route === 'string' ? data.route : '';
+  if (fromData) return fromData;
+
   switch (n.entity_type) {
     case 'post':
       return `/post/${n.entity_id}`;
@@ -183,11 +204,26 @@ export function resolveNotificationRoute(n: Notification): string {
       return `/post/${n.entity_id}/comments`;
     case 'room':
       return `/crew-rooms/${n.entity_id}`;
+    case 'room_post':
+      return `/room-post/${n.entity_id}`;
     case 'profile':
       return `/profile/${n.entity_id}`;
     case 'conversation':
       return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}`;
     default:
+      // Type-based fallbacks when entity_type drifted
+      if (n.type === 'message' || n.type === 'message_request') {
+        return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}`;
+      }
+      if (n.type === 'room_post' || n.type === 'crew_room_reply') {
+        return `/room-post/${n.entity_id}`;
+      }
+      if (n.type === 'like_post' || n.type === 'comment_post' || n.type === 'post_comment' || n.type === 'post_like') {
+        return `/post/${n.entity_id}`;
+      }
+      if (n.type === 'follow' || n.type === 'follow_request' || n.type === 'follow_accept') {
+        return `/profile/${n.entity_id}`;
+      }
       return '/';
   }
 }
@@ -215,6 +251,18 @@ export function notificationPathToHref(path: string): Href {
   }
 
   return trimmed as Href;
+}
+
+/**
+ * Href for navigation from a notification tap. Never returns home `/` for a real row — falls back to the notifications list.
+ */
+export function notificationTargetHref(n: Notification): Href {
+  const path = resolveNotificationRoute(n);
+  const trimmed = (path || '').trim();
+  if (!trimmed || trimmed === '/') {
+    return '/notifications';
+  }
+  return notificationPathToHref(trimmed);
 }
 
 export async function createNotification(input: {

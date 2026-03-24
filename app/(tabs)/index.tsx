@@ -18,11 +18,7 @@ import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts } from '../..
 import { getHomeToolShortcutIds } from '../../lib/homeShortcutsStorage';
 import { pickRecommendedTools } from '../../lib/homeRecommendedTools';
 import { toolsRegistry, toolShortcutChipLabel } from '../../lib/toolsRegistry';
-import {
-  notificationPathToHref,
-  resolveNotificationRoute,
-  type Notification,
-} from '../../lib/notifications';
+import { notificationTargetHref, type Notification } from '../../lib/notifications';
 import {
   getRecentNotifications,
   markNotificationRead,
@@ -704,11 +700,16 @@ function HomeActivitySnapshot() {
             try {
               await markNotificationRead(notification.id);
               setItems((prev) => prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n)));
-              const notifForRoute = notification as NotificationItem & { user_id: string };
-              const route = resolveNotificationRoute(notifForRoute as Notification);
-              router.push(notificationPathToHref(route));
-            } catch {
-              /* non-blocking */
+              router.push(
+                notificationTargetHref(notification as NotificationItem & Notification & { user_id: string }),
+              );
+            } catch (e) {
+              console.warn('[Home] activity item tap failed:', e);
+              try {
+                router.push('/notifications');
+              } catch {
+                /* ignore */
+              }
             }
           }}
           onPressViewAll={() => router.push('/notifications')}

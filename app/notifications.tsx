@@ -7,9 +7,8 @@ import {
   fetchNotifications,
   markAllNotificationsRead,
   markNotificationsRead,
-  notificationPathToHref,
   Notification,
-  resolveNotificationRoute,
+  notificationTargetHref,
 } from '../lib/notifications';
 import { useAuth } from '../src/hooks/useAuth';
 import { supabase } from '../src/lib/supabaseClient';
@@ -102,13 +101,19 @@ export default function NotificationsScreen() {
   };
 
   const handlePress = async (notification: Notification) => {
-    if (!notification.is_read) {
+    const alreadyRead =
+      typeof notification.is_read === 'boolean'
+        ? notification.is_read
+        : typeof notification.read === 'boolean'
+          ? notification.read
+          : false;
+    if (!alreadyRead) {
       await markNotificationsRead([notification.id]);
       setNotifications((prev) =>
-        prev.map((x) => (x.id === notification.id ? { ...x, is_read: true } : x)),
+        prev.map((x) => (x.id === notification.id ? { ...x, is_read: true, read: true } : x)),
       );
     }
-    router.push(notificationPathToHref(resolveNotificationRoute(notification)));
+    router.push(notificationTargetHref(notification));
   };
 
   const handleMarkAllRead = async () => {
@@ -121,7 +126,7 @@ export default function NotificationsScreen() {
       onPress={() => handlePress(item)}
       style={({ pressed }) => [
         styles.item,
-        !item.is_read && styles.unread,
+        !(typeof item.is_read === 'boolean' ? item.is_read : item.read) && styles.unread,
         pressed && { opacity: 0.7 },
       ]}
     >
@@ -139,7 +144,7 @@ export default function NotificationsScreen() {
       {item.data?.thumbnail ? (
         <Image source={{ uri: item.data.thumbnail }} style={styles.thumb} />
       ) : null}
-      {!item.is_read && <View style={styles.dot} />}
+      {!(typeof item.is_read === 'boolean' ? item.is_read : item.read) ? <View style={styles.dot} /> : null}
     </Pressable>
   );
 
@@ -177,8 +182,13 @@ export default function NotificationsScreen() {
   }, [notifications, filter]);
 
   const sections = useMemo(() => {
-    const newer = filtered.filter((n) => !n.is_read);
-    const earlier = filtered.filter((n) => n.is_read);
+    const isRead = (n: Notification) => {
+      if (typeof n.is_read === 'boolean') return n.is_read;
+      if (typeof n.read === 'boolean') return n.read;
+      return false;
+    };
+    const newer = filtered.filter((n) => !isRead(n));
+    const earlier = filtered.filter((n) => isRead(n));
     const out: { title: string; data: Notification[] }[] = [];
     if (newer.length) out.push({ title: 'New', data: newer });
     if (earlier.length) out.push({ title: 'Earlier', data: earlier });
@@ -237,14 +247,15 @@ export default function NotificationsScreen() {
           ))}
         </ScrollView>
         <SectionList
+          style={{ flex: 1 }}
           sections={sections}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item, index) => (item.id ? String(item.id) : `row-${index}`)}
           renderItem={renderItem}
           renderSectionHeader={renderSectionHeader}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           onEndReached={onEndReached}
           onEndReachedThreshold={0.5}
-          contentContainerStyle={{ paddingBottom: 32 }}
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
           ListEmptyComponent={
             loading ? (
               <ActivityIndicator style={{ marginTop: 40 }} />
@@ -280,6 +291,9 @@ function renderNotificationText(n: Notification) {
       return `${n.actor?.display_name || 'Someone'} invited you to join a crew room`;
     case 'mention':
       return `${n.actor?.display_name || 'Someone'} mentioned you`;
+    case 'message':
+    case 'message_request':
+      return `${n.actor?.display_name || 'Someone'} sent you a message`;
     default:
       return n.title || 'Notification';
   }
@@ -369,7 +383,8 @@ const styles = StyleSheet.create({
 });
 
 function formatTimeAgo(iso: string): string {
-  const date = new Date(iso);
+  const date = new Date(iso || 0);
+  if (Number.isNaN(date.getTime())) return '—';
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffSec = Math.floor(diffMs / 1000);
