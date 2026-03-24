@@ -2,21 +2,15 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter, type Href } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Dimensions, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ActivityPreview, { NotificationItem } from '../components/ActivityPreview';
 import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts, getTrendingRooms, getUnreadCounts } from '../lib/home';
-import {
-  notificationPathToHref,
-  resolveNotificationRoute,
-  type Notification,
-} from '../lib/notifications';
+import { notificationTargetHref, type Notification } from '../lib/notifications';
 import { getRecentNotifications, markNotificationRead, subscribeToNotifications } from '../lib/notifications-preview';
 import type { NotificationPreview } from '../lib/notifications-preview';
 import FlightClubHeader from '../src/components/FlightClubHeader';
-import { COLORS, SHADOW, SPACING } from '../src/styles/theme';
-
-const SCREEN_WIDTH = Dimensions.get('window').width;
+import { COLORS, RADIUS, SHADOW, SPACING } from '../src/styles/theme';
 
 function formatActivityTimeAgo(dateString: string) {
   const date = new Date(dateString);
@@ -32,7 +26,7 @@ function formatActivityTimeAgo(dateString: string) {
   return date.toLocaleDateString();
 }
 
-/** Map NotificationPreview → NotificationItem for ActivityPreview; add user_id for resolveNotificationRoute. */
+/** Map NotificationPreview → NotificationItem for ActivityPreview; add user_id for routing. */
 function mapPreviewToItem(
   p: NotificationPreview,
   currentUserId: string,
@@ -367,11 +361,16 @@ export default function HomeScreen() {
                   ...prev,
                   notifications: notification.is_read ? prev.notifications : Math.max(0, prev.notifications - 1),
                 }));
-                const notifForRoute = notification as NotificationItem & { user_id: string };
-                const route = resolveNotificationRoute(notifForRoute as Notification);
-                router.push(notificationPathToHref(route));
+                router.push(
+                  notificationTargetHref(notification as NotificationItem & Notification & { user_id: string }),
+                );
               } catch (e) {
-                // Optionally show error
+                console.warn('[home] activity item tap failed:', e);
+                try {
+                  router.push('/notifications' as Href);
+                } catch {
+                  /* ignore */
+                }
               }
             }}
             onPressViewAll={() => router.push('/notifications' as Href)}
@@ -617,6 +616,239 @@ function formatTimeAgo(dateString: string) {
   return date.toLocaleDateString();
 }
 
+/** Standalone styles for legacy `/home` route (do not require tab index — it does not export `styles`). */
 const styles = StyleSheet.create({
-  ...require('./(tabs)/index.tsx').styles,
+  safe: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  content: {
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: SPACING.xl,
+  },
+  welcome: {
+    paddingTop: SPACING.lg,
+    paddingBottom: SPACING.md,
+  },
+  welcomeTitle: {
+    color: COLORS.navy,
+    fontSize: 26,
+    fontWeight: '700',
+  },
+  welcomeMeta: {
+    color: COLORS.text2,
+    marginTop: 4,
+    fontSize: 14,
+  },
+  grid: {
+    flexDirection: 'row',
+    columnGap: SPACING.sm,
+    justifyContent: 'space-between',
+    marginBottom: SPACING.lg,
+  },
+  tile: {
+    width: '23%',
+    backgroundColor: COLORS.card,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.line,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: 6,
+    minHeight: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tileIcon: {
+    width: 56,
+    height: 56,
+    marginBottom: 6,
+  },
+  tileLabel: {
+    textAlign: 'center',
+    color: COLORS.navySoft,
+    fontWeight: '600',
+    fontSize: 9,
+    lineHeight: 11,
+  },
+  section: {
+    marginBottom: SPACING.lg,
+  },
+  sectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: SPACING.sm,
+  },
+  sectionTitle: {
+    color: COLORS.red,
+    fontWeight: '700',
+    fontSize: 16,
+    letterSpacing: 0.4,
+  },
+  sectionAction: {
+    color: COLORS.text2,
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  activityWrap: {
+    backgroundColor: 'rgba(14,42,71,0.05)',
+    borderRadius: 18,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.04)',
+  },
+  activityGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  activityPill: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.line,
+  },
+  activityText: {
+    color: COLORS.navySoft,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  trendingCard: {
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+    padding: 14,
+    justifyContent: 'space-between',
+  },
+  trendingTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  trendingAvatarWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    overflow: 'hidden',
+    marginRight: 10,
+  },
+  trendingAvatar: {
+    width: '100%',
+    height: '100%',
+  },
+  trendingAuthorBlock: {
+    flex: 1,
+  },
+  trendingAuthor: {
+    color: COLORS.navy,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  trendingTime: {
+    color: COLORS.text2,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  trendingReaction: {
+    backgroundColor: 'rgba(14,42,71,0.06)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  trendingReactionText: {
+    color: COLORS.navySoft,
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  trendingText: {
+    color: COLORS.navySoft,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  trendingBody: {
+    flex: 1,
+  },
+  chatCard: {
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+    padding: 14,
+    justifyContent: 'space-between',
+  },
+  chatTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  chatTitle: {
+    color: COLORS.navy,
+    fontWeight: '700',
+    fontSize: 14,
+    flexShrink: 1,
+    marginRight: 8,
+  },
+  chatLiveChip: {
+    backgroundColor: 'rgba(14,42,71,0.08)',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  chatLiveText: {
+    color: COLORS.navy,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  chatSubline: {
+    color: COLORS.text2,
+    fontSize: 11,
+    marginTop: 4,
+  },
+  chatMessage: {
+    color: COLORS.navySoft,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  awardCard: {
+    width: 190,
+    height: 220,
+    borderRadius: 22,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  awardContent: {
+    flex: 1,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 48,
+  },
+  awardAvatarImage: {
+    width: 118,
+    height: 118,
+    borderRadius: 59,
+    borderWidth: 0,
+  },
+  awardUserName: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  awardUserRole: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.9)',
+    textAlign: 'center',
+    marginTop: 2,
+  },
 });
