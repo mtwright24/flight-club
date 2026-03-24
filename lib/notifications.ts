@@ -1,4 +1,10 @@
 import type { Href } from 'expo-router';
+import {
+  canonicalNotificationType,
+  isPushEligibleForCanonicalType,
+  preferenceBucketForType,
+  resolveRouteFromRegistry,
+} from './notificationRegistry';
 import { supabase } from '../src/lib/supabaseClient';
 
 let missingNotificationsTableLogged = false;
@@ -40,8 +46,6 @@ export function parseNotificationData(n: Pick<Notification, 'data'>): Record<str
   if (typeof d === 'object') return d as Record<string, unknown>;
   return {};
 }
-
-type NotificationCategory = 'social' | 'messages' | 'housing' | 'crew' | 'system';
 
 export async function fetchNotifications(page = 1, pageSize = 30): Promise<Notification[]> {
   const {
@@ -192,39 +196,51 @@ export async function fetchUnreadNotificationsCount(): Promise<number> {
   return countUnreadNotificationsForUser(user.id);
 }
 
+/**
+ * Rewrites known legacy or mistaken `data.route` values to paths that match Expo Router files.
+ * (e.g. crew room post notifications store `/room-post/:postId`, but `room-post` is the composer.)
+ */
+function normalizeNotificationDataRoute(path: string): string {
+  const trimmed = (path || '').trim();
+  if (!trimmed) return trimmed;
+
+  const noComments = trimmed.match(/^\/post\/([^/?#]+)\/comments\/?(?:[?#]|$)/);
+  if (noComments) {
+    return `/post/${noComments[1]}`;
+  }
+
+  const roomPostId = trimmed.match(/^\/room-post\/([^/?#]+)\/?(?:[?#]|$)/);
+  if (roomPostId) {
+    return `/room-post-detail?postId=${encodeURIComponent(roomPostId[1])}`;
+  }
+
+  return trimmed;
+}
+
 export function resolveNotificationRoute(n: Notification): string {
   const data = parseNotificationData(n);
   const fromData = typeof data.route === 'string' ? data.route : '';
-  if (fromData) return fromData;
+  if (fromData) return normalizeNotificationDataRoute(fromData);
 
   switch (n.entity_type) {
     case 'post':
       return `/post/${n.entity_id}`;
     case 'comment':
-      return `/post/${n.entity_id}/comments`;
+      // No `post/[id]/comments` route; post detail already loads comments.
+      return `/post/${n.entity_id}`;
     case 'room':
       return `/crew-rooms/${n.entity_id}`;
     case 'room_post':
-      return `/room-post/${n.entity_id}`;
+      return `/room-post-detail?postId=${encodeURIComponent(n.entity_id)}`;
     case 'profile':
       return `/profile/${n.entity_id}`;
     case 'conversation':
       return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}`;
-    default:
-      // Type-based fallbacks when entity_type drifted
-      if (n.type === 'message' || n.type === 'message_request') {
-        return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}`;
-      }
-      if (n.type === 'room_post' || n.type === 'crew_room_reply') {
-        return `/room-post/${n.entity_id}`;
-      }
-      if (n.type === 'like_post' || n.type === 'comment_post' || n.type === 'post_comment' || n.type === 'post_like') {
-        return `/post/${n.entity_id}`;
-      }
-      if (n.type === 'follow' || n.type === 'follow_request' || n.type === 'follow_accept') {
-        return `/profile/${n.entity_id}`;
-      }
+    default: {
+      const fromRegistry = resolveRouteFromRegistry(n);
+      if (fromRegistry !== null) return fromRegistry;
       return '/';
+    }
   }
 }
 
@@ -236,18 +252,30 @@ export function notificationPathToHref(path: string): Href {
   const trimmed = (path || '').trim();
   if (!trimmed || trimmed === '/') return '/';
 
+  const pathOnly = (pathname: string) => pathname.replace(/^\//, '') || pathname;
+
   const tryDm = (pathname: string, query: string) => {
-    const base = pathname.replace(/^\//, '') || pathname;
-    if (base !== 'dm-thread') return null;
+    if (pathOnly(pathname) !== 'dm-thread') return null;
     const conversationId = new URLSearchParams(query).get('conversationId');
     if (!conversationId) return null;
     return { pathname: '/dm-thread' as const, params: { conversationId: String(conversationId) } };
   };
 
+  const tryRoomPostDetail = (pathname: string, query: string) => {
+    if (pathOnly(pathname) !== 'room-post-detail') return null;
+    const postId = new URLSearchParams(query).get('postId');
+    if (!postId) return null;
+    return { pathname: '/room-post-detail' as const, params: { postId: String(postId) } };
+  };
+
   const q = trimmed.indexOf('?');
   if (q !== -1) {
-    const mapped = tryDm(trimmed.slice(0, q), trimmed.slice(q + 1));
-    if (mapped) return mapped;
+    const pathnamePart = trimmed.slice(0, q);
+    const queryPart = trimmed.slice(q + 1);
+    const dm = tryDm(pathnamePart, queryPart);
+    if (dm) return dm;
+    const rpd = tryRoomPostDetail(pathnamePart, queryPart);
+    if (rpd) return rpd;
   }
 
   return trimmed as Href;
@@ -339,22 +367,14 @@ export async function createNotification(input: {
   }
 }
 
-function getCategoryForType(type: string): NotificationCategory {
+type PreferenceBucket = 'messages' | 'crew_rooms' | 'social' | 'housing' | 'updates';
+
+/** Maps notification `type` to a preference column bucket; registry first, then legacy strings not in the locked list. */
+function getPreferenceBucketForPush(type: string): PreferenceBucket {
+  const fromRegistry = preferenceBucketForType(type);
+  if (fromRegistry) return fromRegistry;
+
   switch (type) {
-    case 'follow':
-    case 'follow_request':
-    case 'follow_accept':
-    case 'post_like':
-    case 'like_post':
-    case 'post_comment':
-    case 'comment_post':
-    case 'comment_reply':
-    case 'mention_post':
-    case 'mention_comment':
-    case 'mention':
-      return 'social';
-    case 'message':
-    case 'message_request':
     case 'dm_share_post':
     case 'dm_share_media':
       return 'messages';
@@ -369,15 +389,42 @@ function getCategoryForType(type: string): NotificationCategory {
     case 'crew_room_invite':
     case 'crew_invite':
     case 'room_post':
-      return 'crew';
+      return 'crew_rooms';
     case 'system_announcement':
     default:
-      return 'system';
+      return 'updates';
   }
+}
+
+function socialTypeUsesFollowsToggle(type: string): boolean {
+  const key = canonicalNotificationType(type);
+  if (key) return ['follow', 'follow_request', 'follow_accept'].includes(key);
+  return type === 'follow' || type === 'follow_request' || type === 'follow_accept';
+}
+
+function socialTypeUsesCommentsToggle(type: string): boolean {
+  const key = canonicalNotificationType(type);
+  if (key) return ['comment_post', 'reply_comment'].includes(key);
+  return type === 'post_comment' || type === 'comment_post' || type === 'comment_reply';
+}
+
+function socialTypeUsesLikesToggle(type: string): boolean {
+  const key = canonicalNotificationType(type);
+  if (key) return key === 'like_post';
+  return type === 'post_like' || type === 'like_post';
+}
+
+function socialTypeUsesMentionsToggle(type: string): boolean {
+  const key = canonicalNotificationType(type);
+  if (key) return ['mention_post', 'mention_comment'].includes(key);
+  return type === 'mention_post' || type === 'mention_comment' || type === 'mention';
 }
 
 async function shouldSendPush(userId: string, type: string): Promise<boolean> {
   try {
+    const pushEligible = isPushEligibleForCanonicalType(type);
+    if (pushEligible === false) return false;
+
     const { data, error } = await supabase
       .from('notification_preferences')
       .select('*')
@@ -387,34 +434,22 @@ async function shouldSendPush(userId: string, type: string): Promise<boolean> {
     if (!data) return true;
 
     if (data.master_push === false) return false;
-    const category = getCategoryForType(type);
-    switch (category) {
+    const bucket = getPreferenceBucketForPush(type);
+    switch (bucket) {
       case 'messages':
         return data.messages !== false;
-      case 'crew':
+      case 'crew_rooms':
         return data.crew_rooms !== false;
       case 'social':
-        if (
-          (type === 'follow' || type === 'follow_request' || type === 'follow_accept') &&
-          data.follows === false
-        )
-          return false;
-        if (
-          (type === 'post_comment' || type === 'comment_post' || type === 'comment_reply') &&
-          data.comments === false
-        )
-          return false;
-        if ((type === 'post_like' || type === 'like_post') && data.likes === false) return false;
-        if (
-          (type === 'mention_post' || type === 'mention_comment' || type === 'mention') &&
-          data.mentions === false
-        )
-          return false;
+        if (socialTypeUsesFollowsToggle(type) && data.follows === false) return false;
+        if (socialTypeUsesCommentsToggle(type) && data.comments === false) return false;
+        if (socialTypeUsesLikesToggle(type) && data.likes === false) return false;
+        if (socialTypeUsesMentionsToggle(type) && data.mentions === false) return false;
         return true;
       case 'housing':
-        // Re-use "updates" toggle for housing-related alerts if needed
+        // Legacy housing bucket matched `updates` before the registry; keep behavior.
         return data.updates !== false;
-      case 'system':
+      case 'updates':
       default:
         return data.updates !== false;
     }
