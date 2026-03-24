@@ -134,8 +134,8 @@ export default function CreatePostScreen({
       console.log('[CREATE POST] Result:', result);
 
       if (result.success) {
+        // onPosted replaces the stack with room-home; do not also onClose()/router.back() or navigation races.
         onPosted();
-        onClose();
       }
     } catch (error) {
       console.error('Post creation error:', error);

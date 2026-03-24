@@ -15,7 +15,8 @@ export type Notification = {
   title?: string | null;
   body?: string | null;
   is_read: boolean;
-  data: any;
+  /** Optional JSON payload; omit if `notifications.data` column is not deployed. */
+  data?: any;
   actor?: {
     display_name?: string;
     avatar_url?: string;
@@ -31,12 +32,15 @@ export async function fetchNotifications(page = 1, pageSize = 30): Promise<Notif
   } = await supabase.auth.getUser();
   if (authError || !user?.id) return [];
 
-  const { data, error } = await supabase
-    .from('notifications')
-    .select('*, actor:actor_id(display_name, avatar_url)')
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
-    .range((page - 1) * pageSize, page * pageSize - 1);
+  const base = () =>
+    supabase
+      .from('notifications')
+      .select('*, actor:actor_id(display_name, avatar_url)')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+
+  let { data, error } = await base();
 
   if (error) {
     const code = (error as any).code;
@@ -49,6 +53,18 @@ export async function fetchNotifications(page = 1, pageSize = 30): Promise<Notif
         missingNotificationsTableLogged = true;
       }
       return [];
+    }
+
+    // Retry without actor embed (FK / RLS / relationship hints often break the join while rows are readable).
+    const { data: plain, error: errPlain } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+
+    if (!errPlain) {
+      return plain || [];
     }
     throw error;
   }
@@ -108,6 +124,46 @@ export async function markAllNotificationsRead(): Promise<void> {
   }
 }
 
+/**
+ * Unread count for a user. Tries `is_read` first; falls back to `read` when the column name differs (live schema drift).
+ */
+export async function countUnreadNotificationsForUser(userId: string): Promise<number> {
+  if (!userId) return 0;
+
+  const { count, error } = await supabase
+    .from('notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('is_read', false as any);
+
+  if (!error) return count ?? 0;
+
+  const code = (error as any).code;
+  const message = String((error as any).message || '');
+  if (code === 'PGRST205' || message.includes("Could not find the table 'public.notifications'")) {
+    if (!missingNotificationsTableLogged) {
+      console.log(
+        "[Notifications] notifications table not found; returning 0 for unread count. Run the notifications migration in Supabase to enable this feature."
+      );
+      missingNotificationsTableLogged = true;
+    }
+    return 0;
+  }
+
+  const msgLower = message.toLowerCase();
+  if (msgLower.includes('is_read') || msgLower.includes('column')) {
+    const alt = await supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('read', false as any);
+    if (!alt.error) return alt.count ?? 0;
+  }
+
+  console.warn('[Notifications] Unread count query failed (check notifications schema/RLS):', message);
+  return 0;
+}
+
 // Fetch total unread notifications for the current signed-in user
 export async function fetchUnreadNotificationsCount(): Promise<number> {
   const {
@@ -115,29 +171,7 @@ export async function fetchUnreadNotificationsCount(): Promise<number> {
     error: authError,
   } = await supabase.auth.getUser();
   if (authError || !user?.id) return 0;
-
-  const { count, error } = await supabase
-    .from('notifications')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', user.id)
-    .eq('is_read', false);
-
-  if (error) {
-    const code = (error as any).code;
-    const message = String((error as any).message || '');
-    if (code === 'PGRST205' || message.includes("Could not find the table 'public.notifications'")) {
-      if (!missingNotificationsTableLogged) {
-        console.log(
-          "[Notifications] notifications table not found; returning 0 for unread count. Run the notifications migration in Supabase to enable this feature."
-        );
-        missingNotificationsTableLogged = true;
-      }
-      return 0;
-    }
-    throw error;
-  }
-
-  return count ?? 0;
+  return countUnreadNotificationsForUser(user.id);
 }
 
 export function resolveNotificationRoute(n: Notification): string {
@@ -185,6 +219,7 @@ export function notificationPathToHref(path: string): Href {
 
 export async function createNotification(input: {
   user_id: string;
+  /** Ignored for the DB row; `public.create_notification` sets actor from `auth.uid()`. Kept for call-site compatibility. */
   actor_id: string;
   type: string;
   entity_type: string;
@@ -194,20 +229,26 @@ export async function createNotification(input: {
   body?: string | null;
   data?: any;
 }): Promise<void> {
-  const { data, error } = await supabase
-    .from('notifications')
-    .insert([
-      {
-        ...input,
-        data: input.data || {},
-      },
-    ])
-    .select('id, user_id, actor_id, type, entity_type, entity_id, title, body, data, created_at')
-    .single();
+  const { data: newId, error } = await supabase.rpc('create_notification', {
+    p_recipient_id: input.user_id,
+    p_type: input.type,
+    p_entity_type: input.entity_type,
+    p_entity_id: input.entity_id,
+    p_secondary_id: input.secondary_id ?? null,
+    p_title: input.title ?? null,
+    p_body: input.body ?? null,
+    p_data: input.data ?? {},
+  });
 
   if (error) {
     const code = (error as any).code;
     const message = String((error as any).message || '');
+    console.warn('[Notifications] create_notification RPC failed:', {
+      code,
+      message,
+      type: input.type,
+      recipient_id: input.user_id,
+    });
     if (code === 'PGRST205' || message.includes("Could not find the table 'public.notifications'")) {
       if (!missingNotificationsTableLogged) {
         console.log(
@@ -220,11 +261,32 @@ export async function createNotification(input: {
     throw error;
   }
 
-  if (data) {
+  if (newId) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const actorId = user?.id ?? null;
+    const rowForPush: Notification = {
+      id: String(newId),
+      created_at: new Date().toISOString(),
+      user_id: input.user_id,
+      actor_id: actorId,
+      type: input.type,
+      entity_type: input.entity_type,
+      entity_id: input.entity_id,
+      secondary_id: input.secondary_id ?? null,
+      title: input.title ?? null,
+      body: input.body ?? null,
+      is_read: false,
+      data: input.data || {},
+    };
     try {
-      await sendPushForNotification(data as Notification);
+      await sendPushForNotification(rowForPush);
     } catch (pushErr) {
       console.log('[Notifications] Failed to send push notification:', pushErr);
+    }
+    if (__DEV__) {
+      console.log('[Notifications] create_notification OK', input.type, String(newId));
     }
   }
 }

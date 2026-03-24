@@ -39,7 +39,7 @@ export default function NotificationsScreen() {
       setHasMore(data.length === 30);
       setPage(1);
     } catch (e) {
-      // ignore
+      console.warn('[Notifications] reloadFirstPage failed:', e);
     } finally {
       setLoading(false);
     }
@@ -95,7 +95,7 @@ export default function NotificationsScreen() {
       setHasMore(data.length === 30);
       setPage(nextPage);
     } catch (e) {
-      // ignore
+      console.warn('[Notifications] onEndReached load failed:', e);
     } finally {
       setLoading(false);
     }

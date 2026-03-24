@@ -1,5 +1,9 @@
 import { supabase } from '../src/lib/supabaseClient';
-import { Notification, resolveNotificationRoute } from './notifications';
+import {
+  Notification,
+  countUnreadNotificationsForUser,
+  resolveNotificationRoute,
+} from './notifications';
 
 export type NotificationPreview = Notification & { summary: string; actor_avatar_url?: string };
 
@@ -56,16 +60,7 @@ export async function getRecentNotifications(userId: string, limit = 4): Promise
 }
 
 export async function getUnreadCount(userId: string): Promise<number> {
-  const { count, error } = await supabase
-    .from('notifications')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('is_read', false);
-  if (error) {
-    if (isMissingNotificationsTable(error)) return 0;
-    throw error;
-  }
-  return count ?? 0;
+  return countUnreadNotificationsForUser(userId);
 }
 
 export async function markNotificationRead(notificationId: string): Promise<void> {

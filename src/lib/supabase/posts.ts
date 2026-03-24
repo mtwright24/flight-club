@@ -278,7 +278,8 @@ export async function createRoomPost(
           .map((m: any) => m.user_id)
           .filter((id: string) => id && id !== userId);
 
-        await Promise.all(
+        // Fire-and-forget: do not await — createNotification can await Expo push fetch and block UI success.
+        void Promise.all(
           targets.map((targetId: string) =>
             createNotification({
               user_id: targetId,
@@ -290,7 +291,9 @@ export async function createRoomPost(
               data: { route: `/room-post/${data.id}` },
             })
           )
-        );
+        ).catch((notifyError) => {
+          console.log('[Notifications] Failed to create room_post notifications:', notifyError);
+        });
       }
     } catch (notifyError) {
       console.log('[Notifications] Failed to create room_post notifications:', notifyError);

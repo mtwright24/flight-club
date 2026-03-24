@@ -41,6 +41,7 @@ export async function createPost({ text, media, mode }: { text: string; media: a
   return data;
 }
 import { supabase } from '../src/lib/supabaseClient';
+import { createNotification } from './notifications';
 
 let missingFollowsTableLogged = false;
 
@@ -295,6 +296,20 @@ export async function getIsFollowing(userId: string) {
 export async function followUser(userId: string) {
   const myId = await getCurrentUserId();
   const { error } = await supabase.from('follows').insert({ follower_id: myId, following_id: userId });
+  if (!error && myId && userId !== myId) {
+    try {
+      await createNotification({
+        user_id: userId,
+        actor_id: myId,
+        type: 'follow',
+        entity_type: 'profile',
+        entity_id: myId,
+        data: { route: `/profile/${myId}` },
+      });
+    } catch (notifyErr) {
+      console.warn('[Notifications] follow notification failed (follow row still saved):', notifyErr);
+    }
+  }
   return { error };
 }
 
