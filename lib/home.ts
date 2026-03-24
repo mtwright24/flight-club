@@ -77,6 +77,7 @@ export async function getRecentActivity(userId: string): Promise<any[]> {
 }
 
 // F) Unread counts
+/** `notifications` = unread rows in `notifications` table. `messages` = unread DM rows in `dm_messages` (not notif count). */
 export async function getUnreadCounts(userId: string): Promise<{ notifications: number; messages: number }> {
   const notifCount = await countUnreadNotificationsForUser(userId);
 

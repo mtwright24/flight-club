@@ -1,3 +1,4 @@
+import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
@@ -16,6 +17,7 @@ export default function NewMessageScreen() {
   const [results, setResults] = useState<any[]>([]);
   const [openingUserId, setOpeningUserId] = useState<string | null>(null);
   const router = useRouter();
+  const navigation = useNavigation();
 
   const handleSearch = useCallback(async (text: string) => {
     setSearch(text);
@@ -67,7 +69,9 @@ export default function NewMessageScreen() {
         bellCount={0}
         dmCount={0}
         onPressBell={() => router.push('/notifications')}
-        onPressMessage={() => router.push('/messages-inbox')}
+        onPressMessage={() =>
+          navigation.canGoBack() ? navigation.goBack() : router.replace('/messages-inbox')
+        }
         onPressMenu={() => router.push('/menu')}
       />
       <KeyboardAvoidingView style={styles.body} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>

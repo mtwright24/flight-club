@@ -169,6 +169,13 @@ export default function RootLayout() {
             }}
           />
           <Stack.Screen
+            name="new-message"
+            options={{
+              presentation: 'card',
+              headerShown: false,
+            }}
+          />
+          <Stack.Screen
             name="dm-thread"
             options={{
               presentation: 'card',

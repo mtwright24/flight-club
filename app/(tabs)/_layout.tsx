@@ -3,15 +3,17 @@ import { Ionicons } from '@expo/vector-icons';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
 import SectionHeader from '../../src/components/navigation/SectionHeader';
 import { useRouter } from 'expo-router';
+import { useDmUnreadBadge } from '../../src/hooks/useDmUnreadBadge';
 import { useNotificationsBadge } from '../../src/hooks/useNotificationsBadge';
 
 function HomeHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
+  const dmUnread = useDmUnreadBadge();
   return (
     <FlightClubHeader
 		  bellCount={unread}
-      dmCount={0} // TODO: wire up real count
+      dmCount={dmUnread}
       onPressBell={() => router.push('/notifications')}
       onPressMessage={() => router.push('/messages-inbox')}
     />
@@ -21,11 +23,12 @@ function HomeHeaderNav() {
 function CrewRoomsHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
+  const dmUnread = useDmUnreadBadge();
   return (
     <SectionHeader
       title="Crew Rooms"
 		  notificationCount={unread}
-      dmCount={0} // TODO: wire up real count
+      dmCount={dmUnread}
       onPressBell={() => router.push('/notifications')}
       onPressMessage={() => router.push('/messages-inbox')}
     />
@@ -35,11 +38,12 @@ function CrewRoomsHeaderNav() {
 function CrewToolsHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
+  const dmUnread = useDmUnreadBadge();
   return (
     <SectionHeader
       title="Crew Tools"
-      notificationCount={unread}
-      dmCount={0} // TODO: wire up real count
+		  notificationCount={unread}
+      dmCount={dmUnread}
       onPressBell={() => router.push('/notifications')}
       onPressMessage={() => router.push('/messages-inbox')}
     />
@@ -49,11 +53,12 @@ function CrewToolsHeaderNav() {
 function SocialFeedHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
+  const dmUnread = useDmUnreadBadge();
   return (
     <SectionHeader
       title="Social Feed"
 		  notificationCount={unread}
-      dmCount={0} // TODO: wire up real count
+      dmCount={dmUnread}
       onPressBell={() => router.push('/notifications')}
       onPressMessage={() => router.push('/messages-inbox')}
     />
@@ -63,11 +68,12 @@ function SocialFeedHeaderNav() {
 function ProfileHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
+  const dmUnread = useDmUnreadBadge();
   return (
     <SectionHeader
       title="Profile"
 		  notificationCount={unread}
-      dmCount={0} // TODO: wire up real count
+      dmCount={dmUnread}
       onPressBell={() => router.push('/notifications')}
       onPressMessage={() => router.push('/messages-inbox')}
     />

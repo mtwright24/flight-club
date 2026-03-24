@@ -27,28 +27,34 @@ export async function pickAndUploadMessageMedia(
 
     const asset = result.assets[0];
     const uri = asset.uri;
-    const ext = uri.split('.').pop() || (asset.type === 'video' ? 'mp4' : 'jpg');
+    const ext = uri.split('.').pop()?.split('?')[0] || (asset.type === 'video' ? 'mp4' : 'jpg');
     const path = `dm-media/${conversationId}/${Date.now()}.${ext}`;
+    const contentType = asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg');
 
-    const file = {
-      uri,
-      name: asset.fileName || `dm-media.${ext}`,
-      type: asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg'),
-    } as any;
-    const formData = new FormData();
-    formData.append('file', file);
+    // React Native: multipart FormData uploads are unreliable with supabase-js; use binary body.
+    const response = await fetch(uri);
+    if (!response.ok) {
+      throw new Error('Could not read the selected media file.');
+    }
+    const arrayBuffer = await response.arrayBuffer();
 
     const { error: uploadError } = await supabase.storage
       .from('messages-media')
-      .upload(path, formData as any, { contentType: file.type, upsert: false });
+      .upload(path, arrayBuffer, { contentType, upsert: false });
 
     if (uploadError) throw uploadError;
 
-    const { data } = supabase.storage.from('messages-media').getPublicUrl(path);
-    const publicUrl = data?.publicUrl || uri;
+    const bucket = supabase.storage.from('messages-media');
+    const { data: pub } = bucket.getPublicUrl(path);
+
+    // Private buckets: prefer a time-limited signed URL so <Image> can load; public buckets still work via getPublicUrl.
+    const sevenDaysSec = 60 * 60 * 24 * 7;
+    const { data: signed, error: signErr } = await bucket.createSignedUrl(path, sevenDaysSec);
+    const displayUrl =
+      !signErr && signed?.signedUrl ? signed.signedUrl : pub?.publicUrl || uri;
     const type: 'image' | 'video' = asset.type === 'video' ? 'video' : 'image';
 
-    return { success: true, url: publicUrl, type };
+    return { success: true, url: displayUrl, type };
   } catch (error: any) {
     console.error('Error uploading DM media:', error);
     return { success: false, error: error?.message || 'Failed to upload media' };

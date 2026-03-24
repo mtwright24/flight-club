@@ -7,6 +7,7 @@ import { followUser, getFollowingFeed, getIsFollowing, getMyProfile, unfollowUse
 import SectionHeader from '../../src/components/navigation/SectionHeader';
 import PostsFeed from '../../src/components/posts/PostsFeed';
 import MediaGrid from '../../src/components/profile/MediaGrid';
+import { useDmUnreadBadge } from '../../src/hooks/useDmUnreadBadge';
 import { useNotificationsBadge } from '../../src/hooks/useNotificationsBadge';
 import { startDirectConversation } from '../../src/lib/supabase/dms';
 import { fetchUserMedia } from '../../src/lib/supabase/profileMedia';
@@ -39,6 +40,7 @@ export default function ProfileScreen() {
         ? params.id[0]
         : '';
   const unread = useNotificationsBadge();
+  const dmUnread = useDmUnreadBadge();
   const [activeTab, setActiveTab] = useState('Posts');
   const [posts, setPosts] = useState<any[]>([]);
   const [postsLoading, setPostsLoading] = useState(true);
@@ -184,7 +186,7 @@ export default function ProfileScreen() {
       <SectionHeader
         title="Profile"
         notificationCount={unread}
-        dmCount={0}
+        dmCount={dmUnread}
         onPressBell={() => {
           try { router.push('/notifications'); } catch (e) { console.log('no route /notifications'); }
         }}

@@ -1,6 +1,13 @@
 import { createNotification } from '../../../lib/notifications';
 import { supabase } from '../supabaseClient';
 
+/** TEMP: proof logs for DM data path — search `[DM-DEBUG]` in Metro. Strip once root cause is confirmed in prod. */
+function dmDebug(label: string, payload?: Record<string, unknown>) {
+  if (__DEV__) {
+    console.log('[DM-DEBUG]', label, payload ? JSON.stringify(payload) : '');
+  }
+}
+
 export type Conversation = {
   id: string;
   created_at: string;
@@ -56,23 +63,124 @@ export async function canDM(currentUserId: string, targetUserId: string): Promis
   return !!follow;
 }
 
-/** PostgREST embeds use table names as JSON keys (e.g. dm_messages), not arbitrary aliases. */
-function nestedDmMessages(convo: any): any[] {
-  const raw = convo?.dm_messages ?? convo?.messages;
-  return Array.isArray(raw) ? raw : [];
-}
-
-function nestedDmParticipants(convo: any): any[] {
-  const raw = convo?.dm_conversation_participants ?? convo?.conversation_participants;
-  return Array.isArray(raw) ? raw : [];
-}
-
 function sortThreadsNewestFirst<T extends { last_message?: { created_at?: string } | null; updated_at?: string | null; created_at?: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => {
     const timeA = new Date(a.last_message?.created_at || a.updated_at || a.created_at || 0).getTime();
     const timeB = new Date(b.last_message?.created_at || b.updated_at || b.created_at || 0).getTime();
     return timeB - timeA;
   });
+}
+
+function mapRawRowToLastMessage(m: any) {
+  if (!m) return null;
+  return {
+    id: m.id,
+    sender_id: m.sender_id,
+    body: m.message_text ?? '',
+    created_at: m.created_at,
+    is_read: m.is_read,
+    message_type: m.message_type,
+    media_url: m.media_url,
+    post_id: m.post_id,
+  };
+}
+
+/** Latest row per thread — avoids broken/unordered nested `dm_messages` embeds on inbox queries. */
+async function fetchLatestMessageForConversation(conversationId: string) {
+  const { data, error } = await supabase
+    .from('dm_messages')
+    .select('id, sender_id, message_text, created_at, is_read, message_type, media_url, post_id')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.warn('[DM] fetchLatestMessageForConversation:', conversationId, error.message);
+    dmDebug('fetchLatestMessageForConversation:error', { conversationId, message: error.message, code: (error as any).code });
+    return null;
+  }
+  return data;
+}
+
+type InboxConversation = {
+  id: string;
+  created_at: string;
+  updated_at: string | null;
+  participants: { user_id: string; profile: any }[];
+  last_message: ReturnType<typeof mapRawRowToLastMessage>;
+};
+
+async function buildInboxConversationsForIds(convoIds: string[]): Promise<InboxConversation[]> {
+  if (!convoIds.length) {
+    dmDebug('buildInboxConversationsForIds:emptyInput', {});
+    return [];
+  }
+
+  dmDebug('buildInboxConversationsForIds:start', {
+    convoCount: convoIds.length,
+    sampleIds: convoIds.slice(0, 3),
+  });
+
+  const [{ data: convoRows, error: convoErr }, firstParts] = await Promise.all([
+    supabase.from('dm_conversations').select('id, created_at, updated_at').in('id', convoIds),
+    supabase
+      .from('dm_conversation_participants')
+      .select('conversation_id, user_id, profiles:profiles!user_id(id, display_name, avatar_url)')
+      .in('conversation_id', convoIds),
+  ]);
+
+  // Inbox must still list threads if dm_conversations RLS is stricter than participants/messages.
+  if (convoErr) {
+    console.warn('[DM] inbox: dm_conversations batch read failed (using message timestamps only):', convoErr.message);
+  }
+
+  let allParts = firstParts.data;
+  let partErr = firstParts.error;
+  if (partErr) {
+    console.warn('[DM] inbox: participant+profile embed failed, retrying without profile join:', partErr.message);
+    const retry = await supabase
+      .from('dm_conversation_participants')
+      .select('conversation_id, user_id')
+      .in('conversation_id', convoIds);
+    if (retry.error) throw retry.error;
+    allParts = (retry.data || []).map((p: any) => ({ ...p, profiles: null }));
+  }
+
+  const metaById = new Map((convoErr ? [] : convoRows || []).map((c: any) => [c.id, c]));
+  const participantsByConvo = new Map<string, { user_id: string; profile: any }[]>();
+  for (const p of allParts || []) {
+    const cid = (p as any).conversation_id;
+    if (!participantsByConvo.has(cid)) participantsByConvo.set(cid, []);
+    participantsByConvo.get(cid)!.push({
+      user_id: (p as any).user_id,
+      profile: (p as any).profiles || null,
+    });
+  }
+
+  const lastRows = await Promise.all(convoIds.map((id) => fetchLatestMessageForConversation(id)));
+
+  const built = convoIds.map((id, i) => {
+    const meta = metaById.get(id);
+    return {
+      id,
+      created_at: meta?.created_at ?? '',
+      updated_at: meta?.updated_at ?? null,
+      participants: participantsByConvo.get(id) || [],
+      last_message: mapRawRowToLastMessage(lastRows[i]),
+    };
+  });
+
+  dmDebug('buildInboxConversationsForIds:built', {
+    rowCount: built.length,
+    perConvoSample: built.slice(0, 12).map((c) => ({
+      id: c.id,
+      participantCount: c.participants.length,
+      hasLastMessage: !!c.last_message,
+    })),
+  });
+
+  return built;
 }
 
 // Generate a UUID v4 client-side (needed to insert dm_conversations without relying on RETURNING).
@@ -101,6 +209,8 @@ function generateUuidV4(): string {
 // Fetch all DM conversations for a user (inbox)
 // Returns: [{ id, participants: [{user_id, profile}], last_message }]
 export async function fetchInbox(userId: string) {
+  dmDebug('fetchInbox:start', { userId });
+
   // Conversations that are pending message requests *to* this user should
   // not appear in the main inbox; they will be handled in a Requests list.
   const { data: pendingReqs } = await supabase
@@ -110,58 +220,39 @@ export async function fetchInbox(userId: string) {
     .eq('status', 'pending');
   const pendingConversationIds = new Set((pendingReqs || []).map((r: any) => r.conversation_id));
 
+  // Do NOT use dm_conversations!inner here: if RLS differs between participants and conversations,
+  // the inner join returns zero rows even though the user has valid participant rows (inbox looks empty).
   const { data, error } = await supabase
     .from('dm_conversation_participants')
-    .select(
-      `conversation_id,
-      dm_conversations!inner(id, created_at, updated_at),
-      profiles:profiles!user_id(id, display_name, avatar_url),
-      dm_conversations(dm_messages(id, sender_id, message_text, created_at, is_read, message_type, media_url, post_id), dm_conversation_participants(user_id, profiles!user_id(id, display_name, avatar_url)))`
-    )
+    .select('conversation_id')
     .eq('user_id', userId);
 
-  if (error) throw error;
+  if (error) {
+    dmDebug('fetchInbox:participantQueryError', { message: error.message, code: (error as any).code });
+    throw error;
+  }
 
-  const mapped = (data || [])
-    .map((row: any) => {
-      const convoRaw = row.dm_conversations;
-      const convo = Array.isArray(convoRaw) ? convoRaw[0] : convoRaw;
-      if (!convo?.id) return null;
+  const convoIds = [...new Set((data || []).map((row: any) => row.conversation_id).filter(Boolean))];
+  dmDebug('fetchInbox:participantRows', {
+    rawParticipantRowCount: data?.length ?? 0,
+    uniqueConvoIds: convoIds.length,
+    pendingRequestConvoCount: pendingConversationIds.size,
+  });
 
-      const allMessages = nestedDmMessages(convo);
-      const lastMessage = allMessages.length
-        ? allMessages.reduce((latest: any, m: any) =>
-            !latest || new Date(m.created_at) > new Date(latest.created_at) ? m : latest,
-          null as any
-          )
-        : null;
+  const mapped = await buildInboxConversationsForIds(convoIds);
 
-      return {
-        id: convo.id,
-        created_at: convo.created_at,
-        updated_at: convo.updated_at,
-        participants: nestedDmParticipants(convo).map((p: any) => ({
-          user_id: p.user_id,
-          profile: p.profiles || null,
-        })),
-        last_message: lastMessage
-          ? {
-              id: lastMessage.id,
-              sender_id: lastMessage.sender_id,
-              body: lastMessage.message_text ?? '',
-              created_at: lastMessage.created_at,
-              is_read: lastMessage.is_read,
-              message_type: lastMessage.message_type,
-              media_url: lastMessage.media_url,
-              post_id: lastMessage.post_id,
-            }
-          : null,
-      };
-    })
-    .filter(Boolean) as any[];
+  const filtered = mapped.filter((c: any) => !pendingConversationIds.has(c.id));
+  if (__DEV__ && mapped.length > 0 && filtered.length === 0) {
+    dmDebug('fetchInbox:WARNING_allMappedFilteredAsPending', {
+      mappedIds: mapped.map((m) => m.id),
+      pendingIds: [...pendingConversationIds],
+    });
+  }
+
+  dmDebug('fetchInbox:result', { beforePendingFilter: mapped.length, afterPendingFilter: filtered.length });
 
   // Filter out conversations that are pending message requests for this user
-  return sortThreadsNewestFirst(mapped.filter((c: any) => !pendingConversationIds.has(c.id)));
+  return sortThreadsNewestFirst(filtered);
 }
 
 // Fetch DM conversations that are pending as message requests for this user
@@ -173,90 +264,68 @@ export async function fetchMessageRequestsInbox(userId: string) {
     .eq('status', 'pending');
 
   if (reqError || !reqs || reqs.length === 0) return [];
-  const convoIds = reqs.map((r: any) => r.conversation_id);
+  const convoIds = [...new Set(reqs.map((r: any) => r.conversation_id).filter(Boolean))];
 
-  const { data, error } = await supabase
-    .from('dm_conversation_participants')
-    .select(
-      `conversation_id,
-      dm_conversations!inner(id, created_at, updated_at),
-      profiles:profiles!user_id(id, display_name, avatar_url),
-      dm_conversations(dm_messages(id, sender_id, message_text, created_at, is_read, message_type, media_url, post_id), dm_conversation_participants(user_id, profiles!user_id(id, display_name, avatar_url)))`
-    )
-    .in('conversation_id', convoIds);
-
-  if (error) throw error;
-
-  const mapped = (data || [])
-    .map((row: any) => {
-      const convoRaw = row.dm_conversations;
-      const convo = Array.isArray(convoRaw) ? convoRaw[0] : convoRaw;
-      if (!convo?.id) return null;
-
-      const allMessages = nestedDmMessages(convo);
-      const lastMessage = allMessages.length
-        ? allMessages.reduce((latest: any, m: any) =>
-            !latest || new Date(m.created_at) > new Date(latest.created_at) ? m : latest,
-          null as any
-          )
-        : null;
-
-      return {
-        id: convo.id,
-        created_at: convo.created_at,
-        updated_at: convo.updated_at,
-        participants: nestedDmParticipants(convo).map((p: any) => ({
-          user_id: p.user_id,
-          profile: p.profiles || null,
-        })),
-        last_message: lastMessage
-          ? {
-              id: lastMessage.id,
-              sender_id: lastMessage.sender_id,
-              body: lastMessage.message_text ?? '',
-              created_at: lastMessage.created_at,
-              is_read: lastMessage.is_read,
-              message_type: lastMessage.message_type,
-              media_url: lastMessage.media_url,
-              post_id: lastMessage.post_id,
-            }
-          : null,
-      };
-    })
-    .filter(Boolean) as any[];
-
-  return sortThreadsNewestFirst(mapped);
+  try {
+    const mapped = await buildInboxConversationsForIds(convoIds);
+    return sortThreadsNewestFirst(mapped);
+  } catch (e) {
+    console.warn('[DM] fetchMessageRequestsInbox build failed:', e);
+    dmDebug('fetchMessageRequestsInbox:buildFailed', {
+      message: e instanceof Error ? e.message : String(e),
+    });
+    return [];
+  }
 }
 
 // Fetch all messages in a DM thread
 // Returns: { messages: [{ id, body, sender_id, created_at }], participants: [{ user_id, profile }] }
 export async function fetchThread(conversationId: string, userId: string) {
+  const cid = (conversationId || '').trim();
+  if (!cid) {
+    throw new Error('Missing conversation id');
+  }
+
   const { data: messagesData, error: msgError } = await supabase
     .from('dm_messages')
     .select('id, conversation_id, sender_id, message_text, created_at, is_read, message_type, media_url, post_id')
-    .eq('conversation_id', conversationId)
+    .eq('conversation_id', cid)
     .order('created_at', { ascending: true });
 
-  if (msgError) throw msgError;
+  if (msgError) {
+    dmDebug('fetchThread:messagesError', { cid, message: msgError.message, code: (msgError as any).code });
+    throw msgError;
+  }
 
-  const { data: participantsData, error: pError } = await supabase
+  dmDebug('fetchThread:messagesOk', { cid, messageRowCount: messagesData?.length ?? 0, viewerUserId: userId });
+
+  let participantsData: any[] | null = null;
+  const { data: partsWithProfile, error: pError } = await supabase
     .from('dm_conversation_participants')
     .select('user_id, profiles:profiles!user_id(id, display_name, avatar_url)')
-    .eq('conversation_id', conversationId);
+    .eq('conversation_id', cid);
 
-  if (pError) throw pError;
+  if (pError) {
+    console.warn('[DM] fetchThread: profile embed failed, retrying participants only:', pError.message);
+    const { data: partsPlain, error: p2 } = await supabase
+      .from('dm_conversation_participants')
+      .select('user_id')
+      .eq('conversation_id', cid);
+    if (p2) throw p2;
+    participantsData = (partsPlain || []).map((p: any) => ({ user_id: p.user_id, profiles: null }));
+  } else {
+    participantsData = partsWithProfile;
+  }
 
-  // Mark messages as read for this user (simplified: mark all incoming as read)
-  try {
-    await supabase
-      .from('dm_messages')
-      .update({ is_read: true })
-      .eq('conversation_id', conversationId)
-      .neq('sender_id', userId);
-  } catch (e) {
-    // RLS update policy for dm_messages might not exist yet; failing to mark read should
-    // not prevent showing the thread on reload.
-    console.log('[DM] mark messages read failed (non-fatal):', e);
+  // Mark peer messages as read for this viewer. Supabase returns { error }; it does not throw.
+  const { error: readErr } = await supabase
+    .from('dm_messages')
+    .update({ is_read: true })
+    .eq('conversation_id', cid)
+    .neq('sender_id', userId);
+
+  if (readErr) {
+    console.warn('[DM] mark messages read failed (non-fatal):', readErr.message);
   }
 
   const messages: DMMessage[] = (messagesData || []).map((m: any) => ({
@@ -276,6 +345,12 @@ export async function fetchThread(conversationId: string, userId: string) {
     profile: p.profiles || null,
   }));
 
+  dmDebug('fetchThread:done', {
+    cid,
+    messageCount: messages.length,
+    participantCount: participants.length,
+  });
+
   return { messages, participants };
 }
 
@@ -287,7 +362,7 @@ export async function sendMessage(
   options?: { messageType?: string; mediaUrl?: string | null; postId?: string | null }
 ) {
   const payload = {
-    conversation_id: conversationId,
+    conversation_id: (conversationId || '').trim(),
     sender_id: senderId,
     message_text: body,
     message_type: options?.messageType || 'text',
@@ -301,20 +376,66 @@ export async function sendMessage(
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    dmDebug('sendMessage:insertError', {
+      conversationId: payload.conversation_id,
+      message: error.message,
+      code: (error as any).code,
+    });
+    throw error;
+  }
 
-  // Update conversation updated_at
-  await supabase
+  dmDebug('sendMessage:insertOk', {
+    conversationId: payload.conversation_id,
+    messageId: data.id,
+    senderId,
+    messageType: payload.message_type,
+  });
+
+  if (__DEV__) {
+    void (async () => {
+      const convId = payload.conversation_id;
+      const [{ count: convCount, error: e1 }, { count: partCount, error: e2 }, { count: msgCount, error: e3 }] =
+        await Promise.all([
+          supabase.from('dm_conversations').select('id', { count: 'exact', head: true }).eq('id', convId),
+          supabase
+            .from('dm_conversation_participants')
+            .select('user_id', { count: 'exact', head: true })
+            .eq('conversation_id', convId),
+          supabase.from('dm_messages').select('id', { count: 'exact', head: true }).eq('conversation_id', convId),
+        ]);
+      dmDebug('sendMessage:postInsertCounts', {
+        conversationId: convId,
+        dm_conversations_headCount: convCount ?? -1,
+        dm_conversation_participants_headCount: partCount ?? -1,
+        dm_messages_headCount: msgCount ?? -1,
+        errConversations: e1?.message,
+        errParticipants: e2?.message,
+        errMessages: e3?.message,
+      });
+    })();
+  }
+
+  const notifyBody =
+    (body && body.trim()) ||
+    (options?.messageType === 'video' ? '[Video]' : options?.mediaUrl ? '[Photo]' : '');
+
+  // Update conversation updated_at (must use same trimmed id as insert)
+  const convId = payload.conversation_id;
+  const { error: updErr } = await supabase
     .from('dm_conversations')
     .update({ updated_at: new Date().toISOString() })
-    .eq('id', conversationId);
+    .eq('id', convId);
+  if (updErr) {
+    dmDebug('sendMessage:updateConversationTimestampFailed', { convId, message: updErr.message });
+  }
 
   // Notify all other participants in the conversation about the new DM
   try {
     const { data: participants, error: pError } = await supabase
       .from('dm_conversation_participants')
       .select('user_id')
-      .eq('conversation_id', conversationId);
+      .eq('conversation_id', convId);
 
     if (!pError && participants) {
       const targets = participants
@@ -328,12 +449,14 @@ export async function sendMessage(
             actor_id: senderId,
             type: 'message',
             entity_type: 'conversation',
-            entity_id: conversationId,
-            body,
-            data: { route: `/dm-thread?conversationId=${conversationId}` },
+            entity_id: convId,
+            body: notifyBody,
+            data: { route: `/dm-thread?conversationId=${convId}` },
           })
         )
       );
+    } else if (pError) {
+      dmDebug('sendMessage:notifyParticipantQueryFailed', { convId, message: pError.message });
     }
   } catch (notifyError) {
     console.log('[Notifications] Failed to create DM notification:', notifyError);

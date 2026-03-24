@@ -1,7 +1,7 @@
-
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getPostById } from '../lib/feed';
@@ -15,9 +15,13 @@ export default function DMThread() {
   const userId = session?.user?.id;
   const rawConversationId = useLocalSearchParams<{ conversationId?: string | string[] }>().conversationId;
   const conversationId = useMemo(() => {
-    if (typeof rawConversationId === 'string') return rawConversationId;
-    if (Array.isArray(rawConversationId) && rawConversationId[0]) return rawConversationId[0];
-    return '';
+    const raw =
+      typeof rawConversationId === 'string'
+        ? rawConversationId
+        : Array.isArray(rawConversationId) && rawConversationId[0]
+          ? rawConversationId[0]
+          : '';
+    return typeof raw === 'string' ? raw.trim() : '';
   }, [rawConversationId]);
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -28,7 +32,25 @@ export default function DMThread() {
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [sharedPosts, setSharedPosts] = useState<Record<string, any>>({});
+  const [mediaLoadFailed, setMediaLoadFailed] = useState<Record<string, boolean>>({});
   const flatListRef = useRef<FlatList>(null);
+  const conversationIdRef = useRef(conversationId);
+  const firstFocusOfConversationRef = useRef(true);
+  const messagesRef = useRef<any[]>([]);
+  messagesRef.current = messages;
+
+  useEffect(() => {
+    conversationIdRef.current = conversationId;
+  }, [conversationId]);
+
+  /** New thread: drop stale rows immediately so we never flash the previous conversation. */
+  useEffect(() => {
+    firstFocusOfConversationRef.current = true;
+    setMessages([]);
+    setParticipants([]);
+    setThreadLoadError(null);
+    setMediaLoadFailed({});
+  }, [conversationId]);
 
   const requestMediaPermission = async (source: 'camera' | 'library'): Promise<boolean> => {
     try {
@@ -55,63 +77,104 @@ export default function DMThread() {
     }
   };
 
-  useEffect(() => {
-    if (!conversationId) {
-      setLoading(false);
-      setMessages([]);
-      setParticipants([]);
-      return;
-    }
-    if (!userId) return;
-
-    let unsubscribe: (() => void) | null = null;
-
-    const loadThread = async () => {
-      setLoading(true);
-      setThreadLoadError(null);
-      // Optimistically clear so we don't show the previous thread while loading a new one.
-      setMessages([]);
-      setParticipants([]);
-      let lastError: any = null;
-
-      // Minimal retry to avoid transient "Network request failed" blank threads.
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const thread = await fetchThread(conversationId, userId);
-          setMessages(thread.messages);
-          setParticipants(thread.participants);
-          lastError = null;
-          break;
-        } catch (e) {
-          lastError = e;
-          if (attempt < 2) {
-            await new Promise((r) => setTimeout(r, 800 * attempt));
-          }
-        }
+  // Refetch whenever the screen gains focus (fixes empty thread after back → re-enter).
+  useFocusEffect(
+    useCallback(() => {
+      if (__DEV__) {
+        console.log('[DM-DEBUG] DMThread:focusEffect', {
+          rawConversationId: rawConversationId,
+          normalizedConversationId: conversationId,
+          hasUserId: !!userId,
+        });
       }
-
-      if (lastError) {
-        setThreadLoadError('Unable to load messages right now. Please check your connection and try again.');
+      if (!conversationId || !userId) {
         setLoading(false);
         return;
       }
-      setLoading(false);
 
-      unsubscribe = subscribeToConversationMessages(conversationId, (msg) => {
-        setMessages((prev) => {
-          if (prev.find((m: any) => m.id === msg.id)) return prev;
-          return [...prev, msg];
-        });
-        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+      let cancelled = false;
+      const targetConvo = conversationId;
+      const showFullSpinner = firstFocusOfConversationRef.current;
+
+      if (showFullSpinner) {
+        setLoading(true);
+        setThreadLoadError(null);
+      }
+
+      const run = async () => {
+        let lastError: unknown = null;
+        try {
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+              const thread = await fetchThread(targetConvo, userId);
+              if (cancelled || conversationIdRef.current !== targetConvo) return;
+              setMessages(thread.messages);
+              setParticipants(thread.participants);
+              setThreadLoadError(null);
+              lastError = null;
+              break;
+            } catch (e) {
+              lastError = e;
+              if (__DEV__) {
+                console.log('[DM-DEBUG] DMThread:fetchThreadAttemptFailed', {
+                  targetConvo,
+                  attempt,
+                  err: e instanceof Error ? e.message : String(e),
+                });
+              }
+              if (attempt < 2) {
+                await new Promise((r) => setTimeout(r, 800 * attempt));
+              }
+            }
+          }
+
+          if (cancelled || conversationIdRef.current !== targetConvo) return;
+
+          if (lastError) {
+            if (messagesRef.current.length === 0) {
+              if (__DEV__) {
+                console.log('[DM-DEBUG] DMThread:settingThreadLoadError', {
+                  targetConvo,
+                  messagesRefLen: messagesRef.current.length,
+                });
+              }
+              setThreadLoadError('Unable to load messages right now. Please check your connection and try again.');
+            }
+          } else {
+            setThreadLoadError(null);
+            firstFocusOfConversationRef.current = false;
+          }
+        } finally {
+          // Always clear spinner for this convo when this focus-run finishes (fixes Strict Mode / blur abort leaving loading stuck).
+          if (!cancelled && conversationIdRef.current === targetConvo) {
+            setLoading(false);
+          }
+        }
+      };
+
+      void run();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [conversationId, userId, rawConversationId])
+  );
+
+  useEffect(() => {
+    if (!conversationId) return;
+
+    const unsubscribe = subscribeToConversationMessages(conversationId, (msg) => {
+      setMessages((prev) => {
+        if (prev.find((m: any) => m.id === msg.id)) return prev;
+        return [...prev, msg];
       });
-    };
-
-    loadThread();
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+    });
 
     return () => {
-      if (unsubscribe) unsubscribe();
+      unsubscribe();
     };
-  }, [conversationId, userId]);
+  }, [conversationId]);
 
   const handleSend = async () => {
     if (!input.trim() || !conversationId || !userId) return;
@@ -213,29 +276,46 @@ export default function DMThread() {
 
   const renderItem = ({ item }: { item: any }) => {
     const isMe = item.sender_id === userId;
-    const sender = participants.find((p: any) => p.user_id === item.sender_id);
-    const isImage = item.message_type === 'image' && item.media_url;
-    const isVideo = item.message_type === 'video' && item.media_url;
+    const mt = String(item.message_type || 'text').toLowerCase();
+    const hasUrl = !!item.media_url;
+    const isImage = mt === 'image';
+    const isVideo = mt === 'video';
+    const showImage = isImage && hasUrl && !mediaLoadFailed[item.id];
+    const showImageFallback =
+      (isImage && hasUrl && !!mediaLoadFailed[item.id]) || (isImage && !hasUrl);
     const isPostShare = item.message_type === 'post_share' && item.post_id;
     const sharedPost = isPostShare ? sharedPosts[item.post_id] : null;
+    const placeholderStyle = isMe ? styles.mediaPlaceholderMe : styles.mediaPlaceholder;
     return (
       <View style={[styles.bubbleRow, isMe ? styles.bubbleRowMe : styles.bubbleRowOther]}>
         {!isMe && (
           <Ionicons name="person-circle" size={32} color="#cbd5e1" style={{ marginRight: 6 }} />
         )}
         <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
-          {isImage && (
-            <Image source={{ uri: item.media_url }} style={styles.mediaImage} />
+          {showImage && (
+            <Image
+              source={{ uri: item.media_url }}
+              style={styles.mediaImage}
+              onError={() => setMediaLoadFailed((prev) => ({ ...prev, [item.id]: true }))}
+            />
           )}
-          {isVideo && (
-            <Text style={styles.mediaPlaceholder}>Shared a video</Text>
+          {showImageFallback && (
+            <Text style={placeholderStyle}>
+              {hasUrl ? 'Photo unavailable (check storage access)' : 'Photo (missing attachment)'}
+            </Text>
+          )}
+          {isVideo && hasUrl && (
+            <Text style={placeholderStyle}>Video (preview not available in chat)</Text>
+          )}
+          {isVideo && !hasUrl && (
+            <Text style={placeholderStyle}>Video (missing attachment)</Text>
           )}
           {isPostShare && (
             <Pressable
               style={styles.postShareCard}
               onPress={() => {
                 if (sharedPost?.id) {
-                  router.push({ pathname: '/social-post-detail', params: { id: sharedPost.id } });
+                  router.push(`/post/${sharedPost.id}`);
                 }
               }}
             >
@@ -246,9 +326,11 @@ export default function DMThread() {
             </Pressable>
           )}
           {!!item.body && (
-            <Text style={styles.bubbleText}>{item.body}</Text>
+            <Text style={[styles.bubbleText, isMe && styles.bubbleTextMe]}>{item.body}</Text>
           )}
-          <Text style={styles.bubbleTime}>{new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+          <Text style={[styles.bubbleTime, isMe && styles.bubbleTimeMe]}>
+            {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </Text>
         </View>
       </View>
     );
@@ -294,11 +376,21 @@ export default function DMThread() {
 
                 const result = await pickAndUploadMessageMedia(conversationId, 'camera');
                 if (result.success && result.url && userId) {
-                  await sendMessage(conversationId, userId, '', {
-                    messageType: result.type === 'video' ? 'video' : 'image',
-                    mediaUrl: result.url,
-                  });
-                } else if (result.error) {
+                  try {
+                    const sent = await sendMessage(conversationId, userId, '', {
+                      messageType: result.type === 'video' ? 'video' : 'image',
+                      mediaUrl: result.url,
+                    });
+                    setMessages((prev) => {
+                      if (prev.find((m: any) => m.id === sent.id)) return prev;
+                      return [...prev, sent];
+                    });
+                    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+                  } catch (sendErr) {
+                    console.warn('[DM] media send failed after upload:', sendErr);
+                    Alert.alert('Unable to send media', 'Upload worked but the message could not be saved. Please try again.');
+                  }
+                } else if (result.error && result.error !== 'cancelled') {
                   Alert.alert('Unable to send media', result.error);
                 }
               } finally {
@@ -330,11 +422,21 @@ export default function DMThread() {
 
                 const result = await pickAndUploadMessageMedia(conversationId, 'library');
                 if (result.success && result.url && userId) {
-                  await sendMessage(conversationId, userId, '', {
-                    messageType: result.type === 'video' ? 'video' : 'image',
-                    mediaUrl: result.url,
-                  });
-                } else if (result.error) {
+                  try {
+                    const sent = await sendMessage(conversationId, userId, '', {
+                      messageType: result.type === 'video' ? 'video' : 'image',
+                      mediaUrl: result.url,
+                    });
+                    setMessages((prev) => {
+                      if (prev.find((m: any) => m.id === sent.id)) return prev;
+                      return [...prev, sent];
+                    });
+                    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+                  } catch (sendErr) {
+                    console.warn('[DM] media send failed after upload:', sendErr);
+                    Alert.alert('Unable to send media', 'Upload worked but the message could not be saved. Please try again.');
+                  }
+                } else if (result.error && result.error !== 'cancelled') {
                   Alert.alert('Unable to send media', result.error);
                 }
               } finally {
@@ -396,7 +498,9 @@ const styles = StyleSheet.create({
   bubbleMe: { backgroundColor: '#2563EB', marginLeft: 40 },
   bubbleOther: { backgroundColor: '#ffffff', marginRight: 40 },
   bubbleText: { color: '#0f172a', fontSize: 16 },
+  bubbleTextMe: { color: '#f8fafc' },
   bubbleTime: { color: '#64748b', fontSize: 11, marginTop: 4, textAlign: 'right' },
+  bubbleTimeMe: { color: '#cbd5e1' },
   composerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -434,6 +538,12 @@ const styles = StyleSheet.create({
   mediaPlaceholder: {
     fontSize: 14,
     color: '#64748b',
+    fontStyle: 'italic',
+    marginBottom: 4,
+  },
+  mediaPlaceholderMe: {
+    fontSize: 14,
+    color: '#e2e8f0',
     fontStyle: 'italic',
     marginBottom: 4,
   },

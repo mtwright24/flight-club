@@ -33,25 +33,43 @@ export default function MessagesInboxScreen() {
   const router = useRouter();
 
   const loadInbox = useCallback(async () => {
-    if (!userId) return;
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    let inbox: any[] = [];
+    let pending: any[] = [];
     try {
-      const [inbox, pending] = await Promise.all([
-        fetchInbox(userId),
-        fetchMessageRequestsInbox(userId),
-      ]);
+      try {
+        inbox = await fetchInbox(userId);
+      } catch (e) {
+        console.warn('[DM] loadInbox fetchInbox failed:', e);
+      }
+      try {
+        pending = await fetchMessageRequestsInbox(userId);
+      } catch (e) {
+        console.warn('[DM] loadInbox fetchMessageRequestsInbox failed:', e);
+      }
       setConversations(inbox);
       setRequests(pending);
-    } catch (e) {
-      setConversations([]);
-      setRequests([]);
+      if (__DEV__) {
+        console.log('[DM-DEBUG] MessagesInboxScreen:setState', {
+          inboxLen: inbox.length,
+          requestsLen: pending.length,
+        });
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
-      if (!userId) return;
+      if (!userId) {
+        setLoading(false);
+        return;
+      }
       void loadInbox();
       void getUnreadCounts(userId)
         .then((counts) => setUnread(counts))
@@ -109,7 +127,14 @@ export default function MessagesInboxScreen() {
         bellCount={unread.notifications}
         dmCount={unread.messages}
         onPressBell={() => router.push('/notifications')}
-        onPressMessage={() => router.push('/new-message')}
+        onPressMessage={() => {
+          void loadInbox();
+          if (userId) {
+            void getUnreadCounts(userId)
+              .then((c) => setUnread(c))
+              .catch(() => setUnread({ notifications: 0, messages: 0 }));
+          }
+        }}
         onPressMenu={() => router.push('/menu')}
       />
       <View style={styles.container}>
@@ -117,11 +142,10 @@ export default function MessagesInboxScreen() {
           <Ionicons name="search" size={18} color="#64748b" style={{ marginRight: 8 }} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search messages…"
+            placeholder="Filter inbox…"
             placeholderTextColor="#94a3b8"
             value={search}
             onChangeText={setSearch}
-            onFocus={() => router.push('/new-message')}
             autoCapitalize="none"
             autoCorrect={false}
           />
