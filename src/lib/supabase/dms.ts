@@ -151,6 +151,74 @@ type InboxConversation = {
   last_message: ReturnType<typeof mapRawRowToLastMessage>;
 };
 
+/** Newest activity first; stable tie-break on conversation id. */
+function compareInboxConversationRecency(a: InboxConversation, b: InboxConversation): number {
+  const lm = (c: InboxConversation) => new Date(c.last_message?.created_at || 0).getTime();
+  if (lm(b) !== lm(a)) return lm(b) - lm(a);
+  const up = (c: InboxConversation) => new Date(c.updated_at || 0).getTime();
+  if (up(b) !== up(a)) return up(b) - up(a);
+  const cr = (c: InboxConversation) => new Date(c.created_at || 0).getTime();
+  if (cr(b) !== cr(a)) return cr(b) - cr(a);
+  return a.id.localeCompare(b.id);
+}
+
+/** Prefer conversations not in the pending-request set when comparing (mainly for shared ranking helpers). */
+function compareInboxCandidates(
+  a: InboxConversation,
+  b: InboxConversation,
+  pendingConversationIds: Set<string>
+): number {
+  const pa = pendingConversationIds.has(a.id);
+  const pb = pendingConversationIds.has(b.id);
+  if (pa !== pb) return pa ? 1 : -1;
+  return compareInboxConversationRecency(a, b);
+}
+
+/**
+ * One row per other participant for strict 1:1 threads (exactly two distinct user ids).
+ * Multi-participant threads are passed through unchanged for future group DMs.
+ */
+function dedupeOneToOneInboxForViewer(
+  viewerId: string,
+  items: InboxConversation[],
+  pendingConversationIds: Set<string>
+): InboxConversation[] {
+  const nonOneToOne: InboxConversation[] = [];
+  const oneToOne: InboxConversation[] = [];
+
+  for (const c of items) {
+    const userIds = [...new Set(c.participants.map((p) => p.user_id).filter(Boolean))];
+    if (userIds.length !== 2) {
+      nonOneToOne.push(c);
+      continue;
+    }
+    oneToOne.push(c);
+  }
+
+  const byOther = new Map<string, InboxConversation[]>();
+  for (const c of oneToOne) {
+    const otherId = c.participants.find((p) => p.user_id !== viewerId)?.user_id;
+    if (!otherId) {
+      nonOneToOne.push(c);
+      continue;
+    }
+    if (!byOther.has(otherId)) byOther.set(otherId, []);
+    byOther.get(otherId)!.push(c);
+  }
+
+  const dedupedPairs: InboxConversation[] = [];
+  for (const [, group] of byOther) {
+    if (group.length === 1) {
+      dedupedPairs.push(group[0]);
+      continue;
+    }
+    const sorted = [...group].sort((a, b) => compareInboxCandidates(a, b, pendingConversationIds));
+    dedupedPairs.push(sorted[0]);
+  }
+
+  return [...dedupedPairs, ...nonOneToOne];
+}
+
 async function buildInboxConversationsForIds(convoIds: string[]): Promise<InboxConversation[]> {
   if (!convoIds.length) {
     return [];
@@ -214,6 +282,18 @@ async function buildInboxConversationsForIds(convoIds: string[]): Promise<InboxC
   return built;
 }
 
+async function sortOneToOneConversationIdsByRecency(ids: string[]): Promise<string[]> {
+  if (ids.length <= 1) return ids;
+  const built = await buildInboxConversationsForIds(ids);
+  const byId = new Map(built.map((c) => [c.id, c]));
+  return [...ids].sort((a, b) => {
+    const ca = byId.get(a);
+    const cb = byId.get(b);
+    if (!ca || !cb) return a.localeCompare(b);
+    return compareInboxConversationRecency(ca, cb);
+  });
+}
+
 // Generate a UUID v4 client-side (needed to insert dm_conversations without relying on RETURNING).
 function generateUuidV4(): string {
   const cryptoAny: any = (globalThis as any).crypto;
@@ -265,9 +345,9 @@ export async function fetchInbox(userId: string) {
   const mapped = await buildInboxConversationsForIds(convoIds);
 
   const filtered = mapped.filter((c: any) => !pendingConversationIds.has(c.id));
+  const deduped = dedupeOneToOneInboxForViewer(userId, filtered, pendingConversationIds);
 
-  // Filter out conversations that are pending message requests for this user
-  return sortThreadsNewestFirst(filtered);
+  return sortThreadsNewestFirst(deduped);
 }
 
 // Fetch DM conversations that are pending as message requests for this user
@@ -360,6 +440,36 @@ export async function fetchThread(conversationId: string, userId: string) {
   });
 
   return { messages, participants };
+}
+
+/** Mark all messages from others in this thread read for the viewer (inbox / swipe "Read"). */
+export async function markDmConversationReadForViewer(
+  conversationId: string,
+  viewerId: string
+): Promise<{ error: string | null }> {
+  const cid = (conversationId || '').trim();
+  const { error } = await supabase
+    .from('dm_messages')
+    .update({ is_read: true })
+    .eq('conversation_id', cid)
+    .neq('sender_id', viewerId);
+  if (error) return { error: error.message };
+  return { error: null };
+}
+
+/** Mark incoming messages unread (best-effort; requires UPDATE policy on dm_messages). */
+export async function markDmConversationUnreadForViewer(
+  conversationId: string,
+  viewerId: string
+): Promise<{ error: string | null }> {
+  const cid = (conversationId || '').trim();
+  const { error } = await supabase
+    .from('dm_messages')
+    .update({ is_read: false })
+    .eq('conversation_id', cid)
+    .neq('sender_id', viewerId);
+  if (error) return { error: error.message };
+  return { error: null };
 }
 
 // Send a text message in a DM thread
@@ -490,30 +600,16 @@ export async function getOrCreateDirectConversation(userId1: string, userId2: st
       const set = byConversation[id];
       return set.has(userId1) && set.has(userId2) && set.size === 2;
     });
-    pairMatches.sort();
-    const existingId = pairMatches[0];
+    const ranked = await sortOneToOneConversationIdsByRecency(pairMatches);
+    const existingId = ranked[0];
 
     if (existingId) {
-      if (__DEV__) {
-        console.log('[DM] getOrCreateDirectConversation:reuse', {
-          conversationId: existingId,
-          userPair: [userId1, userId2].sort().join('|'),
-          matchCount: pairMatches.length,
-        });
-      }
       return existingId;
     }
   }
 
   // No existing 1:1 conversation – create one
   const conversationId = generateUuidV4();
-  if (__DEV__) {
-    console.log('[DM] getOrCreateDirectConversation:create', {
-      conversationId,
-      userPair: [userId1, userId2].sort().join('|'),
-      participantRowCount: rows?.length ?? 0,
-    });
-  }
 
   // Insert without RETURNING/select: avoids RLS visibility dependency on participants existing yet.
   const { error: cError } = await supabase.from('dm_conversations').insert({ id: conversationId });
@@ -569,18 +665,25 @@ export async function acceptDmMessageRequest(
   recipientUserId: string
 ): Promise<{ error: string | null }> {
   const cid = (conversationId || '').trim();
-  const { data, error } = await supabase
+  // Resolve by primary key: UPDATE ... RETURNING / .select() after update often returns [] under RLS
+  // even when the row was updated, which falsely looked like “no rows matched”.
+  const { data: rows, error: qErr } = await supabase
     .from('dm_message_requests')
-    .update({ status: 'accepted' })
+    .select('id')
     .eq('conversation_id', cid)
     .eq('to_user_id', recipientUserId)
     .eq('status', 'pending')
-    .select('id');
+    .limit(1);
 
-  if (error) return { error: error.message };
-  if (!data?.length) {
+  if (qErr) return { error: qErr.message };
+  const row = rows?.[0];
+  if (!row?.id) {
     return { error: 'No pending request was updated. It may have already been handled.' };
   }
+
+  const { error: uErr } = await supabase.from('dm_message_requests').update({ status: 'accepted' }).eq('id', row.id);
+
+  if (uErr) return { error: uErr.message };
   return { error: null };
 }
 
@@ -590,18 +693,23 @@ export async function declineDmMessageRequest(
   recipientUserId: string
 ): Promise<{ error: string | null }> {
   const cid = (conversationId || '').trim();
-  const { data, error } = await supabase
+  const { data: rows, error: qErr } = await supabase
     .from('dm_message_requests')
-    .update({ status: 'declined' })
+    .select('id')
     .eq('conversation_id', cid)
     .eq('to_user_id', recipientUserId)
     .eq('status', 'pending')
-    .select('id');
+    .limit(1);
 
-  if (error) return { error: error.message };
-  if (!data?.length) {
+  if (qErr) return { error: qErr.message };
+  const row = rows?.[0];
+  if (!row?.id) {
     return { error: 'No pending request was updated. It may have already been handled.' };
   }
+
+  const { error: uErr } = await supabase.from('dm_message_requests').update({ status: 'declined' }).eq('id', row.id);
+
+  if (uErr) return { error: uErr.message };
   return { error: null };
 }
 

@@ -1,4 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from './supabaseClient';
 
 type Source = 'library' | 'camera';
@@ -31,16 +32,26 @@ export async function pickAndUploadMessageMedia(
     const path = `dm-media/${conversationId}/${Date.now()}.${ext}`;
     const contentType = asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg');
 
-    // React Native: multipart FormData uploads are unreliable with supabase-js; use binary body.
-    const response = await fetch(uri);
-    if (!response.ok) {
-      throw new Error('Could not read the selected media file.');
+    // React Native: fetch(file://…) is unreliable for picker URIs; match avatar upload (base64 → bytes).
+    let bytes: Uint8Array;
+    if (asset.type === 'video') {
+      const response = await fetch(uri);
+      if (!response.ok) {
+        throw new Error('Could not read the selected media file.');
+      }
+      bytes = new Uint8Array(await response.arrayBuffer());
+    } else {
+      const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+      const binaryString = globalThis.atob(base64);
+      bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
     }
-    const arrayBuffer = await response.arrayBuffer();
 
     const { error: uploadError } = await supabase.storage
       .from('messages-media')
-      .upload(path, arrayBuffer, { contentType, upsert: false });
+      .upload(path, bytes, { contentType, upsert: false });
 
     if (uploadError) throw uploadError;
 

@@ -10,6 +10,28 @@ import { fetchThread, sendMessage, subscribeToConversationMessages } from '../sr
 import { pickAndUploadMessageMedia } from '../src/lib/uploadMessageMedia';
 import * as ImagePicker from 'expo-image-picker';
 
+function sharedPostPreviewText(post: any): string {
+  if (!post) return 'Tap to view post';
+  return (typeof post.content === 'string' && post.content.trim()) ||
+    (typeof post.body === 'string' && post.body.trim()) ||
+    'Tap to view post';
+}
+
+/** Align with PostCard / `posts` row: image, video thumbnail, or first of media_urls. */
+function sharedPostPreviewImageUrl(post: any): string | null {
+  if (!post) return null;
+  const mt = String(post.media_type || '').toLowerCase();
+  const fromArray =
+    Array.isArray(post.media_urls) && post.media_urls.length ? String(post.media_urls[0]) : null;
+  if (mt === 'image' || mt === 'photo') {
+    return (post.media_url && String(post.media_url)) || fromArray || null;
+  }
+  if (mt === 'video' || mt === 'reel') {
+    return (post.thumbnail_url && String(post.thumbnail_url)) || (post.media_url && String(post.media_url)) || fromArray || null;
+  }
+  return (post.media_url && String(post.media_url)) || (post.thumbnail_url && String(post.thumbnail_url)) || fromArray || null;
+}
+
 export default function DMThread() {
   const { session } = useAuth();
   const userId = session?.user?.id;
@@ -258,13 +280,14 @@ export default function DMThread() {
     const isMe = item.sender_id === userId;
     const mt = String(item.message_type || 'text').toLowerCase();
     const hasUrl = !!item.media_url;
-    const isImage = mt === 'image';
+    const isImage = mt === 'image' || mt === 'photo';
     const isVideo = mt === 'video';
     const showImage = isImage && hasUrl && !mediaLoadFailed[item.id];
     const showImageFallback =
       (isImage && hasUrl && !!mediaLoadFailed[item.id]) || (isImage && !hasUrl);
     const isPostShare = item.message_type === 'post_share' && item.post_id;
     const sharedPost = isPostShare ? sharedPosts[item.post_id] : null;
+    const sharePreviewUri = sharedPost ? sharedPostPreviewImageUrl(sharedPost) : null;
     const placeholderStyle = isMe ? styles.mediaPlaceholderMe : styles.mediaPlaceholder;
     return (
       <View style={[styles.bubbleRow, isMe ? styles.bubbleRowMe : styles.bubbleRowOther]}>
@@ -300,8 +323,11 @@ export default function DMThread() {
               }}
             >
               <Text style={styles.postShareLabel}>Shared a post</Text>
+              {sharePreviewUri ? (
+                <Image source={{ uri: sharePreviewUri }} style={styles.postShareImage} resizeMode="cover" />
+              ) : null}
               <Text style={styles.postShareText} numberOfLines={2}>
-                {sharedPost?.content || 'Tap to view post'}
+                {sharedPost ? sharedPostPreviewText(sharedPost) : 'Tap to view post'}
               </Text>
             </Pressable>
           )}
@@ -544,6 +570,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#64748b',
     marginBottom: 4,
+  },
+  postShareImage: {
+    width: '100%',
+    height: 140,
+    borderRadius: 8,
+    marginBottom: 6,
+    backgroundColor: '#e2e8f0',
   },
   postShareText: {
     fontSize: 15,
