@@ -114,13 +114,16 @@ function sortThreadsNewestFirst<T extends { last_message?: { created_at?: string
 
 function mapRawRowToLastMessage(m: any) {
   if (!m) return null;
+  const rawType = m.message_type;
+  const message_type =
+    typeof rawType === 'string' ? rawType.trim().toLowerCase() : rawType || 'text';
   return {
     id: m.id,
     sender_id: m.sender_id,
     body: m.message_text ?? '',
     created_at: m.created_at,
     is_read: m.is_read,
-    message_type: m.message_type,
+    message_type,
     media_url: m.media_url,
     post_id: m.post_id,
   };
@@ -226,10 +229,9 @@ async function buildInboxConversationsForIds(convoIds: string[]): Promise<InboxC
 
   const [{ data: convoRows, error: convoErr }, firstParts] = await Promise.all([
     supabase.from('dm_conversations').select('id, created_at, updated_at').in('id', convoIds),
-    supabase
-      .from('dm_conversation_participants')
-      .select('conversation_id, user_id, profiles:profiles!user_id(id, display_name, avatar_url)')
-      .in('conversation_id', convoIds),
+    // No profiles embed: user_id FK is to auth.users, not profiles — PostgREST has no relationship hint.
+    // Profiles are merged below via fetchProfilesByUserIds.
+    supabase.from('dm_conversation_participants').select('conversation_id, user_id').in('conversation_id', convoIds),
   ]);
 
   // Inbox must still list threads if dm_conversations RLS is stricter than participants/messages.
@@ -237,17 +239,8 @@ async function buildInboxConversationsForIds(convoIds: string[]): Promise<InboxC
     console.warn('[DM] inbox: dm_conversations batch read failed (using message timestamps only):', convoErr.message);
   }
 
-  let allParts = firstParts.data;
-  let partErr = firstParts.error;
-  if (partErr) {
-    console.warn('[DM] inbox: participant+profile embed failed, retrying without profile join:', partErr.message);
-    const retry = await supabase
-      .from('dm_conversation_participants')
-      .select('conversation_id, user_id')
-      .in('conversation_id', convoIds);
-    if (retry.error) throw retry.error;
-    allParts = (retry.data || []).map((p: any) => ({ ...p, profiles: null }));
-  }
+  if (firstParts.error) throw firstParts.error;
+  const allParts = (firstParts.data || []).map((p: any) => ({ ...p, profiles: null }));
 
   const metaById = new Map((convoErr ? [] : convoRows || []).map((c: any) => [c.id, c]));
   const participantsByConvo = new Map<string, { user_id: string; profile: any }[]>();
@@ -256,7 +249,7 @@ async function buildInboxConversationsForIds(convoIds: string[]): Promise<InboxC
     if (!participantsByConvo.has(cid)) participantsByConvo.set(cid, []);
     participantsByConvo.get(cid)!.push({
       user_id: (p as any).user_id,
-      profile: (p as any).profiles || null,
+      profile: null,
     });
   }
 
@@ -354,20 +347,167 @@ export async function fetchInbox(userId: string) {
 export async function fetchMessageRequestsInbox(userId: string) {
   const { data: reqs, error: reqError } = await supabase
     .from('dm_message_requests')
-    .select('conversation_id')
+    .select('id, conversation_id')
     .eq('to_user_id', userId)
-    .eq('status', 'pending');
+    .eq('status', 'pending')
+    /** Newest first so the first row we see per conversation is the canonical pending id (matches thread resolution). */
+    .order('created_at', { ascending: false });
 
   if (reqError || !reqs || reqs.length === 0) return [];
   const convoIds = [...new Set(reqs.map((r: any) => r.conversation_id).filter(Boolean))];
 
+  /** First pending request row per conversation (newest pending wins; stable pairing for Accept/Decline by id). */
+  const conversationIdToRequestId = new Map<string, string>();
+  for (const r of reqs as { id: string; conversation_id: string }[]) {
+    const cid = String(r.conversation_id);
+    if (!conversationIdToRequestId.has(cid)) {
+      conversationIdToRequestId.set(cid, String(r.id));
+    }
+  }
+
   try {
     const mapped = await buildInboxConversationsForIds(convoIds);
-    return sortThreadsNewestFirst(mapped);
+    const sorted = sortThreadsNewestFirst(mapped);
+    return sorted.map((c: InboxConversation) => ({
+      ...c,
+      request_id: conversationIdToRequestId.get(c.id) ?? null,
+    }));
   } catch (e) {
     console.warn('[DM] fetchMessageRequestsInbox build failed:', e);
     return [];
   }
+}
+
+export type DmMessageRequestStatus = 'pending' | 'accepted' | 'declined';
+export type DmMessageRequestForViewer = {
+  id: string;
+  conversation_id: string;
+  status: DmMessageRequestStatus;
+  from_user_id: string;
+  to_user_id: string;
+};
+
+function normalizeDmRequestStatus(raw: unknown): DmMessageRequestStatus {
+  const s = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (s === 'accepted' || s === 'declined' || s === 'pending') return s;
+  return 'pending';
+}
+
+/**
+ * Server-side: mark pending rows accepted when `canDM`-equivalent rules now apply (follows caught up).
+ * Call after opening a thread or when starting a DM while allowed.
+ */
+export async function resolveDmRequestsIfAllowedNow(conversationId: string): Promise<void> {
+  const cid = (conversationId || '').trim();
+  if (!cid) return;
+  const { error } = await supabase.rpc('dm_resolve_pending_requests_if_allowed', {
+    p_conversation_id: cid,
+  });
+  if (error) {
+    console.warn('[DM] resolveDmRequestsIfAllowedNow:', error.message);
+  }
+}
+
+/**
+ * Source of truth for a DM request gate.
+ * - If `requestId` is set (from inbox), load that row when it belongs to this conversation and viewer.
+ * - Otherwise prefer **incoming** pending (`to_user_id` = viewer), then **outgoing** pending (`from_user_id` = viewer).
+ *   This avoids picking the wrong row when both directions had pending rows.
+ * - Otherwise fall back to the latest row by `created_at` for any status.
+ */
+export async function fetchDmMessageRequestForViewer(
+  conversationId: string,
+  viewerUserId: string,
+  options?: { requestId?: string | null }
+): Promise<DmMessageRequestForViewer | null> {
+  const cid = (conversationId || '').trim();
+  if (!cid || !viewerUserId) return null;
+
+  const rid = (options?.requestId || '').trim();
+
+  if (rid) {
+    const { data: byId, error: byIdErr } = await supabase
+      .from('dm_message_requests')
+      .select('id, conversation_id, status, from_user_id, to_user_id')
+      .eq('id', rid)
+      .maybeSingle();
+
+    if (byIdErr) {
+      console.warn('[DM] fetchDmMessageRequestForViewer by id:', byIdErr.message);
+    } else if (byId && String(byId.conversation_id) === cid) {
+      const from = String(byId.from_user_id);
+      const to = String(byId.to_user_id);
+      if (from === viewerUserId || to === viewerUserId) {
+        return {
+          ...byId,
+          status: normalizeDmRequestStatus(byId.status),
+        } as DmMessageRequestForViewer;
+      }
+    }
+  }
+
+  const participantOr = `from_user_id.eq.${viewerUserId},to_user_id.eq.${viewerUserId}`;
+
+  const [inRes, outRes] = await Promise.all([
+    supabase
+      .from('dm_message_requests')
+      .select('id, conversation_id, status, from_user_id, to_user_id')
+      .eq('conversation_id', cid)
+      .eq('status', 'pending')
+      .eq('to_user_id', viewerUserId)
+      .order('created_at', { ascending: false })
+      .limit(1),
+    supabase
+      .from('dm_message_requests')
+      .select('id, conversation_id, status, from_user_id, to_user_id')
+      .eq('conversation_id', cid)
+      .eq('status', 'pending')
+      .eq('from_user_id', viewerUserId)
+      .order('created_at', { ascending: false })
+      .limit(1),
+  ]);
+
+  if (inRes.error) {
+    console.warn('[DM] fetchDmMessageRequestForViewer incoming pending:', inRes.error.message);
+  } else if (inRes.data?.length) {
+    const row = inRes.data[0];
+    return {
+      ...row,
+      status: normalizeDmRequestStatus(row.status),
+    } as DmMessageRequestForViewer;
+  }
+
+  if (outRes.error) {
+    console.warn('[DM] fetchDmMessageRequestForViewer outgoing pending:', outRes.error.message);
+  } else if (outRes.data?.length) {
+    const row = outRes.data[0];
+    return {
+      ...row,
+      status: normalizeDmRequestStatus(row.status),
+    } as DmMessageRequestForViewer;
+  }
+
+  const { data: latestRows, error } = await supabase
+    .from('dm_message_requests')
+    .select('id, conversation_id, status, from_user_id, to_user_id')
+    .eq('conversation_id', cid)
+    .or(participantOr)
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (error) {
+    console.warn('[DM] fetchDmMessageRequestForViewer failed:', error.message);
+    return null;
+  }
+
+  if (!latestRows?.length) return null;
+  const row = latestRows[0];
+  return {
+    ...row,
+    status: normalizeDmRequestStatus(row.status),
+  } as DmMessageRequestForViewer;
 }
 
 // Fetch all messages in a DM thread
@@ -378,43 +518,33 @@ export async function fetchThread(conversationId: string, userId: string) {
     throw new Error('Missing conversation id');
   }
 
-  const { data: messagesData, error: msgError } = await supabase
-    .from('dm_messages')
-    .select('id, conversation_id, sender_id, message_text, created_at, is_read, message_type, media_url, post_id')
-    .eq('conversation_id', cid)
-    .order('created_at', { ascending: true });
+  const [msgRes, partsRes] = await Promise.all([
+    supabase
+      .from('dm_messages')
+      .select('id, conversation_id, sender_id, message_text, created_at, is_read, message_type, media_url, post_id')
+      .eq('conversation_id', cid)
+      .order('created_at', { ascending: true }),
+    supabase.from('dm_conversation_participants').select('user_id').eq('conversation_id', cid),
+  ]);
 
+  const { data: messagesData, error: msgError } = msgRes;
   if (msgError) {
     throw msgError;
   }
 
-  let participantsData: any[] | null = null;
-  const { data: partsWithProfile, error: pError } = await supabase
-    .from('dm_conversation_participants')
-    .select('user_id, profiles:profiles!user_id(id, display_name, avatar_url)')
-    .eq('conversation_id', cid);
+  const { data: partsPlain, error: p2 } = partsRes;
+  if (p2) throw p2;
+  const participantsData = (partsPlain || []).map((p: any) => ({ user_id: p.user_id, profiles: null }));
 
-  if (pError) {
-    console.warn('[DM] fetchThread: profile embed failed, retrying participants only:', pError.message);
-    const { data: partsPlain, error: p2 } = await supabase
-      .from('dm_conversation_participants')
-      .select('user_id')
-      .eq('conversation_id', cid);
-    if (p2) throw p2;
-    participantsData = (partsPlain || []).map((p: any) => ({ user_id: p.user_id, profiles: null }));
-  } else {
-    participantsData = partsWithProfile;
-  }
+  const partUserIds = (participantsData || []).map((p: any) => p.user_id).filter(Boolean);
 
-  // Mark peer messages as read for this viewer. Supabase returns { error }; it does not throw.
-  const { error: readErr } = await supabase
-    .from('dm_messages')
-    .update({ is_read: true })
-    .eq('conversation_id', cid)
-    .neq('sender_id', userId);
+  const [readRes, threadProfileMap] = await Promise.all([
+    supabase.from('dm_messages').update({ is_read: true }).eq('conversation_id', cid).neq('sender_id', userId),
+    fetchProfilesByUserIds(partUserIds),
+  ]);
 
-  if (readErr) {
-    console.warn('[DM] mark messages read failed (non-fatal):', readErr.message);
+  if (readRes.error) {
+    console.warn('[DM] mark messages read failed (non-fatal):', readRes.error.message);
   }
 
   const messages: DMMessage[] = (messagesData || []).map((m: any) => ({
@@ -424,18 +554,19 @@ export async function fetchThread(conversationId: string, userId: string) {
     body: m.message_text ?? '',
     created_at: m.created_at,
     is_read: m.is_read,
-    message_type: m.message_type || 'text',
-    media_url: m.media_url || null,
+    message_type:
+      typeof m.message_type === 'string'
+        ? m.message_type.trim().toLowerCase()
+        : m.message_type || 'text',
+    media_url: typeof m.media_url === 'string' ? m.media_url.trim() || null : m.media_url || null,
     post_id: m.post_id || null,
   }));
 
-  const partUserIds = (participantsData || []).map((p: any) => p.user_id).filter(Boolean);
-  const threadProfileMap = await fetchProfilesByUserIds(partUserIds);
   const participants: ConversationParticipant[] = (participantsData || []).map((p: any) => {
     const fetched = threadProfileMap.get(p.user_id);
     const profile = fetched
       ? { id: fetched.id, display_name: fetched.display_name, avatar_url: fetched.avatar_url }
-      : p.profiles || null;
+      : null;
     return { user_id: p.user_id, profile };
   });
 
@@ -479,12 +610,84 @@ export async function sendMessage(
   body: string,
   options?: { messageType?: string; mediaUrl?: string | null; postId?: string | null }
 ) {
+  const gateConvId = (conversationId || '').trim();
+
+  const [inPendRes, outPendRes] = await Promise.all([
+    supabase
+      .from('dm_message_requests')
+      .select('id')
+      .eq('conversation_id', gateConvId)
+      .eq('status', 'pending')
+      .eq('to_user_id', senderId)
+      .order('created_at', { ascending: false })
+      .limit(1),
+    supabase
+      .from('dm_message_requests')
+      .select('id')
+      .eq('conversation_id', gateConvId)
+      .eq('status', 'pending')
+      .eq('from_user_id', senderId)
+      .order('created_at', { ascending: false })
+      .limit(1),
+  ]);
+
+  if (inPendRes.error) {
+    console.warn('[DM] sendMessage incoming pending check:', inPendRes.error.message);
+  }
+  if (inPendRes.data?.length) {
+    throw new Error('Accept or decline the message request before sending.');
+  }
+
+  if (outPendRes.error) {
+    console.warn('[DM] sendMessage outgoing pending check:', outPendRes.error.message);
+  }
+  if (outPendRes.data?.length) {
+    const { count, error: countErr } = await supabase
+      .from('dm_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('conversation_id', gateConvId);
+
+    if (countErr) {
+      console.warn('[DM] sendMessage: failed counting existing messages:', countErr.message);
+    }
+
+    const existingCount = typeof count === 'number' ? count : 0;
+    if (existingCount > 0) {
+      throw new Error('This message request is not accepted yet.');
+    }
+  } else {
+    const { data: latestOutgoing, error: latestOutErr } = await supabase
+      .from('dm_message_requests')
+      .select('status')
+      .eq('conversation_id', gateConvId)
+      .eq('from_user_id', senderId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestOutErr) {
+      console.warn('[DM] sendMessage latest outgoing row:', latestOutErr.message);
+    }
+    if (latestOutgoing && String(latestOutgoing.status).toLowerCase() === 'declined') {
+      throw new Error('This message request is not accepted yet.');
+    }
+  }
+
+  const hasMedia = !!(options?.mediaUrl && String(options.mediaUrl).trim());
+  const hasPost = !!options?.postId;
+  let messageType = (options?.messageType || 'text').trim().toLowerCase();
+  if (hasPost) {
+    messageType = 'post_share';
+  } else if (hasMedia) {
+    messageType = messageType === 'video' ? 'video' : 'image';
+  }
+
   const payload = {
-    conversation_id: (conversationId || '').trim(),
+    conversation_id: gateConvId,
     sender_id: senderId,
     message_text: body,
-    message_type: options?.messageType || 'text',
-    media_url: options?.mediaUrl || null,
+    message_type: messageType,
+    media_url: hasPost ? null : hasMedia ? String(options!.mediaUrl).trim() : null,
     post_id: options?.postId || null,
   };
 
@@ -500,8 +703,9 @@ export async function sendMessage(
 
   const notifyBody =
     (body && body.trim()) ||
-    (options?.messageType === 'post_share' ? '[Shared a post]' : '') ||
-    (options?.messageType === 'video' ? '[Video]' : options?.mediaUrl ? '[Photo]' : '');
+    (payload.message_type === 'post_share' ? '[Shared a post]' : '') ||
+    (payload.message_type === 'video' ? '[Video]' : '') ||
+    (payload.media_url ? '[Photo]' : '');
 
   // Update conversation updated_at (must use same trimmed id as insert)
   const convId = payload.conversation_id;
@@ -630,6 +834,7 @@ export async function getOrCreateDirectConversation(userId1: string, userId2: st
 export async function startDirectConversation(currentUserId: string, targetUserId: string): Promise<{ conversationId: string; isRequest: boolean }> {
   const allowed = await canDM(currentUserId, targetUserId);
   const conversationId = await getOrCreateDirectConversation(currentUserId, targetUserId);
+  await resolveDmRequestsIfAllowedNow(conversationId);
 
   if (!allowed) {
     try {
@@ -658,58 +863,87 @@ export async function startDirectConversation(currentUserId: string, targetUserI
 
 /**
  * Recipient accepts a pending `dm_message_requests` row so the conversation leaves the Requests list
- * and appears in the main inbox. Requires RLS: recipient may UPDATE their request rows (see Supabase migration).
+ * and appears in the main inbox.
+ * Prefer `requestId` from `fetchMessageRequestsInbox` (`request_id`) so the UPDATE targets the exact row.
+ * Requires RLS: `DM Message requests: recipient update own rows` (see `20260324_dm_message_requests_recipient_update.sql`).
  */
 export async function acceptDmMessageRequest(
   conversationId: string,
-  recipientUserId: string
+  recipientUserId: string,
+  requestId?: string | null
 ): Promise<{ error: string | null }> {
   const cid = (conversationId || '').trim();
-  // Resolve by primary key: UPDATE ... RETURNING / .select() after update often returns [] under RLS
-  // even when the row was updated, which falsely looked like “no rows matched”.
-  const { data: rows, error: qErr } = await supabase
+  let q = supabase
     .from('dm_message_requests')
-    .select('id')
-    .eq('conversation_id', cid)
+    .update({ status: 'accepted' })
     .eq('to_user_id', recipientUserId)
-    .eq('status', 'pending')
-    .limit(1);
+    .eq('status', 'pending');
 
-  if (qErr) return { error: qErr.message };
-  const row = rows?.[0];
-  if (!row?.id) {
-    return { error: 'No pending request was updated. It may have already been handled.' };
+  if (requestId) {
+    q = q.eq('id', requestId);
+  } else {
+    q = q.eq('conversation_id', cid);
   }
 
-  const { error: uErr } = await supabase.from('dm_message_requests').update({ status: 'accepted' }).eq('id', row.id);
+  const { data, error } = await q.select('id, status').maybeSingle();
+  if (error) return { error: error.message };
 
-  if (uErr) return { error: uErr.message };
+  // If no row matched (already processed / wrong id), treat as failure so UI doesn't silently flash.
+  if (!data) return { error: 'Request was not pending anymore. Please refresh and try again.' };
+
   return { error: null };
 }
 
 /** Recipient declines a pending request (request row no longer pending; conversation may still exist). */
 export async function declineDmMessageRequest(
   conversationId: string,
-  recipientUserId: string
+  recipientUserId: string,
+  requestId?: string | null
 ): Promise<{ error: string | null }> {
   const cid = (conversationId || '').trim();
-  const { data: rows, error: qErr } = await supabase
+  let q = supabase
     .from('dm_message_requests')
-    .select('id')
-    .eq('conversation_id', cid)
+    .update({ status: 'declined' })
     .eq('to_user_id', recipientUserId)
-    .eq('status', 'pending')
-    .limit(1);
+    .eq('status', 'pending');
 
-  if (qErr) return { error: qErr.message };
-  const row = rows?.[0];
-  if (!row?.id) {
-    return { error: 'No pending request was updated. It may have already been handled.' };
+  if (requestId) {
+    q = q.eq('id', requestId);
+  } else {
+    q = q.eq('conversation_id', cid);
   }
 
-  const { error: uErr } = await supabase.from('dm_message_requests').update({ status: 'declined' }).eq('id', row.id);
+  const { data, error } = await q.select('id, status').maybeSingle();
+  if (error) return { error: error.message };
+  if (!data) return { error: 'Request was not pending anymore. Please refresh and try again.' };
+  return { error: null };
+}
 
-  if (uErr) return { error: uErr.message };
+/**
+ * Recipient declines the request and records a block (requester cannot DM again from this flow).
+ * Requires migration `20260328_user_blocks.sql` applied.
+ */
+export async function blockDmMessageRequest(
+  conversationId: string,
+  recipientUserId: string,
+  requestId: string | null | undefined,
+  blockedUserId: string
+): Promise<{ error: string | null }> {
+  const declined = await declineDmMessageRequest(conversationId, recipientUserId, requestId);
+  if (declined.error) return declined;
+
+  const { error } = await supabase.from('user_blocks').insert({
+    blocker_id: recipientUserId,
+    blocked_id: blockedUserId,
+  });
+
+  if (error) {
+    const code = (error as { code?: string }).code;
+    if (code === '23505') {
+      return { error: null };
+    }
+    return { error: error.message };
+  }
   return { error: null };
 }
 
@@ -737,8 +971,11 @@ export function subscribeToConversationMessages(
           body: m.message_text ?? '',
           created_at: m.created_at,
           is_read: m.is_read,
-          message_type: m.message_type || 'text',
-          media_url: m.media_url || null,
+          message_type:
+            typeof m.message_type === 'string'
+              ? m.message_type.trim().toLowerCase()
+              : m.message_type || 'text',
+          media_url: typeof m.media_url === 'string' ? m.media_url.trim() || null : m.media_url || null,
           post_id: m.post_id || null,
         };
         callback(msg);

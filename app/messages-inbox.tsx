@@ -24,8 +24,6 @@ import { getUnreadCounts } from '../lib/home';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useAuth } from '../src/hooks/useAuth';
 import {
-  acceptDmMessageRequest,
-  declineDmMessageRequest,
   fetchInbox,
   fetchMessageRequestsInbox,
   markDmConversationReadForViewer,
@@ -315,7 +313,9 @@ export default function MessagesInboxScreen() {
                       const other = item.participants.find((p: any) => p.user_id !== userId);
                       const lastMsg = item.last_message;
                       const openThread = () => {
-                        router.push({ pathname: '/dm-thread', params: { conversationId: String(item.id) } });
+                        const params: Record<string, string> = { conversationId: String(item.id) };
+                        if (item.request_id) params.requestId = String(item.request_id);
+                        router.push({ pathname: '/dm-thread', params });
                       };
                       return (
                         <View key={item.id} style={styles.requestRow}>
@@ -325,16 +325,13 @@ export default function MessagesInboxScreen() {
                             accessibilityRole="button"
                             accessibilityLabel="Open message request"
                           >
-                            <Pressable
-                              style={styles.avatarWrap}
-                              onPress={() => other?.user_id && router.push(`/profile/${other.user_id}`)}
-                            >
+                            <View style={styles.avatarWrap}>
                               {other?.profile?.avatar_url ? (
                                 <Image source={{ uri: other.profile.avatar_url }} style={styles.avatarImg} />
                               ) : (
                                 <Ionicons name="person-circle" size={44} color="#cbd5e1" />
                               )}
-                            </Pressable>
+                            </View>
                             <View style={styles.info}>
                               <Text style={styles.name}>{other?.profile?.display_name || 'User'}</Text>
                               <Text style={styles.snippet} numberOfLines={1}>
@@ -342,36 +339,10 @@ export default function MessagesInboxScreen() {
                               </Text>
                             </View>
                           </Pressable>
-                          <View style={styles.requestActions}>
-                            <Pressable
-                              style={styles.requestAccept}
-                              onPress={async () => {
-                                if (!userId) return;
-                                const { error } = await acceptDmMessageRequest(String(item.id), userId);
-                                if (error) {
-                                  Alert.alert('Could not accept', error);
-                                  return;
-                                }
-                                await handleRefresh();
-                              }}
-                            >
-                              <Text style={styles.requestAcceptText}>Accept</Text>
-                            </Pressable>
-                            <Pressable
-                              style={styles.requestDecline}
-                              onPress={async () => {
-                                if (!userId) return;
-                                const { error } = await declineDmMessageRequest(String(item.id), userId);
-                                if (error) {
-                                  Alert.alert('Could not decline', error);
-                                  return;
-                                }
-                                await handleRefresh();
-                              }}
-                            >
-                              <Text style={styles.requestDeclineText}>Decline</Text>
-                            </Pressable>
-                          </View>
+                          <Pressable style={styles.requestIndicator} onPress={openThread} accessibilityRole="button">
+                            <View style={styles.requestIndicatorDot} />
+                            <Text style={styles.requestIndicatorText}>Request</Text>
+                          </Pressable>
                         </View>
                       );
                     })}
@@ -519,17 +490,24 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e5e7eb',
     backgroundColor: '#fff',
   },
-  requestActions: { flexDirection: 'row', alignItems: 'center', paddingRight: 12, paddingVertical: 8 },
-  requestAccept: {
-    backgroundColor: '#16a34a',
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    marginRight: 6,
+  requestIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 12,
+    paddingVertical: 8,
   },
-  requestAcceptText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  requestDecline: { backgroundColor: '#e5e7eb', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 6 },
-  requestDeclineText: { color: '#0f172a', fontSize: 12, fontWeight: '600' },
+  requestIndicatorDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#2563EB',
+    marginRight: 8,
+  },
+  requestIndicatorText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#2563EB',
+  },
   sheetBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.45)',

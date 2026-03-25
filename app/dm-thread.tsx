@@ -2,11 +2,34 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getPostById } from '../lib/feed';
 import { useAuth } from '../src/hooks/useAuth';
-import { fetchThread, sendMessage, subscribeToConversationMessages } from '../src/lib/supabase/dms';
+import {
+  acceptDmMessageRequest,
+  blockDmMessageRequest,
+  declineDmMessageRequest,
+  fetchDmMessageRequestForViewer,
+  type DmMessageRequestForViewer,
+  fetchThread,
+  resolveDmRequestsIfAllowedNow,
+  sendMessage,
+  subscribeToConversationMessages,
+} from '../src/lib/supabase/dms';
 import { pickAndUploadMessageMedia } from '../src/lib/uploadMessageMedia';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -32,6 +55,83 @@ function sharedPostPreviewImageUrl(post: any): string | null {
   return (post.media_url && String(post.media_url)) || (post.thumbnail_url && String(post.thumbnail_url)) || fromArray || null;
 }
 
+const DM_IMAGE_MAX_H = 260;
+const DM_IMAGE_MIN_SKELETON_H = 120;
+
+/** Fit natural size inside max bounds without upscaling (chat-style preview). */
+function fitDmPreviewSize(nw: number, nh: number, maxW: number, maxH: number) {
+  if (!nw || !nh) return { width: maxW, height: DM_IMAGE_MIN_SKELETON_H };
+  const scale = Math.min(maxW / nw, maxH / nh, 1);
+  return { width: Math.round(nw * scale), height: Math.round(nh * scale) };
+}
+
+/** In-thread DM photo: bounded size from real dimensions, tap opens `/image-viewer` (same route as room post grid). */
+function DmInlineImagePreview({
+  uri,
+  isMe,
+  onLoadError,
+}: {
+  uri: string;
+  isMe: boolean;
+  onLoadError: () => void;
+}) {
+  const router = useRouter();
+  const { width: windowW } = useWindowDimensions();
+  const maxW = Math.min(220, windowW * 0.72);
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Image.getSize(
+      uri,
+      (w, h) => {
+        if (!cancelled && w > 0 && h > 0) setDims({ w, h });
+      },
+      () => {
+        if (!cancelled) onLoadError();
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-measure when URL changes
+  }, [uri]);
+
+  const size = useMemo(() => {
+    if (!dims) return null;
+    return fitDmPreviewSize(dims.w, dims.h, maxW, DM_IMAGE_MAX_H);
+  }, [dims, maxW]);
+
+  const openViewer = useCallback(() => {
+    router.push({
+      pathname: '/image-viewer',
+      params: { uri: encodeURIComponent(uri) },
+    });
+  }, [router, uri]);
+
+  const skeletonBg = isMe ? 'rgba(255,255,255,0.22)' : '#cbd5e1';
+
+  return (
+    <Pressable
+      onPress={openViewer}
+      accessibilityRole="button"
+      accessibilityLabel="View full size photo"
+      style={({ pressed }) => [styles.dmImagePressable, { maxWidth: maxW }, pressed && { opacity: 0.92 }]}
+    >
+      {!size ? (
+        <View style={[styles.dmImageSkeleton, { width: maxW, minHeight: DM_IMAGE_MIN_SKELETON_H, backgroundColor: skeletonBg }]} />
+      ) : (
+        <Image
+          source={{ uri }}
+          style={[styles.dmInlineImage, { width: size.width, height: size.height }]}
+          resizeMode="contain"
+          onError={onLoadError}
+        />
+      )}
+    </Pressable>
+  );
+}
+
 export default function DMThread() {
   const { session } = useAuth();
   const userId = session?.user?.id;
@@ -45,6 +145,18 @@ export default function DMThread() {
           : '';
     return typeof raw === 'string' ? raw.trim() : '';
   }, [rawConversationId]);
+  const rawRequestId = useLocalSearchParams<{ requestId?: string | string[] }>().requestId;
+  const routeRequestId = useMemo(() => {
+    const raw =
+      typeof rawRequestId === 'string'
+        ? rawRequestId
+        : Array.isArray(rawRequestId) && rawRequestId[0]
+          ? rawRequestId[0]
+          : '';
+    return typeof raw === 'string' ? raw.trim() : '';
+  }, [rawRequestId]);
+  const routeRequestIdRef = useRef(routeRequestId);
+  routeRequestIdRef.current = routeRequestId;
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [threadLoadError, setThreadLoadError] = useState<string | null>(null);
@@ -55,6 +167,12 @@ export default function DMThread() {
   const [uploading, setUploading] = useState(false);
   const [sharedPosts, setSharedPosts] = useState<Record<string, any>>({});
   const [mediaLoadFailed, setMediaLoadFailed] = useState<Record<string, boolean>>({});
+  const [requestGateStatus, setRequestGateStatus] = useState<'loading' | 'pending' | 'accepted' | 'declined'>('loading');
+  const [requestRow, setRequestRow] = useState<DmMessageRequestForViewer | null>(null);
+  const [requestActionBusy, setRequestActionBusy] = useState(false);
+  const markDmImageFailed = useCallback((messageId: string) => {
+    setMediaLoadFailed((prev) => ({ ...prev, [messageId]: true }));
+  }, []);
   const flatListRef = useRef<FlatList>(null);
   const conversationIdRef = useRef(conversationId);
   const firstFocusOfConversationRef = useRef(true);
@@ -72,6 +190,9 @@ export default function DMThread() {
     setParticipants([]);
     setThreadLoadError(null);
     setMediaLoadFailed({});
+    setRequestGateStatus('loading');
+    setRequestRow(null);
+    setRequestActionBusy(false);
   }, [conversationId]);
 
   const requestMediaPermission = async (source: 'camera' | 'library'): Promise<boolean> => {
@@ -121,11 +242,19 @@ export default function DMThread() {
         try {
           for (let attempt = 1; attempt <= 2; attempt++) {
             try {
-              const thread = await fetchThread(targetConvo, userId);
+              const [, thread] = await Promise.all([
+                resolveDmRequestsIfAllowedNow(targetConvo),
+                fetchThread(targetConvo, userId),
+              ]);
               if (cancelled || conversationIdRef.current !== targetConvo) return;
               setMessages(thread.messages);
               setParticipants(thread.participants);
               setThreadLoadError(null);
+              const req = await fetchDmMessageRequestForViewer(targetConvo, userId, {
+                requestId: routeRequestIdRef.current || undefined,
+              });
+              setRequestRow(req);
+              setRequestGateStatus(req?.status ?? 'accepted');
               lastError = null;
               break;
             } catch (e) {
@@ -159,7 +288,7 @@ export default function DMThread() {
       return () => {
         cancelled = true;
       };
-    }, [conversationId, userId, rawConversationId])
+    }, [conversationId, userId, rawConversationId, routeRequestId])
   );
 
   useEffect(() => {
@@ -179,6 +308,8 @@ export default function DMThread() {
   }, [conversationId]);
 
   const handleSend = async () => {
+    if (!composerEnabled) return;
+    if (sending) return;
     if (!input.trim() || !conversationId || !userId) return;
     setSending(true);
     try {
@@ -193,9 +324,15 @@ export default function DMThread() {
       });
 
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
-    } catch (e) {
-      // Keep existing behavior (no UI toast) but do not silently swallow.
+    } catch (e: any) {
       console.log('[DM] sendMessage error:', e);
+      const msg =
+        typeof e?.message === 'string'
+          ? e.message
+          : typeof e?.error_description === 'string'
+            ? e.error_description
+            : 'Could not send. Please try again.';
+      Alert.alert('Message not sent', msg);
     } finally {
       setSending(false);
     }
@@ -204,6 +341,126 @@ export default function DMThread() {
   const otherParticipant = useMemo(() => {
     return participants.find((p: any) => p.user_id !== userId) || participants[0] || null;
   }, [participants, userId]);
+
+  const composerEnabled = requestGateStatus === 'accepted';
+  const isRecipient = !!requestRow && requestRow.to_user_id === userId;
+  const isRequester = !!requestRow && requestRow.from_user_id === userId;
+
+  const refreshRequestGate = useCallback(async () => {
+    if (!conversationId || !userId) return null;
+    await resolveDmRequestsIfAllowedNow(conversationId);
+    const req = await fetchDmMessageRequestForViewer(conversationId, userId, {
+      requestId: routeRequestIdRef.current || undefined,
+    });
+    setRequestRow(req);
+    setRequestGateStatus(req?.status ?? 'accepted');
+    return req;
+  }, [conversationId, userId]);
+
+  const handleAcceptRequest = useCallback(async () => {
+    if (!conversationId || !userId || !requestRow || requestGateStatus !== 'pending') return;
+    setRequestActionBusy(true);
+    try {
+      if (!requestRow.id) {
+        Alert.alert('Could not accept', 'Missing request id. Please go back and re-open the thread.');
+        return;
+      }
+      const { error } = await acceptDmMessageRequest(
+        conversationId,
+        userId,
+        requestRow.id
+      );
+      if (error) {
+        Alert.alert('Could not accept', error);
+        return;
+      }
+      const refreshed = await refreshRequestGate();
+      if (!refreshed || refreshed.status !== 'accepted') {
+        Alert.alert('Accept did not complete', 'The request state did not update. Please try again.');
+      }
+    } catch (e: any) {
+      Alert.alert('Could not accept', e?.message ? String(e.message) : 'Unexpected error');
+    } finally {
+      setRequestActionBusy(false);
+    }
+  }, [conversationId, requestGateStatus, requestRow, refreshRequestGate, userId]);
+
+  const handleDeclineRequest = useCallback(async () => {
+    if (!conversationId || !userId || !requestRow || requestGateStatus !== 'pending') return;
+    setRequestActionBusy(true);
+    try {
+      if (!requestRow.id) {
+        Alert.alert('Could not decline', 'Missing request id. Please go back and re-open the thread.');
+        return;
+      }
+      const { error } = await declineDmMessageRequest(conversationId, userId, requestRow.id);
+      if (error) {
+        Alert.alert('Could not decline', error);
+        return;
+      }
+      const refreshed = await refreshRequestGate();
+      if (!refreshed || refreshed.status !== 'declined') {
+        Alert.alert('Decline did not complete', 'The request state did not update. Please try again.');
+      }
+    } catch (e: any) {
+      Alert.alert('Could not decline', e?.message ? String(e.message) : 'Unexpected error');
+    } finally {
+      setRequestActionBusy(false);
+    }
+  }, [conversationId, requestGateStatus, requestRow, refreshRequestGate, userId]);
+
+  const handleBlockRequest = useCallback(async () => {
+    if (!conversationId || !userId || !requestRow || requestGateStatus !== 'pending') return;
+    if (!isRecipient) {
+      Alert.alert('Block', 'Only the person who received the request can block.');
+      return;
+    }
+    if (!requestRow.id) {
+      Alert.alert('Could not block', 'Missing request id. Please go back and re-open the thread.');
+      return;
+    }
+    Alert.alert(
+      'Block',
+      'This will decline the request and block this user from messaging you.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            setRequestActionBusy(true);
+            try {
+              const { error } = await blockDmMessageRequest(
+                conversationId,
+                userId,
+                requestRow.id,
+                requestRow.from_user_id
+              );
+              if (error) {
+                Alert.alert('Could not block', error);
+                return;
+              }
+              const refreshed = await refreshRequestGate();
+              if (!refreshed || refreshed.status !== 'declined') {
+                Alert.alert('Block did not complete', 'The request state did not update. Please try again.');
+              }
+            } catch (e: any) {
+              Alert.alert('Could not block', e?.message ? String(e.message) : 'Unexpected error');
+            } finally {
+              setRequestActionBusy(false);
+            }
+          },
+        },
+      ]
+    );
+  }, [
+    conversationId,
+    isRecipient,
+    refreshRequestGate,
+    requestGateStatus,
+    requestRow,
+    userId,
+  ]);
 
   const ThreadHeader = ({ title, avatarUrl }: { title: string; avatarUrl?: string | null }) => {
     return (
@@ -278,14 +535,16 @@ export default function DMThread() {
 
   const renderItem = ({ item }: { item: any }) => {
     const isMe = item.sender_id === userId;
-    const mt = String(item.message_type || 'text').toLowerCase();
-    const hasUrl = !!item.media_url;
-    const isImage = mt === 'image' || mt === 'photo';
+    const mt = String(item.message_type || 'text').trim().toLowerCase();
+    const hasUrl = typeof item.media_url === 'string' && item.media_url.trim().length > 0;
     const isVideo = mt === 'video';
-    const showImage = isImage && hasUrl && !mediaLoadFailed[item.id];
+    const isPostShare = mt === 'post_share' && item.post_id;
+    // Any non-video DM attachment with a URL renders as an image (covers legacy rows where type drifted).
+    const showMediaImage = hasUrl && !isVideo && !isPostShare;
+    const showImage = showMediaImage && !mediaLoadFailed[item.id];
     const showImageFallback =
-      (isImage && hasUrl && !!mediaLoadFailed[item.id]) || (isImage && !hasUrl);
-    const isPostShare = item.message_type === 'post_share' && item.post_id;
+      (showMediaImage && !!mediaLoadFailed[item.id]) ||
+      ((mt === 'image' || mt === 'photo') && !hasUrl && !isPostShare);
     const sharedPost = isPostShare ? sharedPosts[item.post_id] : null;
     const sharePreviewUri = sharedPost ? sharedPostPreviewImageUrl(sharedPost) : null;
     const placeholderStyle = isMe ? styles.mediaPlaceholderMe : styles.mediaPlaceholder;
@@ -296,10 +555,10 @@ export default function DMThread() {
         )}
         <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
           {showImage && (
-            <Image
-              source={{ uri: item.media_url }}
-              style={styles.mediaImage}
-              onError={() => setMediaLoadFailed((prev) => ({ ...prev, [item.id]: true }))}
+            <DmInlineImagePreview
+              uri={item.media_url.trim()}
+              isMe={isMe}
+              onLoadError={() => markDmImageFailed(item.id)}
             />
           )}
           {showImageFallback && (
@@ -353,6 +612,59 @@ export default function DMThread() {
       />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        {(requestGateStatus === 'pending' || requestGateStatus === 'declined') && requestRow ? (
+          <View style={styles.requestBanner}>
+            <Text style={styles.requestBannerTitle}>
+              {requestGateStatus === 'pending'
+                ? isRecipient
+                  ? 'Message request'
+                  : isRequester
+                    ? 'Request sent'
+                    : 'Message request'
+                : 'Message request declined'}
+            </Text>
+            <Text style={styles.requestBannerBody}>
+              {requestGateStatus === 'pending'
+                ? isRecipient
+                  ? 'Accept to start chatting. Decline will remove this request.'
+                  : isRequester
+                    ? 'You can view this thread, but normal messaging is locked until they accept.'
+                    : 'You can view this thread, but normal messaging is locked until they accept.'
+                : isRequester
+                  ? 'They declined your message request.'
+                  : 'This conversation is no longer available for normal messaging.'}
+            </Text>
+            {requestGateStatus === 'pending' && isRecipient ? (
+              <View style={styles.requestActionsRow}>
+                <Pressable
+                  style={[styles.requestBtn, styles.requestAcceptBtn, requestActionBusy && { opacity: 0.6 }]}
+                  onPress={() => void handleAcceptRequest()}
+                  disabled={requestActionBusy}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.requestBtnText}>Accept</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.requestBtn, styles.requestDeclineBtn, requestActionBusy && { opacity: 0.6 }]}
+                  onPress={() => void handleDeclineRequest()}
+                  disabled={requestActionBusy}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.requestBtnText}>Decline</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.requestBtn, styles.requestBlockBtn, requestActionBusy && { opacity: 0.6 }]}
+                  onPress={() => void handleBlockRequest()}
+                  disabled={requestActionBusy}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.requestBtnText}>Block</Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         {loading ? (
           <ActivityIndicator style={{ marginTop: 40 }} />
         ) : threadLoadError && messages.length === 0 ? (
@@ -375,7 +687,7 @@ export default function DMThread() {
         <View style={styles.composerRow}>
           <Pressable
             style={styles.iconCircle}
-            disabled={uploading || !conversationId}
+            disabled={uploading || !conversationId || !composerEnabled || requestActionBusy}
             onPress={async () => {
               if (!conversationId) return;
               setUploading(true);
@@ -415,13 +727,16 @@ export default function DMThread() {
             placeholderTextColor="#94a3b8"
             value={input}
             onChangeText={setInput}
-            editable={!sending}
-            onSubmitEditing={handleSend}
+            editable={composerEnabled && !sending}
+            multiline={false}
+            blurOnSubmit
             returnKeyType="send"
+            submitBehavior="submit"
+            onSubmitEditing={() => void handleSend()}
           />
           <Pressable
             style={styles.iconCircle}
-            disabled={uploading || !conversationId}
+            disabled={uploading || !conversationId || !composerEnabled || requestActionBusy}
             onPress={async () => {
               if (!conversationId) return;
               setUploading(true);
@@ -462,11 +777,14 @@ export default function DMThread() {
             <Ionicons name="happy-outline" size={22} color="#64748b" />
           </Pressable>
           <Pressable
-            style={[styles.iconCircle, (!input.trim() || !userId || !conversationId) && { opacity: 0.4 }]}
+            style={[
+              styles.iconCircle,
+              (!composerEnabled || requestActionBusy || !input.trim() || !userId || !conversationId) && { opacity: 0.4 },
+            ]}
             onPress={() => {
               void handleSend();
             }}
-            disabled={sending || !input.trim() || !userId || !conversationId}
+            disabled={sending || !input.trim() || !userId || !conversationId || !composerEnabled || requestActionBusy}
           >
             <Ionicons name="send" size={20} color="#B5161E" />
           </Pressable>
@@ -538,12 +856,67 @@ const styles = StyleSheet.create({
     backgroundColor: '#EFF3F9',
     marginHorizontal: 2,
   },
-  mediaImage: {
-    width: '100%',
-    maxHeight: 220,
+  dmImagePressable: {
+    alignSelf: 'center',
     borderRadius: 12,
+    overflow: 'hidden',
     marginBottom: 4,
-    backgroundColor: '#cbd5e1',
+  },
+  dmImageSkeleton: {
+    borderRadius: 12,
+  },
+  dmInlineImage: {
+    borderRadius: 12,
+    backgroundColor: 'transparent',
+  },
+  requestBanner: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 8,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  requestBannerTitle: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  requestBannerBody: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+    lineHeight: 18,
+  },
+  requestActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+  },
+  requestBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  requestBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  requestAcceptBtn: {
+    backgroundColor: '#2563EB',
+  },
+  requestDeclineBtn: {
+    backgroundColor: '#64748b',
+  },
+  requestBlockBtn: {
+    backgroundColor: '#B91C1C',
   },
   mediaPlaceholder: {
     fontSize: 14,
