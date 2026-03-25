@@ -17,6 +17,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { notifyDmUnreadBadgeRefresh } from '../lib/dmUnreadBadgeStore';
 import { getPostById } from '../lib/feed';
 import { useAuth } from '../src/hooks/useAuth';
 import {
@@ -26,6 +27,7 @@ import {
   fetchDmMessageRequestForViewer,
   type DmMessageRequestForViewer,
   fetchThread,
+  markDmConversationReadForViewer,
   resolveDmRequestsIfAllowedNow,
   sendMessage,
   subscribeToConversationMessages,
@@ -256,6 +258,7 @@ export default function DMThread() {
               setRequestRow(req);
               setRequestGateStatus(req?.status ?? 'accepted');
               lastError = null;
+              notifyDmUnreadBadgeRefresh();
               break;
             } catch (e) {
               lastError = e;
@@ -292,7 +295,7 @@ export default function DMThread() {
   );
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !userId) return;
 
     const unsubscribe = subscribeToConversationMessages(conversationId, (msg) => {
       setMessages((prev) => {
@@ -300,12 +303,17 @@ export default function DMThread() {
         return [...prev, msg];
       });
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+      if (msg.sender_id !== userId) {
+        void markDmConversationReadForViewer(conversationId, userId).then(() => {
+          notifyDmUnreadBadgeRefresh();
+        });
+      }
     });
 
     return () => {
       unsubscribe();
     };
-  }, [conversationId]);
+  }, [conversationId, userId]);
 
   const handleSend = async () => {
     if (!composerEnabled) return;

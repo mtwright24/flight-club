@@ -147,21 +147,53 @@ export async function markAllNotificationsRead(): Promise<void> {
 }
 
 /**
- * Unread count for a user. Tries `is_read` first; falls back to `read` when the column name differs (live schema drift).
+ * Unread rows for header bell: one unit per **conversation** (not per DM line item).
+ * Multiple `notifications` rows can share `entity_id` when `entity_type = 'conversation'` (one per new message).
+ */
+function dedupeUnreadNotificationRows(
+  rows: { entity_type?: string | null; entity_id?: string | null }[]
+): number {
+  const perConversation = new Set<string>();
+  let other = 0;
+  for (const r of rows) {
+    const et = typeof r.entity_type === 'string' ? r.entity_type.trim().toLowerCase() : '';
+    const eid = r.entity_id != null && String(r.entity_id).trim() !== '' ? String(r.entity_id) : '';
+    if (et === 'conversation' && eid) {
+      perConversation.add(eid);
+    } else {
+      other += 1;
+    }
+  }
+  return perConversation.size + other;
+}
+
+async function tryUnreadNotificationsDeduped(
+  userId: string,
+  readColumn: 'is_read' | 'read'
+): Promise<{ count: number } | { error: unknown }> {
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('entity_type, entity_id')
+    .eq('user_id', userId)
+    .eq(readColumn, false as any)
+    .limit(10000);
+
+  if (error) return { error };
+  return { count: dedupeUnreadNotificationRows(data || []) };
+}
+
+/**
+ * Unread count for a user (header bell). Tries `is_read` first; falls back to `read` when the column name differs.
+ * Conversation-linked rows are deduped by `entity_id` so N new messages in one thread = 1 unread unit.
  */
 export async function countUnreadNotificationsForUser(userId: string): Promise<number> {
   if (!userId) return 0;
 
-  const { count, error } = await supabase
-    .from('notifications')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('is_read', false as any);
+  const primary = await tryUnreadNotificationsDeduped(userId, 'is_read');
+  if ('count' in primary) return primary.count;
 
-  if (!error) return count ?? 0;
-
-  const code = (error as any).code;
-  const message = String((error as any).message || '');
+  const code = (primary.error as any)?.code;
+  const message = String((primary.error as any)?.message || '');
   if (code === 'PGRST205' || message.includes("Could not find the table 'public.notifications'")) {
     if (!missingNotificationsTableLogged) {
       console.log(
@@ -172,17 +204,28 @@ export async function countUnreadNotificationsForUser(userId: string): Promise<n
     return 0;
   }
 
-  const msgLower = message.toLowerCase();
+  const alt = await tryUnreadNotificationsDeduped(userId, 'read');
+  if ('count' in alt) return alt.count;
+
+  const { count, error } = await supabase
+    .from('notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('is_read', false as any);
+
+  if (!error) return count ?? 0;
+
+  const msgLower = String((error as any).message || '').toLowerCase();
   if (msgLower.includes('is_read') || msgLower.includes('column')) {
-    const alt = await supabase
+    const head = await supabase
       .from('notifications')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)
       .eq('read', false as any);
-    if (!alt.error) return alt.count ?? 0;
+    if (!head.error) return head.count ?? 0;
   }
 
-  console.warn('[Notifications] Unread count query failed (check notifications schema/RLS):', message);
+  console.warn('[Notifications] Unread count query failed (check notifications schema/RLS):', (error as any)?.message);
   return 0;
 }
 

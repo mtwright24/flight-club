@@ -40,7 +40,7 @@ export default function ProfileScreen() {
         ? params.id[0]
         : '';
   const unread = useNotificationsBadge();
-  const dmUnread = useDmUnreadBadge();
+  const { count: dmUnread } = useDmUnreadBadge();
   const [activeTab, setActiveTab] = useState('Posts');
   const [posts, setPosts] = useState<any[]>([]);
   const [postsLoading, setPostsLoading] = useState(true);

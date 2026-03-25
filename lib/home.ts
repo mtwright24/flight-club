@@ -1,4 +1,5 @@
 import { supabase } from '../src/lib/supabaseClient';
+import { countDmCloudBadgeThreads } from '../src/lib/supabase/dms';
 import { countUnreadNotificationsForUser } from './notifications';
 
 // A) Current user profile
@@ -77,30 +78,17 @@ export async function getRecentActivity(userId: string): Promise<any[]> {
 }
 
 // F) Unread counts
-/** `notifications` = unread rows in `notifications` table. `messages` = unread DM rows in `dm_messages` (not notif count). */
+/**
+ * `notifications` = bell (deduped in `countUnreadNotificationsForUser`).
+ * `messages` = **cloud icon only** — same logic as Messages inbox rows + Requests (see `countDmCloudBadgeThreads`).
+ */
 export async function getUnreadCounts(userId: string): Promise<{ notifications: number; messages: number }> {
   const notifCount = await countUnreadNotificationsForUser(userId);
 
-  // Unread DMs: count messages in conversations where the user is a participant,
-  // is_read = false and sender is not the current user.
   let messageCount = 0;
   try {
-    const { data: participantRows, error: participantsError } = await supabase
-      .from('dm_conversation_participants')
-      .select('conversation_id')
-      .eq('user_id', userId);
-
-    if (!participantsError && participantRows && participantRows.length > 0) {
-      const convoIds = participantRows.map((r: any) => r.conversation_id);
-      const { count: unreadMessagesCount } = await supabase
-        .from('dm_messages')
-        .select('id', { count: 'exact', head: true })
-        .in('conversation_id', convoIds)
-        .eq('is_read', false)
-        .neq('sender_id', userId);
-      messageCount = unreadMessagesCount || 0;
-    }
-  } catch (e) {
+    messageCount = await countDmCloudBadgeThreads(userId);
+  } catch {
     messageCount = 0;
   }
 

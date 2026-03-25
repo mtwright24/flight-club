@@ -1,3 +1,4 @@
+import { getMergedHiddenConversationIds } from '../../../lib/dmInboxLocal';
 import { createNotification } from '../../../lib/notifications';
 import { supabase } from '../supabaseClient';
 
@@ -376,6 +377,28 @@ export async function fetchMessageRequestsInbox(userId: string) {
     console.warn('[DM] fetchMessageRequestsInbox build failed:', e);
     return [];
   }
+}
+
+/**
+ * Red header **cloud / DM** badge only — matches what you see on Messages:
+ * - Main inbox: +1 per row with the same “blue dot” rule (last message is from someone else and `is_read` is false).
+ * - Requests: +1 per visible pending request row (needs Accept/Decline).
+ * Does not sum raw `dm_messages` rows (avoids 5 messages → 5 on the badge).
+ */
+export async function countDmCloudBadgeThreads(userId: string): Promise<number> {
+  const hidden = await getMergedHiddenConversationIds(userId);
+  const [main, requests] = await Promise.all([fetchInbox(userId), fetchMessageRequestsInbox(userId)]);
+
+  let n = 0;
+  for (const c of main) {
+    if (hidden.has(c.id)) continue;
+    const lm = c.last_message;
+    if (lm && lm.sender_id !== userId && !lm.is_read) n += 1;
+  }
+  for (const r of requests) {
+    if (!hidden.has(r.id)) n += 1;
+  }
+  return n;
 }
 
 export type DmMessageRequestStatus = 'pending' | 'accepted' | 'declined';

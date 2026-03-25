@@ -9,7 +9,7 @@ import { useNotificationsBadge } from '../../src/hooks/useNotificationsBadge';
 function HomeHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
-  const dmUnread = useDmUnreadBadge();
+  const { count: dmUnread } = useDmUnreadBadge();
   return (
     <FlightClubHeader
 		  bellCount={unread}
@@ -23,7 +23,7 @@ function HomeHeaderNav() {
 function CrewRoomsHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
-  const dmUnread = useDmUnreadBadge();
+  const { count: dmUnread } = useDmUnreadBadge();
   return (
     <SectionHeader
       title="Crew Rooms"
@@ -38,7 +38,7 @@ function CrewRoomsHeaderNav() {
 function CrewToolsHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
-  const dmUnread = useDmUnreadBadge();
+  const { count: dmUnread } = useDmUnreadBadge();
   return (
     <SectionHeader
       title="Crew Tools"
@@ -53,7 +53,7 @@ function CrewToolsHeaderNav() {
 function SocialFeedHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
-  const dmUnread = useDmUnreadBadge();
+  const { count: dmUnread } = useDmUnreadBadge();
   return (
     <SectionHeader
       title="Social Feed"
@@ -68,7 +68,7 @@ function SocialFeedHeaderNav() {
 function ProfileHeaderNav() {
   const router = useRouter();
   const unread = useNotificationsBadge();
-  const dmUnread = useDmUnreadBadge();
+  const { count: dmUnread } = useDmUnreadBadge();
   return (
     <SectionHeader
       title="Profile"

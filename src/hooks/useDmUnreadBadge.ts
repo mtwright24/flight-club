@@ -1,46 +1,44 @@
-import { useCallback, useEffect, useState } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
-import { getUnreadCounts } from '../../lib/home';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import {
+  getDmUnreadBadgeCountSnapshot,
+  refreshDmUnreadBadgeCount,
+  registerDmUnreadBadgeUser,
+  resetDmUnreadBadgeCount,
+  subscribeDmUnreadBadgeCount,
+} from '../../lib/dmUnreadBadgeStore';
 import { useAuth } from './useAuth';
 
+export type DmUnreadBadge = {
+  /** Unread DM threads (same semantics as inbox blue dot). */
+  count: number;
+  refresh: () => Promise<void>;
+};
+
 /**
- * Same source as Messages inbox / home red header: `getUnreadCounts().messages`
- * = count of `dm_messages` rows where `is_read === false` and `sender_id !== current user`
- * in conversations the user participates in (NOT notification rows).
+ * Shared count for all headers: same source as `getUnreadCounts().messages`.
+ * Updates when `notifyDmUnreadBadgeRefresh()` runs (e.g. after opening a thread).
  */
-export function useDmUnreadBadge() {
+export function useDmUnreadBadge(): DmUnreadBadge {
   const { session } = useAuth();
   const userId = session?.user?.id;
-  const [count, setCount] = useState(0);
 
-  const refresh = useCallback(async () => {
-    if (!userId) {
-      setCount(0);
-      return;
-    }
-    try {
-      const { messages } = await getUnreadCounts(userId);
-      setCount(messages);
-    } catch {
-      setCount(0);
-    }
-  }, [userId]);
+  const count = useSyncExternalStore(
+    subscribeDmUnreadBadgeCount,
+    getDmUnreadBadgeCountSnapshot,
+    () => 0
+  );
 
   useEffect(() => {
     if (!userId) {
-      setCount(0);
+      resetDmUnreadBadgeCount();
       return;
     }
-    void refresh();
-    const interval = setInterval(refresh, 45000);
-    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
-      if (next === 'active') void refresh();
-    });
-    return () => {
-      clearInterval(interval);
-      sub.remove();
-    };
-  }, [userId, refresh]);
+    const unregister = registerDmUnreadBadgeUser(userId);
+    void refreshDmUnreadBadgeCount();
+    return unregister;
+  }, [userId]);
 
-  return count;
+  const refresh = useCallback(() => refreshDmUnreadBadgeCount(), []);
+
+  return useMemo(() => ({ count, refresh }), [count, refresh]);
 }

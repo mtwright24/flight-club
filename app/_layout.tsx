@@ -3,6 +3,7 @@ import { Stack, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Linking, View } from "react-native";
 import 'react-native-url-polyfill/auto';
+import { DmBadgeNavigationSync } from '../src/components/DmBadgeNavigationSync';
 import FloatingBackButton from '../src/components/FloatingBackButton';
 import { ThemeProvider } from '../src/context/ThemeContext';
 import { clearProfileDraft, getProfileDraft } from '../src/lib/profileDraft';
@@ -183,6 +184,7 @@ export default function RootLayout() {
             }}
           />
         </Stack>
+        <DmBadgeNavigationSync />
         <FloatingBackButton />
         {loading && (
           <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, justifyContent: "center", alignItems: "center" }}>

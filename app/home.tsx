@@ -5,11 +5,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ActivityPreview, { NotificationItem } from '../components/ActivityPreview';
-import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts, getTrendingRooms, getUnreadCounts } from '../lib/home';
-import { notificationTargetHref, type Notification } from '../lib/notifications';
+import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts, getTrendingRooms } from '../lib/home';
+import { countUnreadNotificationsForUser, notificationTargetHref, type Notification } from '../lib/notifications';
 import { getRecentNotifications, markNotificationRead, subscribeToNotifications } from '../lib/notifications-preview';
 import type { NotificationPreview } from '../lib/notifications-preview';
 import FlightClubHeader from '../src/components/FlightClubHeader';
+import { useDmUnreadBadge } from '../src/hooks/useDmUnreadBadge';
 import { COLORS, RADIUS, SHADOW, SPACING } from '../src/styles/theme';
 
 function formatActivityTimeAgo(dateString: string) {
@@ -46,7 +47,8 @@ export default function HomeScreen() {
   const [profileLoading, setProfileLoading] = useState(true);
   const [profileError, setProfileError] = useState(false);
 
-  const [unread, setUnread] = useState({ notifications: 0, messages: 0 });
+  const [notifUnread, setNotifUnread] = useState(0);
+  const { count: dmBadge, refresh: refreshDmBadge } = useDmUnreadBadge();
   const [unreadLoading, setUnreadLoading] = useState(true);
 
   const [activity, setActivity] = useState<NotificationItem[]>([]);
@@ -110,8 +112,8 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!userId) return;
     setUnreadLoading(true);
-    getUnreadCounts(userId)
-      .then((data) => setUnread(data))
+    countUnreadNotificationsForUser(userId)
+      .then((n) => setNotifUnread(n))
       .finally(() => setUnreadLoading(false));
   }, [userId]);
 
@@ -134,10 +136,11 @@ export default function HomeScreen() {
         .finally(() => setProfileLoading(false));
 
       setUnreadLoading(true);
-      getUnreadCounts(userId)
-        .then((data) => setUnread(data))
+      void refreshDmBadge();
+      countUnreadNotificationsForUser(userId)
+        .then((n) => setNotifUnread(n))
         .finally(() => setUnreadLoading(false));
-    }, [userId])
+    }, [userId, refreshDmBadge])
   );
 
 
@@ -173,9 +176,9 @@ export default function HomeScreen() {
       setActivity((prev) =>
         [mapPreviewToItem(n, effectiveUserId), ...prev].slice(0, 4),
       );
-      void getUnreadCounts(effectiveUserId)
-        .then((counts) => {
-          if (mounted) setUnread(counts);
+      void countUnreadNotificationsForUser(effectiveUserId)
+        .then((n) => {
+          if (mounted) setNotifUnread(n);
         })
         .catch(() => {});
     });
@@ -221,8 +224,9 @@ export default function HomeScreen() {
       setProfileLoading(false);
 
       setUnreadLoading(true);
-      const unreadNext = await getUnreadCounts(userId);
-      setUnread(unreadNext);
+      await refreshDmBadge();
+      const n = await countUnreadNotificationsForUser(userId);
+      setNotifUnread(n);
       setUnreadLoading(false);
 
       setActivityLoading(true);
@@ -266,7 +270,7 @@ export default function HomeScreen() {
     } finally {
       setRefreshing(false);
     }
-  }, [userId]);
+  }, [userId, refreshDmBadge]);
 
   // Tiles for quick tools
   const tiles = [
@@ -348,7 +352,7 @@ export default function HomeScreen() {
         return (
           <ActivityPreview
             items={activity}
-            unreadCount={unread.notifications}
+            unreadCount={notifUnread}
             loading={activityLoading}
             error={activityError}
             onPressItem={async (notification) => {
@@ -357,10 +361,9 @@ export default function HomeScreen() {
                 setActivity((prev) =>
                   prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n)),
                 );
-                setUnread((prev) => ({
-                  ...prev,
-                  notifications: notification.is_read ? prev.notifications : Math.max(0, prev.notifications - 1),
-                }));
+                setNotifUnread((prev) =>
+                  notification.is_read ? prev : Math.max(0, prev - 1),
+                );
                 router.push(
                   notificationTargetHref(notification as NotificationItem & Notification & { user_id: string }),
                 );
@@ -415,13 +418,13 @@ export default function HomeScreen() {
       default:
         return null;
     }
-  }, [profile, profileLoading, profileError, tiles, activity, activityLoading, activityError, unread.notifications, posts, postsLoading, postsError, rooms, roomsLoading, roomsError, awards, awardsLoading, awardsError, router]);
+  }, [profile, profileLoading, profileError, tiles, activity, activityLoading, activityError, notifUnread, posts, postsLoading, postsError, rooms, roomsLoading, roomsError, awards, awardsLoading, awardsError, router]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['left', 'right', 'top']}>
       <FlightClubHeader
-        bellCount={unread.notifications}
-        dmCount={unread.messages}
+        bellCount={notifUnread}
+        dmCount={dmBadge}
         onPressBell={() => router.push('/notifications')}
         onPressMessage={() => router.push('/messages-inbox')}
         onPressMenu={() => router.push('/menu')}

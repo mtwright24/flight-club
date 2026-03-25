@@ -20,6 +20,7 @@ import {
   addDeletedConversationId,
   getMergedHiddenConversationIds,
 } from '../lib/dmInboxLocal';
+import { notifyDmUnreadBadgeRefresh } from '../lib/dmUnreadBadgeStore';
 import { getUnreadCounts } from '../lib/home';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useAuth } from '../src/hooks/useAuth';
@@ -92,6 +93,7 @@ export default function MessagesInboxScreen() {
       void getUnreadCounts(userId)
         .then((counts) => setUnread(counts))
         .catch(() => setUnread({ notifications: 0, messages: 0 }));
+      notifyDmUnreadBadgeRefresh();
     }, [userId, loadInbox])
   );
 
@@ -131,6 +133,7 @@ export default function MessagesInboxScreen() {
       }
       patchConversationLastRead(String(item.id), true);
       void getUnreadCounts(userId).then(setUnread).catch(() => {});
+      notifyDmUnreadBadgeRefresh();
     },
     [userId, patchConversationLastRead]
   );
@@ -146,6 +149,7 @@ export default function MessagesInboxScreen() {
       }
       patchConversationLastRead(String(item.id), false);
       void getUnreadCounts(userId).then(setUnread).catch(() => {});
+      notifyDmUnreadBadgeRefresh();
     },
     [userId, patchConversationLastRead]
   );
@@ -267,6 +271,7 @@ export default function MessagesInboxScreen() {
             void getUnreadCounts(userId)
               .then((c) => setUnread(c))
               .catch(() => setUnread({ notifications: 0, messages: 0 }));
+            notifyDmUnreadBadgeRefresh();
           }
         }}
         onPressMenu={() => router.push('/menu')}
