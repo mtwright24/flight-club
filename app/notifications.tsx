@@ -274,6 +274,7 @@ export default function NotificationsScreen() {
 function renderNotificationText(n: Notification) {
   switch (n.type) {
     case 'like_post':
+    case 'post_like':
       return `${n.actor?.display_name || 'Someone'} liked your post`;
     case 'comment_post':
       return `${n.actor?.display_name || 'Someone'} commented on your post`;

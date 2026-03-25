@@ -1,12 +1,12 @@
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useAuth } from '../src/hooks/useAuth';
-import { startDirectConversation } from '../src/lib/supabase/dms';
+import { sendMessage, startDirectConversation } from '../src/lib/supabase/dms';
 import { supabase } from '../src/lib/supabaseClient';
 
 export default function NewMessageScreen() {
@@ -18,6 +18,12 @@ export default function NewMessageScreen() {
   const [openingUserId, setOpeningUserId] = useState<string | null>(null);
   const router = useRouter();
   const navigation = useNavigation();
+  const sharePostParam = useLocalSearchParams<{ sharePostId?: string | string[] }>().sharePostId;
+  const sharePostId = useMemo(() => {
+    if (typeof sharePostParam === 'string') return sharePostParam.trim();
+    if (Array.isArray(sharePostParam) && sharePostParam[0]) return String(sharePostParam[0]).trim();
+    return '';
+  }, [sharePostParam]);
 
   const handleSearch = useCallback(async (text: string) => {
     setSearch(text);
@@ -53,7 +59,19 @@ export default function NewMessageScreen() {
     setOpeningUserId(tid);
     try {
       const { conversationId } = await startDirectConversation(userId, tid);
-      router.push({ pathname: '/dm-thread', params: { conversationId: String(conversationId) } });
+      const convId = String(conversationId);
+      if (sharePostId) {
+        try {
+          await sendMessage(convId, userId, '', { messageType: 'post_share', postId: sharePostId });
+        } catch (shareErr) {
+          console.warn('[DM] share post to thread failed:', shareErr);
+          Alert.alert(
+            'Could not attach post',
+            'The conversation was opened but the shared post could not be sent. You can try sharing again from the post.',
+          );
+        }
+      }
+      router.push({ pathname: '/dm-thread', params: { conversationId: convId } });
     } catch (e: any) {
       Alert.alert('Unable to start message', e?.message || 'Please try again.');
     } finally {

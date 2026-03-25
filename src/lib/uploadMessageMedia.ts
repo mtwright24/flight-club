@@ -50,8 +50,8 @@ export async function pickAndUploadMessageMedia(
     // Private buckets: prefer a time-limited signed URL so <Image> can load; public buckets still work via getPublicUrl.
     const sevenDaysSec = 60 * 60 * 24 * 7;
     const { data: signed, error: signErr } = await bucket.createSignedUrl(path, sevenDaysSec);
-    const displayUrl =
-      !signErr && signed?.signedUrl ? signed.signedUrl : pub?.publicUrl || uri;
+    // Bucket is public in migrations: prefer stable public URL so stored `media_url` does not expire.
+    const displayUrl = pub?.publicUrl || (!signErr && signed?.signedUrl ? signed.signedUrl : uri);
     const type: 'image' | 'video' = asset.type === 'video' ? 'video' : 'image';
 
     return { success: true, url: displayUrl, type };

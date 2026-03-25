@@ -2,13 +2,17 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, FlatList, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getUnreadCounts } from '../lib/home';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useAuth } from '../src/hooks/useAuth';
-import { fetchInbox, fetchMessageRequestsInbox } from '../src/lib/supabase/dms';
-import { supabase } from '../src/lib/supabaseClient';
+import {
+  acceptDmMessageRequest,
+  declineDmMessageRequest,
+  fetchInbox,
+  fetchMessageRequestsInbox,
+} from '../src/lib/supabase/dms';
 
 function lastMessageSnippet(lastMsg: any): string {
   if (!lastMsg) return 'No messages yet.';
@@ -53,12 +57,6 @@ export default function MessagesInboxScreen() {
       }
       setConversations(inbox);
       setRequests(pending);
-      if (__DEV__) {
-        console.log('[DM-DEBUG] MessagesInboxScreen:setState', {
-          inboxLen: inbox.length,
-          requestsLen: pending.length,
-        });
-      }
     } finally {
       setLoading(false);
     }
@@ -159,9 +157,11 @@ export default function MessagesInboxScreen() {
           <Text style={styles.empty}>No conversations yet.</Text>
         ) : (
           <FlatList
-            data={conversations.filter(c => {
+            data={conversations.filter((c) => {
               const other = c.participants.find((p: any) => p.user_id !== userId);
-              return !search || (other?.profile?.display_name || '').toLowerCase().includes(search.toLowerCase());
+              const name = (other?.profile?.display_name || '').toLowerCase();
+              const q = search.toLowerCase();
+              return !search || name.includes(q);
             })}
             renderItem={renderItem}
             keyExtractor={item => item.id}
@@ -175,9 +175,17 @@ export default function MessagesInboxScreen() {
                   {requests.map((item) => {
                     const other = item.participants.find((p: any) => p.user_id !== userId);
                     const lastMsg = item.last_message;
+                    const openThread = () => {
+                      router.push({ pathname: '/dm-thread', params: { conversationId: String(item.id) } });
+                    };
                     return (
                       <View key={item.id} style={styles.requestRow}>
-                        <View style={styles.row}>
+                        <Pressable
+                          style={styles.requestRowMain}
+                          onPress={openThread}
+                          accessibilityRole="button"
+                          accessibilityLabel="Open message request"
+                        >
                           <Pressable
                             style={styles.avatarWrap}
                             onPress={() => other?.user_id && router.push(`/profile/${other.user_id}`)}
@@ -194,38 +202,36 @@ export default function MessagesInboxScreen() {
                               {lastMsg ? lastMessageSnippet(lastMsg) : 'Message request'}
                             </Text>
                           </View>
-                          <View style={styles.requestActions}>
-                            <Pressable
-                              style={styles.requestAccept}
-                              onPress={async () => {
-                                try {
-                                  await supabase
-                                    .from('dm_message_requests')
-                                    .update({ status: 'accepted' })
-                                    .eq('conversation_id', item.id)
-                                    .eq('to_user_id', userId);
-                                  await handleRefresh();
-                                } catch {}
-                              }}
-                            >
-                              <Text style={styles.requestAcceptText}>Accept</Text>
-                            </Pressable>
-                            <Pressable
-                              style={styles.requestDecline}
-                              onPress={async () => {
-                                try {
-                                  await supabase
-                                    .from('dm_message_requests')
-                                    .update({ status: 'declined' })
-                                    .eq('conversation_id', item.id)
-                                    .eq('to_user_id', userId);
-                                  await handleRefresh();
-                                } catch {}
-                              }}
-                            >
-                              <Text style={styles.requestDeclineText}>Decline</Text>
-                            </Pressable>
-                          </View>
+                        </Pressable>
+                        <View style={styles.requestActions}>
+                          <Pressable
+                            style={styles.requestAccept}
+                            onPress={async () => {
+                              if (!userId) return;
+                              const { error } = await acceptDmMessageRequest(String(item.id), userId);
+                              if (error) {
+                                Alert.alert('Could not accept', error);
+                                return;
+                              }
+                              await handleRefresh();
+                            }}
+                          >
+                            <Text style={styles.requestAcceptText}>Accept</Text>
+                          </Pressable>
+                          <Pressable
+                            style={styles.requestDecline}
+                            onPress={async () => {
+                              if (!userId) return;
+                              const { error } = await declineDmMessageRequest(String(item.id), userId);
+                              if (error) {
+                                Alert.alert('Could not decline', error);
+                                return;
+                              }
+                              await handleRefresh();
+                            }}
+                          >
+                            <Text style={styles.requestDeclineText}>Decline</Text>
+                          </Pressable>
                         </View>
                       </View>
                     );
@@ -247,6 +253,14 @@ const styles = StyleSheet.create({
   loading: { textAlign: 'center', marginTop: 40, color: '#64748b' },
   empty: { textAlign: 'center', marginTop: 40, color: '#64748b' },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
+  requestRowMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+    paddingVertical: 14,
+    paddingLeft: 20,
+  },
   avatarWrap: { marginRight: 14 },
   avatarImg: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#e2e8f0' },
   unreadDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#2563EB', marginRight: 8 },
@@ -257,8 +271,14 @@ const styles = StyleSheet.create({
   snippet: { color: '#64748b', fontSize: 13, marginTop: 2 },
   requestsBlock: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 },
   requestsTitle: { fontSize: 14, fontWeight: '700', color: '#64748b', marginBottom: 4 },
-  requestRow: { marginBottom: 4 },
-  requestActions: { flexDirection: 'row', alignItems: 'center', marginLeft: 8 },
+  requestRow: {
+    marginBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  requestActions: { flexDirection: 'row', alignItems: 'center', paddingRight: 12, paddingVertical: 8 },
   requestAccept: { backgroundColor: '#16a34a', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 6, marginRight: 6 },
   requestAcceptText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   requestDecline: { backgroundColor: '#e5e7eb', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 6 },

@@ -80,13 +80,6 @@ export default function DMThread() {
   // Refetch whenever the screen gains focus (fixes empty thread after back → re-enter).
   useFocusEffect(
     useCallback(() => {
-      if (__DEV__) {
-        console.log('[DM-DEBUG] DMThread:focusEffect', {
-          rawConversationId: rawConversationId,
-          normalizedConversationId: conversationId,
-          hasUserId: !!userId,
-        });
-      }
       if (!conversationId || !userId) {
         setLoading(false);
         return;
@@ -115,13 +108,6 @@ export default function DMThread() {
               break;
             } catch (e) {
               lastError = e;
-              if (__DEV__) {
-                console.log('[DM-DEBUG] DMThread:fetchThreadAttemptFailed', {
-                  targetConvo,
-                  attempt,
-                  err: e instanceof Error ? e.message : String(e),
-                });
-              }
               if (attempt < 2) {
                 await new Promise((r) => setTimeout(r, 800 * attempt));
               }
@@ -132,12 +118,6 @@ export default function DMThread() {
 
           if (lastError) {
             if (messagesRef.current.length === 0) {
-              if (__DEV__) {
-                console.log('[DM-DEBUG] DMThread:settingThreadLoadError', {
-                  targetConvo,
-                  messagesRefLen: messagesRef.current.length,
-                });
-              }
               setThreadLoadError('Unable to load messages right now. Please check your connection and try again.');
             }
           } else {
@@ -331,6 +311,9 @@ export default function DMThread() {
           <Text style={[styles.bubbleTime, isMe && styles.bubbleTimeMe]}>
             {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </Text>
+          {isMe ? (
+            <Text style={[styles.deliveryStatus, styles.bubbleTimeMe]}>{item.is_read ? 'Read' : 'Sent'}</Text>
+          ) : null}
         </View>
       </View>
     );
@@ -501,6 +484,7 @@ const styles = StyleSheet.create({
   bubbleTextMe: { color: '#f8fafc' },
   bubbleTime: { color: '#64748b', fontSize: 11, marginTop: 4, textAlign: 'right' },
   bubbleTimeMe: { color: '#cbd5e1' },
+  deliveryStatus: { fontSize: 10, marginTop: 2, textAlign: 'right', fontWeight: '600' },
   composerRow: {
     flexDirection: 'row',
     alignItems: 'center',
