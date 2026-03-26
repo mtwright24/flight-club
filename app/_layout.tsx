@@ -1,7 +1,7 @@
 import type { Session } from "@supabase/supabase-js";
 import { Stack, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Linking, View } from "react-native";
+import { ActivityIndicator, Linking, LogBox, View } from "react-native";
 import 'react-native-url-polyfill/auto';
 import { DmBadgeNavigationSync } from '../src/components/DmBadgeNavigationSync';
 import FloatingBackButton from '../src/components/FloatingBackButton';
@@ -41,6 +41,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     let mounted = true;
+    LogBox.ignoreLogs([
+      "SafeAreaView has been deprecated and will be removed in a future release.",
+    ]);
 
     (async () => {
       try {

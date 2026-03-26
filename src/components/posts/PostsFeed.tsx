@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '../../hooks/useAuth';
 import {
@@ -235,14 +235,14 @@ export default function PostsFeed({
     ];
   };
 
-  const renderEmpty = () => (
+  const renderEmpty = useCallback(() => (
     <View style={styles.emptyState}>
       <Text style={styles.emptyIcon}>💬</Text>
       <Text style={styles.emptyText}>{emptyTitle}</Text>
     </View>
-  );
+  ), [emptyTitle]);
 
-  const renderItem = ({ item }: { item: RoomPost }) => {
+  const renderItem = useCallback(({ item }: { item: RoomPost }) => {
     const mediaUrls = Array.isArray(item.media_urls) ? item.media_urls : [];
     const commentData = commentsSummary[item.id] || { total: 0, preview: [] };
     const summary = reactionsSummary[item.id];
@@ -488,20 +488,35 @@ export default function PostsFeed({
         </View>
       </View>
     );
-  };
+  }, [
+    commentsSummary,
+    reactionsSummary,
+    onPostPress,
+    onOpenReactionTray,
+    onToggleLike,
+    router,
+    userId,
+  ]);
+
+  const keyExtractor = useCallback((item: RoomPost) => item.id, []);
 
   return (
     <>
       <FlatList
         data={posts}
         renderItem={renderItem}
-        keyExtractor={(item) => item.id}
+        keyExtractor={keyExtractor}
         ListHeaderComponent={headerComponent}
         ListEmptyComponent={renderEmpty}
         scrollEnabled={scrollEnabled}
         contentContainerStyle={{ paddingBottom: spacing.xl }}
         style={styles.feedContainer}
         showsVerticalScrollIndicator={false}
+        initialNumToRender={6}
+        maxToRenderPerBatch={6}
+        updateCellsBatchingPeriod={50}
+        windowSize={7}
+        removeClippedSubviews
         refreshControl={
           onRefresh ? (
             <FlightClubRefreshControl refreshing={!!refreshing} onRefresh={onRefresh} />

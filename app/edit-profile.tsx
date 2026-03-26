@@ -108,7 +108,7 @@ export default function EditProfileScreen() {
   }, [username]);
 
   const pickImage = async (type: 'avatar' | 'cover') => {
-    let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, quality: 0.8 });
+    let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'] as any, allowsEditing: true, quality: 0.8 });
     if (!result.canceled && result.assets && result.assets.length > 0) {
       const asset = result.assets[0];
       if (type === 'avatar') {

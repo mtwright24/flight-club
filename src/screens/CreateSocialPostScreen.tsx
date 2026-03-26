@@ -28,7 +28,7 @@ export default function CreateSocialPostScreen({ onClose, onPosted, initialType 
   const pickImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        mediaTypes: ['images', 'videos'] as any,
         allowsEditing: false,
         quality: 0.8,
       });

@@ -241,8 +241,8 @@ export default function FeedScreen() {
     try {
       const mediaTypes =
         kind === 'image'
-          ? ImagePicker.MediaTypeOptions.Images
-          : ImagePicker.MediaTypeOptions.Videos;
+          ? (['images'] as any)
+          : (['videos'] as any);
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes,
@@ -301,6 +301,10 @@ export default function FeedScreen() {
     if (!userId || !canPost || composeUploading) return;
 
     try {
+      console.log('[SOCIAL_POST] submit start', {
+        hasText: composeContent.trim().length > 0,
+        mediaCount: composeMedia.length,
+      });
       setComposeUploading(true);
       let uploadedUrls: string[] = [];
 
@@ -313,13 +317,16 @@ export default function FeedScreen() {
               lower.endsWith('.mp4') || lower.endsWith('.mov')
                 ? 'video/mp4'
                 : 'image/jpeg';
+            console.log('[SOCIAL_POST] upload start', { fileName, type });
             const result = await uploadSocialFeedMedia(userId, {
               uri,
               name: fileName,
               type,
             });
             if (!result.success) {
-              console.error('Upload failed:', result.error);
+              console.error('[SOCIAL_POST] upload failed', result.error);
+            } else {
+              console.log('[SOCIAL_POST] upload success', { fileName, hasUrl: !!result.url });
             }
             return result.success && result.url ? result.url : null;
           })
@@ -336,20 +343,25 @@ export default function FeedScreen() {
         }
       }
 
+      console.log('[SOCIAL_POST] create start', { uploadedCount: uploadedUrls.length });
       const res = await createSocialFeedPost(userId, composeContent, uploadedUrls);
       setComposeUploading(false);
 
       if (res.success) {
+        console.log('[SOCIAL_POST] create success', { postId: res.post?.id });
         setComposeContent('');
         setComposeMedia([]);
         setCreateSheetVisible(false);
         fetchFeed(true);
       } else if (res.error) {
+        console.error('[SOCIAL_POST] create failed', res.error);
         Alert.alert('Could not create post', res.error);
       }
     } catch (e) {
-      console.error('Error creating social post:', e);
+      console.error('[SOCIAL_POST] submit exception', e);
       setComposeUploading(false);
+    } finally {
+      console.log('[SOCIAL_POST] submit done');
     }
   };
 

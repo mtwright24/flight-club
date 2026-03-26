@@ -14,11 +14,18 @@ export default function PostComposerCard({
   onComposerPress,
   onPhotoPress,
 }: PostComposerCardProps) {
+  const hasAvatar = typeof avatarUrl === 'string' && avatarUrl.trim().length > 0;
   return (
     <>
       {/* Main Composer Card */}
       <View style={styles.composerCard}>
-        <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+        {hasAvatar ? (
+          <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+        ) : (
+          <View style={styles.avatarPlaceholder}>
+            <Ionicons name="person" size={18} color={colors.headerRed} />
+          </View>
+        )}
         <Pressable
           style={styles.inputContainer}
           onPress={onComposerPress}
@@ -53,6 +60,16 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
+  },
+  avatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   inputContainer: {
     flex: 1,

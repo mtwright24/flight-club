@@ -11,6 +11,7 @@ export async function fetchSocialFeedPostById(postId: string): Promise<SocialFee
   return enriched[0] || null;
 }
 import { supabase } from '../supabaseClient';
+import * as FileSystem from 'expo-file-system/legacy';
 
 export interface SocialFeedPost {
   id: string;
@@ -109,18 +110,26 @@ export async function uploadSocialFeedMedia(
     const timestamp = Date.now();
     // Ensure filename does not include 'post-media' twice
     const filename = `${userId}/${timestamp}-${file.name}`;
-    const formData = new FormData();
-    formData.append('file', {
-      uri: file.uri,
-      name: file.name,
-      type: file.type,
-    } as any);
-    const { data, error } = await supabase.storage
+
+    // React Native: Supabase Storage `.upload` expects bytes/Blob-like content.
+    // FormData uploads are unreliable in native and often surface as "Network request failed".
+    let bytes: Uint8Array;
+    if (file.type?.startsWith('video/')) {
+      const response = await fetch(file.uri);
+      if (!response.ok) throw new Error('Could not read selected video.');
+      bytes = new Uint8Array(await response.arrayBuffer());
+    } else {
+      const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' });
+      const binaryString = globalThis.atob(base64);
+      bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+    }
+
+    const { error } = await supabase.storage
       .from('post-media')
-      .upload(filename, formData as any, {
-        contentType: file.type,
-        upsert: false,
-      });
+      .upload(filename, bytes, { contentType: file.type, upsert: false });
     if (error) throw error;
     const { data: publicUrlData } = supabase.storage
       .from('post-media')

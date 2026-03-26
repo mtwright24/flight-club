@@ -1,4 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from './supabaseClient';
 
 export type LocalPhotoAsset = {
@@ -9,7 +10,7 @@ export type LocalPhotoAsset = {
 
 export async function pickHousingPhotos(max: number): Promise<LocalPhotoAsset[]> {
   const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    mediaTypes: ['images'] as any,
     allowsMultipleSelection: true,
     quality: 0.8,
   });
@@ -27,7 +28,7 @@ export async function takeHousingPhoto(): Promise<LocalPhotoAsset | null> {
   if (status !== 'granted') return null;
 
   const result = await ImagePicker.launchCameraAsync({
-    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    mediaTypes: ['images'] as any,
     quality: 0.8,
   });
 
@@ -46,17 +47,17 @@ export async function uploadHousingPhoto(listingId: string, asset: LocalPhotoAss
     const ext = uri.split('.').pop() || 'jpg';
     const path = `housing-listings/${listingId}/photo-${Date.now()}-${index}.${ext}`;
 
-    const file = {
-      uri,
-      name: asset.fileName || `photo.${ext}`,
-      type: asset.mimeType || 'image/jpeg',
-    } as any;
-    const formData = new FormData();
-    formData.append('file', file);
+    const contentType = asset.mimeType || 'image/jpeg';
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+    const binaryString = globalThis.atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
 
     const { error: uploadError } = await supabase.storage
       .from('post-media')
-      .upload(path, formData as any, { contentType: file.type, upsert: false });
+      .upload(path, bytes, { contentType, upsert: false });
 
     if (uploadError) {
       console.log('uploadHousingPhoto error', uploadError);

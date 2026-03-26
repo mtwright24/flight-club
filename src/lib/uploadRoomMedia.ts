@@ -1,10 +1,11 @@
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from './supabaseClient';
 
 export async function uploadRoomAvatar(roomId: string): Promise<{ success: boolean; url?: string; error?: string }> {
   try {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'] as any,
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
@@ -18,19 +19,17 @@ export async function uploadRoomAvatar(roomId: string): Promise<{ success: boole
     const uri = asset.uri;
     const ext = uri.split('.').pop() || 'jpg';
     const path = `room-media/${roomId}/avatar-${Date.now()}.${ext}`;
-
-    // Use FormData upload pattern (matches social feed implementation)
-    const file = {
-      uri,
-      name: asset.fileName || `avatar.${ext}`,
-      type: asset.mimeType || 'image/jpeg',
-    } as any;
-    const formData = new FormData();
-    formData.append('file', file);
+    const contentType = asset.mimeType || 'image/jpeg';
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+    const binaryString = globalThis.atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
 
     const { error: uploadError } = await supabase.storage
       .from('post-media')
-      .upload(path, formData as any, { contentType: file.type, upsert: false });
+      .upload(path, bytes, { contentType, upsert: false });
 
     if (uploadError) throw uploadError;
 
@@ -68,7 +67,7 @@ export async function uploadRoomAvatar(roomId: string): Promise<{ success: boole
 export async function uploadRoomCover(roomId: string): Promise<{ success: boolean; url?: string; error?: string }> {
   try {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'] as any,
       allowsEditing: true,
       // Match a wide, banner-like crop closer to the header
       aspect: [3, 1],
@@ -83,18 +82,17 @@ export async function uploadRoomCover(roomId: string): Promise<{ success: boolea
     const uri = asset.uri;
     const ext = uri.split('.').pop() || 'jpg';
     const path = `room-media/${roomId}/cover-${Date.now()}.${ext}`;
-
-    const file = {
-      uri,
-      name: asset.fileName || `cover.${ext}`,
-      type: asset.mimeType || 'image/jpeg',
-    } as any;
-    const formData = new FormData();
-    formData.append('file', file);
+    const contentType = asset.mimeType || 'image/jpeg';
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+    const binaryString = globalThis.atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
 
     const { error: uploadError } = await supabase.storage
       .from('post-media')
-      .upload(path, formData as any, { contentType: file.type, upsert: false });
+      .upload(path, bytes, { contentType, upsert: false });
 
     if (uploadError) throw uploadError;
 

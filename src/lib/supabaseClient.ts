@@ -1,6 +1,6 @@
 // src/lib/supabaseClient.ts
 import { createClient } from "@supabase/supabase-js";
-import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import "react-native-url-polyfill/auto";
 
 // Read Expo public env vars
@@ -22,63 +22,24 @@ if (rawUrl.endsWith('/')) rawUrl = rawUrl.slice(0, -1);
 export const SUPABASE_URL = rawUrl;
 console.log('Supabase URL:', SUPABASE_URL);
 
-// Custom storage adapter that only stores tokens, not full session
-const ExpoSecureStoreAdapter = {
+// Supabase session blobs can exceed SecureStore's ~2048 byte limit.
+// Use AsyncStorage (unlimited) to prevent session persistence failures / warnings.
+const ExpoAsyncStorageAdapter = {
   getItem: async (key: string) => {
-    const item = await SecureStore.getItemAsync(key);
-    if (!item) return null;
-    
-    try {
-      const parsed = JSON.parse(item);
-      // If it's a session, only return the tokens part
-      if (parsed.session) {
-        return JSON.stringify({
-          session: {
-            access_token: parsed.session.access_token,
-            refresh_token: parsed.session.refresh_token,
-            expires_in: parsed.session.expires_in,
-            token_type: parsed.session.token_type,
-            user: {
-              id: parsed.session.user?.id,
-            },
-          },
-        });
-      }
-      return item;
-    } catch {
-      return item;
-    }
+    const item = await AsyncStorage.getItem(key);
+    return item ?? null;
   },
   setItem: async (key: string, value: string) => {
-    try {
-      const parsed = JSON.parse(value);
-      // Only store tokens, not full session
-      if (parsed.session) {
-        const slim = {
-          session: {
-            access_token: parsed.session.access_token,
-            refresh_token: parsed.session.refresh_token,
-            expires_in: parsed.session.expires_in,
-            token_type: parsed.session.token_type,
-            user: {
-              id: parsed.session.user?.id,
-            },
-          },
-        };
-        await SecureStore.setItemAsync(key, JSON.stringify(slim));
-      } else {
-        await SecureStore.setItemAsync(key, value);
-      }
-    } catch {
-      await SecureStore.setItemAsync(key, value);
-    }
+    await AsyncStorage.setItem(key, value);
   },
-  removeItem: (key: string) => SecureStore.deleteItemAsync(key),
+  removeItem: async (key: string) => {
+    await AsyncStorage.removeItem(key);
+  },
 };
 
 export const supabase = createClient(SUPABASE_URL, supabaseAnonKey ?? "", {
   auth: {
-    storage: ExpoSecureStoreAdapter,
+    storage: ExpoAsyncStorageAdapter,
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,

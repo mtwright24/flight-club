@@ -1,14 +1,14 @@
 // src/lib/pendingProfile.ts
-import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY = 'pendingProfile';
 
 export async function savePendingProfile(profile: any) {
-  await SecureStore.setItemAsync(KEY, JSON.stringify(profile));
+  await AsyncStorage.setItem(KEY, JSON.stringify(profile));
 }
 
 export async function loadPendingProfile() {
-  const raw = await SecureStore.getItemAsync(KEY);
+  const raw = await AsyncStorage.getItem(KEY);
   if (!raw) return null;
   try {
     return JSON.parse(raw);
@@ -18,5 +18,5 @@ export async function loadPendingProfile() {
 }
 
 export async function clearPendingProfile() {
-  await SecureStore.deleteItemAsync(KEY);
+  await AsyncStorage.removeItem(KEY);
 }

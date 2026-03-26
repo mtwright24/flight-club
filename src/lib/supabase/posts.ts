@@ -1,5 +1,6 @@
 import { createNotification } from '../../../lib/notifications';
 import { supabase } from '../supabaseClient';
+import * as FileSystem from 'expo-file-system/legacy';
 
 export interface RoomPost {
   id: string;
@@ -323,21 +324,19 @@ export async function uploadPostImage(
     const filename = `${roomId}/${userId}/${timestamp}-${file.name}`;
     console.log('[UPLOAD] Starting upload, filename:', filename, 'file.uri:', file.uri);
 
-    // For React Native, use FormData to properly upload the file
-    const formData = new FormData();
-    formData.append('file', {
-      uri: file.uri,
-      name: file.name,
-      type: file.type,
-    } as any);
+    // React Native: Supabase Storage `.upload` expects bytes/Blob-like content.
+    // FormData uploads are unreliable in native and often surface as "Network request failed".
+    const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' });
+    const binaryString = globalThis.atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
 
     // Upload to Supabase Storage
     const { data, error } = await supabase.storage
       .from('room-posts')
-      .upload(filename, formData as any, {
-        contentType: file.type,
-        upsert: false,
-      });
+      .upload(filename, bytes, { contentType: file.type, upsert: false });
 
     if (error) {
       console.error('[UPLOAD] Upload error:', error);
