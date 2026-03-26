@@ -1,12 +1,26 @@
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+	ActivityIndicator,
+	Alert,
+	KeyboardAvoidingView,
+	Platform,
+	Pressable,
+	RefreshControl,
+	ScrollView,
+	StyleSheet,
+	Text,
+	TextInput,
+	View,
+} from 'react-native';
 import DropDownPicker from 'react-native-dropdown-picker';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/hooks/useAuth';
 import { supabase } from '../../src/lib/supabaseClient';
 import { colors, radius, spacing } from '../../src/styles/theme';
+import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 
 export default function CompleteSetupScreen() {
 	const router = useRouter();
@@ -27,13 +41,10 @@ export default function CompleteSetupScreen() {
 		state: '',
 	});
 
-	useEffect(() => {
-		loadProfile();
-	}, [userId]);
-
-	const loadProfile = async () => {
+	const loadProfile = useCallback(
+		async (opts?: { silent?: boolean }) => {
 		if (!userId) return;
-		setLoading(true);
+		if (!opts?.silent) setLoading(true);
 		try {
 			const { data, error } = await supabase
 				.from('profiles')
@@ -63,12 +74,18 @@ export default function CompleteSetupScreen() {
 			if (!data?.hometown) missingFields.push('Hometown/City');
 			if (!data?.interests) missingFields.push('Interests/Tags');
 			setMissing(missingFields);
-		} catch (err) {
+		} catch {
 			Alert.alert('Error', 'Something went wrong');
 		} finally {
-			setLoading(false);
+			if (!opts?.silent) setLoading(false);
 		}
-	};
+	},
+		[userId],
+	);
+
+	useEffect(() => {
+		void loadProfile();
+	}, [loadProfile]);
 
 	const handleSave = async () => {
 		if (!userId) return;
@@ -93,7 +110,7 @@ export default function CompleteSetupScreen() {
 				return;
 			}
 			Alert.alert('Success', 'Setup completed!');
-			loadProfile();
+			await loadProfile({ silent: true });
 		} catch (err) {
 			Alert.alert('Error', 'Something went wrong');
 		} finally {
@@ -117,6 +134,12 @@ export default function CompleteSetupScreen() {
 		setProfile((p) => ({ ...p, state: stateValue }));
 		// eslint-disable-next-line
 	}, [stateValue]);
+
+	const { refreshing: completeSetupPullRefreshing, onRefresh: onCompleteSetupPullRefresh } = usePullToRefresh(
+		async () => {
+			await loadProfile({ silent: true });
+		},
+	);
 
 	if (loading) {
 		return (
@@ -143,6 +166,14 @@ export default function CompleteSetupScreen() {
 				keyboardDismissMode="on-drag"
 				contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl }}
 				showsVerticalScrollIndicator={false}
+				refreshControl={
+					<RefreshControl
+						refreshing={completeSetupPullRefreshing}
+						onRefresh={onCompleteSetupPullRefresh}
+						colors={REFRESH_CONTROL_COLORS}
+						tintColor={REFRESH_TINT}
+					/>
+				}
 			>
 				<Text style={styles.sectionTitle}>Missing Items</Text>
 				{missing.length === 0 ? (

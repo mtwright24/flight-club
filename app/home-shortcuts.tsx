@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
@@ -20,6 +21,8 @@ import {
 import { toolsRegistry } from '../lib/toolsRegistry';
 import { COLORS, RADIUS, SPACING } from '../src/styles/theme';
 import { useAuth } from '../src/hooks/useAuth';
+import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 export default function HomeShortcutsScreen() {
   const router = useRouter();
@@ -29,17 +32,28 @@ export default function HomeShortcutsScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
+  const reloadShortcuts = useCallback(async (opts?: { silent?: boolean }) => {
     if (!userId) {
       setSelected([]);
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
       return;
     }
-    setLoading(true);
-    getHomeToolShortcutIds(userId)
-      .then(setSelected)
-      .finally(() => setLoading(false));
+    if (!opts?.silent) setLoading(true);
+    try {
+      const ids = await getHomeToolShortcutIds(userId);
+      setSelected(ids);
+    } finally {
+      if (!opts?.silent) setLoading(false);
+    }
   }, [userId]);
+
+  useEffect(() => {
+    void reloadShortcuts();
+  }, [reloadShortcuts]);
+
+  const { refreshing: shortcutsPullRefreshing, onRefresh: onShortcutsPullRefresh } = usePullToRefresh(async () => {
+    await reloadShortcuts({ silent: true });
+  });
 
   const toggle = useCallback(
     (toolId: string, on: boolean) => {
@@ -107,7 +121,18 @@ export default function HomeShortcutsScreen() {
           <ActivityIndicator color={COLORS.red} />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={shortcutsPullRefreshing}
+              onRefresh={onShortcutsPullRefresh}
+              colors={REFRESH_CONTROL_COLORS}
+              tintColor={REFRESH_TINT}
+            />
+          }
+        >
           {toolsRegistry.map((tool) => {
             const on = selected.includes(tool.id);
             return (

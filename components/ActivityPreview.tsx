@@ -1,6 +1,18 @@
-import React from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator } from 'react-native';
+import React, { useMemo } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  ActivityIndicator,
+  Image,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import {
+  homeActivityBucket,
+  isNotificationUnreadRow,
+  type HomeActivityBucket,
+} from '../lib/activityHomeBuckets';
 
 export interface NotificationItem {
   id: string;
@@ -18,6 +30,18 @@ export interface NotificationItem {
   timeLabel?: string;
 }
 
+const BUCKET_TILES: {
+  key: HomeActivityBucket;
+  shortTitle: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  iconColor: string;
+}[] = [
+  { key: 'social', shortTitle: 'Social', icon: 'chatbubble-ellipses', iconColor: '#2563EB' },
+  { key: 'trades', shortTitle: 'Swaps', icon: 'checkmark-circle', iconColor: '#16A34A' },
+  { key: 'housing', shortTitle: 'Housing', icon: 'key', iconColor: '#CA8A04' },
+  { key: 'crew', shortTitle: 'Crew rooms', icon: 'chatbubbles', iconColor: '#B5161E' },
+];
+
 interface ActivityPreviewProps {
   items: NotificationItem[];
   unreadCount: number;
@@ -25,11 +49,34 @@ interface ActivityPreviewProps {
   onPressViewAll: () => void;
   loading: boolean;
   error?: string | null;
+  /** List rows (default) or 2×2 sectioned tiles like the Home activity mockup. */
+  variant?: 'list' | 'sectioned';
   /** Hide duplicate header/footer when nested under another Activity section (e.g. tab Home). */
   embedded?: boolean;
   /** When embedded and the list is empty, friendlier copy than a generic error. */
   embeddedEmptyTitle?: string;
   embeddedEmptySubtitle?: string;
+}
+
+function buildBucketModel(items: NotificationItem[]) {
+  const sorted = [...items].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+  const per: Record<HomeActivityBucket, NotificationItem[]> = {
+    social: [],
+    trades: [],
+    housing: [],
+    crew: [],
+  };
+  for (const it of sorted) {
+    per[homeActivityBucket(it.type)].push(it);
+  }
+  return BUCKET_TILES.map(({ key }) => {
+    const list = per[key];
+    const latest = list[0];
+    const unreadInBucket = list.filter(isNotificationUnreadRow).length;
+    return { key, latest, unreadInBucket };
+  });
 }
 
 const ActivityPreview: React.FC<ActivityPreviewProps> = ({
@@ -39,6 +86,7 @@ const ActivityPreview: React.FC<ActivityPreviewProps> = ({
   onPressViewAll,
   loading,
   error,
+  variant = 'list',
   embedded = false,
   embeddedEmptyTitle,
   embeddedEmptySubtitle,
@@ -46,6 +94,9 @@ const ActivityPreview: React.FC<ActivityPreviewProps> = ({
   const emptyTitle = embeddedEmptyTitle ?? 'No recent activity';
   const emptySubtitle =
     embeddedEmptySubtitle ?? 'Open notifications for your full history and settings.';
+
+  const bucketModel = useMemo(() => buildBucketModel(items), [items]);
+
   return (
     <View style={[styles.container, embedded && styles.containerEmbedded]}>
       {!embedded ? (
@@ -79,39 +130,79 @@ const ActivityPreview: React.FC<ActivityPreviewProps> = ({
             </Pressable>
           ) : null}
         </View>
-      ) : (
-        <FlatList
-          data={items}
-          keyExtractor={item => item.id}
-          renderItem={({ item }) => (
-            <Pressable
-              style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-              onPress={() => onPressItem(item)}
-            >
-              <View style={styles.avatarWrap}>
-                {item.actor_avatar_url ? (
-                  <View style={styles.avatarOuter}>
-                    <View style={styles.avatarInner}>
-                      <Ionicons name="person-circle" size={32} color="#BDBDBD" />
+      ) : variant === 'sectioned' ? (
+        <View style={styles.sectionedGrid}>
+          {bucketModel.map((cell) => {
+            const { key, latest, unreadInBucket } = cell;
+            const meta = BUCKET_TILES.find((b) => b.key === key)!;
+            const hasUnread = latest && isNotificationUnreadRow(latest);
+            return (
+              <Pressable
+                key={key}
+                style={({ pressed }) => [
+                  styles.sectionTile,
+                  hasUnread && styles.sectionTileUnread,
+                  pressed && styles.sectionTilePressed,
+                ]}
+                onPress={() => (latest ? onPressItem(latest) : onPressViewAll())}
+                accessibilityRole="button"
+                accessibilityLabel={`${meta.shortTitle} activity`}
+              >
+                <View style={styles.sectionTileTop}>
+                  <View style={styles.sectionTileIconRow}>
+                    <View style={styles.sectionTileIconPad}>
+                      <Ionicons name={meta.icon} size={20} color={meta.iconColor} />
                     </View>
+                    <Text style={styles.sectionTileLabel}>{meta.shortTitle}</Text>
                   </View>
+                  {unreadInBucket > 0 ? (
+                    <View style={styles.sectionTileBadge}>
+                      <Text style={styles.sectionTileBadgeText}>+{unreadInBucket}</Text>
+                    </View>
+                  ) : null}
+                </View>
+                {latest ? (
+                  <Text style={styles.sectionTileSummary} numberOfLines={2}>
+                    {latest.summary}
+                  </Text>
                 ) : (
-                  <Ionicons name="person-circle" size={32} color="#BDBDBD" />
+                  <Text style={styles.sectionTilePlaceholder} numberOfLines={2}>
+                    No recent updates
+                  </Text>
                 )}
-                {/* Optionally overlay icon by type */}
-              </View>
-              <View style={styles.textCol}>
-                <Text style={styles.summary} numberOfLines={2}>{item.summary}</Text>
-              </View>
-              <View style={styles.rightCol}>
-                <Text style={styles.timeAgo}>{item.timeLabel ?? item.created_at}</Text>
-                {!item.is_read && <View style={styles.unreadDot} />}
-              </View>
-            </Pressable>
-          )}
-          ItemSeparatorComponent={() => <View style={styles.divider} />}
-          scrollEnabled={false}
-        />
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : (
+        <View>
+          {items.map((item, index) => (
+            <View key={item.id}>
+              <Pressable
+                style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+                onPress={() => onPressItem(item)}
+              >
+                <View style={styles.avatarWrap}>
+                  {item.actor_avatar_url ? (
+                    <Image source={{ uri: item.actor_avatar_url }} style={styles.avatarImg} />
+                  ) : (
+                    <Ionicons name="person-circle" size={32} color="#BDBDBD" />
+                  )}
+                </View>
+                <View style={styles.textCol}>
+                  <Text style={styles.summary} numberOfLines={2}>
+                    {item.summary}
+                  </Text>
+                </View>
+                <View style={styles.rightCol}>
+                  <Text style={styles.timeAgo}>{item.timeLabel ?? item.created_at}</Text>
+                  {!item.is_read && <View style={styles.unreadDot} />}
+                </View>
+              </Pressable>
+              {index < items.length - 1 ? <View style={styles.divider} /> : null}
+            </View>
+          ))}
+        </View>
       )}
       {!embedded && unreadCount > 0 && !loading && (
         <View style={styles.seeAllRow}>
@@ -153,6 +244,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.06)',
+    backgroundColor: '#F3F4F6',
   },
   headerRow: {
     flexDirection: 'row',
@@ -198,22 +290,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarOuter: {
-    borderRadius: 18,
-    overflow: 'hidden',
+  avatarImg: {
     width: 36,
     height: 36,
+    borderRadius: 18,
     backgroundColor: '#E5E7EB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarInner: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#FFF',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   textCol: {
     flex: 1,
@@ -247,6 +328,77 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#F1F1F1',
     marginLeft: 64,
+  },
+  sectionedGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 8,
+    paddingTop: 4,
+    paddingBottom: 10,
+    justifyContent: 'space-between',
+  },
+  sectionTile: {
+    width: '48%',
+    marginBottom: 8,
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    padding: 12,
+    minHeight: 108,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+    position: 'relative',
+  },
+  sectionTileUnread: {
+    backgroundColor: '#FFF6F6',
+    borderColor: 'rgba(181, 22, 30, 0.12)',
+  },
+  sectionTilePressed: {
+    opacity: 0.92,
+  },
+  sectionTileTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  sectionTileIconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
+  sectionTileIconPad: {
+    marginRight: 6,
+  },
+  sectionTileLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#374151',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  sectionTileBadge: {
+    backgroundColor: '#2563EB',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginLeft: 4,
+  },
+  sectionTileBadgeText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  sectionTileSummary: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#111827',
+    lineHeight: 18,
+  },
+  sectionTilePlaceholder: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    lineHeight: 18,
   },
   seeAllRow: {
     alignItems: 'flex-end',

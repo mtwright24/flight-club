@@ -1,13 +1,20 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, ScrollView } from 'react-native';
+import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LoadsSegmentedControl from '../../src/components/loads/LoadsSegmentedControl';
 import LoadsSearchScreen from './search';
 import LoadsRequestsScreen from './requests';
 import LoadsWalletScreen from './wallet';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
+import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
+
 export default function LoadsScreen() {
   const [tab, setTab] = useState<'loads' | 'requests' | 'wallet'>('loads');
+  const [loadsSearchRefreshToken, setLoadsSearchRefreshToken] = useState(0);
+  const { refreshing: loadsPullRefreshing, onRefresh: onLoadsPullRefresh } = usePullToRefresh(async () => {
+    setLoadsSearchRefreshToken((k) => k + 1);
+  });
 
   return (
     <View style={styles.safe}>
@@ -24,8 +31,16 @@ export default function LoadsScreen() {
           <ScrollView
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={loadsPullRefreshing}
+                onRefresh={onLoadsPullRefresh}
+                colors={REFRESH_CONTROL_COLORS}
+                tintColor={REFRESH_TINT}
+              />
+            }
           >
-            <LoadsSearchScreen />
+            <LoadsSearchScreen refreshToken={loadsSearchRefreshToken} />
           </ScrollView>
         ) : tab === 'requests' ? (
           <LoadsRequestsScreen />

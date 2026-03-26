@@ -7,6 +7,7 @@ import {
   Image,
   ImageBackground,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -19,6 +20,7 @@ import { getHomeToolShortcutIds } from '../../lib/homeShortcutsStorage';
 import { pickRecommendedTools } from '../../lib/homeRecommendedTools';
 import { toolsRegistry, toolShortcutChipLabel } from '../../lib/toolsRegistry';
 import { notificationTargetHref, type Notification } from '../../lib/notifications';
+import { notifyNotificationsBadgeRefresh } from '../../lib/notificationsBadgeStore';
 import {
   getRecentNotifications,
   markNotificationRead,
@@ -28,6 +30,10 @@ import {
 import { COLORS, RADIUS, SHADOW, SPACING } from '../../src/styles/theme';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useNotificationsBadge } from '../../src/hooks/useNotificationsBadge';
+import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
+import { refreshDmUnreadBadgeCount } from '../../lib/dmUnreadBadgeStore';
+import { refreshNotificationsBadgeCount } from '../../lib/notificationsBadgeStore';
 import { fetchMyRooms, fetchPublicRooms } from '../../src/lib/supabase/rooms';
 import type { MyRoom, Room } from '../../src/types/rooms';
 
@@ -446,6 +452,7 @@ export default function DashboardHome() {
   const [awardsRaw, setAwardsRaw] = useState<any[]>([]);
   const [awardsLoading, setAwardsLoading] = useState(true);
   const [shortcutToolIds, setShortcutToolIds] = useState<string[]>([]);
+  const [activityRefreshToken, setActivityRefreshToken] = useState(0);
 
   const refreshHomeLists = useCallback(() => {
     setPostsLoading(true);
@@ -505,12 +512,40 @@ export default function DashboardHome() {
     void fetchPublicRooms({ base: base || undefined, limit: 10 }).then(setRecoRooms);
   }, [userId, profile?.base]);
 
+  const handleDashboardPullRefresh = useCallback(async () => {
+    refreshHomeLists();
+    setActivityRefreshToken((t) => t + 1);
+    if (userId) {
+      try {
+        const data = await getCurrentUserProfile(userId);
+        setProfile(data);
+        setError(false);
+        await getHomeToolShortcutIds(userId).then(setShortcutToolIds);
+        await fetchPublicRooms({ base: data?.base || undefined, limit: 10 }).then(setRecoRooms);
+      } catch {
+        setError(true);
+      }
+    }
+    await Promise.all([refreshDmUnreadBadgeCount(), refreshNotificationsBadgeCount()]);
+  }, [refreshHomeLists, userId]);
+
+  const { refreshing: dashboardRefreshing, onRefresh: onDashboardRefresh } =
+    usePullToRefresh(handleDashboardPullRefresh);
+
   return (
     <SafeAreaView style={styles.safe} edges={['left', 'right']}>
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={dashboardRefreshing}
+            onRefresh={onDashboardRefresh}
+            colors={REFRESH_CONTROL_COLORS}
+            tintColor={REFRESH_TINT}
+          />
+        }
       >
         <View style={styles.welcome}>
           {authLoading || loading ? (
@@ -571,7 +606,12 @@ export default function DashboardHome() {
 
         <ShortcutsRow userId={userId} toolIds={shortcutToolIds} />
 
-        <Section title="ACTIVITY" rightAction="View All >" onRightActionPress={() => router.push('/notifications')} />
+        <Section
+          title="ACTIVITY"
+          rightAction="View All >"
+          onRightActionPress={() => router.push('/notifications')}
+          activityRefreshToken={activityRefreshToken}
+        />
         <RecommendedToolsBlock profile={profile} excludeIds={new Set(shortcutToolIds)} />
         <RecommendedForYouBlock
           posts={trendingPosts}
@@ -587,7 +627,7 @@ export default function DashboardHome() {
   );
 }
 
-function HomeActivitySnapshot() {
+function HomeActivitySnapshot({ refreshToken = 0 }: { refreshToken?: number }) {
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user?.id ?? null;
@@ -618,7 +658,7 @@ function HomeActivitySnapshot() {
     }
     let mounted = true;
     setLoading(true);
-    getRecentNotifications(userId, 4)
+    getRecentNotifications(userId, 24)
       .then((rows) => {
         if (mounted) setItems(rows.map((p) => mapPreviewToItem(p, userId)));
       })
@@ -634,7 +674,8 @@ function HomeActivitySnapshot() {
       }
     }
     subRef.current = subscribeToNotifications(userId, (n) => {
-      setItems((prev) => [mapPreviewToItem(n, userId), ...prev].slice(0, 4));
+      setItems((prev) => [mapPreviewToItem(n, userId), ...prev].slice(0, 24));
+      notifyNotificationsBadgeRefresh();
     });
 
     return () => {
@@ -647,12 +688,12 @@ function HomeActivitySnapshot() {
         }
       }
     };
-  }, [userId]);
+  }, [userId, refreshToken]);
 
   useFocusEffect(
     useCallback(() => {
       if (!userId) return;
-      void getRecentNotifications(userId, 4)
+      void getRecentNotifications(userId, 24)
         .then((rows) => {
           setItems(rows.map((p) => mapPreviewToItem(p, userId)));
         })
@@ -675,14 +716,16 @@ function HomeActivitySnapshot() {
             </View>
           ))}
         </Pressable>
-        {unreadBadge > 0 ? (
+        {items.length > 0 || unreadBadge > 0 ? (
           <Pressable
             style={styles.activitySummaryChip}
             onPress={() => router.push('/notifications')}
             accessibilityRole="button"
-            accessibilityLabel={`${unreadBadge} unread, open notifications`}
+            accessibilityLabel={`${items.length ? items.length : unreadBadge} activity items, open notifications`}
           >
-            <Text style={styles.activitySummaryChipText}>+{unreadBadge}</Text>
+            <Text style={styles.activitySummaryChipText}>
+              +{items.length > 0 ? (items.length > 99 ? '99+' : items.length) : unreadBadge > 99 ? '99+' : unreadBadge}
+            </Text>
           </Pressable>
         ) : null}
       </View>
@@ -690,6 +733,7 @@ function HomeActivitySnapshot() {
       <View style={styles.activityPreviewEmbed}>
         <ActivityPreview
           embedded
+          variant="sectioned"
           items={items}
           unreadCount={unreadBadge}
           loading={loading}
@@ -723,10 +767,12 @@ function Section({
   title,
   rightAction,
   onRightActionPress,
+  activityRefreshToken,
 }: {
   title: string;
   rightAction?: string;
   onRightActionPress?: () => void;
+  activityRefreshToken?: number;
 }) {
   if (title === 'ACTIVITY') {
     return (
@@ -743,7 +789,7 @@ function Section({
             )
           ) : null}
         </View>
-        <HomeActivitySnapshot />
+        <HomeActivitySnapshot refreshToken={activityRefreshToken} />
       </View>
     );
   }

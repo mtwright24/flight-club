@@ -1,15 +1,32 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 
 /**
  * Crew Tools tab — primary tools destination (ecosystem TBD).
  * Header/title chrome comes from app/(tabs)/_layout.tsx (SectionHeader: "Crew Tools").
  */
 export default function CrewToolsTabScreen() {
+  const { refreshing, onRefresh } = usePullToRefresh(async () => {
+    /* Placeholder until tools list is server-driven */
+  });
+
   return (
     <SafeAreaView style={styles.safe} edges={['left', 'right']}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={REFRESH_CONTROL_COLORS}
+            tintColor={REFRESH_TINT}
+          />
+        }
+      >
         <Text style={styles.lead}>
           Your crew tools hub. More tools and categories will appear here as the ecosystem is built out.
         </Text>

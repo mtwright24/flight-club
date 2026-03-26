@@ -1,11 +1,26 @@
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useAuth } from '../src/hooks/useAuth';
+import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 import { sendMessage, startDirectConversation } from '../src/lib/supabase/dms';
 import { supabase } from '../src/lib/supabaseClient';
 
@@ -16,6 +31,8 @@ export default function NewMessageScreen() {
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<any[]>([]);
   const [openingUserId, setOpeningUserId] = useState<string | null>(null);
+  const searchRef = useRef('');
+  searchRef.current = search;
   const router = useRouter();
   const navigation = useNavigation();
   const sharePostParam = useLocalSearchParams<{ sharePostId?: string | string[] }>().sharePostId;
@@ -51,6 +68,11 @@ export default function NewMessageScreen() {
       setSearching(false);
     }
   }, [userId]);
+
+  const { refreshing: newMsgRefreshing, onRefresh: onNewMsgRefresh } = usePullToRefresh(async () => {
+    const q = searchRef.current.trim();
+    if (q) await handleSearch(q);
+  });
 
   const handleSelect = async (targetUser: any) => {
     if (!userId || openingUserId) return;
@@ -114,6 +136,14 @@ export default function NewMessageScreen() {
             keyExtractor={(item) => item.id}
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl
+                refreshing={newMsgRefreshing}
+                onRefresh={onNewMsgRefresh}
+                colors={REFRESH_CONTROL_COLORS}
+                tintColor={REFRESH_TINT}
+              />
+            }
             renderItem={({ item }) => (
               <TouchableOpacity
                 style={[styles.row, openingUserId === item.id && { opacity: 0.5 }]}

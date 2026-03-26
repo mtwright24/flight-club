@@ -1,11 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, Switch, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, ScrollView, Pressable, Switch, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { colors, spacing, radius } from '../src/styles/theme';
+import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 export default function PrivacySafetyScreen() {
   const router = useRouter();
+  const { refreshing: privacyPullRefreshing, onRefresh: onPrivacyPullRefresh } = usePullToRefresh(async () => {
+    /* static screen; hook completes spinner */
+  });
   // In-memory toggles (TODO: wire to backend/store for persistence)
   const [privateAccount, setPrivateAccount] = useState(false);
   const [showProfileInSearch, setShowProfileInSearch] = useState(true);
@@ -29,7 +34,17 @@ export default function PrivacySafetyScreen() {
         <Text style={styles.headerTitle}>Privacy & Safety</Text>
         <View style={{ width: 40 }} />
       </View>
-      <ScrollView contentContainerStyle={{ padding: spacing.md }}>
+      <ScrollView
+        contentContainerStyle={{ padding: spacing.md }}
+        refreshControl={
+          <RefreshControl
+            refreshing={privacyPullRefreshing}
+            onRefresh={onPrivacyPullRefresh}
+            colors={REFRESH_CONTROL_COLORS}
+            tintColor={REFRESH_TINT}
+          />
+        }
+      >
         <Text style={styles.sectionTitle}>Privacy Controls</Text>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Private Account</Text>

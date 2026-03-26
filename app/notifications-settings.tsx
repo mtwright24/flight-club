@@ -1,11 +1,13 @@
 
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, Switch, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, ScrollView, Pressable, Switch, StyleSheet, ActivityIndicator, Alert, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { supabase } from '../src/lib/supabaseClient';
 import { useAuth } from '../src/hooks/useAuth';
 import { colors, spacing, radius } from '../src/styles/theme';
+import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 export default function NotificationSettingsScreen() {
   const router = useRouter();
@@ -27,13 +29,9 @@ export default function NotificationSettingsScreen() {
     email: true,
   });
 
-  useEffect(() => {
-    loadPrefs();
-  }, [userId]);
-
-  const loadPrefs = async () => {
+  const loadPrefs = useCallback(async (opts?: { silent?: boolean }) => {
     if (!userId) return;
-    setLoading(true);
+    if (!opts?.silent) setLoading(true);
     try {
       const { data, error } = await supabase
         .from('notification_preferences')
@@ -41,7 +39,6 @@ export default function NotificationSettingsScreen() {
         .eq('user_id', userId)
         .single();
       if (error) {
-        // If no prefs, use defaults
         setPrefs({
           masterPush: true,
           messages: true,
@@ -70,12 +67,21 @@ export default function NotificationSettingsScreen() {
           email: data.email ?? true,
         });
       }
-    } catch (err) {
+    } catch {
       Alert.alert('Error', 'Failed to load notification preferences');
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
-  };
+  }, [userId]);
+
+  useEffect(() => {
+    void loadPrefs();
+  }, [loadPrefs]);
+
+  const { refreshing: notifSettingsPullRefreshing, onRefresh: onNotifSettingsPullRefresh } =
+    usePullToRefresh(async () => {
+      await loadPrefs({ silent: true });
+    });
 
   const handleToggle = (key: keyof typeof prefs, value: boolean) => {
     setPrefs((prev: typeof prefs) => ({ ...prev, [key]: value }));
@@ -122,9 +128,19 @@ export default function NotificationSettingsScreen() {
           <Text style={styles.headerTitle}>Notification Settings</Text>
           <View style={{ width: 40 }} />
         </View>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <ScrollView
+          contentContainerStyle={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
+          refreshControl={
+            <RefreshControl
+              refreshing={notifSettingsPullRefreshing}
+              onRefresh={onNotifSettingsPullRefresh}
+              colors={REFRESH_CONTROL_COLORS}
+              tintColor={REFRESH_TINT}
+            />
+          }
+        >
           <ActivityIndicator size="large" color={colors.headerRed} />
-        </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -138,7 +154,17 @@ export default function NotificationSettingsScreen() {
         <Text style={styles.headerTitle}>Notification Settings</Text>
         <View style={{ width: 40 }} />
       </View>
-      <ScrollView contentContainerStyle={{ padding: spacing.md }}>
+      <ScrollView
+        contentContainerStyle={{ padding: spacing.md }}
+        refreshControl={
+          <RefreshControl
+            refreshing={notifSettingsPullRefreshing}
+            onRefresh={onNotifSettingsPullRefresh}
+            colors={REFRESH_CONTROL_COLORS}
+            tintColor={REFRESH_TINT}
+          />
+        }
+      >
         <Text style={styles.sectionTitle}>Push Notifications</Text>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Enable Push Notifications</Text>

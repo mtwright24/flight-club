@@ -1,8 +1,19 @@
 
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, FlatList, Modal } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  ActivityIndicator,
+  FlatList,
+  Modal,
+  RefreshControl,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getCreditsBalance, purchaseCredits, getCreditsLedger } from '../../src/lib/supabase/loads';
+import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 
 const PACKAGES = [
   { id: '1', amount: 1, price: '$0.99' },
@@ -12,7 +23,6 @@ const PACKAGES = [
   { id: '50', amount: 50, price: '$24.99' },
   { id: '100', amount: 100, price: '$44.99' },
 ];
-
 
 export default function LoadsWalletScreen() {
   const [balance, setBalance] = useState<number | null>(null);
@@ -24,18 +34,28 @@ export default function LoadsWalletScreen() {
   const [ledger, setLedger] = useState<any[]>([]);
   const [ledgerLoading, setLedgerLoading] = useState(true);
 
-  useEffect(() => {
+  const reloadWallet = useCallback(async () => {
     setLoading(true);
-    getCreditsBalance().then(res => {
+    try {
+      const res = await getCreditsBalance();
       setBalance(res.data?.balance ?? 0);
+    } finally {
       setLoading(false);
-    });
+    }
     setLedgerLoading(true);
-    getCreditsLedger().then(res => {
+    try {
+      const res = await getCreditsLedger();
       setLedger(res.data || []);
+    } finally {
       setLedgerLoading(false);
-    });
-  }, [purchasing]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadWallet();
+  }, [purchasing, reloadWallet]);
+
+  const { refreshing: walletPullRefreshing, onRefresh: onWalletPullRefresh } = usePullToRefresh(reloadWallet);
 
   const handlePurchase = async () => {
     setPurchasing(true);
@@ -44,14 +64,13 @@ export default function LoadsWalletScreen() {
     if (res.error) {
       const err = res.error;
       setMessage(typeof err === 'string' ? err : err.message || 'Purchase failed');
-    }
-    else setMessage('Credits purchased!');
+    } else setMessage('Credits purchased!');
     setPurchasing(false);
     setShowSheet(false);
   };
 
-  return (
-    <View style={styles.container}>
+  const header = (
+    <>
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Current Balance</Text>
         {loading ? (
@@ -65,7 +84,6 @@ export default function LoadsWalletScreen() {
         {message ? <Text style={styles.message}>{message}</Text> : null}
       </View>
 
-      {/* Purchase Sheet */}
       <Modal visible={showSheet} animationType="slide" transparent>
         <View style={styles.overlay}>
           <View style={styles.sheet}>
@@ -91,7 +109,6 @@ export default function LoadsWalletScreen() {
         </View>
       </Modal>
 
-      {/* Credits history/ledger */}
       <View style={styles.ledgerCard}>
         <Text style={styles.ledgerTitle}>Credits History</Text>
         {ledgerLoading ? (
@@ -101,22 +118,34 @@ export default function LoadsWalletScreen() {
             <Ionicons name="receipt-outline" size={32} color="#ddd" />
             <Text style={styles.emptyLedgerText}>No credits history yet.</Text>
           </View>
-        ) : (
-          <FlatList
-            data={ledger}
-            keyExtractor={item => item.id}
-            renderItem={({ item }) => (
-              <View style={styles.ledgerRow}>
-                <Text style={styles.ledgerAmount}>{item.amount > 0 ? '+' : ''}{item.amount}</Text>
-                <Text style={styles.ledgerReason}>{item.reason}</Text>
-                <Text style={styles.ledgerDate}>{new Date(item.created_at).toLocaleDateString()}</Text>
-              </View>
-            )}
-            contentContainerStyle={{ paddingBottom: 8 }}
-          />
-        )}
+        ) : null}
       </View>
-    </View>
+    </>
+  );
+
+  return (
+    <FlatList
+      style={styles.container}
+      data={ledger}
+      keyExtractor={item => item.id}
+      ListHeaderComponent={header}
+      renderItem={({ item }) => (
+        <View style={styles.ledgerRow}>
+          <Text style={styles.ledgerAmount}>{item.amount > 0 ? '+' : ''}{item.amount}</Text>
+          <Text style={styles.ledgerReason}>{item.reason}</Text>
+          <Text style={styles.ledgerDate}>{new Date(item.created_at).toLocaleDateString()}</Text>
+        </View>
+      )}
+      contentContainerStyle={{ paddingBottom: 32 }}
+      refreshControl={
+        <RefreshControl
+          refreshing={walletPullRefreshing}
+          onRefresh={onWalletPullRefresh}
+          colors={REFRESH_CONTROL_COLORS}
+          tintColor={REFRESH_TINT}
+        />
+      }
+    />
   );
 }
 
@@ -156,9 +185,9 @@ const styles = StyleSheet.create({
   price: { color: '#222', fontWeight: '600', fontSize: 16 },
   closeBtn: { alignItems: 'center', marginTop: 18 },
   closeText: { color: '#DC3545', fontWeight: '700', fontSize: 16 },
-  ledgerCard: { backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 24, borderWidth: 1, borderColor: '#eee' },
+  ledgerCard: { backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 8, borderWidth: 1, borderColor: '#eee' },
   ledgerTitle: { fontWeight: '700', fontSize: 16, marginBottom: 10 },
-  emptyLedger: { alignItems: 'center', marginTop: 12 },
+  emptyLedger: { alignItems: 'center', marginTop: 12, paddingBottom: 24 },
   emptyLedgerText: { color: '#888', fontSize: 15, marginTop: 8 },
   ledgerRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   ledgerAmount: { fontWeight: '700', fontSize: 15, color: '#DC3545', width: 48 },

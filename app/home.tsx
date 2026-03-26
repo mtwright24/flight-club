@@ -2,16 +2,30 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter, type Href } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ActivityPreview, { NotificationItem } from '../components/ActivityPreview';
 import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts, getTrendingRooms } from '../lib/home';
-import { countUnreadNotificationsForUser, notificationTargetHref, type Notification } from '../lib/notifications';
+import { notificationTargetHref, type Notification } from '../lib/notifications';
+import {
+  notifyNotificationsBadgeRefresh,
+  refreshNotificationsBadgeCount,
+} from '../lib/notificationsBadgeStore';
 import { getRecentNotifications, markNotificationRead, subscribeToNotifications } from '../lib/notifications-preview';
 import type { NotificationPreview } from '../lib/notifications-preview';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useDmUnreadBadge } from '../src/hooks/useDmUnreadBadge';
+import { useNotificationsBadge } from '../src/hooks/useNotificationsBadge';
 import { COLORS, RADIUS, SHADOW, SPACING } from '../src/styles/theme';
+import { FlightClubRefreshControl } from '../src/components/common/FlightClubRefreshControl';
 
 function formatActivityTimeAgo(dateString: string) {
   const date = new Date(dateString);
@@ -47,9 +61,8 @@ export default function HomeScreen() {
   const [profileLoading, setProfileLoading] = useState(true);
   const [profileError, setProfileError] = useState(false);
 
-  const [notifUnread, setNotifUnread] = useState(0);
+  const notifUnread = useNotificationsBadge();
   const { count: dmBadge, refresh: refreshDmBadge } = useDmUnreadBadge();
-  const [unreadLoading, setUnreadLoading] = useState(true);
 
   const [activity, setActivity] = useState<NotificationItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
@@ -109,14 +122,6 @@ export default function HomeScreen() {
       .finally(() => setProfileLoading(false));
   }, [userId]);
 
-  useEffect(() => {
-    if (!userId) return;
-    setUnreadLoading(true);
-    countUnreadNotificationsForUser(userId)
-      .then((n) => setNotifUnread(n))
-      .finally(() => setUnreadLoading(false));
-  }, [userId]);
-
   // Refresh profile + unread counts whenever Home gains focus so
   // updates from Edit Profile are reflected in the welcome copy.
   useFocusEffect(
@@ -135,11 +140,8 @@ export default function HomeScreen() {
         })
         .finally(() => setProfileLoading(false));
 
-      setUnreadLoading(true);
       void refreshDmBadge();
-      countUnreadNotificationsForUser(userId)
-        .then((n) => setNotifUnread(n))
-        .finally(() => setUnreadLoading(false));
+      void refreshNotificationsBadgeCount();
     }, [userId, refreshDmBadge])
   );
 
@@ -174,13 +176,9 @@ export default function HomeScreen() {
     }
     activitySubRef.current = subscribeToNotifications(effectiveUserId, (n) => {
       setActivity((prev) =>
-        [mapPreviewToItem(n, effectiveUserId), ...prev].slice(0, 4),
+        [mapPreviewToItem(n, effectiveUserId), ...prev].slice(0, 24),
       );
-      void countUnreadNotificationsForUser(effectiveUserId)
-        .then((n) => {
-          if (mounted) setNotifUnread(n);
-        })
-        .catch(() => {});
+      notifyNotificationsBadgeRefresh();
     });
     return () => {
       mounted = false;
@@ -223,15 +221,12 @@ export default function HomeScreen() {
       setProfileError(false);
       setProfileLoading(false);
 
-      setUnreadLoading(true);
       await refreshDmBadge();
-      const n = await countUnreadNotificationsForUser(userId);
-      setNotifUnread(n);
-      setUnreadLoading(false);
+      await refreshNotificationsBadgeCount();
 
       setActivityLoading(true);
       setActivityError(null);
-      const items = await getRecentNotifications(userId, 4);
+      const items = await getRecentNotifications(userId, 24);
       setActivity(items.map((p) => mapPreviewToItem(p, userId)));
       setActivityLoading(false);
 
@@ -351,6 +346,7 @@ export default function HomeScreen() {
       case 'activity':
         return (
           <ActivityPreview
+            variant="sectioned"
             items={activity}
             unreadCount={notifUnread}
             loading={activityLoading}
@@ -360,9 +356,6 @@ export default function HomeScreen() {
                 await markNotificationRead(notification.id);
                 setActivity((prev) =>
                   prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n)),
-                );
-                setNotifUnread((prev) =>
-                  notification.is_read ? prev : Math.max(0, prev - 1),
                 );
                 router.push(
                   notificationTargetHref(notification as NotificationItem & Notification & { user_id: string }),
@@ -435,8 +428,12 @@ export default function HomeScreen() {
         keyExtractor={(item) => item.key}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-        refreshing={refreshing}
-        onRefresh={handleRefresh}
+        refreshControl={
+          <FlightClubRefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+          />
+        }
         ListFooterComponent={<View style={{ height: SPACING.xl }} />}
       />
     </SafeAreaView>

@@ -8,6 +8,7 @@ import {
   Pressable,
   ActivityIndicator,
   Image,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,6 +21,8 @@ import RoomDiscoverySection from '../components/rooms/RoomDiscoverySection';
 import SuggestedRoomsSection from '../components/rooms/SuggestedRoomsSection';
 import CreateRoomSheet from '../components/rooms/CreateRoomSheet';
 import { useCrewRooms } from '../hooks/useCrewRooms';
+import { usePullToRefresh } from '../hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../styles/refreshControl';
 import { Room } from '../types/rooms';
 
 
@@ -92,6 +95,10 @@ export default function CrewRoomsScreen() {
       setRoomsFetchedSuccessfully(true);
     }
   }, [crewRoomsError, loading, userId]);
+
+  const { refreshing: roomsPullRefreshing, onRefresh: onRoomsPullRefresh } = usePullToRefresh(async () => {
+    await refetch?.();
+  });
 
   // ADDED: Sort and filter my rooms
   const sortedMyRooms = useMemo(() => {
@@ -197,6 +204,14 @@ export default function CrewRoomsScreen() {
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={roomsPullRefreshing}
+              onRefresh={onRoomsPullRefresh}
+              colors={REFRESH_CONTROL_COLORS}
+              tintColor={REFRESH_TINT}
+            />
+          }
         >
           {/* Search Bar */}
           <View style={styles.searchContainer}>

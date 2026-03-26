@@ -1,14 +1,19 @@
 import React from 'react';
-import { View, Text, Pressable, StyleSheet, Alert } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Alert, ScrollView, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { supabase } from '../src/lib/supabaseClient';
 import { colors, spacing, radius } from '../src/styles/theme';
+import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 export default function MenuScreen() {
   const router = useRouter();
+  const { refreshing: menuRefreshing, onRefresh: onMenuRefresh } = usePullToRefresh(async () => {
+    await supabase.auth.getSession();
+  });
 
   const handleAccountSettings = () => {
     router.dismiss();
@@ -48,7 +53,18 @@ export default function MenuScreen() {
         </Pressable>
       </View>
 
-      <View style={styles.content}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.contentInner}
+        refreshControl={
+          <RefreshControl
+            refreshing={menuRefreshing}
+            onRefresh={onMenuRefresh}
+            colors={REFRESH_CONTROL_COLORS}
+            tintColor={REFRESH_TINT}
+          />
+        }
+      >
         <Pressable style={styles.menuItem} onPress={() => {
           router.push('/account-settings');
         }}>
@@ -105,7 +121,7 @@ export default function MenuScreen() {
           <Ionicons name="log-out-outline" size={24} color="#E63946" />
           <Text style={[styles.menuText, { color: '#E63946' }]}>Log Out</Text>
         </Pressable>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -129,10 +145,13 @@ const styles = StyleSheet.create({
   closeButton: {
     padding: spacing.sm,
   },
-  content: { 
-    flex: 1, 
+  content: {
+    flex: 1,
+  },
+  contentInner: {
     paddingHorizontal: spacing.md,
     paddingTop: spacing.md,
+    paddingBottom: spacing.xl,
   },
   menuItem: {
     flexDirection: 'row',

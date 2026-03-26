@@ -1,6 +1,15 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ProfileHeaderSection from '../../components/ProfileHeaderSection';
 import { followUser, getFollowingFeed, getIsFollowing, getMyProfile, unfollowUser } from '../../lib/feed';
@@ -12,6 +21,8 @@ import { useNotificationsBadge } from '../../src/hooks/useNotificationsBadge';
 import { startDirectConversation } from '../../src/lib/supabase/dms';
 import { fetchUserMedia } from '../../src/lib/supabase/profileMedia';
 import { supabase } from '../../src/lib/supabaseClient';
+import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 
 /** Card user shown in ProfileHeaderSection (view by id). */
 type ProfileRouteUser = {
@@ -52,111 +63,46 @@ export default function ProfileScreen() {
   const [isSelf, setIsSelf] = useState(false);
   const [user, setUser] = useState<ProfileRouteUser | null>(null);
   const [stats, setStats] = useState({ followers: 0, following: 0, posts: 0 });
-  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        // Fetch current user profile for self-check
-        const me = await getMyProfile();
-        setIsSelf(me.id === profileId);
-
-        // Fetch profile for this user
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', profileId)
-          .single();
-        setUser({
-          name: profile.display_name || profile.full_name || 'User',
-          subtitle: `${profile.role || ''} • ${profile.base || ''}`,
-          avatar: profile.avatar_url || '',
-          cover: profile.cover_url || 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=800&q=80',
-          bio: profile.bio || '',
-        });
-        setProfileIsPrivate(profile.is_private === true);
-
-        // Fetch stats
-        const { data: followersData } = await supabase
-          .from('follows')
-          .select('id')
-          .eq('following_id', profileId);
-        const { data: followingData } = await supabase
-          .from('follows')
-          .select('id')
-          .eq('follower_id', profileId);
-        const { data: postsData } = await supabase
-          .from('posts')
-          .select('id')
-          .eq('user_id', profileId);
-        setStats({
-          followers: followersData ? followersData.length : 0,
-          following: followingData ? followingData.length : 0,
-          posts: postsData ? postsData.length : 0,
-        });
-
-        // Fetch posts
-        setPostsLoading(true);
-        const feed = await getFollowingFeed({ userId: profileId, limit: 20, offset: 0 });
-        const ownPosts = (feed || [])
-          .filter((p: any) => p.user_id === profileId)
-          .map((post: any) => {
-            const joinedProfile = (post as any).profiles || {};
-            return {
-              ...post,
-              profile_display_name:
-                post.profile_display_name ??
-                joinedProfile.display_name ??
-                joinedProfile.full_name ??
-                undefined,
-              profile_avatar_url:
-                post.profile_avatar_url ??
-                joinedProfile.avatar_url ??
-                undefined,
-            };
-          });
-        setPosts(ownPosts);
-        setPostsLoading(false);
-
-        // Fetch media from posts
-        setMediaLoading(true);
-        const mediaUrls = await fetchUserMedia(profileId);
-        setMedia(mediaUrls);
-        setMediaLoading(false);
-
-        // Fetch following status
-        setFollowingStatus(await getIsFollowing(profileId));
-        // Check for follow request pending (if using follow_requests table)
-        if (profile.is_private) {
-          const { data: requestData } = await supabase
-            .from('follow_requests')
-            .select('*')
-            .eq('follower_id', me.id)
-            .eq('following_id', profileId)
-            .eq('status', 'pending')
-            .single();
-          setFollowRequestPending(!!requestData);
-        }
-      } catch (err) {
-        setPostsLoading(false);
-      }
-    })();
-  }, [profileId]);
-
-  const handleStartDm = useCallback(async () => {
+  const loadProfileData = useCallback(async () => {
+    if (!profileId) return;
     try {
       const me = await getMyProfile();
-      if (!me?.id || !profileId) return;
-      const { conversationId } = await startDirectConversation(me.id, profileId);
-      router.push({ pathname: '/dm-thread', params: { conversationId: String(conversationId) } });
-    } catch (err: any) {
-      Alert.alert('Unable to start message', err?.message || 'Please try again.');
-    }
-  }, [profileId, router]);
+      setIsSelf(me.id === profileId);
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', profileId)
+        .single();
+      setUser({
+        name: profile.display_name || profile.full_name || 'User',
+        subtitle: `${profile.role || ''} • ${profile.base || ''}`,
+        avatar: profile.avatar_url || '',
+        cover: profile.cover_url || 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=800&q=80',
+        bio: profile.bio || '',
+      });
+      setProfileIsPrivate(profile.is_private === true);
+
+      const { data: followersData } = await supabase
+        .from('follows')
+        .select('id')
+        .eq('following_id', profileId);
+      const { data: followingData } = await supabase
+        .from('follows')
+        .select('id')
+        .eq('follower_id', profileId);
+      const { data: postsData } = await supabase
+        .from('posts')
+        .select('id')
+        .eq('user_id', profileId);
+      setStats({
+        followers: followersData ? followersData.length : 0,
+        following: followingData ? followingData.length : 0,
+        posts: postsData ? postsData.length : 0,
+      });
+
+      setPostsLoading(true);
       const feed = await getFollowingFeed({ userId: profileId, limit: 20, offset: 0 });
       const ownPosts = (feed || [])
         .filter((p: any) => p.user_id === profileId)
@@ -176,10 +122,50 @@ export default function ProfileScreen() {
           };
         });
       setPosts(ownPosts);
-    } finally {
-      setRefreshing(false);
+      setPostsLoading(false);
+
+      setMediaLoading(true);
+      const mediaUrls = await fetchUserMedia(profileId);
+      setMedia(mediaUrls);
+      setMediaLoading(false);
+
+      setFollowingStatus(await getIsFollowing(profileId));
+      if (profile.is_private) {
+        const { data: requestData } = await supabase
+          .from('follow_requests')
+          .select('*')
+          .eq('follower_id', me.id)
+          .eq('following_id', profileId)
+          .eq('status', 'pending')
+          .single();
+        setFollowRequestPending(!!requestData);
+      } else {
+        setFollowRequestPending(false);
+      }
+    } catch {
+      setPostsLoading(false);
+      setMediaLoading(false);
     }
-  };
+  }, [profileId]);
+
+  useEffect(() => {
+    void loadProfileData();
+  }, [loadProfileData]);
+
+  const { refreshing: profilePullRefreshing, onRefresh: onProfilePullRefresh } = usePullToRefresh(async () => {
+    await loadProfileData();
+  });
+
+  const handleStartDm = useCallback(async () => {
+    try {
+      const me = await getMyProfile();
+      if (!me?.id || !profileId) return;
+      const { conversationId } = await startDirectConversation(me.id, profileId);
+      router.push({ pathname: '/dm-thread', params: { conversationId: String(conversationId) } });
+    } catch (err: any) {
+      Alert.alert('Unable to start message', err?.message || 'Please try again.');
+    }
+  }, [profileId, router]);
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right']}>
@@ -204,8 +190,8 @@ export default function ProfileScreen() {
             posts={posts}
             emptyTitle="No posts yet."
             reactionsSummary={{}}
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
+            refreshing={profilePullRefreshing}
+            onRefresh={onProfilePullRefresh}
             headerComponent={
               <>
                 {user ? (
@@ -311,7 +297,18 @@ export default function ProfileScreen() {
           />
         )
       ) : (
-        <ScrollView contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 32 }}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={profilePullRefreshing}
+              onRefresh={onProfilePullRefresh}
+              colors={REFRESH_CONTROL_COLORS}
+              tintColor={REFRESH_TINT}
+            />
+          }
+        >
           {user ? (
             <ProfileHeaderSection
               user={user}

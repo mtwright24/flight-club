@@ -1,11 +1,13 @@
 
 
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, FlatList } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, FlatList, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { listLoadRequests, LoadRequest } from '../../src/lib/supabase/loads';
 import LoadsSegmentedControl from '../../src/components/loads/LoadsSegmentedControl';
 import { useRouter } from 'expo-router';
+import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 
 function RequestCard({ request }: { request: LoadRequest }) {
   const router = useRouter();
@@ -29,43 +31,64 @@ export default function LoadsRequestsScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    let mounted = true;
+  const loadRequests = useCallback(async () => {
     setLoading(true);
     setError('');
     setRequests([]);
-    listLoadRequests({ status: tab })
-      .then(res => {
-        if (mounted) setRequests(res.data || []);
-      })
-      .catch(e => setError(e.message || 'Error loading requests'))
-      .finally(() => mounted && setLoading(false));
-    return () => { mounted = false; };
+    try {
+      const res = await listLoadRequests({ status: tab });
+      setRequests(res.data || []);
+    } catch (e: any) {
+      setError(e.message || 'Error loading requests');
+    } finally {
+      setLoading(false);
+    }
   }, [tab]);
 
-  return (
-    <View style={styles.container}>
+  useEffect(() => {
+    void loadRequests();
+  }, [loadRequests]);
+
+  const { refreshing: requestsPullRefreshing, onRefresh: onRequestsPullRefresh } = usePullToRefresh(loadRequests);
+
+  const listHeader = (
+    <>
       <LoadsSegmentedControl
         tabs={['Open', 'Answered']}
         selectedIndex={tab === 'open' ? 0 : 1}
         onTabPress={i => setTab(i === 0 ? 'open' : 'answered')}
       />
-      {loading && <ActivityIndicator style={{ marginTop: 32 }} size="large" color="#DC3545" />}
-      {!loading && error ? (
-        <Text style={styles.errorText}>{error}</Text>
-      ) : !loading && requests.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="list-outline" size={48} color="#ddd" />
-          <Text style={styles.emptyText}>No {tab === 'open' ? 'open' : 'answered'} requests found.</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={requests}
-          keyExtractor={item => item.id}
-          renderItem={({ item }) => <RequestCard request={item} />}
-          contentContainerStyle={{ paddingBottom: 32 }}
-        />
-      )}
+      {loading ? <ActivityIndicator style={{ marginTop: 24 }} size="large" color="#DC3545" /> : null}
+      {!loading && error ? <Text style={styles.errorText}>{error}</Text> : null}
+    </>
+  );
+
+  const listEmpty =
+    !loading && !error ? (
+      <View style={styles.emptyState}>
+        <Ionicons name="list-outline" size={48} color="#ddd" />
+        <Text style={styles.emptyText}>No {tab === 'open' ? 'open' : 'answered'} requests found.</Text>
+      </View>
+    ) : null;
+
+  return (
+    <View style={styles.container}>
+      <FlatList
+        data={requests}
+        keyExtractor={item => item.id}
+        renderItem={({ item }) => <RequestCard request={item} />}
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={listEmpty}
+        contentContainerStyle={{ paddingBottom: 32, flexGrow: 1 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={requestsPullRefreshing}
+            onRefresh={onRequestsPullRefresh}
+            colors={REFRESH_CONTROL_COLORS}
+            tintColor={REFRESH_TINT}
+          />
+        }
+      />
     </View>
   );
 }

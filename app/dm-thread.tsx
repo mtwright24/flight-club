@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   TextInput,
@@ -20,6 +21,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { notifyDmUnreadBadgeRefresh } from '../lib/dmUnreadBadgeStore';
 import { getPostById } from '../lib/feed';
 import { useAuth } from '../src/hooks/useAuth';
+import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 import {
   acceptDmMessageRequest,
   blockDmMessageRequest,
@@ -293,6 +296,35 @@ export default function DMThread() {
       };
     }, [conversationId, userId, rawConversationId, routeRequestId])
   );
+
+  const handleThreadPullRefresh = useCallback(async () => {
+    if (!conversationId || !userId) return;
+    const targetConvo = conversationId;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const [, thread] = await Promise.all([
+          resolveDmRequestsIfAllowedNow(targetConvo),
+          fetchThread(targetConvo, userId),
+        ]);
+        if (conversationIdRef.current !== targetConvo) return;
+        setMessages(thread.messages);
+        setParticipants(thread.participants);
+        setThreadLoadError(null);
+        const req = await fetchDmMessageRequestForViewer(targetConvo, userId, {
+          requestId: routeRequestIdRef.current || undefined,
+        });
+        setRequestRow(req);
+        setRequestGateStatus(req?.status ?? 'accepted');
+        notifyDmUnreadBadgeRefresh();
+        return;
+      } catch {
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 800 * attempt));
+      }
+    }
+  }, [conversationId, userId]);
+
+  const { refreshing: threadPullRefreshing, onRefresh: onThreadPullRefresh } =
+    usePullToRefresh(handleThreadPullRefresh);
 
   useEffect(() => {
     if (!conversationId || !userId) return;
@@ -688,6 +720,14 @@ export default function DMThread() {
             keyExtractor={(item: any) => item.id}
             contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
             onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+            refreshControl={
+              <RefreshControl
+                refreshing={threadPullRefreshing}
+                onRefresh={onThreadPullRefresh}
+                colors={REFRESH_CONTROL_COLORS}
+                tintColor={REFRESH_TINT}
+              />
+            }
           />
         )}
 

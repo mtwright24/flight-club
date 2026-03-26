@@ -1,4 +1,5 @@
 import { supabase } from '../src/lib/supabaseClient';
+import { notifyNotificationsBadgeRefresh } from './notificationsBadgeStore';
 import {
   Notification,
   countUnreadNotificationsForUser,
@@ -68,6 +69,7 @@ export async function markNotificationRead(notificationId: string): Promise<void
     .from('notifications')
     .update({ is_read: true })
     .eq('id', notificationId);
+  notifyNotificationsBadgeRefresh();
 }
 
 export function subscribeToNotifications(userId: string, onNew: (n: NotificationPreview) => void) {

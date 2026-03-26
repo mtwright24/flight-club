@@ -115,6 +115,9 @@ export async function markNotificationsRead(ids: string[]): Promise<void> {
     }
     throw error;
   }
+  void import('./notificationsBadgeStore')
+    .then((m) => m.notifyNotificationsBadgeRefresh())
+    .catch(() => {});
 }
 
 export async function markAllNotificationsRead(): Promise<void> {
@@ -144,6 +147,9 @@ export async function markAllNotificationsRead(): Promise<void> {
     }
     throw error;
   }
+  void import('./notificationsBadgeStore')
+    .then((m) => m.notifyNotificationsBadgeRefresh())
+    .catch(() => {});
 }
 
 /**

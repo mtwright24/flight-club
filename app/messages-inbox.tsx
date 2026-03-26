@@ -8,6 +8,7 @@ import {
   Image,
   Modal,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   TextInput,
@@ -24,6 +25,7 @@ import { notifyDmUnreadBadgeRefresh } from '../lib/dmUnreadBadgeStore';
 import { getUnreadCounts } from '../lib/home';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useAuth } from '../src/hooks/useAuth';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 import {
   fetchInbox,
   fetchMessageRequestsInbox,
@@ -101,10 +103,16 @@ export default function MessagesInboxScreen() {
     setRefreshing(true);
     try {
       await loadInbox();
+      if (userId) {
+        void getUnreadCounts(userId)
+          .then((c) => setUnread(c))
+          .catch(() => setUnread({ notifications: 0, messages: 0 }));
+        notifyDmUnreadBadgeRefresh();
+      }
     } finally {
       setRefreshing(false);
     }
-  }, [loadInbox]);
+  }, [loadInbox, userId]);
 
   const openMore = useCallback((item: any) => {
     swipeMap.current.get(item.id)?.close();
@@ -308,8 +316,14 @@ export default function MessagesInboxScreen() {
               renderItem={renderItem}
               keyExtractor={(item) => item.id}
               contentContainerStyle={{ paddingBottom: 24 }}
-              refreshing={refreshing}
-              onRefresh={handleRefresh}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={handleRefresh}
+                  colors={REFRESH_CONTROL_COLORS}
+                  tintColor={REFRESH_TINT}
+                />
+              }
               ListHeaderComponent={
                 requests.length > 0 ? (
                   <View style={styles.requestsBlock}>

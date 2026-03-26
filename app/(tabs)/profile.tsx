@@ -1,7 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ProfileHeaderSection from '../../components/ProfileHeaderSection';
 import { getFollowingFeed, getMyProfile } from '../../lib/feed';
@@ -9,6 +9,7 @@ import PostsFeed from '../../src/components/posts/PostsFeed';
 import MediaGrid from '../../src/components/profile/MediaGrid';
 import { fetchUserMedia } from '../../src/lib/supabase/profileMedia';
 import { supabase } from '../../src/lib/supabaseClient';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 
 /** Card user shown in ProfileHeaderSection (self tab). */
 type TabProfileUser = {
@@ -195,6 +196,14 @@ export default function ProfileScreen() {
         <ScrollView
           contentContainerStyle={{ paddingBottom: 32 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={REFRESH_CONTROL_COLORS}
+              tintColor={REFRESH_TINT}
+            />
+          }
         >
           {user ? (
             <ProfileHeaderSection

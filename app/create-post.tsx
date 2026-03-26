@@ -1,15 +1,31 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Image, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  Pressable,
+  ScrollView,
+  Image,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  RefreshControl,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import FlightClubHeader from '../src/components/FlightClubHeader';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { colors } from '../src/theme/colors';
 import { createPost } from '../lib/feed';
-
+import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 export default function CreatePostScreen() {
   const router = useRouter();
+  const { refreshing: createPostPullRefreshing, onRefresh: onCreatePostPullRefresh } = usePullToRefresh(async () => {
+    /* composer state only */
+  });
   const [text, setText] = useState('');
   const [mediaUri, setMediaUri] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<string>('image/jpeg');
@@ -65,6 +81,14 @@ export default function CreatePostScreen() {
           contentContainerStyle={[styles.container, { flexGrow: 1, paddingBottom: 32 }]}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={createPostPullRefreshing}
+              onRefresh={onCreatePostPullRefresh}
+              colors={REFRESH_CONTROL_COLORS}
+              tintColor={REFRESH_TINT}
+            />
+          }
         >
           <Text style={styles.label}>Text</Text>
           <TextInput value={text} onChangeText={setText} placeholder="Write something..." placeholderTextColor={colors.PLACEHOLDER} style={[styles.input, { height: 120 }]} multiline />

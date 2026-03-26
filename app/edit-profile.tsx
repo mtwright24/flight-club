@@ -2,11 +2,25 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { checkUsernameAvailable, getMyProfile, updateProfile } from '../lib/profile';
 import { uploadAvatar, uploadCover } from '../lib/storage';
+import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 const brandRed = '#B5161E';
 
@@ -31,13 +45,14 @@ export default function EditProfileScreen() {
   const [coverFile, setCoverFile] = useState<ImagePickerAsset | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const p = await getMyProfile();
+        if (cancelled) return;
         setProfile(p);
         setAvatar(p.avatar_url || '');
         setCover(p.cover_url || '');
-        // Prefer display_name if present, fall back to full_name
         setDisplayName((p.display_name as string) || p.full_name || '');
         setUsername(p.username || '');
         setBio(p.bio || '');
@@ -47,12 +62,35 @@ export default function EditProfileScreen() {
         setFleet(p.fleet || '');
       } catch (err) {
         console.error('EditProfile load error', err);
-        Alert.alert('Error', 'Failed to load your profile.');
+        if (!cancelled) Alert.alert('Error', 'Failed to load your profile.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  const refreshProfileFromServer = useCallback(async () => {
+    try {
+      const p = await getMyProfile();
+      setProfile(p);
+      if (!avatarFile) setAvatar(p.avatar_url || '');
+      if (!coverFile) setCover(p.cover_url || '');
+      setDisplayName((p.display_name as string) || p.full_name || '');
+      setUsername(p.username || '');
+      setBio(p.bio || '');
+      setRole(p.role || '');
+      setAirline(p.airline || '');
+      setBase(p.base || '');
+      setFleet(p.fleet || '');
+    } catch (err) {
+      console.error('EditProfile refresh error', err);
+    }
+  }, [avatarFile, coverFile]);
+
+  const { refreshing: editPullRefreshing, onRefresh: onEditPullRefresh } = usePullToRefresh(refreshProfileFromServer);
 
   // Username uniqueness check
   useEffect(() => {
@@ -172,6 +210,14 @@ export default function EditProfileScreen() {
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
+            refreshControl={
+              <RefreshControl
+                refreshing={editPullRefreshing}
+                onRefresh={onEditPullRefresh}
+                colors={REFRESH_CONTROL_COLORS}
+                tintColor={REFRESH_TINT}
+              />
+            }
           >
             {/* Cover photo */}
             <View style={{ alignItems: 'center', marginTop: 18 }}>

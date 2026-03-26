@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { usePathname, useSegments } from 'expo-router';
 import { refreshDmUnreadBadgeCount } from '../../lib/dmUnreadBadgeStore';
+import { refreshNotificationsBadgeCount } from '../../lib/notificationsBadgeStore';
 
 /**
- * Refreshes the shared DM cloud badge whenever the route changes (pathname or
- * tab segments) so it updates after stack pops or tab switches without tapping the icon.
+ * Refreshes shared header badges (DM cloud + notifications bell) when the route
+ * changes (pathname or tab segments), e.g. after stack pops or tab switches.
  */
 export function DmBadgeNavigationSync() {
   const pathname = usePathname();
@@ -19,6 +20,7 @@ export function DmBadgeNavigationSync() {
     }
     const t = setTimeout(() => {
       void refreshDmUnreadBadgeCount();
+      void refreshNotificationsBadgeCount();
     }, 50);
     return () => clearTimeout(t);
   }, [routeKey]);

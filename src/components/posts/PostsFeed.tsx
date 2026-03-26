@@ -14,6 +14,7 @@ import {
 import { PostReactionSummary, REACTIONS } from '../../lib/supabase/reactions';
 import { createSocialPostComment, fetchSocialCommentPreviews } from '../../lib/supabase/socialFeedComments';
 import { colors, radius, spacing } from '../../styles/theme';
+import { FlightClubRefreshControl } from '../common/FlightClubRefreshControl';
 import ActionSheet, { ActionSheetOption } from '../common/ActionSheet';
 import CommentPreview from './CommentPreview';
 import EditPostModal from './EditPostModal';
@@ -501,8 +502,11 @@ export default function PostsFeed({
         contentContainerStyle={{ paddingBottom: spacing.xl }}
         style={styles.feedContainer}
         showsVerticalScrollIndicator={false}
-        refreshing={!!refreshing}
-        onRefresh={onRefresh}
+        refreshControl={
+          onRefresh ? (
+            <FlightClubRefreshControl refreshing={!!refreshing} onRefresh={onRefresh} />
+          ) : undefined
+        }
       />
 
       <ActionSheet

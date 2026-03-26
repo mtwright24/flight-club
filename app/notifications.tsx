@@ -10,9 +10,11 @@ import {
   Notification,
   notificationTargetHref,
 } from '../lib/notifications';
+import { notifyNotificationsBadgeRefresh } from '../lib/notificationsBadgeStore';
 import { useAuth } from '../src/hooks/useAuth';
 import { supabase } from '../src/lib/supabaseClient';
 import { colors, spacing } from '../src/styles/theme';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 export default function NotificationsScreen() {
   const router = useRouter();
@@ -69,6 +71,7 @@ export default function NotificationsScreen() {
             if (prev.find((x) => x.id === n.id)) return prev;
             return [n, ...prev];
           });
+          notifyNotificationsBadgeRefresh();
         }
       )
       .subscribe();
@@ -252,7 +255,14 @@ export default function NotificationsScreen() {
           keyExtractor={(item, index) => (item.id ? String(item.id) : `row-${index}`)}
           renderItem={renderItem}
           renderSectionHeader={renderSectionHeader}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={REFRESH_CONTROL_COLORS}
+              tintColor={REFRESH_TINT}
+            />
+          }
           onEndReached={onEndReached}
           onEndReachedThreshold={0.5}
           contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}

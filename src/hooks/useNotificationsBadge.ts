@@ -1,60 +1,36 @@
-import { useEffect, useState } from 'react';
-import { fetchUnreadNotificationsCount } from '../../lib/notifications';
-import { useAuth } from '../hooks/useAuth';
-import { supabase } from '../lib/supabaseClient';
+import { useEffect, useSyncExternalStore } from 'react';
+import {
+  getNotificationsBadgeCountSnapshot,
+  refreshNotificationsBadgeCount,
+  registerNotificationsBadgeUser,
+  resetNotificationsBadgeCount,
+  subscribeNotificationsBadgeCount,
+} from '../../lib/notificationsBadgeStore';
+import { useAuth } from './useAuth';
 
-export function useNotificationsBadge() {
+/**
+ * Shared bell count (same as `countUnreadNotificationsForUser` / deduped unread).
+ * Updates when `notifyNotificationsBadgeRefresh()` runs or realtime/poll fires.
+ */
+export function useNotificationsBadge(): number {
   const { session } = useAuth();
-  const [count, setCount] = useState(0);
+  const userId = session?.user?.id;
+
+  const count = useSyncExternalStore(
+    subscribeNotificationsBadgeCount,
+    getNotificationsBadgeCountSnapshot,
+    () => 0
+  );
 
   useEffect(() => {
-    if (!session?.user?.id) {
-      setCount(0);
+    if (!userId) {
+      resetNotificationsBadgeCount();
       return;
     }
-
-    let isMounted = true;
-
-    const load = async () => {
-      try {
-        const value = await fetchUnreadNotificationsCount();
-        if (isMounted) setCount(value);
-      } catch (e) {
-        if (isMounted) setCount(0);
-      }
-    };
-
-    load();
-
-    const channel = supabase
-      .channel('notifications-badge')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_id=eq.${session.user.id}`,
-        },
-        async () => {
-          if (!isMounted) return;
-          try {
-            const value = await fetchUnreadNotificationsCount();
-            if (isMounted) setCount(value);
-          } catch {
-            if (isMounted) setCount(0);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      isMounted = false;
-      try {
-        supabase.removeChannel(channel);
-      } catch {}
-    };
-  }, [session?.user?.id]);
+    const unregister = registerNotificationsBadgeUser(userId);
+    void refreshNotificationsBadgeCount();
+    return unregister;
+  }, [userId]);
 
   return count;
 }

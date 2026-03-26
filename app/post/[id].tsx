@@ -1,12 +1,23 @@
-
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TextInput, Pressable } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  TextInput,
+  Pressable,
+  RefreshControl,
+} from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import PostCard from '../../components/PostCard';
 import { getPostById, getComments, addComment } from '../../lib/feed';
+import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 
 export default function PostDetailScreen() {
   const { id } = useLocalSearchParams();
+  const postId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : '';
   const [post, setPost] = useState<any>(null);
   const [comments, setComments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -14,25 +25,35 @@ export default function PostDetailScreen() {
   const [posting, setPosting] = useState(false);
   const router = useRouter();
 
+  const loadPostAndComments = useCallback(async (isPull = false) => {
+    if (!postId) return;
+    if (!isPull) setLoading(true);
+    try {
+      const p = await getPostById(postId);
+      setPost(p);
+      const c = await getComments(postId, { limit: 50, offset: 0 });
+      setComments(c);
+    } catch {
+      /* keep prior */
+    } finally {
+      if (!isPull) setLoading(false);
+    }
+  }, [postId]);
+
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const p = await getPostById(id as string);
-        setPost(p);
-        const c = await getComments(id as string, { limit: 50, offset: 0 });
-        setComments(c);
-      } catch {}
-      setLoading(false);
-    })();
-  }, [id]);
+    void loadPostAndComments(false);
+  }, [loadPostAndComments]);
+
+  const { refreshing: postPullRefreshing, onRefresh: onPostPullRefresh } = usePullToRefresh(async () => {
+    await loadPostAndComments(true);
+  });
 
   const handleAddComment = async () => {
-    if (!commentText.trim()) return;
+    if (!commentText.trim() || !postId) return;
     setPosting(true);
-    await addComment(id as string, commentText);
+    await addComment(postId, commentText);
     setCommentText('');
-    const c = await getComments(id as string, { limit: 50, offset: 0 });
+    const c = await getComments(postId, { limit: 50, offset: 0 });
     setComments(c);
     setPosting(false);
   };
@@ -41,7 +62,18 @@ export default function PostDetailScreen() {
   if (!post) return <View style={styles.center}><Text>Post not found.</Text></View>;
 
   return (
-    <ScrollView style={styles.safe} contentContainerStyle={{ padding: 16 }}>
+    <ScrollView
+      style={styles.safe}
+      contentContainerStyle={{ padding: 16 }}
+      refreshControl={
+        <RefreshControl
+          refreshing={postPullRefreshing}
+          onRefresh={onPostPullRefresh}
+          colors={REFRESH_CONTROL_COLORS}
+          tintColor={REFRESH_TINT}
+        />
+      }
+    >
       <PostCard post={post} />
       {/* Comments */}
       <View style={styles.commentsSection}>

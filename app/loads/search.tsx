@@ -1,10 +1,12 @@
 
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, FlatList, Platform } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, FlatList, Platform, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { searchFlights, NonRevLoadFlight } from '../../src/lib/supabase/loads';
+import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
+import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 import { AirportPickerModal, AirlinePickerModal } from '../../src/components/loads/AirportAirlinePickers';
 
 // Wrapper component to match previous usage
@@ -134,7 +136,7 @@ function AirportAirlinePickers({ from, setFrom, to, setTo, date, setDate, onSear
 }
 import { FlightCard } from '../../src/components/loads/FlightCard';
 
-export default function LoadsSearchScreen() {
+export default function LoadsSearchScreen({ refreshToken = 0 }: { refreshToken?: number }) {
     const insets = useSafeAreaInsets();
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -144,18 +146,34 @@ export default function LoadsSearchScreen() {
   const [error, setError] = useState('');
   const [searched, setSearched] = useState(false);
 
-  const handleSearch = async () => {
-    setLoading(true);
+  const performSearch = useCallback(async () => {
     setError('');
     setSearched(true);
-    // TODO: Replace with real user ID from auth context
     const userId = 'demo-user';
-    // Pass empty string for airline to search all airlines
     const res = await searchFlights(userId, '', from, to, date);
     setFlights(res.flights);
     setError(res.error || '');
-    setLoading(false);
+  }, [from, to, date]);
+
+  const handleSearch = async () => {
+    setLoading(true);
+    try {
+      await performSearch();
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const { refreshing: loadsSearchPullRefreshing, onRefresh: onLoadsSearchPullRefresh } = usePullToRefresh(async () => {
+    if (!from || !to || !date) return;
+    await performSearch();
+  });
+
+  useEffect(() => {
+    if (!refreshToken) return;
+    if (!from || !to || !date) return;
+    void performSearch();
+  }, [refreshToken, from, to, date, performSearch]);
 
   const STICKY_BAR_HEIGHT = 88;
   const canSearch = !!from && !!to && !!date && !loading;
@@ -188,6 +206,14 @@ export default function LoadsSearchScreen() {
                 <FlatList
                   data={flights}
                   keyExtractor={item => item.id}
+                  refreshControl={
+                    <RefreshControl
+                      refreshing={loadsSearchPullRefreshing}
+                      onRefresh={onLoadsSearchPullRefresh}
+                      colors={REFRESH_CONTROL_COLORS}
+                      tintColor={REFRESH_TINT}
+                    />
+                  }
                   renderItem={({ item }) => {
                     const depart = new Date(item.depart_at);
                     const arrive = new Date(item.arrive_at);
