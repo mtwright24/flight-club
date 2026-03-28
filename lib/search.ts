@@ -65,6 +65,16 @@ export type SearchAllResult = {
  * cannot execute or inspect them at build time.
  */
 
+/** Strip characters that break PostgREST `.or()` / `ilike` filters or act as wildcards. */
+function sanitizeIlikeTerm(raw: string): string {
+  return raw
+    .replace(/\\/g, '')
+    .replace(/%/g, '')
+    .replace(/_/g, '')
+    .replace(/,/g, '')
+    .trim();
+}
+
 function isMissingTableOrColumnError(error: any): boolean {
   if (!error) return false;
   const code = (error as any).code;
@@ -160,13 +170,25 @@ export async function searchPeople(query: string, limit = 25): Promise<SearchRes
     let data: any[] | null = null;
 
     if (isUuidSearch) {
-      // Exact id match when query looks like a UUID
-      const { data: byId, error } = await supabase
+      const byIdWithHandle = await supabase
         .from('profiles')
-        .select('id, display_name, username, avatar_url, base, airline, role')
+        .select('id, display_name, username, handle, avatar_url, base, airline, role')
         .eq('id', q)
         .limit(limit);
 
+      let byIdRes: { data: any[] | null; error: any } = byIdWithHandle;
+      if (byIdWithHandle.error) {
+        const msg = String(byIdWithHandle.error.message || '');
+        if (msg.includes('handle') || (byIdWithHandle.error as any)?.code === '42703') {
+          byIdRes = await supabase
+            .from('profiles')
+            .select('id, display_name, username, avatar_url, base, airline, role')
+            .eq('id', q)
+            .limit(limit);
+        }
+      }
+
+      const { data: byId, error } = byIdRes;
       if (error) {
         lastSearchPeopleError = String(error.message || error);
         console.error('[searchPeople] Supabase error (id search)', error);
@@ -174,35 +196,60 @@ export async function searchPeople(query: string, limit = 25): Promise<SearchRes
       }
       data = byId || [];
     } else {
-      const ilike = `%${q}%`;
-      const { data: byText, error } = await supabase
-        .from('profiles')
-        .select('id, display_name, username, avatar_url, base, airline, role')
-        .or(
-          [
-            `display_name.ilike.${ilike}`,
-            `username.ilike.${ilike}`,
-          ].join(',')
-        )
-        .order('display_name', { ascending: true })
-        .limit(limit);
+      const safe = sanitizeIlikeTerm(q);
+      if (!safe) {
+        lastSearchPeopleError = null;
+        return [];
+      }
+      const ilike = `%${safe}%`;
 
+      const tryWithHandle = async () =>
+        supabase
+          .from('profiles')
+          .select('id, display_name, username, handle, avatar_url, base, airline, role')
+          .or(
+            [
+              `display_name.ilike.${ilike}`,
+              `username.ilike.${ilike}`,
+              `handle.ilike.${ilike}`,
+            ].join(',')
+          )
+          .order('display_name', { ascending: true })
+          .limit(limit);
+
+      const textWithHandle = await tryWithHandle();
+      let textRes: { data: any[] | null; error: any } = textWithHandle;
+      if (textWithHandle.error) {
+        const msg = String(textWithHandle.error.message || '');
+        if (msg.includes('handle') || (textWithHandle.error as any)?.code === '42703') {
+          textRes = await supabase
+            .from('profiles')
+            .select('id, display_name, username, avatar_url, base, airline, role')
+            .or([`display_name.ilike.${ilike}`, `username.ilike.${ilike}`].join(','))
+            .order('display_name', { ascending: true })
+            .limit(limit);
+        }
+      }
+
+      const { error } = textRes;
       if (error) {
         lastSearchPeopleError = String(error.message || error);
         console.error('[searchPeople] Supabase error (text search)', error);
         return [];
       }
-      data = byText || [];
+      data = textRes.data || [];
     }
 
     lastSearchPeopleError = null;
 
-    return (data || []).map((row: any): SearchResultItem => {
+    const mapped = (data || []).map((row: any): SearchResultItem => {
       const displayName: string | null = row.display_name || null;
       const username: string | null = row.username || null;
+      const handle: string | null = row.handle || null;
+      const handleStr = handle || username;
 
-      const title = displayName || username || 'Crew member';
-      const subtitle = username ? `@${username}` : null;
+      const title = displayName || handleStr || 'Crew member';
+      const subtitle = handleStr ? `@${handleStr}` : null;
 
       return {
         type: 'person',
@@ -214,6 +261,8 @@ export async function searchPeople(query: string, limit = 25): Promise<SearchRes
         meta: null,
       };
     });
+
+    return await maybeIncludeCurrentUser(mapped, q);
   } catch (error: any) {
     lastSearchPeopleError = String(error?.message || error);
     console.error('[searchPeople] Unexpected error', error);
@@ -302,7 +351,10 @@ export async function searchRooms(query: string, limit = 10): Promise<SearchResu
   const q = query.trim();
   if (!q) return [];
 
-  const ilike = `%${q}%`;
+  const safe = sanitizeIlikeTerm(q);
+  if (!safe) return [];
+
+  const ilike = `%${safe}%`;
   const { data, error } = await supabase
     .from('crew_rooms')
     .select('id, name, last_message_at')
@@ -350,7 +402,7 @@ export async function searchTools(query: string, limit = 10): Promise<SearchResu
   return results;
 }
 
-export async function searchAll(query: string, perTypeLimit = 5): Promise<SearchAllResult> {
+export async function searchAll(query: string, perTypeLimit = 12): Promise<SearchAllResult> {
   const q = query.trim();
   if (!q) {
     return { people: [], posts: [], rooms: [], tools: [] };
@@ -359,8 +411,8 @@ export async function searchAll(query: string, perTypeLimit = 5): Promise<Search
   const [people, rooms, posts, tools] = await Promise.all([
     searchPeople(q, perTypeLimit),
     searchRooms(q, perTypeLimit),
-    searchPosts(q, perTypeLimit),
-    searchTools(q, perTypeLimit),
+    searchPosts(q, Math.min(perTypeLimit, 10)),
+    searchTools(q, Math.min(perTypeLimit, 10)),
   ]);
 
   return { people, posts, rooms, tools };

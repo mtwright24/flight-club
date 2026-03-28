@@ -160,8 +160,17 @@ export default function ProfileScreen() {
     try {
       const me = await getMyProfile();
       if (!me?.id || !profileId) return;
-      const { conversationId } = await startDirectConversation(me.id, profileId);
-      router.push({ pathname: '/dm-thread', params: { conversationId: String(conversationId) } });
+      const { conversationId, isRequest } = await startDirectConversation(me.id, profileId);
+      const convId = String(conversationId);
+      if (isRequest) {
+        Alert.alert(
+          'Message request',
+          'They don’t follow you yet. Your first message is sent as a request. They can accept, decline, or block before you can keep chatting.',
+          [{ text: 'OK', onPress: () => router.push({ pathname: '/dm-thread', params: { conversationId: convId } }) }],
+        );
+        return;
+      }
+      router.push({ pathname: '/dm-thread', params: { conversationId: convId } });
     } catch (err: any) {
       Alert.alert('Unable to start message', err?.message || 'Please try again.');
     }

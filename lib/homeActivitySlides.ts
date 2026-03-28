@@ -4,7 +4,6 @@ import {
   type ActivitySlideTriple,
   type HomeActivityModuleData,
 } from './homeActivityPanels';
-import { HOME_ACTIVITY_SEED_AVATARS, HOME_ACTIVITY_SEED_SLIDES } from './homeActivitySeed';
 
 export type HomeActivitySlideModel = ActivitySlideTriple;
 
@@ -15,20 +14,6 @@ export function buildHomeActivitySlides(items: NotificationItem[]): {
   chrome: ActivityChromeModel;
   usedSeed: boolean;
 } {
-  if (items.length === 0) {
-    return {
-      slides: [
-        HOME_ACTIVITY_SEED_SLIDES[0],
-        HOME_ACTIVITY_SEED_SLIDES[1],
-        HOME_ACTIVITY_SEED_SLIDES[2],
-      ],
-      chrome: {
-        badgeCount: 13,
-        avatarUris: HOME_ACTIVITY_SEED_AVATARS.slice(0, 4),
-      },
-      usedSeed: true,
-    };
-  }
   const data = buildHomeActivityModuleData(items);
-  return { slides: data.slides, chrome: data.chrome, usedSeed: false };
+  return { slides: data.slides, chrome: data.chrome, usedSeed: items.length === 0 };
 }

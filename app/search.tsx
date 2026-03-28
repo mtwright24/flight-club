@@ -242,7 +242,7 @@ export default function SearchScreen() {
     const timeout = setTimeout(async () => {
       try {
         if (activeTab === 'all') {
-          const all = await searchAll(trimmed, 5);
+          const all = await searchAll(trimmed, 15);
           if (requestIdRef.current !== currentRequestId) return;
           setPeopleResults(all.people);
           setRoomResults(all.rooms);
@@ -389,7 +389,7 @@ export default function SearchScreen() {
     (async () => {
       try {
         if (activeTab === 'all') {
-          const all = await searchAll(trimmed, 5);
+          const all = await searchAll(trimmed, 15);
           if (requestIdRef.current !== currentRequestId) return;
           setPeopleResults(all.people);
           setRoomResults(all.rooms);

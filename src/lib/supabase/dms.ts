@@ -77,9 +77,9 @@ export type DMMessage = {
   post_id: string | null;
 };
 
-// Basic permission check for starting a DM
-// - Public profiles: always ok
-// - Private profiles: ok if current user follows target, otherwise it will be treated as a request
+// Basic permission check for starting a DM (open thread without a message request).
+// Recipient must follow the sender (they opted in to hearing from you). Private accounts
+// additionally require the sender to follow the recipient before open messaging.
 export async function canDM(currentUserId: string, targetUserId: string): Promise<boolean> {
   if (currentUserId === targetUserId) return true;
 
@@ -91,18 +91,25 @@ export async function canDM(currentUserId: string, targetUserId: string): Promis
 
   if (profileError || !profile) return false;
 
-  // Public profile: always allow
+  const { data: recipientFollowsSender } = await supabase
+    .from('follows')
+    .select('id')
+    .eq('follower_id', targetUserId)
+    .eq('following_id', currentUserId)
+    .maybeSingle();
+
+  if (!recipientFollowsSender) return false;
+
   if (!profile.is_private) return true;
 
-  // Private profile: require follow relationship
-  const { data: follow } = await supabase
+  const { data: senderFollowsTarget } = await supabase
     .from('follows')
     .select('id')
     .eq('follower_id', currentUserId)
     .eq('following_id', targetUserId)
     .maybeSingle();
 
-  return !!follow;
+  return !!senderFollowsTarget;
 }
 
 function sortThreadsNewestFirst<T extends { last_message?: { created_at?: string } | null; updated_at?: string | null; created_at?: string }>(items: T[]): T[] {
@@ -882,23 +889,50 @@ export async function startDirectConversation(currentUserId: string, targetUserI
 
   if (!allowed) {
     try {
-      const { data: existing } = await supabase
+      const { data: existingRows, error: existingErr } = await supabase
         .from('dm_message_requests')
         .select('id, status')
         .eq('from_user_id', currentUserId)
         .eq('to_user_id', targetUserId)
-        .maybeSingle();
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: false })
+        .limit(1);
 
+      if (existingErr) {
+        console.warn('[DM] startDirectConversation: existing request check:', existingErr.message);
+      }
+
+      const existing = existingRows?.[0];
       if (!existing) {
-        await supabase.from('dm_message_requests').insert({
+        const { error: insErr } = await supabase.from('dm_message_requests').insert({
           from_user_id: currentUserId,
           to_user_id: targetUserId,
           conversation_id: conversationId,
           status: 'pending',
         });
+        if (insErr) {
+          console.warn('[DM] startDirectConversation: insert request:', insErr.message);
+        } else {
+          try {
+            await createNotification({
+              user_id: targetUserId,
+              actor_id: currentUserId,
+              type: 'message_request',
+              entity_type: 'conversation',
+              entity_id: conversationId,
+              title: 'Message request',
+              body: 'Someone wants to message you. Accept or decline in Message requests.',
+              data: {
+                route: `/notifications/sublist/message-requests`,
+              },
+            });
+          } catch (notifyErr) {
+            console.warn('[DM] message_request notification:', notifyErr);
+          }
+        }
       }
     } catch (e) {
-      // swallow; request is best-effort
+      console.warn('[DM] startDirectConversation: request flow:', e);
     }
   }
 

@@ -382,9 +382,11 @@ export default function DMThread() {
     return participants.find((p: any) => p.user_id !== userId) || participants[0] || null;
   }, [participants, userId]);
 
-  const composerEnabled = requestGateStatus === 'accepted';
   const isRecipient = !!requestRow && requestRow.to_user_id === userId;
   const isRequester = !!requestRow && requestRow.from_user_id === userId;
+  const composerEnabled =
+    requestGateStatus === 'accepted' ||
+    (requestGateStatus === 'pending' && isRequester && messages.length === 0);
 
   const refreshRequestGate = useCallback(async () => {
     if (!conversationId || !userId) return null;

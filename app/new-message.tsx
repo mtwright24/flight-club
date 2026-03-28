@@ -21,15 +21,17 @@ import FlightClubHeader from '../src/components/FlightClubHeader';
 import { useAuth } from '../src/hooks/useAuth';
 import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
 import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
+import { searchPeople } from '../lib/search';
 import { sendMessage, startDirectConversation } from '../src/lib/supabase/dms';
-import { supabase } from '../src/lib/supabaseClient';
 
 export default function NewMessageScreen() {
   const { session } = useAuth();
   const userId = session?.user?.id;
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<any[]>([]);
+  const [results, setResults] = useState<
+    { id: string; display_name: string; username: string | null; avatar_url: string | null }[]
+  >([]);
   const [openingUserId, setOpeningUserId] = useState<string | null>(null);
   const searchRef = useRef('');
   searchRef.current = search;
@@ -50,18 +52,22 @@ export default function NewMessageScreen() {
     }
     setSearching(true);
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, display_name, username, avatar_url')
-        .or(
-          `display_name.ilike.%${text}%,username.ilike.%${text}%`
-        )
-        .limit(20);
-      if (!error && data) {
-        setResults(data.filter((u) => u.id !== userId));
-      } else {
-        setResults([]);
-      }
+      const found = await searchPeople(text, 40);
+      const people = found
+        .filter((r) => r.type === 'person' && r.id && r.id !== userId)
+        .map((r) => {
+          const handleFromSubtitle =
+            r.subtitle && r.subtitle.startsWith('@')
+              ? r.subtitle.slice(1).split(/\s/)[0] ?? null
+              : null;
+          return {
+            id: r.id,
+            display_name: r.title || 'Crew member',
+            username: handleFromSubtitle,
+            avatar_url: r.avatarUrl ?? null,
+          };
+        });
+      setResults(people);
     } catch (e) {
       setResults([]);
     } finally {
@@ -74,26 +80,56 @@ export default function NewMessageScreen() {
     if (q) await handleSearch(q);
   });
 
-  const handleSelect = async (targetUser: any) => {
+  const openThread = (convId: string) => {
+    router.push({ pathname: '/dm-thread', params: { conversationId: convId } });
+  };
+
+  const handleSelect = async (targetUser: { id: string }) => {
     if (!userId || openingUserId) return;
     const tid = targetUser?.id as string | undefined;
     if (!tid) return;
     setOpeningUserId(tid);
     try {
-      const { conversationId } = await startDirectConversation(userId, tid);
+      const { conversationId, isRequest } = await startDirectConversation(userId, tid);
       const convId = String(conversationId);
-      if (sharePostId) {
-        try {
-          await sendMessage(convId, userId, '', { messageType: 'post_share', postId: sharePostId });
-        } catch (shareErr) {
-          console.warn('[DM] share post to thread failed:', shareErr);
-          Alert.alert(
-            'Could not attach post',
-            'The conversation was opened but the shared post could not be sent. You can try sharing again from the post.',
-          );
+
+      const go = async () => {
+        if (sharePostId) {
+          try {
+            await sendMessage(convId, userId, '', { messageType: 'post_share', postId: sharePostId });
+          } catch (shareErr) {
+            console.warn('[DM] share post to thread failed:', shareErr);
+            Alert.alert(
+              'Could not attach post',
+              'The conversation was opened but the shared post could not be sent. You can try sharing again from the post.',
+            );
+          }
         }
+        openThread(convId);
+      };
+
+      if (isRequest) {
+        Alert.alert(
+          'Message request',
+          'This person doesn’t follow you yet. Your first message is sent as a request. They can accept, decline, or block before you can keep chatting.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                void (async () => {
+                  try {
+                    await go();
+                  } catch {
+                    /* share errors surfaced inside go */
+                  }
+                })();
+              },
+            },
+          ],
+        );
+      } else {
+        await go();
       }
-      router.push({ pathname: '/dm-thread', params: { conversationId: convId } });
     } catch (e: any) {
       Alert.alert('Unable to start message', e?.message || 'Please try again.');
     } finally {
