@@ -17,25 +17,36 @@ export default function RootLayout() {
   // Extract access_token and refresh_token from deep-link URL
   const handleDeepLink = async (url: string) => {
     try {
-      // Check for tokens in query params (emailRedirectTo=flightclub://auth/callback?...)
-      const urlObj = new URL(url.replace("flightclub://", "https://example.com/"));
+      console.log('[AUTH][DeepLink] received', url);
+      // Check for tokens in query params (works for exp:// and flightclub:// callbacks).
+      const urlObj = new URL(url);
       const accessToken = urlObj.searchParams.get("access_token");
       const refreshToken = urlObj.searchParams.get("refresh_token");
+      const hash = urlObj.hash?.replace(/^#/, '') ?? '';
+      const hashParams = new URLSearchParams(hash);
+      const accessTokenFromHash = hashParams.get('access_token');
+      const refreshTokenFromHash = hashParams.get('refresh_token');
+      const finalAccessToken = accessToken ?? accessTokenFromHash;
+      const finalRefreshToken = refreshToken ?? refreshTokenFromHash;
+      console.log('[AUTH][DeepLink] token parse', {
+        hasAccessToken: !!finalAccessToken,
+        hasRefreshToken: !!finalRefreshToken,
+      });
 
-      if (accessToken && refreshToken) {
+      if (finalAccessToken && finalRefreshToken) {
         // @ts-ignore
         const { error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
+          access_token: finalAccessToken,
+          refresh_token: finalRefreshToken,
         });
         if (error) {
-          console.log("setSession error:", error);
+          console.log("[AUTH][DeepLink] setSession error:", error);
         } else {
-          console.log("Session set from deep-link");
+          console.log("[AUTH][DeepLink] Session set from deep-link");
         }
       }
     } catch (err) {
-      console.log("handleDeepLink error:", err);
+      console.log("[AUTH][DeepLink] handleDeepLink error:", err);
     }
   };
 

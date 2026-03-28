@@ -48,9 +48,13 @@ export default function SignInScreen() {
   };
 
   const onPressGoogle = async () => {
+    console.log('[AUTH][UI] Google pressed on Sign In');
     const { error } = await signInWithGoogle();
     if (error) {
+      console.error('[AUTH][UI] Google sign in failed', error.message);
       Alert.alert('Google sign in failed', error.message);
+    } else {
+      console.log('[AUTH][UI] Google auth flow launched; waiting for callback');
     }
   };
 

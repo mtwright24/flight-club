@@ -3,9 +3,9 @@ import { Link } from 'expo-router';
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
-import * as Linking from 'expo-linking';
 import { supabase } from '../../src/lib/supabaseClient';
 import { signInWithGoogle } from '../../src/lib/auth/googleOAuth';
+import { getAuthRedirectUri } from '../../src/lib/auth/redirectUri';
 import { authTheme } from '../../src/styles/authTheme';
 import {
   AuthBackground,
@@ -22,6 +22,7 @@ export default function SignUpScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const authRedirectUri = getAuthRedirectUri();
 
   const onSignUp = async () => {
     if (!email || !password) {
@@ -38,7 +39,7 @@ export default function SignUpScreen() {
         email: email.trim(),
         password,
         options: {
-          emailRedirectTo: Linking.createURL('/(auth)/sign-in'),
+          emailRedirectTo: authRedirectUri,
         },
       });
       if (error) {
@@ -62,7 +63,7 @@ export default function SignUpScreen() {
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim(),
         options: {
-          emailRedirectTo: Linking.createURL('/(auth)/sign-in'),
+          emailRedirectTo: authRedirectUri,
         },
       });
       if (error) {
@@ -80,9 +81,13 @@ export default function SignUpScreen() {
   };
 
   const onPressGoogle = async () => {
+    console.log('[AUTH][UI] Google pressed on Sign Up');
     const { error } = await signInWithGoogle();
     if (error) {
+      console.error('[AUTH][UI] Google sign up failed', error.message);
       Alert.alert('Google sign in failed', error.message);
+    } else {
+      console.log('[AUTH][UI] Google auth flow launched; waiting for callback');
     }
   };
 
