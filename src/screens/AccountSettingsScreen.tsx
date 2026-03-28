@@ -7,13 +7,11 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 
 
-import { ActivityIndicator, Alert, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, StyleSheet, Switch, Text, TextInput, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Switch, Text, TextInput, TouchableWithoutFeedback, View } from 'react-native';
 import DropDownPicker from 'react-native-dropdown-picker';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, radius, spacing } from '../../src/styles/theme';
-import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
-import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 
 const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || 'YOUR_GOOGLE_PLACES_API_KEY';
 const stateOptions = ['', 'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'];
@@ -78,9 +76,6 @@ export default function AccountSettingsScreen() {
   React.useEffect(() => {
     void reloadFromStorage();
   }, [reloadFromStorage]);
-
-  const { refreshing: accountSettingsPullRefreshing, onRefresh: onAccountSettingsPullRefresh } =
-    usePullToRefresh(reloadFromStorage);
 
   const handleSave = async () => {
     setSaving(true);
@@ -261,14 +256,6 @@ export default function AccountSettingsScreen() {
             keyExtractor={(item: Section) => item.key}
             contentContainerStyle={styles.container}
             keyboardShouldPersistTaps="handled"
-            refreshControl={
-              <RefreshControl
-                refreshing={accountSettingsPullRefreshing}
-                onRefresh={onAccountSettingsPullRefresh}
-                colors={REFRESH_CONTROL_COLORS}
-                tintColor={REFRESH_TINT}
-              />
-            }
           />
         </TouchableWithoutFeedback>
       </KeyboardAvoidingView>

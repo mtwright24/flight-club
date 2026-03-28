@@ -25,6 +25,8 @@ export interface NotificationItem {
   is_read: boolean;
   data?: any;
   actor_avatar_url?: string;
+  /** From enrichment / profiles — used to replace generic "Someone" copy on Home Activity. */
+  actor_display_name?: string;
   summary: string;
   /** Relative time for display (same engine as Home trending cards). */
   timeLabel?: string;

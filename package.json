@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start --go",
+    "start:lan": "expo start --go --lan",
+    "start:tunnel": "expo start --go --tunnel",
     "start:dev-client": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",

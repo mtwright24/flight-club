@@ -1,10 +1,15 @@
-import React from 'react';
-import { View, TextInput, StyleSheet, Platform, TouchableOpacity } from 'react-native';
+import React, { forwardRef } from 'react';
+import {
+  View,
+  TextInput,
+  StyleSheet,
+  TouchableOpacity,
+  type TextInputProps,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import { authTheme } from '../../styles/authTheme';
 
-type AuthTextFieldProps = {
+export type AuthTextFieldProps = {
   value: string;
   onChangeText: (text: string) => void;
   placeholder?: string;
@@ -12,9 +17,34 @@ type AuthTextFieldProps = {
   rightIcon?: string;
   onRightPress?: () => void;
   secureTextEntry?: boolean;
+  /** Primary / return key label (Next, Go, Send, Done, …) */
+  returnKeyType?: TextInputProps['returnKeyType'];
+  /** Fires when user presses the keyboard submit/enter key — use for same action as primary button or focus next field */
+  onSubmitEditing?: TextInputProps['onSubmitEditing'];
+  blurOnSubmit?: TextInputProps['blurOnSubmit'];
+  keyboardType?: TextInputProps['keyboardType'];
+  autoComplete?: TextInputProps['autoComplete'];
+  textContentType?: TextInputProps['textContentType'];
 };
 
-export default function AuthTextField({ value, onChangeText, placeholder, leftIcon, rightIcon, onRightPress, secureTextEntry }: AuthTextFieldProps) {
+const AuthTextField = forwardRef<TextInput, AuthTextFieldProps>(function AuthTextField(
+  {
+    value,
+    onChangeText,
+    placeholder,
+    leftIcon,
+    rightIcon,
+    onRightPress,
+    secureTextEntry,
+    returnKeyType = 'default',
+    onSubmitEditing,
+    blurOnSubmit,
+    keyboardType,
+    autoComplete,
+    textContentType,
+  },
+  ref,
+) {
   return (
     <View style={styles.outerWrap}>
       <View style={styles.blur}>
@@ -23,9 +53,10 @@ export default function AuthTextField({ value, onChangeText, placeholder, leftIc
         <View style={styles.bottomShade} pointerEvents="none" />
         <View style={styles.inputWrap}>
           {leftIcon && (
-            <Ionicons name={leftIcon as any} size={20} color="#888888" style={styles.leftIcon} />
+            <Ionicons name={leftIcon as never} size={20} color="#888888" style={styles.leftIcon} />
           )}
           <TextInput
+            ref={ref}
             style={styles.input}
             value={value}
             onChangeText={onChangeText}
@@ -33,17 +64,25 @@ export default function AuthTextField({ value, onChangeText, placeholder, leftIc
             placeholderTextColor="#999999"
             secureTextEntry={secureTextEntry}
             autoCapitalize="none"
+            returnKeyType={returnKeyType}
+            onSubmitEditing={onSubmitEditing}
+            blurOnSubmit={blurOnSubmit}
+            keyboardType={keyboardType}
+            autoComplete={autoComplete}
+            textContentType={textContentType}
           />
           {rightIcon && (
             <TouchableOpacity onPress={onRightPress} style={styles.rightIconBtn} hitSlop={8}>
-              <Ionicons name={rightIcon as any} size={20} color="#888888" />
+              <Ionicons name={rightIcon as never} size={20} color="#888888" />
             </TouchableOpacity>
           )}
         </View>
       </View>
     </View>
   );
-}
+});
+
+export default AuthTextField;
 
 const styles = StyleSheet.create({
   outerWrap: {

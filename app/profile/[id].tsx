@@ -14,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import ProfileHeaderSection from '../../components/ProfileHeaderSection';
 import { followUser, getFollowingFeed, getIsFollowing, getMyProfile, unfollowUser } from '../../lib/feed';
 import SectionHeader from '../../src/components/navigation/SectionHeader';
-import PostsFeed from '../../src/components/posts/PostsFeed';
+import ProfilePostsFeedWithInteractions from '../../src/components/profile/ProfilePostsFeedWithInteractions';
 import MediaGrid from '../../src/components/profile/MediaGrid';
 import { useDmUnreadBadge } from '../../src/hooks/useDmUnreadBadge';
 import { useNotificationsBadge } from '../../src/hooks/useNotificationsBadge';
@@ -186,12 +186,12 @@ export default function ProfileScreen() {
             <ActivityIndicator size="small" />
           </View>
         ) : (
-          <PostsFeed
+          <ProfilePostsFeedWithInteractions
             posts={posts}
             emptyTitle="No posts yet."
-            reactionsSummary={{}}
             refreshing={profilePullRefreshing}
             onRefresh={onProfilePullRefresh}
+            onPostsChanged={() => void loadProfileData()}
             headerComponent={
               <>
                 {user ? (

@@ -280,3 +280,94 @@ export async function toggleCommentReaction(
     return { success: false, action: 'removed', error: String(error) };
   }
 }
+
+/** Social feed `post_comments` — same shape as {@link fetchCommentReactionsSummary} for room comments. */
+export async function fetchSocialCommentReactionsSummary(
+  commentIds: string[],
+  userId: string
+): Promise<CommentReactionSummary> {
+  if (commentIds.length === 0) return {};
+
+  try {
+    const { data: reactions, error } = await supabase
+      .from('post_comment_reactions')
+      .select('comment_id, user_id, reaction')
+      .in('comment_id', commentIds);
+
+    if (error) throw error;
+
+    const summary: CommentReactionSummary = {};
+    commentIds.forEach((commentId) => {
+      summary[commentId] = { counts: {} };
+    });
+
+    reactions?.forEach((r: { comment_id: string; user_id: string; reaction: string }) => {
+      if (!summary[r.comment_id]) {
+        summary[r.comment_id] = { counts: {} };
+      }
+      const currentCount = summary[r.comment_id].counts[r.reaction] || 0;
+      summary[r.comment_id].counts[r.reaction] = currentCount + 1;
+      if (r.user_id === userId) {
+        summary[r.comment_id].userReaction = r.reaction as ReactionType;
+      }
+    });
+
+    return summary;
+  } catch (error) {
+    const errorMsg = String(error);
+    if (errorMsg.includes('Could not find the table') || errorMsg.includes('PGRST205')) {
+      if (!missingReactionsTableLogged) {
+        console.log('[Reactions] post_comment_reactions not migrated yet; empty summary');
+        missingReactionsTableLogged = true;
+      }
+      return {};
+    }
+    console.error('Error fetching social comment reactions summary:', error);
+    return {};
+  }
+}
+
+export async function toggleSocialCommentReaction(
+  commentId: string,
+  userId: string,
+  reactionType: ReactionType
+): Promise<{ success: boolean; action: 'added' | 'removed' | 'changed'; error?: string }> {
+  try {
+    const { data: existing, error: fetchError } = await supabase
+      .from('post_comment_reactions')
+      .select('id, reaction')
+      .eq('comment_id', commentId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+
+    if (existing) {
+      if (existing.reaction === reactionType) {
+        const { error: deleteError } = await supabase
+          .from('post_comment_reactions')
+          .delete()
+          .eq('id', existing.id);
+        if (deleteError) throw deleteError;
+        return { success: true, action: 'removed' };
+      }
+      const { error: updateError } = await supabase
+        .from('post_comment_reactions')
+        .update({ reaction: reactionType })
+        .eq('id', existing.id);
+      if (updateError) throw updateError;
+      return { success: true, action: 'changed' };
+    }
+
+    const { error: insertError } = await supabase.from('post_comment_reactions').insert({
+      comment_id: commentId,
+      user_id: userId,
+      reaction: reactionType,
+    });
+    if (insertError) throw insertError;
+    return { success: true, action: 'added' };
+  } catch (error) {
+    console.error('Error toggling social comment reaction:', error);
+    return { success: false, action: 'removed', error: String(error) };
+  }
+}

@@ -540,6 +540,8 @@ export default function PostMediaViewerScreen() {
         onClose={() => setCommentsDrawerVisible(false)}
         onAddComment={handleAddComment}
         postId={post.id}
+        commentReactionMode={mode}
+        userId={userId ?? null}
       />
 
       {/* Action sheet menu */}

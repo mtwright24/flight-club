@@ -5,7 +5,7 @@ import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, T
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ProfileHeaderSection from '../../components/ProfileHeaderSection';
 import { getFollowingFeed, getMyProfile } from '../../lib/feed';
-import PostsFeed from '../../src/components/posts/PostsFeed';
+import ProfilePostsFeedWithInteractions from '../../src/components/profile/ProfilePostsFeedWithInteractions';
 import MediaGrid from '../../src/components/profile/MediaGrid';
 import { fetchUserMedia } from '../../src/lib/supabase/profileMedia';
 import { supabase } from '../../src/lib/supabaseClient';
@@ -146,12 +146,12 @@ export default function ProfileScreen() {
             <ActivityIndicator size="small" />
           </View>
         ) : (
-          <PostsFeed
+          <ProfilePostsFeedWithInteractions
             posts={posts}
             emptyTitle="No posts yet."
-            reactionsSummary={{}}
             refreshing={refreshing}
             onRefresh={handleRefresh}
+            onPostsChanged={() => void loadSelfProfile()}
             headerComponent={
               <>
                 {user ? (

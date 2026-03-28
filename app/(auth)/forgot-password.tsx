@@ -50,6 +50,13 @@ export default function ForgotPasswordScreen() {
           leftIcon="mail-outline"
           value={email}
           onChangeText={setEmail}
+          keyboardType="email-address"
+          autoComplete="email"
+          textContentType="emailAddress"
+          returnKeyType="send"
+          onSubmitEditing={() => {
+            void onSendReset();
+          }}
         />
         <PrimaryAuthButton
           label={loading ? 'SENDING...' : 'SEND RESET LINK'}

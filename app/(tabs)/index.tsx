@@ -14,12 +14,14 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import ActivityPreview, { type NotificationItem } from '../../components/ActivityPreview';
+import HomeActivityCenter from '../../components/HomeActivityCenter';
+import { type NotificationItem } from '../../components/ActivityPreview';
+import type { ActivityCardModel } from '../../lib/homeActivityPanels';
 import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts } from '../../lib/home';
 import { getHomeToolShortcutIds } from '../../lib/homeShortcutsStorage';
 import { pickRecommendedTools } from '../../lib/homeRecommendedTools';
 import { toolsRegistry, toolShortcutChipLabel } from '../../lib/toolsRegistry';
-import { notificationTargetHref, type Notification } from '../../lib/notifications';
+import { enrichNotificationsWithActors, parseNotificationData, type Notification } from '../../lib/notifications';
 import { notifyNotificationsBadgeRefresh } from '../../lib/notificationsBadgeStore';
 import {
   getRecentNotifications,
@@ -29,13 +31,14 @@ import {
 } from '../../lib/notifications-preview';
 import { COLORS, RADIUS, SHADOW, SPACING } from '../../src/styles/theme';
 import { useAuth } from '../../src/hooks/useAuth';
-import { useNotificationsBadge } from '../../src/hooks/useNotificationsBadge';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
 import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 import { refreshDmUnreadBadgeCount } from '../../lib/dmUnreadBadgeStore';
 import { refreshNotificationsBadgeCount } from '../../lib/notificationsBadgeStore';
 import { fetchMyRooms, fetchPublicRooms } from '../../src/lib/supabase/rooms';
 import type { MyRoom, Room } from '../../src/types/rooms';
+import { isNotificationUnreadRow } from '../../lib/activityHomeBuckets';
+import { pickAvatarUrlFromData } from '../../lib/homeActivityAvatars';
 
 type HomeTileId = 'crew-schedule' | 'staff-loads' | 'pad-housing' | 'utility';
 
@@ -93,10 +96,26 @@ function formatActivityTimeAgo(dateString: string) {
 
 function mapPreviewToItem(p: NotificationPreview, currentUserId: string): NotificationItem & { user_id: string } {
   const base = p as NotificationPreview & { user_id?: string };
+  const actor = (p as NotificationPreview & { actor?: { avatar_url?: string | null; display_name?: string | null; full_name?: string | null } }).actor;
+  const fromActor = actor?.avatar_url;
+  const actorAvatar =
+    p.actor_avatar_url ?? (typeof fromActor === 'string' ? fromActor : undefined) ?? pickAvatarUrlFromData(p.data);
+  const d = parseNotificationData(p as { data?: unknown }) as Record<string, unknown>;
+  const actorDisplay =
+    (typeof actor?.display_name === 'string' && actor.display_name.trim()
+      ? actor.display_name
+      : typeof actor?.full_name === 'string' && actor.full_name.trim()
+        ? actor.full_name
+        : undefined) ??
+    (typeof d.actor_display_name === 'string' ? d.actor_display_name : undefined) ??
+    (typeof d.sender_display_name === 'string' ? d.sender_display_name : undefined) ??
+    (typeof d.from_display_name === 'string' ? d.from_display_name : undefined);
   return {
     ...p,
     actor_id: p.actor_id ?? '',
     user_id: base.user_id ?? currentUserId,
+    actor_avatar_url: actorAvatar,
+    actor_display_name: typeof actorDisplay === 'string' ? actorDisplay.trim() : undefined,
     timeLabel: formatActivityTimeAgo(p.created_at),
   } as NotificationItem & { user_id: string };
 }
@@ -538,6 +557,7 @@ export default function DashboardHome() {
         style={styles.scroll}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
         refreshControl={
           <RefreshControl
             refreshing={dashboardRefreshing}
@@ -631,24 +651,9 @@ function HomeActivitySnapshot({ refreshToken = 0 }: { refreshToken?: number }) {
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user?.id ?? null;
-  const unreadBadge = useNotificationsBadge();
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const subRef = useRef<ReturnType<typeof subscribeToNotifications> | null>(null);
-
-  const avatarUris = useMemo(() => {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const it of items) {
-      const u = it.actor_avatar_url;
-      if (u && !seen.has(u)) {
-        seen.add(u);
-        out.push(u);
-        if (out.length >= 5) break;
-      }
-    }
-    return out;
-  }, [items]);
 
   useEffect(() => {
     if (!userId) {
@@ -658,9 +663,15 @@ function HomeActivitySnapshot({ refreshToken = 0 }: { refreshToken?: number }) {
     }
     let mounted = true;
     setLoading(true);
-    getRecentNotifications(userId, 24)
-      .then((rows) => {
-        if (mounted) setItems(rows.map((p) => mapPreviewToItem(p, userId)));
+    getRecentNotifications(userId, 40)
+      .then(async (rows) => {
+        if (!mounted) return;
+        try {
+          const enriched = await enrichNotificationsWithActors(rows as Notification[]);
+          setItems(enriched.map((p) => mapPreviewToItem(p as NotificationPreview, userId)));
+        } catch {
+          setItems(rows.map((p) => mapPreviewToItem(p, userId)));
+        }
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -673,8 +684,14 @@ function HomeActivitySnapshot({ refreshToken = 0 }: { refreshToken?: number }) {
         /* ignore */
       }
     }
-    subRef.current = subscribeToNotifications(userId, (n) => {
-      setItems((prev) => [mapPreviewToItem(n, userId), ...prev].slice(0, 24));
+    subRef.current = subscribeToNotifications(userId, async (n) => {
+      try {
+        const [enriched] = await enrichNotificationsWithActors([{ ...n } as Notification]);
+        const row = (enriched ?? n) as NotificationPreview;
+        setItems((prev) => [mapPreviewToItem(row, userId), ...prev].slice(0, 40));
+      } catch {
+        setItems((prev) => [mapPreviewToItem(n, userId), ...prev].slice(0, 40));
+      }
       notifyNotificationsBadgeRefresh();
     });
 
@@ -693,73 +710,49 @@ function HomeActivitySnapshot({ refreshToken = 0 }: { refreshToken?: number }) {
   useFocusEffect(
     useCallback(() => {
       if (!userId) return;
-      void getRecentNotifications(userId, 24)
-        .then((rows) => {
-          setItems(rows.map((p) => mapPreviewToItem(p, userId)));
+      void getRecentNotifications(userId, 40)
+        .then(async (rows) => {
+          try {
+            const enriched = await enrichNotificationsWithActors(rows as Notification[]);
+            setItems(enriched.map((p) => mapPreviewToItem(p as NotificationPreview, userId)));
+          } catch {
+            setItems(rows.map((p) => mapPreviewToItem(p, userId)));
+          }
         })
         .catch(() => {});
     }, [userId]),
   );
 
-  return (
-    <View style={styles.activityWrap}>
-      <View style={styles.activityTopRow}>
-        <Pressable
-          style={styles.avatarStack}
-          onPress={() => router.push('/notifications')}
-          accessibilityRole="button"
-          accessibilityLabel="Open notifications"
-        >
-          {avatarUris.map((uri, index) => (
-            <View key={uri} style={[styles.avatar, { marginLeft: index === 0 ? 0 : -12 }]}>
-              <Image source={{ uri }} style={styles.avatarImg} />
-            </View>
-          ))}
-        </Pressable>
-        {items.length > 0 || unreadBadge > 0 ? (
-          <Pressable
-            style={styles.activitySummaryChip}
-            onPress={() => router.push('/notifications')}
-            accessibilityRole="button"
-            accessibilityLabel={`${items.length ? items.length : unreadBadge} activity items, open notifications`}
-          >
-            <Text style={styles.activitySummaryChipText}>
-              +{items.length > 0 ? (items.length > 99 ? '99+' : items.length) : unreadBadge > 99 ? '99+' : unreadBadge}
-            </Text>
-          </Pressable>
-        ) : null}
-      </View>
+  const openNotifications = useCallback(() => {
+    router.push('/notifications');
+  }, [router]);
 
-      <View style={styles.activityPreviewEmbed}>
-        <ActivityPreview
-          embedded
-          variant="sectioned"
-          items={items}
-          unreadCount={unreadBadge}
-          loading={loading}
-          error={null}
-          embeddedEmptyTitle="You’re caught up"
-          embeddedEmptySubtitle="New likes, mentions, and crew activity will show up here. Open notifications for the full list."
-          onPressItem={async (notification) => {
-            try {
-              await markNotificationRead(notification.id);
-              setItems((prev) => prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n)));
-              router.push(
-                notificationTargetHref(notification as NotificationItem & Notification & { user_id: string }),
-              );
-            } catch (e) {
-              console.warn('[Home] activity item tap failed:', e);
-              try {
-                router.push('/notifications');
-              } catch {
-                /* ignore */
-              }
-            }
-          }}
-          onPressViewAll={() => router.push('/notifications')}
-        />
-      </View>
-    </View>
+  return (
+    <HomeActivityCenter
+      items={items}
+      loading={loading}
+      error={null}
+      onPressAvatarCluster={openNotifications}
+      onCardPress={async (card: ActivityCardModel) => {
+        try {
+          const markIds = [
+            ...new Set([...(card.markReadIds ?? []), ...(card.coversNotificationIds ?? [])]),
+          ];
+          for (const id of markIds) {
+            await markNotificationRead(id);
+            setItems((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)));
+          }
+          router.push(card.href);
+        } catch (e) {
+          console.warn('[Home] activity card tap failed:', e);
+          try {
+            router.push('/notifications');
+          } catch {
+            /* ignore */
+          }
+        }
+      }}
+    />
   );
 }
 
@@ -1077,7 +1070,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.bg,
   },
   content: {
-    paddingHorizontal: SPACING.lg,
+    paddingHorizontal: 10,
     paddingBottom: SPACING.xl,
   },
   welcome: {
@@ -1275,57 +1268,6 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.lg,
     borderWidth: 1,
     borderColor: COLORS.line,
-  },
-  activityWrap: {
-    backgroundColor: 'rgba(14,42,71,0.05)',
-    borderRadius: 18,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.04)',
-  },
-  activityTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-  },
-  avatarStack: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  avatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 2,
-    borderColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarImg: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 18,
-  },
-  activitySummaryChip: {
-    marginLeft: 'auto',
-    alignSelf: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
-    backgroundColor: COLORS.red,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  activitySummaryChipText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 13,
-    letterSpacing: 0.15,
-  },
-  activityPreviewEmbed: {
-    marginTop: 8,
   },
   trendingCard: {
     backgroundColor: 'rgba(255,255,255,0.88)',

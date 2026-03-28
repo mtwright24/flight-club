@@ -1,7 +1,6 @@
 // app/(auth)/sign-up.tsx
-import { Link } from 'expo-router';
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabaseClient';
 import { signInWithGoogle } from '../../src/lib/auth/googleOAuth';
@@ -23,6 +22,7 @@ export default function SignUpScreen() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const authRedirectUri = getAuthRedirectUri();
+  const passwordRef = useRef<TextInput>(null);
 
   const onSignUp = async () => {
     if (!email || !password) {
@@ -106,13 +106,26 @@ export default function SignUpScreen() {
           leftIcon="mail-outline"
           value={email}
           onChangeText={setEmail}
+          keyboardType="email-address"
+          autoComplete="email"
+          textContentType="emailAddress"
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => passwordRef.current?.focus()}
         />
         <AuthTextField
+          ref={passwordRef}
           placeholder="Password (6+ characters)"
           leftIcon="lock-closed-outline"
           value={password}
           onChangeText={setPassword}
           secureTextEntry
+          textContentType="newPassword"
+          autoComplete="password-new"
+          returnKeyType="go"
+          onSubmitEditing={() => {
+            void onSignUp();
+          }}
         />
         <PrimaryAuthButton
           label={loading ? 'CREATING...' : 'CREATE ACCOUNT'}

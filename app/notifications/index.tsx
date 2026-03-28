@@ -303,7 +303,6 @@ export default function NotificationsScreen() {
   const listHeader = useCallback(
     () => (
       <View style={styles.listHeaderWrap}>
-        <NotificationTopBlocks counts={topBlockCounts} />
         <View style={styles.filterLayerA}>
           <View style={styles.segmentGroup}>
             <Pressable onPress={() => setReadScope('all')} hitSlop={8} style={[styles.segmentHit, styles.segmentHitSpacing]}>
@@ -356,6 +355,7 @@ export default function NotificationsScreen() {
             })}
           </ScrollView>
         </View>
+        <NotificationTopBlocks counts={topBlockCounts} />
       </View>
     ),
     [topBlockCounts, readScope, categoryChip, handleMarkAllRead]

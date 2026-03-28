@@ -1,16 +1,10 @@
 import React from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { colors, spacing, radius } from '../src/styles/theme';
-import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
-import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
-
 export default function AboutFlightClubScreen() {
   const router = useRouter();
-  const { refreshing: aboutPullRefreshing, onRefresh: onAboutPullRefresh } = usePullToRefresh(async () => {
-    /* static screen */
-  });
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.screenBg }} edges={['top']}>
       <View style={styles.header}>
@@ -20,17 +14,7 @@ export default function AboutFlightClubScreen() {
         <Text style={styles.headerTitle}>About Flight Club</Text>
         <View style={{ width: 40 }} />
       </View>
-      <ScrollView
-        contentContainerStyle={{ padding: spacing.md }}
-        refreshControl={
-          <RefreshControl
-            refreshing={aboutPullRefreshing}
-            onRefresh={onAboutPullRefresh}
-            colors={REFRESH_CONTROL_COLORS}
-            tintColor={REFRESH_TINT}
-          />
-        }
-      >
+      <ScrollView contentContainerStyle={{ padding: spacing.md }}>
         <Text style={styles.brandTitle}>Flight Club</Text>
         <Text style={styles.brandDesc}>A community for airline crew to connect, share, and support each other. Built for pilots, flight attendants, and all crew members.</Text>
         <View style={{ height: spacing.lg }} />

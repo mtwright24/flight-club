@@ -1,13 +1,11 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, ScrollView, Pressable, Switch, StyleSheet, ActivityIndicator, Alert, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, Pressable, Switch, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { supabase } from '../src/lib/supabaseClient';
 import { useAuth } from '../src/hooks/useAuth';
 import { colors, spacing, radius } from '../src/styles/theme';
-import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
-import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 export default function NotificationSettingsScreen() {
   const router = useRouter();
@@ -78,11 +76,6 @@ export default function NotificationSettingsScreen() {
     void loadPrefs();
   }, [loadPrefs]);
 
-  const { refreshing: notifSettingsPullRefreshing, onRefresh: onNotifSettingsPullRefresh } =
-    usePullToRefresh(async () => {
-      await loadPrefs({ silent: true });
-    });
-
   const handleToggle = (key: keyof typeof prefs, value: boolean) => {
     setPrefs((prev: typeof prefs) => ({ ...prev, [key]: value }));
     savePrefs({ ...prefs, [key]: value });
@@ -128,19 +121,9 @@ export default function NotificationSettingsScreen() {
           <Text style={styles.headerTitle}>Notification Settings</Text>
           <View style={{ width: 40 }} />
         </View>
-        <ScrollView
-          contentContainerStyle={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
-          refreshControl={
-            <RefreshControl
-              refreshing={notifSettingsPullRefreshing}
-              onRefresh={onNotifSettingsPullRefresh}
-              colors={REFRESH_CONTROL_COLORS}
-              tintColor={REFRESH_TINT}
-            />
-          }
-        >
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator size="large" color={colors.headerRed} />
-        </ScrollView>
+        </View>
       </SafeAreaView>
     );
   }
@@ -154,17 +137,7 @@ export default function NotificationSettingsScreen() {
         <Text style={styles.headerTitle}>Notification Settings</Text>
         <View style={{ width: 40 }} />
       </View>
-      <ScrollView
-        contentContainerStyle={{ padding: spacing.md }}
-        refreshControl={
-          <RefreshControl
-            refreshing={notifSettingsPullRefreshing}
-            onRefresh={onNotifSettingsPullRefresh}
-            colors={REFRESH_CONTROL_COLORS}
-            tintColor={REFRESH_TINT}
-          />
-        }
-      >
+      <ScrollView contentContainerStyle={{ padding: spacing.md }}>
         <Text style={styles.sectionTitle}>Push Notifications</Text>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Enable Push Notifications</Text>

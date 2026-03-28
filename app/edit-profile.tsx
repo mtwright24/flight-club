@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -10,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  RefreshControl,
   ScrollView,
   Text,
   TextInput,
@@ -71,26 +70,6 @@ export default function EditProfileScreen() {
       cancelled = true;
     };
   }, []);
-
-  const refreshProfileFromServer = useCallback(async () => {
-    try {
-      const p = await getMyProfile();
-      setProfile(p);
-      if (!avatarFile) setAvatar(p.avatar_url || '');
-      if (!coverFile) setCover(p.cover_url || '');
-      setDisplayName((p.display_name as string) || p.full_name || '');
-      setUsername(p.username || '');
-      setBio(p.bio || '');
-      setRole(p.role || '');
-      setAirline(p.airline || '');
-      setBase(p.base || '');
-      setFleet(p.fleet || '');
-    } catch (err) {
-      console.error('EditProfile refresh error', err);
-    }
-  }, [avatarFile, coverFile]);
-
-  const { refreshing: editPullRefreshing, onRefresh: onEditPullRefresh } = usePullToRefresh(refreshProfileFromServer);
 
   // Username uniqueness check
   useEffect(() => {
@@ -210,14 +189,6 @@ export default function EditProfileScreen() {
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
-            refreshControl={
-              <RefreshControl
-                refreshing={editPullRefreshing}
-                onRefresh={onEditPullRefresh}
-                colors={REFRESH_CONTROL_COLORS}
-                tintColor={REFRESH_TINT}
-              />
-            }
           >
             {/* Cover photo */}
             <View style={{ alignItems: 'center', marginTop: 18 }}>

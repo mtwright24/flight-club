@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
-  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
@@ -21,8 +20,6 @@ import {
 import { toolsRegistry } from '../lib/toolsRegistry';
 import { COLORS, RADIUS, SPACING } from '../src/styles/theme';
 import { useAuth } from '../src/hooks/useAuth';
-import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
-import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 export default function HomeShortcutsScreen() {
   const router = useRouter();
@@ -50,10 +47,6 @@ export default function HomeShortcutsScreen() {
   useEffect(() => {
     void reloadShortcuts();
   }, [reloadShortcuts]);
-
-  const { refreshing: shortcutsPullRefreshing, onRefresh: onShortcutsPullRefresh } = usePullToRefresh(async () => {
-    await reloadShortcuts({ silent: true });
-  });
 
   const toggle = useCallback(
     (toolId: string, on: boolean) => {
@@ -121,18 +114,7 @@ export default function HomeShortcutsScreen() {
           <ActivityIndicator color={COLORS.red} />
         </View>
       ) : (
-        <ScrollView
-          contentContainerStyle={styles.list}
-          keyboardShouldPersistTaps="handled"
-          refreshControl={
-            <RefreshControl
-              refreshing={shortcutsPullRefreshing}
-              onRefresh={onShortcutsPullRefresh}
-              colors={REFRESH_CONTROL_COLORS}
-              tintColor={REFRESH_TINT}
-            />
-          }
-        >
+        <ScrollView contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled">
           {toolsRegistry.map((tool) => {
             const on = selected.includes(tool.id);
             return (

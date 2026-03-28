@@ -1,19 +1,13 @@
 import React from 'react';
-import { View, Text, Pressable, StyleSheet, Alert, ScrollView, RefreshControl } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Alert, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import FlightClubHeader from '../src/components/FlightClubHeader';
 import { supabase } from '../src/lib/supabaseClient';
 import { colors, spacing, radius } from '../src/styles/theme';
-import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
-import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 export default function MenuScreen() {
   const router = useRouter();
-  const { refreshing: menuRefreshing, onRefresh: onMenuRefresh } = usePullToRefresh(async () => {
-    await supabase.auth.getSession();
-  });
 
   const handleAccountSettings = () => {
     router.dismiss();
@@ -53,18 +47,7 @@ export default function MenuScreen() {
         </Pressable>
       </View>
 
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={styles.contentInner}
-        refreshControl={
-          <RefreshControl
-            refreshing={menuRefreshing}
-            onRefresh={onMenuRefresh}
-            colors={REFRESH_CONTROL_COLORS}
-            tintColor={REFRESH_TINT}
-          />
-        }
-      >
+      <ScrollView style={styles.content} contentContainerStyle={styles.contentInner}>
         <Pressable style={styles.menuItem} onPress={() => {
           router.push('/account-settings');
         }}>

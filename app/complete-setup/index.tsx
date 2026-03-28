@@ -6,7 +6,6 @@ import {
 	KeyboardAvoidingView,
 	Platform,
 	Pressable,
-	RefreshControl,
 	ScrollView,
 	StyleSheet,
 	Text,
@@ -19,8 +18,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/hooks/useAuth';
 import { supabase } from '../../src/lib/supabaseClient';
 import { colors, radius, spacing } from '../../src/styles/theme';
-import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
-import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 
 export default function CompleteSetupScreen() {
 	const router = useRouter();
@@ -135,12 +132,6 @@ export default function CompleteSetupScreen() {
 		// eslint-disable-next-line
 	}, [stateValue]);
 
-	const { refreshing: completeSetupPullRefreshing, onRefresh: onCompleteSetupPullRefresh } = usePullToRefresh(
-		async () => {
-			await loadProfile({ silent: true });
-		},
-	);
-
 	if (loading) {
 		return (
 			<SafeAreaView style={{ flex: 1, backgroundColor: colors.screenBg }} edges={['top', 'bottom', 'left', 'right']}>
@@ -166,14 +157,6 @@ export default function CompleteSetupScreen() {
 				keyboardDismissMode="on-drag"
 				contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl }}
 				showsVerticalScrollIndicator={false}
-				refreshControl={
-					<RefreshControl
-						refreshing={completeSetupPullRefreshing}
-						onRefresh={onCompleteSetupPullRefresh}
-						colors={REFRESH_CONTROL_COLORS}
-						tintColor={REFRESH_TINT}
-					/>
-				}
 			>
 				<Text style={styles.sectionTitle}>Missing Items</Text>
 				{missing.length === 0 ? (

@@ -1,14 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import ReactionSummaryRow from '../components/posts/ReactionSummaryRow';
+import ReactionTrayOverlay from '../components/posts/ReactionTrayOverlay';
 import ShareModal from '../components/posts/ShareModal';
 import { useAuth } from '../hooks/useAuth';
 import { fetchSocialFeedPostById } from '../lib/supabase/socialFeed';
 import { createSocialPostComment, deleteSocialFeedPost, fetchSocialPostComments, updateSocialFeedPost } from '../lib/supabase/socialFeedComments';
 import { fetchSocialFeedReactionsSummary } from '../lib/supabase/socialFeedReactions';
 import { toggleSocialPostLike } from '../lib/supabase/socialFeedReactionsActions';
+import {
+  CommentReactionSummary,
+  fetchSocialCommentReactionsSummary,
+  ReactionType,
+  toggleSocialCommentReaction,
+} from '../lib/supabase/reactions';
 
 interface SocialPostDetailScreenProps {
   postId: string;
@@ -30,6 +38,17 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
   const [shareVisible, setShareVisible] = useState(false);
   const handleShare = () => setShareVisible(true);
 
+  const [commentReactionsSummary, setCommentReactionsSummary] = useState<CommentReactionSummary>({});
+  const [commentTrayVisible, setCommentTrayVisible] = useState(false);
+  const [commentTrayAnchor, setCommentTrayAnchor] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const commentReactRefs = useRef<{ [key: string]: View | null }>({});
+
   const loadAll = async () => {
     try {
       setLoading(true);
@@ -39,6 +58,13 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
       try {
         const comm = await fetchSocialPostComments(postId);
         setComments(comm);
+        if (userId && comm.length > 0) {
+          const ids = comm.map((c: { id: string }) => c.id);
+          const cr = await fetchSocialCommentReactionsSummary(ids, userId);
+          setCommentReactionsSummary(cr);
+        } else {
+          setCommentReactionsSummary({});
+        }
       } catch (commentError) {
         console.error('Error loading social post comments:', commentError);
         // Do not crash the screen if comments fail; just show none
@@ -63,6 +89,35 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
   };
 
   useEffect(() => { loadAll(); }, [postId, userId]);
+
+  const handlePressCommentReact = useCallback(
+    (commentId: string) => {
+      if (!userId) return;
+      const ref = commentReactRefs.current[commentId];
+      if (!ref) return;
+      ref.measureInWindow((x, y, width, height) => {
+        setActiveCommentId(commentId);
+        setCommentTrayAnchor({ x, y, width, height });
+        setCommentTrayVisible(true);
+      });
+    },
+    [userId]
+  );
+
+  const handleSelectCommentReaction = useCallback(
+    async (reaction: ReactionType) => {
+      if (!userId || !activeCommentId) return;
+      const result = await toggleSocialCommentReaction(activeCommentId, userId, reaction);
+      if (result.success) {
+        const ids = comments.map((c: { id: string }) => c.id);
+        const summary = await fetchSocialCommentReactionsSummary(ids, userId);
+        setCommentReactionsSummary(summary);
+      }
+      setCommentTrayVisible(false);
+      setActiveCommentId(null);
+    },
+    [userId, activeCommentId, comments]
+  );
 
   const handleLike = async () => {
     if (!userId) return;
@@ -171,20 +226,48 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
         <View style={styles.commentsSection}>
           <Text style={styles.commentsTitle}>Comments</Text>
           {comments.length === 0 && <Text style={styles.noComments}>No comments yet.</Text>}
-          {comments.map((c, idx) => (
-            <View key={c.id || idx} style={styles.commentRow}>
-              <Pressable
-                style={{ flexDirection: 'row', alignItems: 'flex-start', flex: 1 }}
-                onPress={() => router.push(`/profile/${c.user_id}`)}
-              >
-                <Image source={{ uri: c.profiles?.avatar_url || '' }} style={styles.commentAvatar} />
-                <View style={styles.commentBubble}>
-                  <Text style={styles.commentAuthor}>{c.profiles?.display_name || 'User'}</Text>
-                  <Text style={styles.commentBody}>{c.body}</Text>
+          {comments.map((c: any, idx: number) => {
+            const displayName = c.profile_display_name ?? c.profiles?.display_name ?? 'User';
+            const avatarUrl = c.profile_avatar_url ?? c.profiles?.avatar_url ?? '';
+            const body = c.body ?? c.content ?? '';
+            const rx = commentReactionsSummary[c.id] || { counts: {} };
+            return (
+              <View key={c.id || idx} style={styles.commentRow}>
+                <View style={styles.commentRowInner}>
+                  <Pressable
+                    style={styles.commentRowPressable}
+                    onPress={() => router.push(`/profile/${c.user_id}`)}
+                  >
+                    {avatarUrl ? (
+                      <Image source={{ uri: avatarUrl }} style={styles.commentAvatar} />
+                    ) : (
+                      <View style={[styles.commentAvatar, styles.commentAvatarPh]} />
+                    )}
+                    <View style={styles.commentBubble}>
+                      <Text style={styles.commentAuthor}>{displayName}</Text>
+                      <Text style={styles.commentBody}>{body}</Text>
+                    </View>
+                  </Pressable>
+                  {userId ? (
+                    <View
+                      ref={(r) => {
+                        commentReactRefs.current[c.id] = r;
+                      }}
+                      collapsable={false}
+                      style={styles.commentReactionWrap}
+                    >
+                      <ReactionSummaryRow
+                        counts={rx.counts}
+                        userReaction={rx.userReaction}
+                        onPressReact={() => handlePressCommentReact(c.id)}
+                        compact
+                      />
+                    </View>
+                  ) : null}
                 </View>
-              </Pressable>
-            </View>
-          ))}
+              </View>
+            );
+          })}
           <View style={styles.addCommentRow}>
             <TextInput
               style={styles.addCommentInput}
@@ -199,6 +282,21 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
           </View>
         </View>
       </ScrollView>
+
+      {userId ? (
+        <ReactionTrayOverlay
+          visible={commentTrayVisible}
+          anchorLayout={commentTrayAnchor || undefined}
+          selectedReaction={
+            activeCommentId ? commentReactionsSummary[activeCommentId]?.userReaction : undefined
+          }
+          onSelect={handleSelectCommentReaction}
+          onClose={() => {
+            setCommentTrayVisible(false);
+            setActiveCommentId(null);
+          }}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -220,9 +318,13 @@ const styles = StyleSheet.create({
   commentsSection: { marginTop: 24 },
   commentsTitle: { fontWeight: '700', fontSize: 15, marginBottom: 8 },
   noComments: { color: '#64748B', marginBottom: 8 },
-  commentRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10 },
+  commentRow: { marginBottom: 12 },
+  commentRowInner: { width: '100%' },
+  commentRowPressable: { flexDirection: 'row', alignItems: 'flex-start' },
   commentAvatar: { width: 32, height: 32, borderRadius: 16, marginRight: 8, backgroundColor: '#eee' },
+  commentAvatarPh: { backgroundColor: '#E5E7EB' },
   commentBubble: { backgroundColor: '#F1F5F9', borderRadius: 10, padding: 8, flex: 1 },
+  commentReactionWrap: { marginLeft: 40, marginTop: 4 },
   commentAuthor: { fontWeight: '600', fontSize: 13, marginBottom: 2 },
   commentBody: { fontSize: 14 },
   addCommentRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },

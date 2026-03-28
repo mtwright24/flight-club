@@ -1,6 +1,6 @@
 // app/(auth)/sign-in.tsx
-import React, { useState } from 'react';
-import { Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { Text, TouchableOpacity, Alert, StyleSheet, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import { authTheme } from '../../src/styles/authTheme';
 import { supabase } from '../../src/lib/supabaseClient';
@@ -21,6 +21,7 @@ export default function SignInScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const passwordRef = useRef<TextInput>(null);
 
   const onSignIn = async () => {
     if (!email || !password) {
@@ -73,8 +74,15 @@ export default function SignInScreen() {
           leftIcon="mail-outline"
           value={email}
           onChangeText={setEmail}
+          keyboardType="email-address"
+          autoComplete="email"
+          textContentType="emailAddress"
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => passwordRef.current?.focus()}
         />
         <AuthTextField
+          ref={passwordRef}
           placeholder="Password (6+ characters)"
           leftIcon="lock-closed-outline"
           value={password}
@@ -82,6 +90,12 @@ export default function SignInScreen() {
           secureTextEntry={!showPassword}
           rightIcon={showPassword ? 'eye-off-outline' : 'eye-outline'}
           onRightPress={() => setShowPassword((v) => !v)}
+          textContentType="password"
+          autoComplete="password"
+          returnKeyType="go"
+          onSubmitEditing={() => {
+            void onSignIn();
+          }}
         />
         <PrimaryAuthButton
           label={loading ? 'SIGNING IN...' : 'SIGN IN'}
