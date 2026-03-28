@@ -550,3 +550,89 @@ export function preferenceBucketForType(type: string): PreferenceBucket | null {
   if (!key) return null;
   return preferenceBucketForRegistryCategory(NOTIFICATION_REGISTRY[key].category);
 }
+
+/**
+ * Layer-B category chips (under All / Unread). Social / feed / system types only match `all`.
+ */
+export type NotificationCategoryChip = 'all' | 'messages' | 'crew_rooms' | 'tradeboard' | 'housing';
+
+const CHIP_MESSAGES = new Set([
+  'message',
+  'message_request',
+  'message_request_accepted',
+  'message_reaction',
+  'message_media',
+  'dm_share_post',
+  'dm_share_media',
+]);
+
+/** Crew-room activity: matches registry `rooms` + legacy strings used in DB / RPCs. */
+const CHIP_CREW_ROOMS = new Set([
+  'room_post',
+  'crew_room_reply',
+  'crew_room_invite',
+  'crew_invite',
+  'crew_room_mention',
+  'room_join_request',
+  'room_join_approved',
+  'room_join_denied',
+  'room_role_changed',
+  'room_announcement',
+]);
+
+const CHIP_HOUSING_LEGACY = new Set([
+  'housing_reply',
+  'listing_reply',
+  'housing_message',
+  'saved_search_match',
+  'standby_match',
+  'crashpad_match',
+  'housing_alert',
+]);
+
+function registryCategoryForType(type: string): NotificationRegistryCategory | null {
+  const key = canonicalNotificationType(type);
+  if (!key) return null;
+  return NOTIFICATION_REGISTRY[key].category;
+}
+
+/**
+ * Layer-B chip filter. Uses canonical registry categories + explicit legacy type strings from this app.
+ */
+export function notificationMatchesCategoryChip(chip: NotificationCategoryChip, type: string): boolean {
+  if (chip === 'all') return true;
+  const t = (type || '').trim();
+  const reg = registryCategoryForType(t);
+
+  if (chip === 'messages') {
+    if (CHIP_MESSAGES.has(t)) return true;
+    return reg === 'messages';
+  }
+  if (chip === 'crew_rooms') {
+    if (CHIP_CREW_ROOMS.has(t)) return true;
+    return reg === 'rooms';
+  }
+  if (chip === 'tradeboard') {
+    return reg === 'trades';
+  }
+  if (chip === 'housing') {
+    if (CHIP_HOUSING_LEGACY.has(t)) return true;
+    return reg === 'housing';
+  }
+  return true;
+}
+
+/** @deprecated Prefer notificationMatchesCategoryChip — kept for any external imports. */
+export type NotificationInboxFilter = 'all' | 'social' | 'messages' | 'housing';
+
+/** @deprecated */
+export function notificationMatchesInboxFilter(filter: NotificationInboxFilter, type: string): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'messages') return notificationMatchesCategoryChip('messages', type);
+  if (filter === 'housing') return notificationMatchesCategoryChip('housing', type);
+  if (filter === 'social') {
+    const reg = registryCategoryForType(type);
+    return reg === 'social' || reg === 'rooms';
+  }
+  return true;
+}

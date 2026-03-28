@@ -752,6 +752,24 @@ export async function sendMessage(
         .map((p: any) => p.user_id)
         .filter((id: string) => id && id !== senderId);
 
+      let dmActorPayload: Record<string, string> = {};
+      try {
+        const { data: sp } = await supabase
+          .from('profiles')
+          .select('display_name, full_name, avatar_url')
+          .eq('id', senderId)
+          .maybeSingle();
+        if (sp) {
+          const label = [sp.display_name, sp.full_name].find((x) => typeof x === 'string' && String(x).trim());
+          if (label) dmActorPayload.actor_display_name = String(label).trim();
+          if (sp.avatar_url && String(sp.avatar_url).trim()) {
+            dmActorPayload.actor_avatar_url = String(sp.avatar_url).trim();
+          }
+        }
+      } catch {
+        dmActorPayload = {};
+      }
+
       await Promise.all(
         targets.map((targetId: string) =>
           createNotification({
@@ -763,7 +781,10 @@ export async function sendMessage(
             secondary_id: data.id,
             title: 'New message',
             body: notifyBody || 'You have a new message',
-            data: { route: `/dm-thread?conversationId=${convId}` },
+            data: {
+              route: `/dm-thread?conversationId=${convId}`,
+              ...dmActorPayload,
+            },
           })
         )
       );

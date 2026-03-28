@@ -5,6 +5,10 @@ import {
   preferenceBucketForType,
   resolveRouteFromRegistry,
 } from './notificationRegistry';
+import {
+  rawDbTypesForNotificationsSubsection,
+  type TopBlockSection,
+} from './notificationTopBlocks';
 import { supabase } from '../src/lib/supabaseClient';
 
 let missingNotificationsTableLogged = false;
@@ -26,8 +30,9 @@ export type Notification = {
   /** Optional JSON payload; omit if `notifications.data` column is not deployed. */
   data?: any;
   actor?: {
-    display_name?: string;
-    avatar_url?: string;
+    display_name?: string | null;
+    full_name?: string | null;
+    avatar_url?: string | null;
   };
 };
 
@@ -47,6 +52,99 @@ export function parseNotificationData(n: Pick<Notification, 'data'>): Record<str
   return {};
 }
 
+function pickStr(...vals: unknown[]): string | undefined {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+/**
+ * Fills `actor` from `profiles` when PostgREST embed fails (RLS/FK) or returns empty.
+ * Safe to call on every fetch; dedupes actor ids.
+ */
+export async function enrichNotificationsWithActors(rows: Notification[]): Promise<Notification[]> {
+  if (!rows.length) return rows;
+  const idSet = new Set<string>();
+  for (const r of rows) {
+    if (r.actor_id && String(r.actor_id).trim()) idSet.add(String(r.actor_id));
+  }
+  if (!idSet.size) return augmentActorsFromNotificationData(rows);
+
+  const ids = [...idSet];
+  const chunkSize = 80;
+  const profiles: Record<string, unknown>[] = [];
+
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const slice = ids.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, display_name, full_name, avatar_url')
+      .in('id', slice);
+
+    if (error) {
+      if (__DEV__) {
+        console.warn('[Notifications] enrichNotificationsWithActors:', error.message);
+      }
+      continue;
+    }
+    if (data?.length) profiles.push(...(data as Record<string, unknown>[]));
+  }
+
+  if (!profiles.length) {
+    return augmentActorsFromNotificationData(rows);
+  }
+
+  const map = new Map<string, Record<string, unknown>>();
+  for (const p of profiles) {
+    const id = p.id != null ? String(p.id) : '';
+    if (id) map.set(id, p);
+  }
+
+  const profileMerged = rows.map((r) => {
+    if (!r.actor_id) return r;
+    const p = map.get(String(r.actor_id));
+    if (!p) return r;
+
+    const prev = r.actor || {};
+    const mergedDisplay = pickStr(prev.display_name) ?? pickStr(p.display_name, p.full_name);
+    const mergedFull = pickStr(prev.full_name) ?? pickStr(p.full_name);
+    const mergedAvatar = pickStr(prev.avatar_url) ?? pickStr(p.avatar_url);
+
+    if (!mergedDisplay && !mergedFull && !mergedAvatar) return r;
+
+    return {
+      ...r,
+      actor: {
+        display_name: mergedDisplay ?? null,
+        full_name: mergedFull ?? null,
+        avatar_url: mergedAvatar ?? null,
+      },
+    };
+  });
+
+  return augmentActorsFromNotificationData(profileMerged);
+}
+
+/** Fills missing actor fields from `notifications.data` (e.g. DM payloads). */
+function augmentActorsFromNotificationData(rows: Notification[]): Notification[] {
+  return rows.map((r) => {
+    const d = parseNotificationData(r);
+    const dn = pickStr(d.actor_display_name, d.sender_display_name, d.from_display_name);
+    const av = pickStr(d.actor_avatar_url, d.sender_avatar_url, d.sender_avatar);
+    if (!dn && !av) return r;
+    const act = r.actor || {};
+    return {
+      ...r,
+      actor: {
+        display_name: pickStr(act.display_name) ?? dn ?? null,
+        full_name: act.full_name ?? null,
+        avatar_url: pickStr(act.avatar_url) ?? av ?? null,
+      },
+    };
+  });
+}
+
 export async function fetchNotifications(page = 1, pageSize = 30): Promise<Notification[]> {
   const {
     data: { user },
@@ -57,7 +155,7 @@ export async function fetchNotifications(page = 1, pageSize = 30): Promise<Notif
   const base = () =>
     supabase
       .from('notifications')
-      .select('*, actor:actor_id(display_name, avatar_url)')
+      .select('*, actor:actor_id(display_name, full_name, avatar_url)')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .range((page - 1) * pageSize, page * pageSize - 1);
@@ -86,12 +184,82 @@ export async function fetchNotifications(page = 1, pageSize = 30): Promise<Notif
       .range((page - 1) * pageSize, page * pageSize - 1);
 
     if (!errPlain) {
-      return plain || [];
+      return enrichNotificationsWithActors(plain || []);
     }
     throw error;
   }
 
-  return data || [];
+  return enrichNotificationsWithActors(data || []);
+}
+
+const NOTIFICATIONS_SUBLIST_PAGE_SIZE = 200;
+
+/** Notifications for a top-block subsection (crew / trade / housing), newest first. */
+export async function fetchNotificationsForTopBlockSection(
+  section: Exclude<TopBlockSection, 'message-requests'>
+): Promise<Notification[]> {
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  if (authError || !user?.id) return [];
+
+  const types = rawDbTypesForNotificationsSubsection(section);
+  if (!types.length) return [];
+
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('*')
+    .eq('user_id', user.id)
+    .in('type', types)
+    .order('created_at', { ascending: false })
+    .limit(NOTIFICATIONS_SUBLIST_PAGE_SIZE);
+
+  if (error) {
+    const code = (error as any).code;
+    const message = String((error as any).message || '');
+    if (code === 'PGRST205' || message.includes("Could not find the table 'public.notifications'")) {
+      return [];
+    }
+    if (__DEV__) console.warn('[Notifications] fetchNotificationsForTopBlockSection:', message);
+    return [];
+  }
+
+  return enrichNotificationsWithActors(data || []);
+}
+
+/** Marks unread notifications in this subsection (up to 500 ids per call). */
+export async function markTopBlockSectionNotificationsRead(
+  section: Exclude<TopBlockSection, 'message-requests'>
+): Promise<void> {
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  if (authError || !user?.id) return;
+
+  const types = rawDbTypesForNotificationsSubsection(section);
+  if (!types.length) return;
+
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('is_read', false)
+    .in('type', types)
+    .limit(500);
+
+  if (error) {
+    const code = (error as any).code;
+    const message = String((error as any).message || '');
+    if (code === 'PGRST205' || message.includes("Could not find the table 'public.notifications'")) {
+      return;
+    }
+    throw error;
+  }
+
+  const ids = (data || []).map((r: { id: string }) => r.id).filter(Boolean);
+  await markNotificationsRead(ids);
 }
 
 export async function markNotificationsRead(ids: string[]): Promise<void> {
@@ -271,12 +439,18 @@ export function resolveNotificationRoute(n: Notification): string {
   const fromData = typeof data.route === 'string' ? data.route : '';
   if (fromData) return normalizeNotificationDataRoute(fromData);
 
+  const fromRegistry = resolveRouteFromRegistry(n);
+  if (fromRegistry !== null) return fromRegistry;
+
   switch (n.entity_type) {
     case 'post':
       return `/post/${n.entity_id}`;
-    case 'comment':
-      // No `post/[id]/comments` route; post detail already loads comments.
+    case 'comment': {
+      if (typeof data.post_id === 'string' && data.post_id.trim()) {
+        return `/post/${data.post_id.trim()}`;
+      }
       return `/post/${n.entity_id}`;
+    }
     case 'room':
       return `/crew-rooms/${n.entity_id}`;
     case 'room_post':
@@ -285,11 +459,8 @@ export function resolveNotificationRoute(n: Notification): string {
       return `/profile/${n.entity_id}`;
     case 'conversation':
       return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}`;
-    default: {
-      const fromRegistry = resolveRouteFromRegistry(n);
-      if (fromRegistry !== null) return fromRegistry;
-      return '/';
-    }
+    default:
+      return '/notifications';
   }
 }
 
@@ -317,6 +488,16 @@ export function notificationPathToHref(path: string): Href {
     return { pathname: '/room-post-detail' as const, params: { postId: String(postId) } };
   };
 
+  const normalizedPath = (pathname: string) => pathname.replace(/^\/+/, '');
+
+  const tryCrashpadsDetail = (pathname: string, query: string) => {
+    const n = normalizedPath(pathname);
+    if (n !== '(screens)/crashpads-detail' && !n.endsWith('crashpads-detail')) return null;
+    const id = new URLSearchParams(query).get('id');
+    if (!id) return null;
+    return { pathname: '/(screens)/crashpads-detail' as const, params: { id: String(id) } };
+  };
+
   const q = trimmed.indexOf('?');
   if (q !== -1) {
     const pathnamePart = trimmed.slice(0, q);
@@ -325,6 +506,8 @@ export function notificationPathToHref(path: string): Href {
     if (dm) return dm;
     const rpd = tryRoomPostDetail(pathnamePart, queryPart);
     if (rpd) return rpd;
+    const cpd = tryCrashpadsDetail(pathnamePart, queryPart);
+    if (cpd) return cpd;
   }
 
   return trimmed as Href;
