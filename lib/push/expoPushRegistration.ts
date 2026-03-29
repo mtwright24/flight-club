@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
-import { deviceName, isDevice, modelName } from 'expo-device/build/Device';
 import { Platform } from 'react-native';
+import { expoDeviceSafe } from './expoDeviceSafe';
 import {
   AndroidImportance,
   getExpoPushTokenAsync,
@@ -41,7 +41,7 @@ export async function ensureAndroidNotificationChannelAsync(): Promise<void> {
  * Returns structured errors for simulators, denied permission, or missing projectId.
  */
 export async function registerExpoPushTokenAsync(): Promise<ExpoPushRegistrationResult> {
-  if (!isDevice) {
+  if (!expoDeviceSafe.getIsDevice()) {
     return { ok: false, reason: 'not_physical_device' };
   }
 
@@ -80,5 +80,5 @@ export async function registerExpoPushTokenAsync(): Promise<ExpoPushRegistration
 }
 
 export function getDeviceLabelForSync(): string | null {
-  return [modelName, deviceName].filter(Boolean).join(' · ') || null;
+  return [expoDeviceSafe.getModelName(), expoDeviceSafe.getDeviceName()].filter(Boolean).join(' · ') || null;
 }

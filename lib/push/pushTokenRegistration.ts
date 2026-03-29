@@ -1,6 +1,6 @@
 import { AppState, type AppStateStatus, Platform } from 'react-native';
-import { isDevice } from 'expo-device/build/Device';
 import { supabase } from '../../src/lib/supabaseClient';
+import { expoDeviceSafe } from './expoDeviceSafe';
 import { getDeviceLabelForSync, registerExpoPushTokenAsync } from './expoPushRegistration';
 
 export type PushTokenRegistrationResult =
@@ -10,6 +10,8 @@ export type PushTokenRegistrationResult =
 /** Last successfully registered Expo push token for this JS runtime (for lightweight presence updates). */
 let lastRegisteredUserId: string | null = null;
 let lastRegisteredPushToken: string | null = null;
+/** Dev: "skipped — not physical device" log at most once per JS runtime. */
+let devLoggedSkipNotPhysicalDevice = false;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -20,8 +22,9 @@ function nowIso(): string {
  * Idempotent: repeated calls with the same `(user_id, push_token)` update the same row via `onConflict`.
  */
 export async function registerPushTokenForSignedInUser(userId: string): Promise<PushTokenRegistrationResult> {
-  if (!isDevice) {
-    if (__DEV__) {
+  if (!expoDeviceSafe.getIsDevice()) {
+    if (__DEV__ && !devLoggedSkipNotPhysicalDevice) {
+      devLoggedSkipNotPhysicalDevice = true;
       console.log('[Push] Skipping push registration — not a physical device (simulator/emulator).');
     }
     return { ok: true, skipped: true };
@@ -30,7 +33,10 @@ export async function registerPushTokenForSignedInUser(userId: string): Promise<
   const reg = await registerExpoPushTokenAsync();
   if (!reg.ok) {
     if (reg.reason === 'not_physical_device') {
-      if (__DEV__) console.log('[Push] Skipping push registration — not a physical device.');
+      if (__DEV__ && !devLoggedSkipNotPhysicalDevice) {
+        devLoggedSkipNotPhysicalDevice = true;
+        console.log('[Push] Skipping push registration — not a physical device.');
+      }
       return { ok: true, skipped: true };
     }
     if (reg.reason === 'permission_denied') {
@@ -82,7 +88,7 @@ export async function registerPushTokenForSignedInUser(userId: string): Promise<
  * Call on app foreground when the user is signed in.
  */
 export async function touchPushTokenLastSeen(userId: string): Promise<void> {
-  if (!isDevice) return;
+  if (!expoDeviceSafe.getIsDevice()) return;
 
   const token = lastRegisteredPushToken;
   if (!token || lastRegisteredUserId !== userId) {
