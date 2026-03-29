@@ -35,8 +35,7 @@ import { useAuth } from '../../src/hooks/useAuth';
 import { useHomeActivityNotifications } from '../../src/hooks/useHomeActivityNotifications';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
 import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
-import { refreshDmUnreadBadgeCount } from '../../lib/dmUnreadBadgeStore';
-import { refreshNotificationsBadgeCount } from '../../lib/notificationsBadgeStore';
+import { refreshAllBadgeCountsFromServer } from '../../lib/notificationUnreadSync';
 import { fetchMyRooms, fetchPublicRooms } from '../../src/lib/supabase/rooms';
 import type { MyRoom, Room } from '../../src/types/rooms';
 import { pickAvatarUrlFromData } from '../../lib/homeActivityAvatars';
@@ -563,7 +562,7 @@ export default function DashboardHome() {
         setError(true);
       }
     }
-    await Promise.all([refreshDmUnreadBadgeCount(), refreshNotificationsBadgeCount()]);
+    await refreshAllBadgeCountsFromServer();
   }, [refreshHomeLists, userId]);
 
   const { refreshing: dashboardRefreshing, onRefresh: onDashboardRefresh } =

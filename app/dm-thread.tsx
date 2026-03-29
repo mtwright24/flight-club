@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { notifyDmUnreadBadgeRefresh } from '../lib/dmUnreadBadgeStore';
+import { markNotificationsReadForConversation } from '../lib/notifications';
 import { getPostById } from '../lib/feed';
 import { useAuth } from '../src/hooks/useAuth';
 import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
@@ -261,6 +262,7 @@ export default function DMThread() {
               setRequestRow(req);
               setRequestGateStatus(req?.status ?? 'accepted');
               lastError = null;
+              void markNotificationsReadForConversation(userId, targetConvo);
               notifyDmUnreadBadgeRefresh();
               break;
             } catch (e) {

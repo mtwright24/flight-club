@@ -4,7 +4,7 @@ import {
   enrichNotificationsWithActors,
   type Notification,
 } from '../../lib/notifications';
-import { notifyNotificationsBadgeRefresh } from '../../lib/notificationsBadgeStore';
+import { notifyAllBadgeCachesRefresh } from '../../lib/notificationUnreadSync';
 import {
   getRecentNotifications,
   subscribeToNotifications,
@@ -67,7 +67,7 @@ export function useHomeActivityNotifications(
       } catch {
         setItems((prev) => [mapPreviewToItem(n, userId), ...prev].slice(0, 80));
       }
-      notifyNotificationsBadgeRefresh();
+      notifyAllBadgeCachesRefresh();
     });
 
     return () => {

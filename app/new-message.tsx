@@ -113,7 +113,7 @@ export default function NewMessageScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#B5161E' }} edges={['left', 'right', 'top', 'bottom']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }} edges={['left', 'right', 'bottom']}>
       <FlightClubHeader
         title="New Message"
         showLogo={false}

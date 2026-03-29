@@ -5,6 +5,7 @@ import { ActivityIndicator, Linking, LogBox, View } from "react-native";
 import 'react-native-url-polyfill/auto';
 import { DmBadgeNavigationSync } from '../src/components/DmBadgeNavigationSync';
 import FloatingBackButton from '../src/components/FloatingBackButton';
+import { PushNotificationRoot } from '../src/components/PushNotificationRoot';
 import { ThemeProvider } from '../src/context/ThemeContext';
 import { clearProfileDraft, getProfileDraft } from '../src/lib/profileDraft';
 import { supabase } from "../src/lib/supabaseClient";
@@ -199,6 +200,7 @@ export default function RootLayout() {
           />
         </Stack>
         <DmBadgeNavigationSync />
+        <PushNotificationRoot />
         <FloatingBackButton />
         {loading && (
           <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, justifyContent: "center", alignItems: "center" }}>

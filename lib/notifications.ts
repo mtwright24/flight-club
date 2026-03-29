@@ -1,15 +1,23 @@
 import type { Href } from 'expo-router';
 import {
+  notificationRecordToRoutingPayload,
+  resolveNotificationHrefFromRecord,
+  resolveNotificationPathFromPayload,
+} from './notificationRouting';
+import {
   canonicalNotificationType,
   isPushEligibleForCanonicalType,
   preferenceBucketForType,
-  resolveRouteFromRegistry,
 } from './notificationRegistry';
+import { parseNotificationData } from './notificationPayload';
 import {
   rawDbTypesForNotificationsSubsection,
   type TopBlockSection,
 } from './notificationTopBlocks';
 import { supabase } from '../src/lib/supabaseClient';
+
+export { parseNotificationData };
+export { notificationPathToHref } from './notificationPathMapping';
 
 let missingNotificationsTableLogged = false;
 
@@ -35,22 +43,6 @@ export type Notification = {
     avatar_url?: string | null;
   };
 };
-
-/** Normalize `data` when PostgREST returns a string or null. */
-export function parseNotificationData(n: Pick<Notification, 'data'>): Record<string, unknown> {
-  const d = n.data;
-  if (d == null) return {};
-  if (typeof d === 'string') {
-    try {
-      const parsed = JSON.parse(d) as unknown;
-      return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
-    } catch {
-      return {};
-    }
-  }
-  if (typeof d === 'object') return d as Record<string, unknown>;
-  return {};
-}
 
 function pickStr(...vals: unknown[]): string | undefined {
   for (const v of vals) {
@@ -288,6 +280,37 @@ export async function markNotificationsRead(ids: string[]): Promise<void> {
     .catch(() => {});
 }
 
+/** Mark in-app notification rows for this DM thread read (bell + Activity stay aligned). */
+export async function markNotificationsReadForConversation(
+  viewerUserId: string,
+  conversationId: string
+): Promise<void> {
+  const cid = String(conversationId || '').trim();
+  if (!viewerUserId || !cid) return;
+
+  const { error } = await supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('user_id', viewerUserId)
+    .eq('entity_type', 'conversation')
+    .eq('entity_id', cid)
+    .eq('is_read', false);
+
+  if (error) {
+    const code = (error as any)?.code;
+    const message = String((error as any)?.message || '');
+    if (code === 'PGRST205' || message.includes("Could not find the table 'public.notifications'")) {
+      return;
+    }
+    if (__DEV__) console.warn('[Notifications] markNotificationsReadForConversation:', message);
+    return;
+  }
+
+  void import('./notificationsBadgeStore')
+    .then((m) => m.notifyNotificationsBadgeRefresh())
+    .catch(() => {});
+}
+
 export async function markAllNotificationsRead(): Promise<void> {
   const {
     data: { user },
@@ -414,144 +437,18 @@ export async function fetchUnreadNotificationsCount(): Promise<number> {
 }
 
 /**
- * Rewrites known legacy or mistaken `data.route` values to paths that match Expo Router files.
- * (e.g. crew room post notifications store `/room-post/:postId`, but `room-post` is the composer.)
+ * String path for previews / push payload `route` (centralized with push + inbox).
+ * @see resolveNotificationHrefFromPayload
  */
-function normalizeNotificationDataRoute(path: string): string {
-  const trimmed = (path || '').trim();
-  if (!trimmed) return trimmed;
-
-  const noComments = trimmed.match(/^\/post\/([^/?#]+)\/comments\/?(?:[?#]|$)/);
-  if (noComments) {
-    return `/post/${noComments[1]}`;
-  }
-
-  const roomPostId = trimmed.match(/^\/room-post\/([^/?#]+)\/?(?:[?#]|$)/);
-  if (roomPostId) {
-    return `/room-post-detail?postId=${encodeURIComponent(roomPostId[1])}`;
-  }
-
-  return trimmed;
-}
-
 export function resolveNotificationRoute(n: Notification): string {
-  const data = parseNotificationData(n);
-  const fromData = typeof data.route === 'string' ? data.route : '';
-  if (fromData) return normalizeNotificationDataRoute(fromData);
-
-  const fromRegistry = resolveRouteFromRegistry(n);
-  if (fromRegistry !== null) return fromRegistry;
-
-  switch (n.entity_type) {
-    case 'post':
-      return `/post/${n.entity_id}`;
-    case 'comment': {
-      if (typeof data.post_id === 'string' && data.post_id.trim()) {
-        return `/post/${data.post_id.trim()}`;
-      }
-      return `/post/${n.entity_id}`;
-    }
-    case 'room':
-      return `/crew-rooms/${n.entity_id}`;
-    case 'room_post':
-      return `/room-post-detail?postId=${encodeURIComponent(n.entity_id)}`;
-    case 'profile':
-      return `/profile/${n.entity_id}`;
-    case 'conversation': {
-      const rid =
-        typeof data.request_id === 'string'
-          ? data.request_id.trim()
-          : typeof data.dm_request_id === 'string'
-            ? data.dm_request_id.trim()
-            : '';
-      if (n.type === 'message_request' && rid) {
-        return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}&requestId=${encodeURIComponent(rid)}`;
-      }
-      return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}`;
-    }
-    default:
-      return '/notifications';
-  }
+  return resolveNotificationPathFromPayload(notificationRecordToRoutingPayload(n));
 }
 
 /**
- * Map stored notification routes (often `/dm-thread?conversationId=…`) to Expo Router hrefs
- * so params are passed reliably (matches in-app DM navigation).
- */
-export function notificationPathToHref(path: string): Href {
-  const trimmed = (path || '').trim();
-  if (!trimmed || trimmed === '/') return '/';
-
-  const pathOnly = (pathname: string) => pathname.replace(/^\//, '') || pathname;
-
-  const tryDm = (pathname: string, query: string) => {
-    if (pathOnly(pathname) !== 'dm-thread') return null;
-    const sp = new URLSearchParams(query);
-    const conversationId = sp.get('conversationId');
-    if (!conversationId) return null;
-    const requestId = sp.get('requestId');
-    const params: Record<string, string> = { conversationId: String(conversationId) };
-    if (requestId) params.requestId = String(requestId);
-    return { pathname: '/dm-thread' as const, params };
-  };
-
-  const tryRoomPostDetail = (pathname: string, query: string) => {
-    if (pathOnly(pathname) !== 'room-post-detail') return null;
-    const postId = new URLSearchParams(query).get('postId');
-    if (!postId) return null;
-    return { pathname: '/room-post-detail' as const, params: { postId: String(postId) } };
-  };
-
-  const normalizedPath = (pathname: string) => pathname.replace(/^\/+/, '');
-
-  const tryCrashpadsDetail = (pathname: string, query: string) => {
-    const n = normalizedPath(pathname);
-    if (n !== '(screens)/crashpads-detail' && !n.endsWith('crashpads-detail')) return null;
-    const id = new URLSearchParams(query).get('id');
-    if (!id) return null;
-    return { pathname: '/(screens)/crashpads-detail' as const, params: { id: String(id) } };
-  };
-
-  /** Crew room invite / share links using `/(tabs)/crew-rooms/room-home?roomId=…` */
-  const tryRoomHome = (pathname: string, query: string) => {
-    const n = normalizedPath(pathname);
-    if (!n.includes('crew-rooms/room-home')) return null;
-    const sp = new URLSearchParams(query);
-    const roomId = sp.get('roomId');
-    if (!roomId) return null;
-    const roomName = sp.get('roomName');
-    const params: Record<string, string> = { roomId: String(roomId) };
-    if (roomName) params.roomName = String(roomName);
-    return { pathname: '/(tabs)/crew-rooms/room-home' as const, params };
-  };
-
-  const q = trimmed.indexOf('?');
-  if (q !== -1) {
-    const pathnamePart = trimmed.slice(0, q);
-    const queryPart = trimmed.slice(q + 1);
-    const dm = tryDm(pathnamePart, queryPart);
-    if (dm) return dm;
-    const rpd = tryRoomPostDetail(pathnamePart, queryPart);
-    if (rpd) return rpd;
-    const cpd = tryCrashpadsDetail(pathnamePart, queryPart);
-    if (cpd) return cpd;
-    const rh = tryRoomHome(pathnamePart, queryPart);
-    if (rh) return rh;
-  }
-
-  return trimmed as Href;
-}
-
-/**
- * Href for navigation from a notification tap. Never returns home `/` for a real row — falls back to the notifications list.
+ * Href for navigation from a notification tap (inbox, home, push). Same rules as foreground banner / response taps.
  */
 export function notificationTargetHref(n: Notification): Href {
-  const path = resolveNotificationRoute(n);
-  const trimmed = (path || '').trim();
-  if (!trimmed || trimmed === '/') {
-    return '/notifications';
-  }
-  return notificationPathToHref(trimmed);
+  return resolveNotificationHrefFromRecord(n);
 }
 
 export async function createNotification(input: {
@@ -729,7 +626,8 @@ async function sendPushForNotification(n: Notification): Promise<void> {
   const { data: tokens, error } = await supabase
     .from('user_push_tokens')
     .select('push_token')
-    .eq('user_id', userId);
+    .eq('user_id', userId)
+    .eq('is_active', true);
   if (error || !tokens || !tokens.length) return;
 
   let actorName: string | undefined;
@@ -760,6 +658,7 @@ async function sendPushForNotification(n: Notification): Promise<void> {
       type: n.type,
       entity_type: n.entity_type,
       entity_id: n.entity_id,
+      secondary_id: n.secondary_id ?? null,
     },
   }));
 
@@ -771,7 +670,8 @@ async function sendPushForNotification(n: Notification): Promise<void> {
         'Accept-Encoding': 'gzip, deflate',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(messages),
+      // Expo v2 expects `{ messages: [...] }` (not a raw array).
+      body: JSON.stringify({ messages }),
     });
   } catch (err) {
     console.log('[Notifications] Expo push send failed:', err);

@@ -58,17 +58,24 @@ const routeNotifications = () => '/notifications';
 
 /** Legacy DB / call-site type strings → canonical registry keys. */
 export const LEGACY_NOTIFICATION_TYPE_ALIASES: Record<string, NotificationTypeKey> = {
+  dm: 'message',
   post_like: 'like_post',
   post_comment: 'comment_post',
   comment_reply: 'reply_comment',
   crew_room_mention: 'room_mention',
   crew_room_invite: 'room_invite',
   crew_invite: 'room_invite',
+  crew_room_post: 'room_post',
   mention: 'mention_post',
   listing_reply: 'housing_reply',
   housing_message: 'housing_inquiry',
+  housing_alert: 'housing_listing_saved_match',
   saved_search_match: 'housing_listing_saved_match',
   standby_match: 'housing_availability_match',
+  social_like: 'like_post',
+  social_comment: 'comment_post',
+  social_follow: 'follow',
+  swap_match: 'trade_match',
 };
 
 export type NotificationTypeKey =

@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { usePathname, useSegments } from 'expo-router';
-import { refreshDmUnreadBadgeCount } from '../../lib/dmUnreadBadgeStore';
-import { refreshNotificationsBadgeCount } from '../../lib/notificationsBadgeStore';
+import { refreshAllBadgeCountsFromServer } from '../../lib/notificationUnreadSync';
 
 /**
  * Refreshes shared header badges (DM cloud + notifications bell) when the route
@@ -19,8 +18,7 @@ export function DmBadgeNavigationSync() {
       return;
     }
     const t = setTimeout(() => {
-      void refreshDmUnreadBadgeCount();
-      void refreshNotificationsBadgeCount();
+      void refreshAllBadgeCountsFromServer();
     }, 50);
     return () => clearTimeout(t);
   }, [routeKey]);

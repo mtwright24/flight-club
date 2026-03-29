@@ -267,7 +267,7 @@ export default function MessagesInboxScreen() {
   const moreIsUnread = moreLast && moreLast.sender_id !== userId && !moreLast.is_read;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#B5161E' }} edges={['left', 'right', 'top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#F8FAFC' }} edges={['left', 'right', 'bottom']}>
       <FlightClubHeader
         title="Messages"
         bellCount={unread.notifications}

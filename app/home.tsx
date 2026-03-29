@@ -16,9 +16,9 @@ import ActivityPreview, { NotificationItem } from '../components/ActivityPreview
 import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts, getTrendingRooms } from '../lib/home';
 import { notificationTargetHref, type Notification } from '../lib/notifications';
 import {
-  notifyNotificationsBadgeRefresh,
-  refreshNotificationsBadgeCount,
-} from '../lib/notificationsBadgeStore';
+  notifyAllBadgeCachesRefresh,
+  refreshAllBadgeCountsFromServer,
+} from '../lib/notificationUnreadSync';
 import { getRecentNotifications, markNotificationRead, subscribeToNotifications } from '../lib/notifications-preview';
 import type { NotificationPreview } from '../lib/notifications-preview';
 import FlightClubHeader from '../src/components/FlightClubHeader';
@@ -141,7 +141,7 @@ export default function HomeScreen() {
         .finally(() => setProfileLoading(false));
 
       void refreshDmBadge();
-      void refreshNotificationsBadgeCount();
+      void refreshAllBadgeCountsFromServer();
     }, [userId, refreshDmBadge])
   );
 
@@ -178,7 +178,7 @@ export default function HomeScreen() {
       setActivity((prev) =>
         [mapPreviewToItem(n, effectiveUserId), ...prev].slice(0, 24),
       );
-      notifyNotificationsBadgeRefresh();
+      notifyAllBadgeCachesRefresh();
     });
     return () => {
       mounted = false;
@@ -222,7 +222,7 @@ export default function HomeScreen() {
       setProfileLoading(false);
 
       await refreshDmBadge();
-      await refreshNotificationsBadgeCount();
+      await refreshAllBadgeCountsFromServer();
 
       setActivityLoading(true);
       setActivityError(null);
