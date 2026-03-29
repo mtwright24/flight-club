@@ -904,15 +904,21 @@ export async function startDirectConversation(currentUserId: string, targetUserI
 
       const existing = existingRows?.[0];
       if (!existing) {
-        const { error: insErr } = await supabase.from('dm_message_requests').insert({
-          from_user_id: currentUserId,
-          to_user_id: targetUserId,
-          conversation_id: conversationId,
-          status: 'pending',
-        });
+        const { data: insertedReq, error: insErr } = await supabase
+          .from('dm_message_requests')
+          .insert({
+            from_user_id: currentUserId,
+            to_user_id: targetUserId,
+            conversation_id: conversationId,
+            status: 'pending',
+          })
+          .select('id')
+          .maybeSingle();
         if (insErr) {
           console.warn('[DM] startDirectConversation: insert request:', insErr.message);
-        } else {
+        } else if (insertedReq?.id) {
+          const reqId = String(insertedReq.id);
+          const dmRoute = `/dm-thread?conversationId=${encodeURIComponent(conversationId)}&requestId=${encodeURIComponent(reqId)}`;
           try {
             await createNotification({
               user_id: targetUserId,
@@ -923,7 +929,9 @@ export async function startDirectConversation(currentUserId: string, targetUserI
               title: 'Message request',
               body: 'Someone wants to message you. Accept or decline in Message requests.',
               data: {
-                route: `/notifications/sublist/message-requests`,
+                route: dmRoute,
+                request_id: reqId,
+                dm_request_id: reqId,
               },
             });
           } catch (notifyErr) {
@@ -940,6 +948,60 @@ export async function startDirectConversation(currentUserId: string, targetUserI
 }
 
 /**
+ * Update a pending dm_message_requests row for the recipient (`to_user_id`).
+ * - When `requestId` is set, always also filter by `conversation_id` when provided so we never
+ *   target the wrong row if ids get out of sync.
+ * - If that update matches no row (stale notification id, duplicate rows, etc.), retry by
+ *   conversation only so Accept/Decline still works for the visible pending chat.
+ */
+async function updatePendingDmMessageRequestForRecipient(
+  nextStatus: 'accepted' | 'declined',
+  conversationId: string,
+  recipientUserId: string,
+  requestId?: string | null
+): Promise<{ error: string | null }> {
+  const cid = (conversationId || '').trim();
+  const rid = (requestId || '').trim();
+  if (!cid && !rid) {
+    return { error: 'Missing conversation id' };
+  }
+
+  const run = async (mode: 'by-request-and-convo' | 'by-conversation-only') => {
+    let q = supabase
+      .from('dm_message_requests')
+      .update({ status: nextStatus })
+      .eq('to_user_id', recipientUserId)
+      .eq('status', 'pending');
+
+    if (mode === 'by-request-and-convo' && rid) {
+      q = q.eq('id', rid);
+      if (cid) q = q.eq('conversation_id', cid);
+    } else {
+      if (!cid) return { data: null, error: null };
+      q = q.eq('conversation_id', cid);
+    }
+
+    return q.select('id, status').maybeSingle();
+  };
+
+  let { data, error } = rid ? await run('by-request-and-convo') : await run('by-conversation-only');
+  if (error) return { error: error.message };
+  if (!data && rid && cid) {
+    const second = await run('by-conversation-only');
+    if (second.error) return { error: second.error.message };
+    data = second.data;
+  }
+
+  if (!data) {
+    return {
+      error:
+        'No pending request found for this conversation. Pull to refresh or open it again from Message requests.',
+    };
+  }
+  return { error: null };
+}
+
+/**
  * Recipient accepts a pending `dm_message_requests` row so the conversation leaves the Requests list
  * and appears in the main inbox.
  * Prefer `requestId` from `fetchMessageRequestsInbox` (`request_id`) so the UPDATE targets the exact row.
@@ -950,26 +1012,7 @@ export async function acceptDmMessageRequest(
   recipientUserId: string,
   requestId?: string | null
 ): Promise<{ error: string | null }> {
-  const cid = (conversationId || '').trim();
-  let q = supabase
-    .from('dm_message_requests')
-    .update({ status: 'accepted' })
-    .eq('to_user_id', recipientUserId)
-    .eq('status', 'pending');
-
-  if (requestId) {
-    q = q.eq('id', requestId);
-  } else {
-    q = q.eq('conversation_id', cid);
-  }
-
-  const { data, error } = await q.select('id, status').maybeSingle();
-  if (error) return { error: error.message };
-
-  // If no row matched (already processed / wrong id), treat as failure so UI doesn't silently flash.
-  if (!data) return { error: 'Request was not pending anymore. Please refresh and try again.' };
-
-  return { error: null };
+  return updatePendingDmMessageRequestForRecipient('accepted', conversationId, recipientUserId, requestId);
 }
 
 /** Recipient declines a pending request (request row no longer pending; conversation may still exist). */
@@ -978,23 +1021,7 @@ export async function declineDmMessageRequest(
   recipientUserId: string,
   requestId?: string | null
 ): Promise<{ error: string | null }> {
-  const cid = (conversationId || '').trim();
-  let q = supabase
-    .from('dm_message_requests')
-    .update({ status: 'declined' })
-    .eq('to_user_id', recipientUserId)
-    .eq('status', 'pending');
-
-  if (requestId) {
-    q = q.eq('id', requestId);
-  } else {
-    q = q.eq('conversation_id', cid);
-  }
-
-  const { data, error } = await q.select('id, status').maybeSingle();
-  if (error) return { error: error.message };
-  if (!data) return { error: 'Request was not pending anymore. Please refresh and try again.' };
-  return { error: null };
+  return updatePendingDmMessageRequestForRecipient('declined', conversationId, recipientUserId, requestId);
 }
 
 /**

@@ -168,6 +168,181 @@ export function inToolsScope(n: NotificationItem): boolean {
   );
 }
 
+/** Slide 1 “mixed priority”: real activity only — social, DMs, rooms, trades, housing, loads/ops, requests. */
+function slide1Eligible(n: NotificationItem): boolean {
+  const t = (n.type || '').trim();
+  if (t === 'message_request') return true;
+  return (
+    isSocialFeedType(n.type) ||
+    isMessagesType(n.type) ||
+    isRoomsType(n.type) ||
+    isMentionRoomType(n.type) ||
+    isTradesType(n.type) ||
+    isHousingType(n.type) ||
+    isLoadsAlertType(n.type) ||
+    isRestScheduleType(n.type) ||
+    isCommuteDelayType(n.type)
+  );
+}
+
+function diversityKey(n: NotificationItem): string {
+  const t = (n.type || '').trim();
+  if (isMessagesType(n.type) || t === 'message_request') return 'messages';
+  if (isRoomsType(n.type) || isMentionRoomType(n.type)) return 'rooms';
+  if (isHousingType(n.type)) return 'housing';
+  if (isTradesType(n.type)) return 'trades';
+  if (isLoadsAlertType(n.type) || isRestScheduleType(n.type) || isCommuteDelayType(n.type)) return 'ops';
+  if (isSocialFeedType(n.type)) return 'social';
+  return 'other';
+}
+
+function mixedSlideLabel(n: NotificationItem): string {
+  const t = (n.type || '').trim();
+  if (isMessagesType(n.type)) return 'MESSAGES';
+  if (t === 'message_request') return 'REQUESTS';
+  if (isRoomsType(n.type) || isMentionRoomType(n.type)) return 'CREW ROOMS';
+  if (isHousingType(n.type)) return 'HOUSING';
+  if (isTradesType(n.type)) return 'SWAPS';
+  if (isLoadsAlertType(n.type) || isRestScheduleType(n.type) || isCommuteDelayType(n.type)) return 'OPS';
+  if (isSocialFeedType(n.type)) return 'SOCIAL';
+  return 'ACTIVITY';
+}
+
+const MIXED_NEUTRAL_FILL: ActivityCardModel = {
+  id: 'mixed-neutral-fill',
+  label: 'ACTIVITY',
+  title: 'See all updates',
+  subtitle: 'Notifications',
+  href: HREF_NOTIFICATIONS,
+  markReadIds: [],
+};
+
+const MIXED_QUIET_HERO: ActivityCardModel = {
+  id: 'mixed-quiet-hero',
+  label: 'ACTIVITY',
+  title: 'You’re caught up',
+  subtitle: 'Pull to refresh for the latest',
+  href: HREF_NOTIFICATIONS,
+  markReadIds: [],
+};
+
+function mixedHeroFromNotification(n: NotificationItem, sorted: NotificationItem[]): ActivityCardModel {
+  const label = mixedSlideLabel(n);
+  const tradeUnread = countUnread(sorted, (x) => isTradesType(x.type));
+  return withCovers(
+    {
+      id: 'mixed-hero',
+      label,
+      title: truncate(personalizeSummary(n.summary, n), 90),
+      subtitle: undefined,
+      timestamp: n.timeLabel,
+      detailRoute: extractRouteHint(n) || undefined,
+      sparkleCount: tradeUnread > 0 ? Math.min(99, tradeUnread) : undefined,
+      href: hrefFrom(n, HREF_NOTIFICATIONS),
+      markReadIds: [],
+    },
+    [n],
+  );
+}
+
+function mixedMiniFromNotification(n: NotificationItem): ActivityCardModel {
+  const label = mixedSlideLabel(n);
+  if (isHousingType(n.type)) {
+    const housingCard = splitHousingCard(n);
+    return withCovers(
+      {
+        id: `mixed-mini-housing-${n.id}`,
+        label: 'HOUSING',
+        title: truncate(housingCard.primary, 72),
+        subtitle: truncate(housingCard.secondary, 44),
+        timestamp: n.timeLabel,
+        primaryLine: truncate(housingCard.primary, 72),
+        secondaryLine: housingCard.secondary,
+        imageUrl: housingCard.image,
+        href: hrefFrom(n, HREF_HOUSING),
+        markReadIds: [],
+      },
+      [n],
+    );
+  }
+  if (isTradesType(n.type)) {
+    return withCovers(
+      {
+        id: `mixed-mini-trade-${n.id}`,
+        label: 'SWAPS',
+        title: truncate(personalizeSummary(n.summary, n), 80),
+        subtitle: 'Open tradeboard',
+        timestamp: n.timeLabel,
+        primaryLine: truncate(personalizeSummary(n.summary, n), 80),
+        secondaryLine: 'Review >',
+        href: hrefFrom(n, HREF_TRADES),
+        markReadIds: [],
+      },
+      [n],
+    );
+  }
+  if (isMessagesType(n.type) || (n.type || '').trim() === 'message_request') {
+    const d = parseNotificationData(n as { data?: unknown }) as Record<string, unknown>;
+    const sub = pickStr(d.preview_text, d.body, d.snippet, d.message_preview);
+    return withCovers(
+      {
+        id: `mixed-mini-msg-${n.id}`,
+        label: (n.type || '').trim() === 'message_request' ? 'REQUESTS' : 'MESSAGES',
+        title: truncate(personalizeSummary(n.summary, n), 72),
+        subtitle: sub,
+        timestamp: n.timeLabel,
+        primaryLine: truncate(personalizeSummary(n.summary, n), 72),
+        href: hrefFrom(n, (n.type || '').trim() === 'message_request' ? HREF_MESSAGE_REQUESTS : HREF_MESSAGES),
+        markReadIds: [],
+      },
+      [n],
+    );
+  }
+  if (isRoomsType(n.type) || isMentionRoomType(n.type)) {
+    const rl = splitCrewLines(personalizeSummary(n.summary, n), 'Crew rooms');
+    return withCovers(
+      {
+        id: `mixed-mini-room-${n.id}`,
+        label: 'CREW ROOMS',
+        title: truncate(rl.primary, 72),
+        subtitle: truncate(rl.secondary, 44),
+        timestamp: n.timeLabel,
+        primaryLine: truncate(rl.primary, 72),
+        secondaryLine: rl.secondary,
+        href: hrefFrom(n, HREF_CREW_ROOMS),
+        markReadIds: [],
+      },
+      [n],
+    );
+  }
+  if (isLoadsAlertType(n.type) || isRestScheduleType(n.type) || isCommuteDelayType(n.type)) {
+    return withCovers(
+      {
+        id: `mixed-mini-ops-${n.id}`,
+        label: utilityLabel(n.type),
+        title: truncate(personalizeSummary(n.summary, n), 80),
+        subtitle: 'Open',
+        timestamp: n.timeLabel,
+        href: hrefFrom(n, HREF_LOADS),
+        markReadIds: [],
+      },
+      [n],
+    );
+  }
+  return withCovers(
+    {
+      id: `mixed-mini-social-${n.id}`,
+      label: 'SOCIAL',
+      title: truncate(personalizeSummary(n.summary, n), 90),
+      subtitle: undefined,
+      timestamp: n.timeLabel,
+      href: hrefFrom(n, HREF_NOTIFICATIONS),
+      markReadIds: [],
+    },
+    [n],
+  );
+}
+
 function sortNewest(items: NotificationItem[]): NotificationItem[] {
   return [...items].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
@@ -555,16 +730,6 @@ export type HomeActivityModuleData = {
   slides: [ActivitySlideTriple, ActivitySlideTriple, ActivitySlideTriple];
 };
 
-type MixedCat = 'social' | 'rooms' | 'housing' | 'trades';
-
-function mixedCat(n: NotificationItem): MixedCat | null {
-  if (isSocialFeedType(n.type)) return 'social';
-  if (isRoomsType(n.type)) return 'rooms';
-  if (isHousingType(n.type)) return 'housing';
-  if (isTradesType(n.type)) return 'trades';
-  return null;
-}
-
 function withCovers(card: ActivityCardModel, sources: NotificationItem[]): ActivityCardModel {
   const ids = sources.map((s) => s.id);
   const unreadIds = sources.filter((s) => isNotificationUnreadRow(s)).map((s) => s.id);
@@ -575,39 +740,53 @@ function withCovers(card: ActivityCardModel, sources: NotificationItem[]): Activ
   };
 }
 
-function heroLabelForMixed(n: NotificationItem): string {
-  const c = mixedCat(n);
-  if (c === 'social') return 'SOCIAL';
-  if (c === 'trades') return 'SWAPS';
-  if (c === 'rooms') return 'CREW ROOMS';
-  if (c === 'housing') return 'HOUSING';
-  return 'ACTIVITY';
-}
-
 function pickMixedTriple(sorted: NotificationItem[]): {
   hero?: NotificationItem;
   left?: NotificationItem;
   right?: NotificationItem;
 } {
-  const pool = sorted.filter((n) => inMixedScope(n));
+  const pool = sorted.filter((n) => slide1Eligible(n));
   if (!pool.length) return {};
-  const used = new Set<string>();
-  const hero = pool[0];
-  used.add(hero.id);
-  const hCat = mixedCat(hero);
-  const left =
-    pool.find((n) => !used.has(n.id) && mixedCat(n) !== hCat && mixedCat(n) != null) ??
-    pool.find((n) => !used.has(n.id));
-  if (left) used.add(left.id);
-  const lCat = left ? mixedCat(left) : null;
-  const right =
-    pool.find(
-      (n) =>
-        !used.has(n.id) &&
-        mixedCat(n) != null &&
-        mixedCat(n) !== hCat &&
-        (lCat == null || mixedCat(n) !== lCat),
-    ) ?? pool.find((n) => !used.has(n.id));
+
+  const scored = [...pool].sort((a, b) => {
+    const ur = Number(isNotificationUnreadRow(b)) - Number(isNotificationUnreadRow(a));
+    if (ur !== 0) return ur;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
+
+  const hero = scored[0];
+  const used = new Set<string>([hero.id]);
+  const k0 = diversityKey(hero);
+
+  let left: NotificationItem | undefined;
+  for (const n of scored) {
+    if (used.has(n.id)) continue;
+    if (diversityKey(n) !== k0) {
+      left = n;
+      used.add(n.id);
+      break;
+    }
+  }
+  if (!left) {
+    left = scored.find((n) => !used.has(n.id));
+    if (left) used.add(left.id);
+  }
+
+  const keysSoFar = new Set([k0, left ? diversityKey(left) : '']);
+  let right: NotificationItem | undefined;
+  for (const n of scored) {
+    if (used.has(n.id)) continue;
+    if (!keysSoFar.has(diversityKey(n))) {
+      right = n;
+      used.add(n.id);
+      break;
+    }
+  }
+  if (!right) {
+    right = scored.find((n) => !used.has(n.id));
+    if (right) used.add(right.id);
+  }
+
   return { hero, left, right };
 }
 
@@ -617,118 +796,19 @@ function buildMixedSlideCards(
   l?: NotificationItem,
   r?: NotificationItem,
 ): ActivitySlideTriple {
-  const tradeUnread = countUnread(sorted, (n) => isTradesType(n.type));
-
-  const featured: ActivityCardModel = h
-    ? withCovers(
-        {
-          id: 'mixed-hero',
-          label: heroLabelForMixed(h),
-          title: truncate(personalizeSummary(h.summary, h), 90),
-          subtitle: undefined,
-          timestamp: h.timeLabel,
-          detailRoute: extractRouteHint(h) || undefined,
-          sparkleCount: tradeUnread > 0 ? Math.min(99, tradeUnread) : undefined,
-          href: hrefFrom(h, HREF_NOTIFICATIONS),
-          markReadIds: [],
-        },
-        [h],
-      )
-    : {
-        id: 'mixed-social-empty',
-        label: 'SOCIAL',
-        title: 'Nothing new in your feed yet',
-        subtitle: 'Follows, replies & mentions appear here',
-        href: HREF_NOTIFICATIONS,
-        markReadIds: [],
-      };
-
-  const crewLines = l
-    ? splitCrewLines(personalizeSummary(l.summary, l), 'Crew rooms')
-    : { primary: 'No crew room updates', secondary: 'Replies show here', fallback: '' };
-  const bottomLeft: ActivityCardModel = l
-    ? withCovers(
-        {
-          id: 'mixed-crew',
-          label: 'CREW ROOMS',
-          title: truncate(crewLines.primary, 72),
-          subtitle: truncate(crewLines.secondary, 48),
-          timestamp: l.timeLabel,
-          primaryLine: truncate(crewLines.primary, 72),
-          secondaryLine: crewLines.secondary,
-          href: hrefFrom(l, HREF_CREW_ROOMS),
-          markReadIds: [],
-        },
-        [l],
-      )
-    : {
-        id: 'mixed-crew-empty',
-        label: 'CREW ROOMS',
-        title: 'No room activity',
-        subtitle: 'Mentions & replies show here',
-        href: HREF_CREW_ROOMS,
-        markReadIds: [],
-      };
-
-  let bottomRight: ActivityCardModel;
-  if (r && isHousingType(r.type)) {
-    const housingCard = splitHousingCard(r);
-    bottomRight = withCovers(
-      {
-        id: 'mixed-housing',
-        label: 'HOUSING',
-        title: truncate(housingCard.primary, 72),
-        subtitle: truncate(housingCard.secondary, 44),
-        timestamp: r.timeLabel,
-        primaryLine: truncate(housingCard.primary, 72),
-        secondaryLine: housingCard.secondary,
-        imageUrl: housingCard.image,
-        href: hrefFrom(r, HREF_HOUSING),
-        markReadIds: [],
-      },
-      [r],
-    );
-  } else if (r && isTradesType(r.type)) {
-    bottomRight = withCovers(
-      {
-        id: 'mixed-trade',
-        label: 'SWAPS',
-        title: truncate(personalizeSummary(r.summary, r), 80),
-        subtitle: 'Open tradeboard',
-        timestamp: r.timeLabel,
-        primaryLine: truncate(personalizeSummary(r.summary, r), 80),
-        secondaryLine: 'Review >',
-        href: hrefFrom(r, HREF_TRADES),
-        markReadIds: [],
-      },
-      [r],
-    );
-  } else if (r && isRoomsType(r.type)) {
-    const rl = splitCrewLines(personalizeSummary(r.summary, r), 'Crew rooms');
-    bottomRight = withCovers(
-      {
-        id: 'mixed-room-br',
-        label: 'CREW ROOMS',
-        title: truncate(rl.primary, 72),
-        subtitle: truncate(rl.secondary, 44),
-        timestamp: r.timeLabel,
-        primaryLine: truncate(rl.primary, 72),
-        secondaryLine: rl.secondary,
-        href: hrefFrom(r, HREF_CREW_ROOMS),
-        markReadIds: [],
-      },
-      [r],
-    );
-  } else {
-    bottomRight = {
-      id: 'mixed-housing-empty',
-      label: 'HOUSING',
-      title: 'No housing alerts',
-      subtitle: 'Listings & saved searches',
-      href: HREF_HOUSING,
-      markReadIds: [],
+  if (!h && !l && !r) {
+    return {
+      hero: MIXED_QUIET_HERO,
+      bottomLeft: { ...MIXED_NEUTRAL_FILL, id: 'mixed-neutral-bl' },
+      bottomRight: { ...MIXED_NEUTRAL_FILL, id: 'mixed-neutral-br' },
     };
   }
+
+  const featured: ActivityCardModel = h ? mixedHeroFromNotification(h, sorted) : MIXED_QUIET_HERO;
+
+  const bottomLeft: ActivityCardModel = l ? mixedMiniFromNotification(l) : { ...MIXED_NEUTRAL_FILL, id: 'mixed-fill-bl' };
+
+  const bottomRight: ActivityCardModel = r ? mixedMiniFromNotification(r) : l ? { ...MIXED_NEUTRAL_FILL, id: 'mixed-fill-br' } : { ...MIXED_NEUTRAL_FILL, id: 'mixed-fill-br2' };
 
   return { hero: featured, bottomLeft, bottomRight };
 }
@@ -852,8 +932,8 @@ function buildCommsSlideCards(sorted: NotificationItem[], used: Set<string>): Ac
     : {
         id: 'comms-rooms-empty',
         label: 'CREW ROOMS',
-        title: 'No room updates',
-        subtitle: 'Rooms & mentions',
+        title: 'No crew room activity',
+        subtitle: 'Mentions & replies show here',
         href: HREF_CREW_ROOMS,
         markReadIds: [],
       };

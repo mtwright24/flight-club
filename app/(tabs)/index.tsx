@@ -1,7 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter, type Href } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -15,32 +15,31 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import HomeActivityCenter from '../../components/HomeActivityCenter';
+import HomeUnreadDot from '../../components/HomeUnreadDot';
 import { type NotificationItem } from '../../components/ActivityPreview';
 import type { ActivityCardModel } from '../../lib/homeActivityPanels';
+import {
+  hasPinnedRoomUnread,
+  hasTileUnread,
+  hasToolShortcutUnread,
+  type HomeTileId,
+} from '../../lib/homeDestinationUnread';
 import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts } from '../../lib/home';
 import { getHomeToolShortcutIds } from '../../lib/homeShortcutsStorage';
 import { pickRecommendedTools } from '../../lib/homeRecommendedTools';
 import { toolsRegistry, toolShortcutChipLabel } from '../../lib/toolsRegistry';
-import { enrichNotificationsWithActors, parseNotificationData, type Notification } from '../../lib/notifications';
-import { notifyNotificationsBadgeRefresh } from '../../lib/notificationsBadgeStore';
-import {
-  getRecentNotifications,
-  markNotificationRead,
-  subscribeToNotifications,
-  type NotificationPreview,
-} from '../../lib/notifications-preview';
+import { parseNotificationData } from '../../lib/notifications';
+import { markNotificationRead, type NotificationPreview } from '../../lib/notifications-preview';
 import { COLORS, RADIUS, SHADOW, SPACING } from '../../src/styles/theme';
 import { useAuth } from '../../src/hooks/useAuth';
+import { useHomeActivityNotifications } from '../../src/hooks/useHomeActivityNotifications';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
 import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 import { refreshDmUnreadBadgeCount } from '../../lib/dmUnreadBadgeStore';
 import { refreshNotificationsBadgeCount } from '../../lib/notificationsBadgeStore';
 import { fetchMyRooms, fetchPublicRooms } from '../../src/lib/supabase/rooms';
 import type { MyRoom, Room } from '../../src/types/rooms';
-import { isNotificationUnreadRow } from '../../lib/activityHomeBuckets';
 import { pickAvatarUrlFromData } from '../../lib/homeActivityAvatars';
-
-type HomeTileId = 'crew-schedule' | 'staff-loads' | 'pad-housing' | 'utility';
 
 const tiles: { id: HomeTileId; lines: string[]; icon: number }[] = [
   {
@@ -162,7 +161,15 @@ function mapMonthlyAwardsToCards(awards: any[]): AwardCardModel[] {
   return out;
 }
 
-function ShortcutsRow({ userId, toolIds }: { userId?: string | null; toolIds: string[] }) {
+function ShortcutsRow({
+  userId,
+  toolIds,
+  notificationItems,
+}: {
+  userId?: string | null;
+  toolIds: string[];
+  notificationItems: NotificationItem[];
+}) {
   const router = useRouter();
   const [pinnedRooms, setPinnedRooms] = useState<MyRoom[]>([]);
 
@@ -225,9 +232,12 @@ function ShortcutsRow({ userId, toolIds }: { userId?: string | null; toolIds: st
               })
             }
           >
-            <Text style={styles.shortcutChipText} numberOfLines={1}>
-              {room.name.length > 22 ? `${room.name.slice(0, 20)}…` : room.name}
-            </Text>
+            <View style={styles.shortcutChipInner}>
+              <Text style={styles.shortcutChipText} numberOfLines={1}>
+                {room.name.length > 22 ? `${room.name.slice(0, 20)}…` : room.name}
+              </Text>
+              <HomeUnreadDot visible={hasPinnedRoomUnread(room.id, notificationItems)} placement="inline" />
+            </View>
           </Pressable>
         ))}
         {toolChips.map((chip) => (
@@ -236,9 +246,12 @@ function ShortcutsRow({ userId, toolIds }: { userId?: string | null; toolIds: st
             style={[styles.shortcutChip, SHADOW.soft]}
             onPress={() => router.push(chip.route as Href)}
           >
-            <Text style={styles.shortcutChipText} numberOfLines={1}>
-              {chip.label}
-            </Text>
+            <View style={styles.shortcutChipInner}>
+              <Text style={styles.shortcutChipText} numberOfLines={1}>
+                {chip.label}
+              </Text>
+              <HomeUnreadDot visible={hasToolShortcutUnread(chip.route, notificationItems)} placement="inline" />
+            </View>
           </Pressable>
         ))}
         {pinnedRooms.length === 0 && toolChips.length === 0 ? (
@@ -472,6 +485,11 @@ export default function DashboardHome() {
   const [awardsLoading, setAwardsLoading] = useState(true);
   const [shortcutToolIds, setShortcutToolIds] = useState<string[]>([]);
   const [activityRefreshToken, setActivityRefreshToken] = useState(0);
+  const {
+    items: homeActivityItems,
+    setItems: setHomeActivityItems,
+    loading: homeActivityLoading,
+  } = useHomeActivityNotifications(userId, activityRefreshToken, mapPreviewToItem);
 
   const refreshHomeLists = useCallback(() => {
     setPostsLoading(true);
@@ -601,6 +619,7 @@ export default function DashboardHome() {
               style={[styles.tile, SHADOW.card]}
               onPress={() => router.push(routeForTile(id))}
             >
+              <HomeUnreadDot visible={hasTileUnread(id, homeActivityItems)} placement="tileCorner" />
               <Image source={icon} style={styles.tileIcon} resizeMode="contain" />
               <View style={styles.tileLabelCol}>
                 {lines.length === 1 ? (
@@ -624,13 +643,15 @@ export default function DashboardHome() {
           ))}
         </View>
 
-        <ShortcutsRow userId={userId} toolIds={shortcutToolIds} />
+        <ShortcutsRow userId={userId} toolIds={shortcutToolIds} notificationItems={homeActivityItems} />
 
         <Section
           title="ACTIVITY"
           rightAction="View All >"
           onRightActionPress={() => router.push('/notifications')}
-          activityRefreshToken={activityRefreshToken}
+          activityItems={homeActivityItems}
+          setActivityItems={setHomeActivityItems}
+          activityLoading={homeActivityLoading}
         />
         <RecommendedToolsBlock profile={profile} excludeIds={new Set(shortcutToolIds)} />
         <RecommendedForYouBlock
@@ -647,81 +668,16 @@ export default function DashboardHome() {
   );
 }
 
-function HomeActivitySnapshot({ refreshToken = 0 }: { refreshToken?: number }) {
+function HomeActivitySnapshot({
+  items,
+  setItems,
+  loading,
+}: {
+  items: NotificationItem[];
+  setItems: React.Dispatch<React.SetStateAction<NotificationItem[]>>;
+  loading: boolean;
+}) {
   const router = useRouter();
-  const { session } = useAuth();
-  const userId = session?.user?.id ?? null;
-  const [items, setItems] = useState<NotificationItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const subRef = useRef<ReturnType<typeof subscribeToNotifications> | null>(null);
-
-  useEffect(() => {
-    if (!userId) {
-      setItems([]);
-      setLoading(false);
-      return;
-    }
-    let mounted = true;
-    setLoading(true);
-    getRecentNotifications(userId, 40)
-      .then(async (rows) => {
-        if (!mounted) return;
-        try {
-          const enriched = await enrichNotificationsWithActors(rows as Notification[]);
-          setItems(enriched.map((p) => mapPreviewToItem(p as NotificationPreview, userId)));
-        } catch {
-          setItems(rows.map((p) => mapPreviewToItem(p, userId)));
-        }
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
-
-    if (subRef.current) {
-      try {
-        subRef.current.unsubscribe();
-      } catch {
-        /* ignore */
-      }
-    }
-    subRef.current = subscribeToNotifications(userId, async (n) => {
-      try {
-        const [enriched] = await enrichNotificationsWithActors([{ ...n } as Notification]);
-        const row = (enriched ?? n) as NotificationPreview;
-        setItems((prev) => [mapPreviewToItem(row, userId), ...prev].slice(0, 40));
-      } catch {
-        setItems((prev) => [mapPreviewToItem(n, userId), ...prev].slice(0, 40));
-      }
-      notifyNotificationsBadgeRefresh();
-    });
-
-    return () => {
-      mounted = false;
-      if (subRef.current) {
-        try {
-          subRef.current.unsubscribe();
-        } catch {
-          /* ignore */
-        }
-      }
-    };
-  }, [userId, refreshToken]);
-
-  useFocusEffect(
-    useCallback(() => {
-      if (!userId) return;
-      void getRecentNotifications(userId, 40)
-        .then(async (rows) => {
-          try {
-            const enriched = await enrichNotificationsWithActors(rows as Notification[]);
-            setItems(enriched.map((p) => mapPreviewToItem(p as NotificationPreview, userId)));
-          } catch {
-            setItems(rows.map((p) => mapPreviewToItem(p, userId)));
-          }
-        })
-        .catch(() => {});
-    }, [userId]),
-  );
 
   const openNotifications = useCallback(() => {
     router.push('/notifications');
@@ -760,12 +716,16 @@ function Section({
   title,
   rightAction,
   onRightActionPress,
-  activityRefreshToken,
+  activityItems,
+  setActivityItems,
+  activityLoading,
 }: {
   title: string;
   rightAction?: string;
   onRightActionPress?: () => void;
-  activityRefreshToken?: number;
+  activityItems?: NotificationItem[];
+  setActivityItems?: React.Dispatch<React.SetStateAction<NotificationItem[]>>;
+  activityLoading?: boolean;
 }) {
   if (title === 'ACTIVITY') {
     return (
@@ -782,7 +742,9 @@ function Section({
             )
           ) : null}
         </View>
-        <HomeActivitySnapshot refreshToken={activityRefreshToken} />
+        {activityItems != null && setActivityItems != null && activityLoading != null ? (
+          <HomeActivitySnapshot items={activityItems} setItems={setActivityItems} loading={activityLoading} />
+        ) : null}
       </View>
     );
   }
@@ -1103,6 +1065,12 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card,
     borderWidth: 1,
     borderColor: COLORS.line,
+    maxWidth: '100%',
+  },
+  shortcutChipInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    maxWidth: '100%',
   },
   shortcutChipMuted: {
     backgroundColor: COLORS.cardAlt,
@@ -1112,6 +1080,8 @@ const styles = StyleSheet.create({
     color: COLORS.navySoft,
     fontWeight: '700',
     fontSize: 13,
+    flexShrink: 1,
+    minWidth: 0,
   },
   shortcutChipTextMuted: {
     color: COLORS.text2,
@@ -1214,6 +1184,8 @@ const styles = StyleSheet.create({
     minHeight: 120,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+    overflow: 'hidden',
   },
   tileLabelCol: {
     alignItems: 'center',

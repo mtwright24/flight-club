@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Image, Alert, Share, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Image, Alert, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { colors, spacing, radius, shadow } from '../styles/theme';
@@ -16,6 +16,7 @@ import ReactionTrayOverlay from '../components/posts/ReactionTrayOverlay';
 import RoomChatView from '../components/rooms/RoomChatView';
 import CommentsDrawer from '../components/comments/CommentsDrawer';
 import { uploadRoomAvatar, uploadRoomCover, removeRoomAvatar, removeRoomCover } from '../lib/uploadRoomMedia';
+import RoomInviteSheet from '../components/rooms/RoomInviteSheet';
 
 export interface RoomHomeScreenProps {
   roomId: string;
@@ -70,6 +71,7 @@ export default function RoomHomeScreenImpl({ roomId, posted }: RoomHomeScreenPro
   const [uploading, setUploading] = useState(false);
   const [isOwnerOrAdmin, setIsOwnerOrAdmin] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [inviteSheetVisible, setInviteSheetVisible] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
   const scrollPositionRef = useRef(0);
 
@@ -290,12 +292,9 @@ export default function RoomHomeScreenImpl({ roomId, posted }: RoomHomeScreenPro
   }, [room, roomId, userId]);
 
   const handleInvite = useCallback(() => {
-    if (!room) return;
-    const message = `Join my crew room "${room.name}" on Flight Club. Open the app and search for this room by name.`;
-    Share.share({ message }).catch((err) => {
-      console.error('Error sharing room invite:', err);
-    });
-  }, [room]);
+    if (!room || !userId) return;
+    setInviteSheetVisible(true);
+  }, [room, userId]);
 
   const openCreatePost = useCallback((startMode: 'text' | 'photo') => {
     router.push({
@@ -449,6 +448,15 @@ export default function RoomHomeScreenImpl({ roomId, posted }: RoomHomeScreenPro
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right']}>
+      {userId ? (
+        <RoomInviteSheet
+          visible={inviteSheetVisible}
+          onClose={() => setInviteSheetVisible(false)}
+          roomId={roomId}
+          roomName={room.name}
+          currentUserId={userId}
+        />
+      ) : null}
       {toastVisible && (
         <View style={styles.toast}>
           <Text style={styles.toastText}>Post submitted successfully</Text>

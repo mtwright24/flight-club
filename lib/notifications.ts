@@ -457,8 +457,18 @@ export function resolveNotificationRoute(n: Notification): string {
       return `/room-post-detail?postId=${encodeURIComponent(n.entity_id)}`;
     case 'profile':
       return `/profile/${n.entity_id}`;
-    case 'conversation':
+    case 'conversation': {
+      const rid =
+        typeof data.request_id === 'string'
+          ? data.request_id.trim()
+          : typeof data.dm_request_id === 'string'
+            ? data.dm_request_id.trim()
+            : '';
+      if (n.type === 'message_request' && rid) {
+        return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}&requestId=${encodeURIComponent(rid)}`;
+      }
       return `/dm-thread?conversationId=${encodeURIComponent(n.entity_id)}`;
+    }
     default:
       return '/notifications';
   }
@@ -476,9 +486,13 @@ export function notificationPathToHref(path: string): Href {
 
   const tryDm = (pathname: string, query: string) => {
     if (pathOnly(pathname) !== 'dm-thread') return null;
-    const conversationId = new URLSearchParams(query).get('conversationId');
+    const sp = new URLSearchParams(query);
+    const conversationId = sp.get('conversationId');
     if (!conversationId) return null;
-    return { pathname: '/dm-thread' as const, params: { conversationId: String(conversationId) } };
+    const requestId = sp.get('requestId');
+    const params: Record<string, string> = { conversationId: String(conversationId) };
+    if (requestId) params.requestId = String(requestId);
+    return { pathname: '/dm-thread' as const, params };
   };
 
   const tryRoomPostDetail = (pathname: string, query: string) => {
@@ -498,6 +512,19 @@ export function notificationPathToHref(path: string): Href {
     return { pathname: '/(screens)/crashpads-detail' as const, params: { id: String(id) } };
   };
 
+  /** Crew room invite / share links using `/(tabs)/crew-rooms/room-home?roomId=…` */
+  const tryRoomHome = (pathname: string, query: string) => {
+    const n = normalizedPath(pathname);
+    if (!n.includes('crew-rooms/room-home')) return null;
+    const sp = new URLSearchParams(query);
+    const roomId = sp.get('roomId');
+    if (!roomId) return null;
+    const roomName = sp.get('roomName');
+    const params: Record<string, string> = { roomId: String(roomId) };
+    if (roomName) params.roomName = String(roomName);
+    return { pathname: '/(tabs)/crew-rooms/room-home' as const, params };
+  };
+
   const q = trimmed.indexOf('?');
   if (q !== -1) {
     const pathnamePart = trimmed.slice(0, q);
@@ -508,6 +535,8 @@ export function notificationPathToHref(path: string): Href {
     if (rpd) return rpd;
     const cpd = tryCrashpadsDetail(pathnamePart, queryPart);
     if (cpd) return cpd;
+    const rh = tryRoomHome(pathnamePart, queryPart);
+    if (rh) return rh;
   }
 
   return trimmed as Href;

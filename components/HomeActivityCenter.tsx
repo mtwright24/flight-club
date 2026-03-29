@@ -17,8 +17,7 @@ import { buildHomeActivitySlides, type HomeActivitySlideModel } from '../lib/hom
 import type { NotificationItem } from './ActivityPreview';
 import { COLORS } from '../src/styles/theme';
 
-/** Soft neutral “frosted glass” gray (no blue/slate tint). */
-const SHELL_BG = '#F2F2F7';
+/** Match Home screen surface — light, integrated (not a heavy tinted floating card). */
 const SHELL_RADIUS = 22;
 const CARD_RADIUS = 12;
 const MOCKUP_BLUE = '#2563EB';
@@ -421,13 +420,13 @@ const TILE_SHADOW = {
 
 const styles = StyleSheet.create({
   outerShell: {
-    backgroundColor: SHELL_BG,
+    backgroundColor: COLORS.bg,
     borderRadius: SHELL_RADIUS,
     paddingHorizontal: 11,
     paddingTop: 8,
     paddingBottom: 8,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(0,0,0,0.05)',
+    borderColor: COLORS.line,
     overflow: 'hidden',
   },
   carouselViewport: {

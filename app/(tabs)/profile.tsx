@@ -138,6 +138,11 @@ export default function ProfileScreen() {
     router.push('/messages-inbox');
   }
 
+  const openConnections = (tab: 'mutual' | 'followers' | 'following') => {
+    if (!user?.id) return;
+    router.push(`/profile/${user.id}/connections?tab=${tab}`);
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right']}>
       {activeTab === 'Posts' ? (
@@ -162,6 +167,8 @@ export default function ProfileScreen() {
                     followingStatus={followingStatus}
                     onFollow={() => setFollowingStatus(!followingStatus)}
                     onMessage={handleMessageButton}
+                    onPressFollowers={() => openConnections('followers')}
+                    onPressFollowing={() => openConnections('following')}
                     onPressAvatar={isSelf ? () => router.push('/edit-profile') : undefined}
                     router={router}
                   />
@@ -213,6 +220,8 @@ export default function ProfileScreen() {
               followingStatus={followingStatus}
               onFollow={() => setFollowingStatus(!followingStatus)}
               onMessage={handleMessageButton}
+              onPressFollowers={() => openConnections('followers')}
+              onPressFollowing={() => openConnections('following')}
               onPressAvatar={isSelf ? () => router.push('/edit-profile') : undefined}
               router={router}
             />

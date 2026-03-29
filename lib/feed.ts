@@ -318,3 +318,76 @@ export async function unfollowUser(userId: string) {
   const { error } = await supabase.from('follows').delete().eq('follower_id', myId).eq('following_id', userId);
   return { error };
 }
+
+/** Profile row for followers / following / mutual lists */
+export type ProfileListUser = {
+  id: string;
+  display_name: string | null;
+  full_name: string | null;
+  username: string | null;
+  avatar_url: string | null;
+};
+
+async function fetchProfilesByIds(ids: string[]): Promise<ProfileListUser[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, display_name, full_name, username, avatar_url')
+    .in('id', ids);
+  if (error) throw error;
+  const list = (data || []) as ProfileListUser[];
+  const order = new Map(ids.map((id, i) => [id, i]));
+  return list.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+}
+
+/** Users who follow `profileId` */
+export async function getFollowersOfUser(profileId: string): Promise<ProfileListUser[]> {
+  const { data, error } = await supabase.from('follows').select('follower_id').eq('following_id', profileId);
+  if (error) {
+    const code = (error as { code?: string }).code;
+    const message = String((error as { message?: string }).message || '');
+    if (code === 'PGRST205' || message.includes("Could not find the table 'public.follows'")) return [];
+    throw error;
+  }
+  const ids = [...new Set((data || []).map((r: { follower_id: string }) => r.follower_id).filter(Boolean))];
+  return fetchProfilesByIds(ids);
+}
+
+/** Users that `profileId` follows */
+export async function getFollowingOfUser(profileId: string): Promise<ProfileListUser[]> {
+  const { data, error } = await supabase.from('follows').select('following_id').eq('follower_id', profileId);
+  if (error) {
+    const code = (error as { code?: string }).code;
+    const message = String((error as { message?: string }).message || '');
+    if (code === 'PGRST205' || message.includes("Could not find the table 'public.follows'")) return [];
+    throw error;
+  }
+  const ids = [...new Set((data || []).map((r: { following_id: string }) => r.following_id).filter(Boolean))];
+  return fetchProfilesByIds(ids);
+}
+
+/**
+ * Mutual connections:
+ * - Same profile and viewer: users who follow you and whom you follow (mutual follows).
+ * - Different users: accounts both you and `profileId` follow (shared following).
+ */
+export async function getMutualConnections(viewerId: string, profileId: string): Promise<ProfileListUser[]> {
+  if (viewerId === profileId) {
+    const { data: fol, error: e1 } = await supabase.from('follows').select('follower_id').eq('following_id', profileId);
+    if (e1) return [];
+    const { data: ing, error: e2 } = await supabase.from('follows').select('following_id').eq('follower_id', profileId);
+    if (e2) return [];
+    const followerSet = new Set((fol || []).map((r: { follower_id: string }) => r.follower_id));
+    const mutualIds = [...new Set((ing || []).map((r: { following_id: string }) => r.following_id).filter((id) => followerSet.has(id)))];
+    return fetchProfilesByIds(mutualIds);
+  }
+  const [a, b] = await Promise.all([
+    supabase.from('follows').select('following_id').eq('follower_id', profileId),
+    supabase.from('follows').select('following_id').eq('follower_id', viewerId),
+  ]);
+  if (a.error || b.error) return [];
+  const theirs = new Set((a.data || []).map((r: { following_id: string }) => r.following_id));
+  const mine = new Set((b.data || []).map((r: { following_id: string }) => r.following_id));
+  const mutualIds = [...theirs].filter((id) => mine.has(id));
+  return fetchProfilesByIds(mutualIds);
+}

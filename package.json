@@ -7,9 +7,11 @@
     "start:lan": "expo start --go --lan",
     "start:tunnel": "expo start --go --tunnel",
     "start:dev-client": "expo start",
+    "start:dev-client:tunnel": "expo start --tunnel",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "ios:open": "open ios/flightclub.xcworkspace",
     "web": "expo start --web",
     "lint": "expo lint"
   },

@@ -55,6 +55,13 @@ function actorNameOrSomeone(n: Notification): string {
   return getActorDisplayName(n) || 'Someone';
 }
 
+/** Crew-room invite rows stored as whitelisted `room_post` + `data.room_invite` (RPC allowlist). */
+function isRoomInviteRoomPost(n: Notification): boolean {
+  if (n.type !== 'room_post') return false;
+  const d = parseNotificationData(n) as Record<string, unknown>;
+  return d.room_invite === true;
+}
+
 /** Short label for top-right of row (5m, 4h, 3d — compact). */
 export function formatNotificationTimeShort(iso: string): string {
   const date = new Date(iso || 0);
@@ -86,7 +93,9 @@ export function getNotificationRowPrimary(
   | { mode: 'split'; name: string; rest: string }
   | { mode: 'plain'; text: string } {
   const name = getActorDisplayName(n);
-  const rest = actionSuffixForNotificationType(n.type);
+  const rest = isRoomInviteRoomPost(n)
+    ? ' invited you to a crew room'
+    : actionSuffixForNotificationType(n.type);
   if (name && rest !== null) {
     return { mode: 'split', name, rest };
   }
@@ -116,6 +125,7 @@ function actionSuffixForNotificationType(type: string): string | null {
       return ' requested to follow you';
     case 'follow_accept':
       return ' accepted your follow request';
+    case 'room_invite':
     case 'crew_invite':
     case 'crew_room_invite':
       return ' invited you to a crew room';
@@ -165,13 +175,14 @@ export function getNotificationDisplayLines(n: Notification): { primary: string;
       case 'crew_room_reply':
         return `${who} replied in your crew room`;
       case 'room_post':
-        return `${who} posted in your crew room`;
+        return isRoomInviteRoomPost(n) ? `${who} invited you to a crew room` : `${who} posted in your crew room`;
       case 'follow':
         return `${who} started following you`;
       case 'follow_request':
         return `${who} requested to follow you`;
       case 'follow_accept':
         return `${who} accepted your follow request`;
+      case 'room_invite':
       case 'crew_invite':
       case 'crew_room_invite':
         return `${who} invited you to a crew room`;

@@ -19,6 +19,10 @@ type ProfileHeaderSectionProps = {
   onMessage: () => void;
   /** When set, avatar is tappable (e.g. self → edit profile). Omit to avoid a dead-press affordance. */
   onPressAvatar?: () => void;
+  /** Open followers list (connections screen). */
+  onPressFollowers?: () => void;
+  /** Open following list (connections screen). */
+  onPressFollowing?: () => void;
   router?: any;
 };
 
@@ -32,6 +36,8 @@ export default function ProfileHeaderSection({
   onFollow,
   onMessage,
   onPressAvatar,
+  onPressFollowers,
+  onPressFollowing,
   router,
 }: ProfileHeaderSectionProps) {
   return (
@@ -85,15 +91,27 @@ export default function ProfileHeaderSection({
       </View>
       {/* Stats row with vertical dividers */}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, marginBottom: 0 }}>
-        <View style={{ flex: 1, alignItems: 'center' }}>
+        <Pressable
+          style={{ flex: 1, alignItems: 'center' }}
+          onPress={onPressFollowers}
+          disabled={!onPressFollowers}
+          accessibilityRole={onPressFollowers ? 'button' : undefined}
+          accessibilityLabel={onPressFollowers ? 'View followers' : undefined}
+        >
           <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{stats.followers}</Text>
           <Text style={{ fontSize: 11, color: '#64748b' }}>Followers</Text>
-        </View>
+        </Pressable>
         <View style={{ width: 1, height: 32, backgroundColor: '#E5E7EB', opacity: 0.7, marginHorizontal: 8 }} />
-        <View style={{ flex: 1, alignItems: 'center' }}>
+        <Pressable
+          style={{ flex: 1, alignItems: 'center' }}
+          onPress={onPressFollowing}
+          disabled={!onPressFollowing}
+          accessibilityRole={onPressFollowing ? 'button' : undefined}
+          accessibilityLabel={onPressFollowing ? 'View following' : undefined}
+        >
           <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{stats.following}</Text>
           <Text style={{ fontSize: 11, color: '#64748b' }}>Following</Text>
-        </View>
+        </Pressable>
         <View style={{ width: 1, height: 32, backgroundColor: '#E5E7EB', opacity: 0.7, marginHorizontal: 8 }} />
         <View style={{ flex: 1, alignItems: 'center' }}>
           <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{stats.posts}</Text>

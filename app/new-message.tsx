@@ -90,46 +90,21 @@ export default function NewMessageScreen() {
     if (!tid) return;
     setOpeningUserId(tid);
     try {
-      const { conversationId, isRequest } = await startDirectConversation(userId, tid);
+      const { conversationId } = await startDirectConversation(userId, tid);
       const convId = String(conversationId);
 
-      const go = async () => {
-        if (sharePostId) {
-          try {
-            await sendMessage(convId, userId, '', { messageType: 'post_share', postId: sharePostId });
-          } catch (shareErr) {
-            console.warn('[DM] share post to thread failed:', shareErr);
-            Alert.alert(
-              'Could not attach post',
-              'The conversation was opened but the shared post could not be sent. You can try sharing again from the post.',
-            );
-          }
+      if (sharePostId) {
+        try {
+          await sendMessage(convId, userId, '', { messageType: 'post_share', postId: sharePostId });
+        } catch (shareErr) {
+          console.warn('[DM] share post to thread failed:', shareErr);
+          Alert.alert(
+            'Could not attach post',
+            'The conversation was opened but the shared post could not be sent. You can try sharing again from the post.',
+          );
         }
-        openThread(convId);
-      };
-
-      if (isRequest) {
-        Alert.alert(
-          'Message request',
-          'This person doesn’t follow you yet. Your first message is sent as a request. They can accept, decline, or block before you can keep chatting.',
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                void (async () => {
-                  try {
-                    await go();
-                  } catch {
-                    /* share errors surfaced inside go */
-                  }
-                })();
-              },
-            },
-          ],
-        );
-      } else {
-        await go();
       }
+      openThread(convId);
     } catch (e: any) {
       Alert.alert('Unable to start message', e?.message || 'Please try again.');
     } finally {

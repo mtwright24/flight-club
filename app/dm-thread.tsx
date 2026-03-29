@@ -388,6 +388,19 @@ export default function DMThread() {
     requestGateStatus === 'accepted' ||
     (requestGateStatus === 'pending' && isRequester && messages.length === 0);
 
+  /** Requester can compose first; only show the request banner after they’ve sent something. */
+  const showRequestBanner =
+    !!requestRow &&
+    (requestGateStatus === 'declined' ||
+      (requestGateStatus === 'pending' && (!isRequester || messages.length > 0)));
+
+  /** Subtle one-line hint while requester still hasn’t sent their first message. */
+  const showRequesterPreSendHint =
+    !!requestRow &&
+    requestGateStatus === 'pending' &&
+    isRequester &&
+    messages.length === 0;
+
   const refreshRequestGate = useCallback(async () => {
     if (!conversationId || !userId) return null;
     await resolveDmRequestsIfAllowedNow(conversationId);
@@ -504,7 +517,16 @@ export default function DMThread() {
     userId,
   ]);
 
-  const ThreadHeader = ({ title, avatarUrl }: { title: string; avatarUrl?: string | null }) => {
+  const ThreadHeader = ({
+    title,
+    avatarUrl,
+    profileUserId,
+  }: {
+    title: string;
+    avatarUrl?: string | null;
+    profileUserId?: string | null;
+  }) => {
+    const canOpenProfile = typeof profileUserId === 'string' && profileUserId.length > 0;
     return (
       <View style={styles.threadHeaderOuter}>
         <View style={styles.threadHeaderRow}>
@@ -516,17 +538,31 @@ export default function DMThread() {
           >
             <Ionicons name="chevron-back" size={22} color="#64748b" />
           </Pressable>
-          <View style={styles.threadAvatarWrap}>
-            {avatarUrl ? (
-              <Image source={{ uri: avatarUrl }} style={styles.threadAvatarImg} />
-            ) : (
-              <Ionicons name="person-circle" size={32} color="#cbd5e1" />
-            )}
-          </View>
-          <View style={styles.threadTitleCol}>
-            <Text style={styles.threadTitle}>{title}</Text>
-            <Text style={styles.threadSubtitle}>Private crew conversation</Text>
-          </View>
+          <Pressable
+            onPress={() => {
+              if (!canOpenProfile) return;
+              router.push(`/profile/${profileUserId}`);
+            }}
+            disabled={!canOpenProfile}
+            style={({ pressed }) => [
+              styles.threadHeaderIdentity,
+              canOpenProfile && pressed && { opacity: 0.85 },
+            ]}
+            accessibilityRole={canOpenProfile ? 'button' : undefined}
+            accessibilityLabel={canOpenProfile ? 'View profile' : undefined}
+          >
+            <View style={styles.threadAvatarWrap}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.threadAvatarImg} />
+              ) : (
+                <Ionicons name="person-circle" size={32} color="#cbd5e1" />
+              )}
+            </View>
+            <View style={styles.threadTitleCol}>
+              <Text style={styles.threadTitle}>{title}</Text>
+              <Text style={styles.threadSubtitle}>Private crew conversation</Text>
+            </View>
+          </Pressable>
           {/* No other actions in this deep task header. */}
           <View style={{ width: 40 }} />
         </View>
@@ -651,10 +687,18 @@ export default function DMThread() {
       <ThreadHeader
         title={otherParticipant?.profile?.display_name || 'Direct Message'}
         avatarUrl={otherParticipant?.profile?.avatar_url}
+        profileUserId={otherParticipant?.user_id ?? null}
       />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        {(requestGateStatus === 'pending' || requestGateStatus === 'declined') && requestRow ? (
+        {showRequesterPreSendHint ? (
+          <View style={styles.requestHintStrip} accessibilityRole="text">
+            <Text style={styles.requestHintText}>
+              Your first message is sent as a request — they can accept or decline before you keep chatting.
+            </Text>
+          </View>
+        ) : null}
+        {showRequestBanner ? (
           <View style={styles.requestBanner}>
             <Text style={styles.requestBannerTitle}>
               {requestGateStatus === 'pending'
@@ -854,6 +898,12 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
   },
   threadBackBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  threadHeaderIdentity: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+  },
   threadAvatarWrap: {
     width: 36,
     height: 36,
@@ -918,6 +968,24 @@ const styles = StyleSheet.create({
   dmInlineImage: {
     borderRadius: 12,
     backgroundColor: 'transparent',
+  },
+  requestHintStrip: {
+    marginHorizontal: 16,
+    marginTop: 4,
+    marginBottom: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#EFF6FF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#BFDBFE',
+  },
+  requestHintText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: 'center',
+    lineHeight: 16,
   },
   requestBanner: {
     marginHorizontal: 16,
