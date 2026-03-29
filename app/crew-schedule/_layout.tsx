@@ -1,0 +1,12 @@
+import { Stack } from 'expo-router';
+
+export default function CrewScheduleStackLayout() {
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="trip-detail" />
+      <Stack.Screen name="import-schedule" />
+      <Stack.Screen name="import-review" />
+    </Stack>
+  );
+}
