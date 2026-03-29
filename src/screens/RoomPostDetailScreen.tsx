@@ -34,6 +34,8 @@ import {
     togglePostReaction,
 } from '../lib/supabase/reactions';
 import { colors, radius, shadow, spacing } from '../styles/theme';
+import { FeedVideoPreview } from '../components/media/FeedVideoPreview';
+import { isFeedVideoMedia } from '../lib/media/videoDetection';
 
 interface RoomPostDetailScreenProps {
   postId: string;
@@ -50,6 +52,7 @@ export default function RoomPostDetailScreen({ postId, onClose }: RoomPostDetail
   const [loading, setLoading] = useState(true);
   const [commentText, setCommentText] = useState('');
   const [sending, setSending] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<{ id: string; name: string } | null>(null);
 
   const [postReactionsSummary, setPostReactionsSummary] = useState<PostReactionSummary>({});
   const [commentReactionsSummary, setCommentReactionsSummary] = useState<CommentReactionSummary>({});
@@ -104,17 +107,24 @@ export default function RoomPostDetailScreen({ postId, onClose }: RoomPostDetail
 
     try {
       setSending(true);
-      const result = await createPostComment(post.id, post.room_id, userId, commentText);
+      const result = await createPostComment(
+        post.id,
+        post.room_id,
+        userId,
+        commentText,
+        replyingTo?.id
+      );
       if (result.success && result.comment) {
         setComments((prev) => [...prev, result.comment!]);
         setCommentText('');
+        setReplyingTo(null);
       }
     } catch (error) {
       console.error('Error sending comment:', error);
     } finally {
       setSending(false);
     }
-  }, [post, userId, commentText, canSend]);
+  }, [post, userId, commentText, canSend, replyingTo]);
 
   const handlePressReact = useCallback(
     (itemId: string, itemType: 'post' | 'comment') => {
@@ -221,8 +231,6 @@ export default function RoomPostDetailScreen({ postId, onClose }: RoomPostDetail
 
   const mediaUrls = (post.media_urls || []).filter(Boolean);
   const postReactions = postReactionsSummary[post.id] || { counts: {} };
-  
-  console.log('[ROOM POST DETAIL] mediaUrls:', mediaUrls, 'post.media_urls:', post.media_urls);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -292,8 +300,10 @@ export default function RoomPostDetailScreen({ postId, onClose }: RoomPostDetail
           }
           renderItem={({ item }) => {
             const commentReactions = commentReactionsSummary[item.id] || { counts: {} };
+            const isReply = !!item.parent_comment_id;
+            const displayName = item.profile_display_name || 'Crew Member';
             return (
-              <View style={styles.commentRow}>
+              <View style={[styles.commentRow, isReply && styles.commentRowReply]}>
                 <Pressable
                   style={{ flexDirection: 'row', alignItems: 'flex-start', flex: 1 }}
                   onPress={() => router.push(`/profile/${item.user_id}`)}
@@ -304,7 +314,7 @@ export default function RoomPostDetailScreen({ postId, onClose }: RoomPostDetail
                   />
                   <View style={{ flex: 1 }}>
                     <View style={styles.commentBubble}>
-                      <Text style={styles.commentAuthor}>{item.profile_display_name || 'Crew Member'}</Text>
+                      <Text style={styles.commentAuthor}>{displayName}</Text>
                       <Text style={styles.commentText}>{item.content}</Text>
                     </View>
                   </View>
@@ -316,10 +326,20 @@ export default function RoomPostDetailScreen({ postId, onClose }: RoomPostDetail
                   collapsable={false}
                 >
                   <ReactionSummaryRow
+                    variant="commentBar"
                     counts={commentReactions.counts}
                     userReaction={commentReactions.userReaction}
                     onPressReact={() => handlePressReact(item.id, 'comment')}
-                    compact
+                    onPressReply={
+                      userId
+                        ? () =>
+                            setReplyingTo({
+                              id: item.id,
+                              name: displayName,
+                            })
+                        : undefined
+                    }
+                    canReact={!!userId}
                   />
                 </View>
               </View>
@@ -329,9 +349,19 @@ export default function RoomPostDetailScreen({ postId, onClose }: RoomPostDetail
           ItemSeparatorComponent={() => <View style={{ height: spacing.sm }} />}
         />
 
+        {replyingTo ? (
+          <View style={styles.replyingBanner}>
+            <Text style={styles.replyingText} numberOfLines={1}>
+              Replying to {replyingTo.name}
+            </Text>
+            <Pressable onPress={() => setReplyingTo(null)} hitSlop={8}>
+              <Text style={styles.replyingCancel}>Cancel</Text>
+            </Pressable>
+          </View>
+        ) : null}
         <View style={styles.inputRow}>
           <TextInput
-            placeholder="Write a comment..."
+            placeholder={replyingTo ? `Reply to ${replyingTo.name}…` : 'Write a comment...'}
             value={commentText}
             onChangeText={setCommentText}
             style={styles.input}
@@ -464,6 +494,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingHorizontal: spacing.lg,
     alignItems: 'flex-start',
+  },
+  commentRowReply: {
+    marginLeft: 20,
+  },
+  replyingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.screenBg,
+  },
+  replyingText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  replyingCancel: {
+    fontSize: 13,
+    color: colors.headerRed,
+    fontWeight: '700',
   },
   commentAvatar: {
     width: 28,

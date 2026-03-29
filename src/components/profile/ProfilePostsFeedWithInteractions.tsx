@@ -103,6 +103,7 @@ export default function ProfilePostsFeedWithInteractions({
         if (post && (post as { room_id?: string }).room_id) {
           const data = await fetchPostComments(postId, 50);
           setComments(data);
+          // parent_comment_id comes from select('*') on room_post_comments
         } else {
           const data = await fetchSocialPostComments(postId);
           const mapped: RoomPostComment[] = (data || []).map((item: Record<string, unknown>) => ({
@@ -111,6 +112,7 @@ export default function ProfilePostsFeedWithInteractions({
             room_id: '',
             user_id: item.user_id as string,
             content: (item.body ?? item.content ?? '') as string,
+            parent_comment_id: (item.parent_comment_id as string) || null,
             created_at: item.created_at as string,
             profile_display_name:
               (item.profile_display_name as string) || (item.profiles as { display_name?: string })?.display_name || undefined,
@@ -128,18 +130,18 @@ export default function ProfilePostsFeedWithInteractions({
   );
 
   const handleAddComment = useCallback(
-    async (text: string) => {
+    async (text: string, parentCommentId?: string | null) => {
       if (!userId || !selectedPostId) return;
       const post = getPost(selectedPostId);
       const roomId = post ? (post as { room_id?: string | null }).room_id : null;
       if (roomId) {
-        const result = await createPostComment(selectedPostId, roomId, userId, text);
+        const result = await createPostComment(selectedPostId, roomId, userId, text, parentCommentId);
         if (result.success && result.comment) {
           setComments((prev) => [...prev, result.comment!]);
         }
         return;
       }
-      const result = await createSocialPostComment(selectedPostId, userId, text);
+      const result = await createSocialPostComment(selectedPostId, userId, text, parentCommentId);
       if (!result.success) {
         if (result.error) Alert.alert('Could not post comment', result.error);
         return;
@@ -151,6 +153,7 @@ export default function ProfilePostsFeedWithInteractions({
         room_id: '',
         user_id: item.user_id as string,
         content: (item.body ?? item.content ?? '') as string,
+        parent_comment_id: (item.parent_comment_id as string) || null,
         created_at: item.created_at as string,
         profile_display_name:
           (item.profile_display_name as string) || (item.profiles as { display_name?: string })?.display_name || undefined,
@@ -252,6 +255,12 @@ export default function ProfilePostsFeedWithInteractions({
           }}
           onAddComment={handleAddComment}
           postId={selectedPostId}
+          commentReactionMode={
+            getPost(selectedPostId) && (getPost(selectedPostId) as { room_id?: string }).room_id
+              ? 'room'
+              : 'social'
+          }
+          userId={userId}
         />
       ) : null}
       <ReactionTrayOverlay

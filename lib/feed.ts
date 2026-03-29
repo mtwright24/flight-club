@@ -251,12 +251,13 @@ export async function toggleLike(postId: string) {
   }
 }
 
-export async function addComment(postId: string, body: string) {
+export async function addComment(postId: string, body: string, parentCommentId?: string | null) {
   const userId = await getCurrentUserId();
-  const { data, error } = await supabase
-    .from('post_comments')
-    .insert({ post_id: postId, user_id: userId, body })
-    .single();
+  const row: Record<string, unknown> = { post_id: postId, user_id: userId, body };
+  if (parentCommentId && String(parentCommentId).trim()) {
+    row.parent_comment_id = String(parentCommentId).trim();
+  }
+  const { data, error } = await supabase.from('post_comments').insert(row).single();
   if (error) throw error;
   return data;
 }
@@ -276,7 +277,7 @@ export async function getComments(postId: string, { limit = 20, offset = 0 }) {
     .from('post_comments')
     .select('*, profiles!inner(*)')
     .eq('post_id', postId)
-    .order('created_at', { ascending: false })
+    .order('created_at', { ascending: true })
     .range(offset, offset + limit - 1);
   if (error) throw error;
   return data;

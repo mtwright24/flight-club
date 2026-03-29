@@ -12,6 +12,7 @@ import {
   PanResponder,
   Animated,
 } from 'react-native';
+import { Video, ResizeMode } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -46,6 +47,7 @@ import {
   fetchSocialPostComments,
 } from '../lib/supabase/socialFeedComments';
 import { toggleSocialPostReaction } from '../lib/supabase/socialFeedReactionsActions';
+import { isFeedVideoMedia } from '../lib/media/videoDetection';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -276,12 +278,12 @@ export default function PostMediaViewerScreen() {
     }
   };
 
-  const handleAddComment = async (text: string) => {
+  const handleAddComment = async (text: string, parentCommentId?: string | null) => {
     if (!post || !userId) return;
 
     if (mode === 'room') {
       if (!room) return;
-      const result = await createPostComment(post.id, room.id, userId, text);
+      const result = await createPostComment(post.id, room.id, userId, text, parentCommentId);
       if (result.success && result.comment) {
         setComments((prev) => [...prev, result.comment!]);
       }
@@ -289,7 +291,7 @@ export default function PostMediaViewerScreen() {
     }
 
     // Social feed comment
-    const result = await createSocialPostComment(post.id, userId, text);
+    const result = await createSocialPostComment(post.id, userId, text, parentCommentId);
     if (!result.success) {
       return;
     }
@@ -302,6 +304,7 @@ export default function PostMediaViewerScreen() {
       room_id: '',
       user_id: item.user_id,
       content: item.body ?? item.content ?? '',
+      parent_comment_id: item.parent_comment_id ?? null,
       created_at: item.created_at,
       profile_display_name: item.profile_display_name ?? undefined,
       profile_avatar_url: item.profile_avatar_url ?? undefined,
@@ -363,6 +366,8 @@ export default function PostMediaViewerScreen() {
 
   const mediaUrls = (post.media_urls || []).filter(Boolean);
   const currentImageUrl = mediaUrls[currentMediaIndex];
+  const currentIsVideo =
+    !!currentImageUrl && isFeedVideoMedia(post as { media_type?: string | null }, currentImageUrl);
   const postReactions = reactions[post.id] || { counts: {} };
   const totalReactions = Object.values(postReactions.counts).reduce((a, b) => a + b, 0);
 
@@ -387,13 +392,23 @@ export default function PostMediaViewerScreen() {
               onPress={() => setOverlaysVisible(!overlaysVisible)}
               style={{ flex: 1, width: '100%', justifyContent: 'center', alignItems: 'center' }}
             >
-              {currentImageUrl && (
-                <Image
-                  source={{ uri: currentImageUrl }}
-                  style={styles.image}
-                  resizeMode="contain"
-                />
-              )}
+              {currentImageUrl &&
+                (currentIsVideo ? (
+                  <Video
+                    source={{ uri: currentImageUrl }}
+                    style={styles.image}
+                    resizeMode={ResizeMode.CONTAIN}
+                    useNativeControls
+                    shouldPlay
+                    isLooping
+                  />
+                ) : (
+                  <Image
+                    source={{ uri: currentImageUrl }}
+                    style={styles.image}
+                    resizeMode="contain"
+                  />
+                ))}
             </Pressable>
           </View>
 

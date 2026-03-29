@@ -27,14 +27,15 @@ export interface SocialPostCommentSummary {
 export async function createSocialPostComment(
   postId: string,
   userId: string,
-  body: string
+  body: string,
+  parentCommentId?: string | null
 ): Promise<SocialCommentResult> {
   try {
-    const { data, error } = await supabase
-      .from('post_comments')
-      .insert({ post_id: postId, user_id: userId, body })
-      .select()
-      .single();
+    const row: Record<string, unknown> = { post_id: postId, user_id: userId, body };
+    if (parentCommentId && String(parentCommentId).trim()) {
+      row.parent_comment_id = String(parentCommentId).trim();
+    }
+    const { data, error } = await supabase.from('post_comments').insert(row).select().single();
 
     if (error) {
       const code = (error as any).code;

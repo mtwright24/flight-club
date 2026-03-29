@@ -8,6 +8,7 @@ export interface RoomPost {
   user_id: string;
   content: string;
   media_urls?: string[] | null;
+  thumbnail_url?: string | null;
   created_at: string;
   author_display_name?: string; // Added for display names
   profile_display_name?: string; // For PostsFeed
@@ -31,6 +32,7 @@ export interface RoomPostComment {
   room_id: string;
   user_id: string;
   content: string;
+  parent_comment_id?: string | null;
   created_at: string;
   author_display_name?: string; // Added for display names
   profile_display_name?: string; // For comments display
@@ -183,21 +185,27 @@ export async function createPostComment(
   postId: string,
   roomId: string,
   userId: string,
-  content: string
+  content: string,
+  parentCommentId?: string | null
 ): Promise<{ success: boolean; comment?: RoomPostComment; error?: string }> {
   try {
     if (!content.trim()) {
       return { success: false, error: 'Comment cannot be empty' };
     }
 
+    const row: Record<string, unknown> = {
+      post_id: postId,
+      room_id: roomId,
+      user_id: userId,
+      content,
+    };
+    if (parentCommentId) {
+      row.parent_comment_id = parentCommentId;
+    }
+
     const { data, error } = await supabase
       .from('room_post_comments')
-      .insert({
-        post_id: postId,
-        room_id: roomId,
-        user_id: userId,
-        content,
-      })
+      .insert(row)
       .select()
       .single();
 
@@ -223,7 +231,10 @@ export async function createPostComment(
           secondary_id: data?.id ?? null,
           title: 'New reply in your crew room',
           body: content,
-          data: { route: `/room-post/${postId}` },
+          data: {
+            route: `/room-post/${postId}`,
+            room_id: roomId,
+          },
         });
       }
     } catch (notifyError) {
@@ -289,7 +300,10 @@ export async function createRoomPost(
               entity_type: 'room_post',
               entity_id: data.id,
               body: content,
-              data: { route: `/room-post/${data.id}` },
+              data: {
+                route: `/room-post/${data.id}`,
+                room_id: roomId,
+              },
             })
           )
         ).catch((notifyError) => {

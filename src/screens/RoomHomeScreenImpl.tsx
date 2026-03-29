@@ -415,9 +415,9 @@ export default function RoomHomeScreenImpl({ roomId, posted }: RoomHomeScreenPro
     loadPosts();
   }, [loadPosts]);
 
-  const handleAddComment = useCallback(async (text: string) => {
+  const handleAddComment = useCallback(async (text: string, parentCommentId?: string | null) => {
     if (!userId || !selectedPostId) return;
-    const result = await createPostComment(selectedPostId, roomId, userId, text);
+    const result = await createPostComment(selectedPostId, roomId, userId, text, parentCommentId);
     if (result.success && result.comment) {
       setComments((prev) => [...prev, result.comment!]);
     }
@@ -650,6 +650,8 @@ export default function RoomHomeScreenImpl({ roomId, posted }: RoomHomeScreenPro
           }}
           onAddComment={handleAddComment}
           postId={selectedPostId}
+          commentReactionMode="room"
+          userId={userId ?? null}
         />
       )}
 

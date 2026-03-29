@@ -18,7 +18,7 @@ import { getPostById, getComments, addComment } from '../../lib/feed';
 import {
   CommentReactionSummary,
   fetchSocialCommentReactionsSummary,
-  ReactionType,
+  type ReactionType,
   toggleSocialCommentReaction,
 } from '../../src/lib/supabase/reactions';
 import { useAuth } from '../../src/hooks/useAuth';
@@ -47,21 +47,19 @@ export default function PostDetailScreen() {
     height: number;
   } | null>(null);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<{ id: string; name: string } | null>(null);
   const reactRefs = useRef<{ [key: string]: View | null }>({});
 
-  const loadCommentReactions = useCallback(
-    async (list: any[]) => {
-      if (!userId || !list.length) {
-        setCommentReactionsSummary({});
-        return;
-      }
-      const ids = list.map((c) => c.id).filter(Boolean);
-      if (!ids.length) return;
-      const summary = await fetchSocialCommentReactionsSummary(ids, userId);
-      setCommentReactionsSummary(summary);
-    },
-    [userId]
-  );
+  const loadCommentReactions = useCallback(async (list: any[]) => {
+    if (!list.length) {
+      setCommentReactionsSummary({});
+      return;
+    }
+    const ids = list.map((c) => c.id).filter(Boolean);
+    if (!ids.length) return;
+    const summary = await fetchSocialCommentReactionsSummary(ids, userId ?? '');
+    setCommentReactionsSummary(summary);
+  }, [userId]);
 
   const loadPostAndComments = useCallback(
     async (isPull = false) => {
@@ -120,12 +118,16 @@ export default function PostDetailScreen() {
   const handleAddComment = async () => {
     if (!commentText.trim() || !postId) return;
     setPosting(true);
-    await addComment(postId, commentText);
-    setCommentText('');
-    const c = await getComments(postId, { limit: 50, offset: 0 });
-    setComments(c);
-    await loadCommentReactions(c);
-    setPosting(false);
+    try {
+      await addComment(postId, commentText.trim(), replyingTo?.id);
+      setCommentText('');
+      setReplyingTo(null);
+      const c = await getComments(postId, { limit: 50, offset: 0 });
+      setComments(c);
+      await loadCommentReactions(c);
+    } finally {
+      setPosting(false);
+    }
   };
 
   if (loading) {
@@ -165,8 +167,9 @@ export default function PostDetailScreen() {
               profile?.display_name || profile?.full_name || profile?.first_name || 'User';
             const avatar = profile?.avatar_url || '';
             const rx = commentReactionsSummary[c.id] || { counts: {} };
+            const isReply = !!c.parent_comment_id;
             return (
-              <View key={c.id} style={styles.commentRow}>
+              <View key={c.id} style={[styles.commentRow, isReply && styles.commentRowReply]}>
                 <Pressable
                   style={styles.commentMain}
                   onPress={() => c.user_id && router.push(`/profile/${c.user_id}`)}
@@ -181,31 +184,45 @@ export default function PostDetailScreen() {
                     <Text style={styles.commentBody}>{c.body}</Text>
                   </View>
                 </Pressable>
-                {userId ? (
-                  <View
-                    ref={(r) => {
-                      reactRefs.current[c.id] = r;
+                <View
+                  ref={(r) => {
+                    reactRefs.current[c.id] = r;
+                  }}
+                  collapsable={false}
+                  style={styles.reactionRow}
+                >
+                  <ReactionSummaryRow
+                    variant="commentBar"
+                    counts={rx.counts}
+                    userReaction={rx.userReaction}
+                    onPressReact={() => {
+                      if (userId) handlePressReact(c.id);
                     }}
-                    collapsable={false}
-                    style={styles.reactionRow}
-                  >
-                    <ReactionSummaryRow
-                      counts={rx.counts}
-                      userReaction={rx.userReaction}
-                      onPressReact={() => handlePressReact(c.id)}
-                      compact
-                    />
-                  </View>
-                ) : null}
+                    onPressReply={
+                      userId ? () => setReplyingTo({ id: c.id, name }) : undefined
+                    }
+                    canReact={!!userId}
+                  />
+                </View>
               </View>
             );
           })}
+          {replyingTo ? (
+            <View style={styles.replyingBanner}>
+              <Text style={styles.replyingText} numberOfLines={1}>
+                Replying to {replyingTo.name}
+              </Text>
+              <Pressable onPress={() => setReplyingTo(null)} hitSlop={8}>
+                <Text style={styles.replyingCancel}>Cancel</Text>
+              </Pressable>
+            </View>
+          ) : null}
           <View style={styles.addCommentRow}>
             <TextInput
               style={styles.input}
               value={commentText}
               onChangeText={setCommentText}
-              placeholder="Add a comment..."
+              placeholder={replyingTo ? `Reply to ${replyingTo.name}…` : 'Add a comment…'}
               editable={!posting}
             />
             <Pressable
@@ -225,6 +242,11 @@ export default function PostDetailScreen() {
           anchorLayout={trayAnchor || undefined}
           selectedReaction={
             activeCommentId ? commentReactionsSummary[activeCommentId]?.userReaction : undefined
+          }
+          reactionCounts={
+            activeCommentId
+              ? (commentReactionsSummary[activeCommentId]?.counts as Record<ReactionType, number>)
+              : undefined
           }
           onSelect={handleSelectReaction}
           onClose={() => {
@@ -250,6 +272,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
+  commentRowReply: {
+    marginLeft: 28,
+    backgroundColor: '#F8FAFC',
+  },
+  replyingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  replyingText: { flex: 1, fontSize: 13, color: '#64748b', fontWeight: '600' },
+  replyingCancel: { fontSize: 13, color: '#B5161E', fontWeight: '700' },
   commentMain: {
     flexDirection: 'row',
     alignItems: 'flex-start',

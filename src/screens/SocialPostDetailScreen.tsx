@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Video, ResizeMode } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ReactionSummaryRow from '../components/posts/ReactionSummaryRow';
 import ReactionTrayOverlay from '../components/posts/ReactionTrayOverlay';
@@ -17,6 +18,7 @@ import {
   ReactionType,
   toggleSocialCommentReaction,
 } from '../lib/supabase/reactions';
+import { isFeedVideoMedia } from '../lib/media/videoDetection';
 
 interface SocialPostDetailScreenProps {
   postId: string;
@@ -47,6 +49,7 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
     height: number;
   } | null>(null);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<{ id: string; name: string } | null>(null);
   const commentReactRefs = useRef<{ [key: string]: View | null }>({});
 
   const loadAll = async () => {
@@ -55,17 +58,17 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
       const data = await fetchSocialFeedPostById(postId);
       setPost(data);
 
-      try {
-        const comm = await fetchSocialPostComments(postId);
-        setComments(comm);
-        if (userId && comm.length > 0) {
-          const ids = comm.map((c: { id: string }) => c.id);
-          const cr = await fetchSocialCommentReactionsSummary(ids, userId);
-          setCommentReactionsSummary(cr);
-        } else {
-          setCommentReactionsSummary({});
-        }
-      } catch (commentError) {
+        try {
+          const comm = await fetchSocialPostComments(postId);
+          setComments(comm);
+          if (comm.length > 0) {
+            const ids = comm.map((c: { id: string }) => c.id);
+            const cr = await fetchSocialCommentReactionsSummary(ids, userId || '');
+            setCommentReactionsSummary(cr);
+          } else {
+            setCommentReactionsSummary({});
+          }
+        } catch (commentError) {
         console.error('Error loading social post comments:', commentError);
         // Do not crash the screen if comments fail; just show none
         setComments([]);
@@ -127,9 +130,10 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
 
   const handleAddComment = async () => {
     if (!userId || !commentText.trim()) return;
-    const result = await createSocialPostComment(postId, userId, commentText.trim());
+    const result = await createSocialPostComment(postId, userId, commentText.trim(), replyingTo?.id);
     if (result.success) {
       setCommentText('');
+      setReplyingTo(null);
       loadAll();
     } else if (result.error) {
       Alert.alert('Error', result.error);
@@ -205,7 +209,17 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
           <Text style={styles.content}>{post.content}</Text>
         )}
         {post.media_urls && post.media_urls.length > 0 && (
-          <Image source={{ uri: post.media_urls[0] }} style={styles.media} />
+          isFeedVideoMedia(post, post.media_urls[0]) ? (
+            <Video
+              source={{ uri: post.media_urls[0] }}
+              style={styles.media}
+              resizeMode={ResizeMode.CONTAIN}
+              useNativeControls
+              shouldPlay={false}
+            />
+          ) : (
+            <Image source={{ uri: post.media_urls[0] }} style={styles.media} />
+          )
         )}
         <View style={styles.row}>
           <Pressable style={styles.reactionBtn} onPress={handleLike}>
@@ -231,8 +245,9 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
             const avatarUrl = c.profile_avatar_url ?? c.profiles?.avatar_url ?? '';
             const body = c.body ?? c.content ?? '';
             const rx = commentReactionsSummary[c.id] || { counts: {} };
+            const isReply = !!c.parent_comment_id;
             return (
-              <View key={c.id || idx} style={styles.commentRow}>
+              <View key={c.id || idx} style={[styles.commentRow, isReply && styles.commentRowReply]}>
                 <View style={styles.commentRowInner}>
                   <Pressable
                     style={styles.commentRowPressable}
@@ -248,30 +263,44 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
                       <Text style={styles.commentBody}>{body}</Text>
                     </View>
                   </Pressable>
-                  {userId ? (
-                    <View
-                      ref={(r) => {
-                        commentReactRefs.current[c.id] = r;
+                  <View
+                    ref={(r) => {
+                      commentReactRefs.current[c.id] = r;
+                    }}
+                    collapsable={false}
+                    style={styles.commentReactionWrap}
+                  >
+                    <ReactionSummaryRow
+                      variant="commentBar"
+                      counts={rx.counts}
+                      userReaction={rx.userReaction}
+                      onPressReact={() => {
+                        if (userId) handlePressCommentReact(c.id);
                       }}
-                      collapsable={false}
-                      style={styles.commentReactionWrap}
-                    >
-                      <ReactionSummaryRow
-                        counts={rx.counts}
-                        userReaction={rx.userReaction}
-                        onPressReact={() => handlePressCommentReact(c.id)}
-                        compact
-                      />
-                    </View>
-                  ) : null}
+                      onPressReply={
+                        userId ? () => setReplyingTo({ id: c.id, name: displayName }) : undefined
+                      }
+                      canReact={!!userId}
+                    />
+                  </View>
                 </View>
               </View>
             );
           })}
+          {replyingTo ? (
+            <View style={styles.replyingBanner}>
+              <Text style={styles.replyingText} numberOfLines={1}>
+                Replying to {replyingTo.name}
+              </Text>
+              <Pressable onPress={() => setReplyingTo(null)}>
+                <Text style={styles.replyingCancel}>Cancel</Text>
+              </Pressable>
+            </View>
+          ) : null}
           <View style={styles.addCommentRow}>
             <TextInput
               style={styles.addCommentInput}
-              placeholder="Add a comment..."
+              placeholder={replyingTo ? `Reply to ${replyingTo.name}…` : 'Add a comment…'}
               value={commentText}
               onChangeText={setCommentText}
               multiline
@@ -319,7 +348,16 @@ const styles = StyleSheet.create({
   commentsTitle: { fontWeight: '700', fontSize: 15, marginBottom: 8 },
   noComments: { color: '#64748B', marginBottom: 8 },
   commentRow: { marginBottom: 12 },
+  commentRowReply: { marginLeft: 20 },
   commentRowInner: { width: '100%' },
+  replyingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  replyingText: { flex: 1, fontSize: 13, color: '#64748b', fontWeight: '600' },
+  replyingCancel: { fontSize: 13, color: '#B5161E', fontWeight: '700' },
   commentRowPressable: { flexDirection: 'row', alignItems: 'flex-start' },
   commentAvatar: { width: 32, height: 32, borderRadius: 16, marginRight: 8, backgroundColor: '#eee' },
   commentAvatarPh: { backgroundColor: '#E5E7EB' },

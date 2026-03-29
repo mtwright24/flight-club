@@ -33,9 +33,10 @@ interface CommentsDrawerProps {
   visible: boolean;
   comments: RoomPostComment[];
   onClose: () => void;
-  onAddComment: (text: string) => Promise<void>;
+  /** Second arg is parent comment id when replying (social posts only; ignored by room handlers). */
+  onAddComment: (text: string, parentCommentId?: string | null) => Promise<void>;
   postId: string;
-  /** When set with userId, shows react counts + tray (room vs social comment tables). */
+  /** When set, loads comment reactions + shows Reply / react row (room vs social comment tables). */
   commentReactionMode?: CommentReactionMode | null;
   userId?: string | null;
 }
@@ -62,30 +63,36 @@ export default function CommentsDrawer({
     height: number;
   } | null>(null);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<{ id: string; name: string } | null>(null);
   const reactButtonRefs = useRef<{ [key: string]: View | null }>({});
 
   const commentIdsKey = comments.map((c) => c.id).join(',');
 
   const reloadCommentReactions = useCallback(async () => {
-    if (!userId || !commentReactionMode || comments.length === 0) {
+    if (!commentReactionMode || comments.length === 0) {
       setCommentReactionsSummary({});
       return;
     }
     const ids = comments.map((c) => c.id);
+    const uid = userId ?? '';
     const summary =
       commentReactionMode === 'room'
-        ? await fetchCommentReactionsSummary(ids, userId)
-        : await fetchSocialCommentReactionsSummary(ids, userId);
+        ? await fetchCommentReactionsSummary(ids, uid)
+        : await fetchSocialCommentReactionsSummary(ids, uid);
     setCommentReactionsSummary(summary);
   }, [userId, commentReactionMode, commentIdsKey, comments.length]);
 
   useEffect(() => {
-    if (!visible || !userId || !commentReactionMode) {
+    if (!visible || !commentReactionMode) {
       setCommentReactionsSummary({});
       return;
     }
     void reloadCommentReactions();
-  }, [visible, userId, commentReactionMode, reloadCommentReactions]);
+  }, [visible, commentReactionMode, reloadCommentReactions]);
+
+  useEffect(() => {
+    if (!visible) setReplyingTo(null);
+  }, [visible]);
 
   const handlePressReact = useCallback(
     (commentId: string) => {
@@ -121,8 +128,13 @@ export default function CommentsDrawer({
 
     try {
       setSending(true);
-      await onAddComment(commentText.trim());
+      const parentId =
+        replyingTo && (commentReactionMode === 'social' || commentReactionMode === 'room')
+          ? replyingTo.id
+          : null;
+      await onAddComment(commentText.trim(), parentId);
       setCommentText('');
+      setReplyingTo(null);
     } catch (error) {
       console.error('Error adding comment:', error);
     } finally {
@@ -173,9 +185,11 @@ export default function CommentsDrawer({
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => {
                 const rx = commentReactionsSummary[item.id] || { counts: {} };
-                const showReactions = !!userId && !!commentReactionMode;
+                const showCommentBar = !!commentReactionMode;
+                const displayName = item.profile_display_name || 'Crew Member';
+                const isReply = !!(item as RoomPostComment).parent_comment_id;
                 return (
-                  <View style={styles.commentItem}>
+                  <View style={[styles.commentItem, isReply && styles.commentItemReply]}>
                     <View style={styles.commentHeader}>
                       <Pressable
                         style={styles.commentHeaderPressable}
@@ -216,7 +230,7 @@ export default function CommentsDrawer({
                         (item as RoomPostComment & { body?: string }).body ??
                         ''}
                     </Text>
-                    {showReactions ? (
+                    {showCommentBar ? (
                       <View
                         ref={(r) => {
                           reactButtonRefs.current[item.id] = r;
@@ -225,10 +239,21 @@ export default function CommentsDrawer({
                         style={styles.reactionRow}
                       >
                         <ReactionSummaryRow
+                          variant="commentBar"
                           counts={rx.counts}
                           userReaction={rx.userReaction}
                           onPressReact={() => handlePressReact(item.id)}
-                          compact
+                          onPressReply={
+                            userId &&
+                            (commentReactionMode === 'social' || commentReactionMode === 'room')
+                              ? () =>
+                                  setReplyingTo({
+                                    id: item.id,
+                                    name: displayName,
+                                  })
+                              : undefined
+                          }
+                          canReact={!!userId && !!commentReactionMode}
                         />
                       </View>
                     ) : null}
@@ -244,11 +269,23 @@ export default function CommentsDrawer({
             />
 
             {/* Comment input */}
+            {replyingTo ? (
+              <View style={styles.replyingBanner}>
+                <Text style={styles.replyingText} numberOfLines={1}>
+                  Replying to {replyingTo.name}
+                </Text>
+                <Pressable onPress={() => setReplyingTo(null)} hitSlop={8}>
+                  <Text style={styles.replyingCancel}>Cancel</Text>
+                </Pressable>
+              </View>
+            ) : null}
             <View style={styles.inputContainer}>
               <View style={styles.inputWrapper}>
                 <TextInput
                   style={styles.input}
-                  placeholder="Write a comment…"
+                  placeholder={
+                    replyingTo ? `Reply to ${replyingTo.name}…` : 'Write a comment…'
+                  }
                   placeholderTextColor={colors.textSecondary}
                   value={commentText}
                   onChangeText={setCommentText}
@@ -294,6 +331,11 @@ export default function CommentsDrawer({
           anchorLayout={trayAnchorLayout || undefined}
           selectedReaction={
             activeCommentId ? commentReactionsSummary[activeCommentId]?.userReaction : undefined
+          }
+          reactionCounts={
+            activeCommentId
+              ? (commentReactionsSummary[activeCommentId]?.counts as Record<ReactionType, number>)
+              : undefined
           }
           onSelect={handleSelectCommentReaction}
           onClose={() => {
@@ -350,6 +392,12 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.border + '20',
+  },
+  commentItemReply: {
+    marginLeft: 16,
+    paddingLeft: 4,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border,
   },
   commentHeader: {
     marginBottom: spacing.xs,
@@ -410,6 +458,24 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     color: colors.textSecondary,
+  },
+  replyingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.xs,
+  },
+  replyingText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  replyingCancel: {
+    fontSize: 13,
+    color: colors.primary,
+    fontWeight: '700',
   },
   inputContainer: {
     paddingHorizontal: spacing.lg,

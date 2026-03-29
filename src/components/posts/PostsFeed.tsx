@@ -20,6 +20,8 @@ import CommentPreview from './CommentPreview';
 import EditPostModal from './EditPostModal';
 import QuickCommentInput from './QuickCommentInput';
 import ShareModal from './ShareModal';
+import { FeedVideoPreview } from '../media/FeedVideoPreview';
+import { isFeedVideoMedia } from '../../lib/media/videoDetection';
 
 interface PostsFeedProps {
   posts: RoomPost[];
@@ -306,50 +308,81 @@ export default function PostsFeed({
         {mediaUrls.length > 0 && (
           <View style={styles.mediaContainer}>
             {mediaUrls.length === 1 ? (
-              <Pressable
-                onPress={() =>
-                  router.push({
-                    pathname: '/post-media-viewer',
-                    params: {
-                      postId: item.id,
-                      roomId: item.room_id,
-                      mediaIndex: 0,
-                    },
-                  })
-                }
-              >
-                <View style={styles.singleImageWrapper}>
-                  <Image
-                    source={{ uri: mediaUrls[0] }}
-                    style={styles.mediaImageCover}
-                    resizeMode="cover"
-                  />
-                </View>
-              </Pressable>
-            ) : (
-              <View style={styles.mediaGrid}>
-                {mediaUrls.map((url, idx) => (
+              (() => {
+                const url0 = mediaUrls[0];
+                const isVideo = isFeedVideoMedia(item as { media_type?: string | null }, url0);
+                const poster =
+                  (item as { thumbnail_url?: string | null }).thumbnail_url || undefined;
+                return (
                   <Pressable
-                    key={idx}
                     onPress={() =>
                       router.push({
                         pathname: '/post-media-viewer',
                         params: {
                           postId: item.id,
-                          roomId: item.room_id,
-                          mediaIndex: idx,
+                          roomId: item.room_id ?? '',
+                          mediaIndex: 0,
                         },
                       })
                     }
-                    style={styles.gridImageWrapper}
                   >
-                    <Image
-                      source={{ uri: url }}
-                      style={styles.mediaImageGridCover}
-                      resizeMode="cover"
-                    />
+                    <View style={styles.singleImageWrapper}>
+                      {isVideo ? (
+                        <FeedVideoPreview
+                          uri={url0}
+                          posterUri={poster}
+                          height={400}
+                          style={styles.mediaImageCover}
+                        />
+                      ) : (
+                        <Image
+                          source={{ uri: url0 }}
+                          style={styles.mediaImageCover}
+                          resizeMode="cover"
+                        />
+                      )}
+                    </View>
                   </Pressable>
-                ))}
+                );
+              })()
+            ) : (
+              <View style={styles.mediaGrid}>
+                {mediaUrls.map((url, idx) => {
+                  const isVideo = isFeedVideoMedia(item as { media_type?: string | null }, url);
+                  const poster =
+                    (item as { thumbnail_url?: string | null }).thumbnail_url || undefined;
+                  return (
+                    <Pressable
+                      key={idx}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/post-media-viewer',
+                          params: {
+                            postId: item.id,
+                            roomId: item.room_id ?? '',
+                            mediaIndex: idx,
+                          },
+                        })
+                      }
+                      style={styles.gridImageWrapper}
+                    >
+                      {isVideo ? (
+                        <FeedVideoPreview
+                          uri={url}
+                          posterUri={poster}
+                          style={styles.mediaImageGridCover}
+                          showPlayBadge
+                        />
+                      ) : (
+                        <Image
+                          source={{ uri: url }}
+                          style={styles.mediaImageGridCover}
+                          resizeMode="cover"
+                        />
+                      )}
+                    </Pressable>
+                  );
+                })}
               </View>
             )}
           </View>
@@ -449,28 +482,6 @@ export default function PostsFeed({
               </View>
             </Pressable>
           </View>
-
-          {reactionTotal > 0 && (
-            <View style={styles.actionSummaryRight}>
-              <View style={styles.reactionCluster}>
-                {reactionEntries.slice(0, 3).map(([type], index) => {
-                  const cfg = REACTIONS.find((r) => r.type === type);
-                  if (!cfg) return null;
-                  return (
-                    <View
-                      key={String(type)}
-                      style={[
-                        styles.reactionClusterIcon,
-                        index > 0 && { marginLeft: -8 },
-                      ]}
-                    >
-                      <Text style={styles.reactionClusterEmoji}>{cfg.emoji}</Text>
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-          )}
         </View>
 
         {/* Footer section */}
@@ -709,30 +720,6 @@ const styles = StyleSheet.create({
   },
   actionTextActive: {
     color: colors.headerRed,
-  },
-  actionSummaryRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingRight: 14,
-    marginLeft: 8,
-  },
-  reactionCluster: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: 0,
-  },
-  reactionClusterIcon: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.border + '80',
-  },
-  reactionClusterEmoji: {
-    fontSize: 11,
   },
   footerSection: {
     paddingHorizontal: 14,

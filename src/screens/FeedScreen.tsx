@@ -155,6 +155,7 @@ export default function FeedScreen() {
         room_id: '',
         user_id: item.user_id,
         content: item.body ?? item.content ?? '',
+        parent_comment_id: item.parent_comment_id ?? null,
         created_at: item.created_at,
         profile_display_name:
           item.profile_display_name || item.profiles?.display_name || undefined,
@@ -268,11 +269,11 @@ export default function FeedScreen() {
     return !!userId && (composeContent.trim().length > 0 || composeMedia.length > 0);
   }, [session, composeContent, composeMedia]);
 
-  const handleAddComment = async (text: string) => {
+  const handleAddComment = async (text: string, parentCommentId?: string | null) => {
     const userId = session?.user?.id;
     if (!userId || !selectedPostId) return;
 
-    const result = await createSocialPostComment(selectedPostId, userId, text);
+    const result = await createSocialPostComment(selectedPostId, userId, text, parentCommentId);
     if (!result.success) {
       if (result.error) {
         Alert.alert('Could not post comment', result.error);
@@ -287,6 +288,7 @@ export default function FeedScreen() {
       room_id: '',
       user_id: item.user_id,
       content: item.body ?? item.content ?? '',
+      parent_comment_id: item.parent_comment_id ?? null,
       created_at: item.created_at,
       profile_display_name:
         item.profile_display_name || item.profiles?.display_name || undefined,
@@ -562,6 +564,8 @@ export default function FeedScreen() {
           }}
           onAddComment={handleAddComment}
           postId={selectedPostId}
+          commentReactionMode="social"
+          userId={session?.user?.id ?? null}
         />
       )}
       <ReactionTrayOverlay

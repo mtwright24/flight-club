@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { View, Text, Image, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { FeedVideoPreview } from '../src/components/media/FeedVideoPreview';
 
 type PostCardProps = {
 	post: any;
@@ -14,18 +15,6 @@ export default function PostCard({ post, onPress, onLike, onComment, onProfile }
 	const likeCount = post.like_count ?? 0;
 	const commentCount = post.comment_count ?? 0;
 	const shareCount = post.share_count ?? 0;
-
-	// Simple fake reaction mix for the right-side cluster when we don't have per-type reactions
-	const reactionEmojis = useMemo(() => {
-		const emojis: string[] = [];
-		if (likeCount > 0) {
-			emojis.push('👍', '❤️');
-			if (likeCount >= 5) {
-				emojis.push('😂');
-			}
-		}
-		return emojis.slice(0, 3);
-	}, [likeCount]);
 
 	const { useRouter } = require('expo-router');
 	const router = useRouter();
@@ -53,14 +42,22 @@ export default function PostCard({ post, onPress, onLike, onComment, onProfile }
 				/>
 			) : null}
 
-			{(post.media_type === 'video' || post.media_type === 'reel') && post.thumbnail_url ? (
-				<View style={styles.mediaWrap}>
-					<Image
-						source={{ uri: post.thumbnail_url }}
+			{(post.media_type === 'video' || post.media_type === 'reel') && post.media_url ? (
+				post.thumbnail_url ? (
+					<View style={styles.mediaWrap}>
+						<Image
+							source={{ uri: post.thumbnail_url }}
+							style={[styles.media, post.aspect_ratio ? { aspectRatio: post.aspect_ratio } : { height: 200 }]}
+						/>
+						<View style={styles.playIcon}><Ionicons name="play" size={32} color="#fff" /></View>
+					</View>
+				) : (
+					<FeedVideoPreview
+						uri={post.media_url}
+						height={post.aspect_ratio ? undefined : 200}
 						style={[styles.media, post.aspect_ratio ? { aspectRatio: post.aspect_ratio } : { height: 200 }]}
 					/>
-					<View style={styles.playIcon}><Ionicons name="play" size={32} color="#fff" /></View>
-				</View>
+				)
 			) : null}
 
 			{/* Top meta line: reactions left, comments right */}
@@ -82,7 +79,7 @@ export default function PostCard({ post, onPress, onLike, onComment, onProfile }
 				</View>
 			</View>
 
-			{/* Action row: icon + count buttons with right reaction cluster */}
+			{/* Action row: single-stat buttons (no stacked emoji cluster on the right) */}
 			<View style={styles.footer}>
 				<View style={styles.actionsLeft}>
 					<Pressable style={styles.action} onPress={() => onLike?.(post)}>
@@ -104,24 +101,6 @@ export default function PostCard({ post, onPress, onLike, onComment, onProfile }
 						<Text style={styles.actionText}>{shareCount}</Text>
 					</Pressable>
 				</View>
-
-				{reactionEmojis.length > 0 && (
-					<View style={styles.actionsRight}>
-						<View style={styles.reactionCluster}>
-							{reactionEmojis.map((emoji, index) => (
-								<View
-									key={`${emoji}-${index}`}
-									style={[
-										styles.reactionClusterIcon,
-										index > 0 && { marginLeft: -8 },
-									]}
-								>
-									<Text style={styles.reactionClusterEmoji}>{emoji}</Text>
-								</View>
-							))}
-						</View>
-					</View>
-				)}
 			</View>
 
 			{post.top_comment ? (
@@ -183,11 +162,9 @@ const styles = StyleSheet.create({
 	metaReactions: { flexDirection: 'row', alignItems: 'center' },
 	metaText: { fontSize: 12, color: '#64748B', fontWeight: '500' },
 
-	// Action row + reaction cluster
 	footer: {
 		flexDirection: 'row',
 		alignItems: 'center',
-		justifyContent: 'space-between',
 		marginTop: 10,
 		paddingRight: 4,
 	},
@@ -195,11 +172,6 @@ const styles = StyleSheet.create({
 		flexDirection: 'row',
 		alignItems: 'center',
 		flexGrow: 1,
-	},
-	actionsRight: {
-		flexShrink: 0,
-		flexDirection: 'row',
-		alignItems: 'center',
 	},
 	action: {
 		flexDirection: 'row',
@@ -209,23 +181,6 @@ const styles = StyleSheet.create({
 		marginRight: 4,
 	},
 	actionText: { marginLeft: 4, color: '#0F172A', fontWeight: '700' },
-	reactionCluster: {
-		flexDirection: 'row',
-		alignItems: 'center',
-	},
-	reactionClusterIcon: {
-		width: 18,
-		height: 18,
-		borderRadius: 9,
-		backgroundColor: '#fff',
-		justifyContent: 'center',
-		alignItems: 'center',
-		borderWidth: 1,
-		borderColor: '#CBD5F5',
-	},
-	reactionClusterEmoji: {
-		fontSize: 11,
-	},
 
 	topCommentRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
 	commentAvatar: { width: 28, height: 28, borderRadius: 14, marginRight: 8 },
