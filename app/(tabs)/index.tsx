@@ -67,7 +67,7 @@ const tiles: { id: HomeTileId; lines: string[]; icon: number }[] = [
 function routeForTile(id: HomeTileId): Href {
   switch (id) {
     case 'crew-schedule':
-      return '/crew-exchange';
+      return '/crew-schedule';
     case 'staff-loads':
       return '/loads';
     case 'pad-housing':

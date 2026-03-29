@@ -29,7 +29,12 @@ import { TradeRow } from '../components/trades/TradeRow';
 import { AdvancedFilterSheet } from '../components/trades/AdvancedFilterSheet';
 import { SortControl } from '../components/trades/SortControl';
 
-export const CrewExchangeScreen: React.FC = () => {
+type CrewExchangeScreenProps = {
+  /** When true, hides AppHeader — use inside Crew Schedule Tradeboard tab. */
+  embedded?: boolean;
+};
+
+export const CrewExchangeScreen: React.FC<CrewExchangeScreenProps> = ({ embedded = false }) => {
   const router = useRouter();
   const { session } = useAuth();
   // Use the same color scheme logic as the rest of the app for consistency
@@ -189,7 +194,7 @@ export const CrewExchangeScreen: React.FC = () => {
   if (boardsLoading) {
     return (
       <View style={styles.container}>
-        <AppHeader title="Crew Exchange" showLogo={false} />
+        {!embedded ? <AppHeader title="Crew Exchange" showLogo={false} /> : null}
         <View style={styles.centerContent}>
           <ActivityIndicator size="large" color="#DC3545" />
           <Text style={styles.loadingText}>Loading tradeboards...</Text>
@@ -202,7 +207,7 @@ export const CrewExchangeScreen: React.FC = () => {
   if (!selectedBoard || boards.length === 0) {
     return (
       <View style={styles.container}>
-        <AppHeader title="Crew Exchange" showLogo={false} />
+        {!embedded ? <AppHeader title="Crew Exchange" showLogo={false} /> : null}
         <View style={styles.centerContent}>
           <Text style={styles.emptyText}>
             No tradeboards available for your profile
@@ -224,8 +229,7 @@ export const CrewExchangeScreen: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      {/* Permanent Red Header */}
-      <AppHeader title="Crew Exchange" showLogo={false} />
+      {!embedded ? <AppHeader title="Crew Exchange" showLogo={false} /> : null}
 
       {/* Sticky Controls Area */}
       <View style={styles.stickyControls}>

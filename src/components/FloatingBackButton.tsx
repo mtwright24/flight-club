@@ -41,7 +41,8 @@ export default function FloatingBackButton() {
     path === '/notifications' ||
     path === '/dm-thread' ||
     path === '/messages-inbox' ||
-    path === '/new-message'
+    path === '/new-message' ||
+    path.startsWith('/crew-schedule')
   ) {
     return null;
   }

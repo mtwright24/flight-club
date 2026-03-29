@@ -19,12 +19,12 @@ export function toolShortcutChipLabel(entry: ToolEntry): string {
 export const toolsRegistry: ToolEntry[] = [
   {
     id: 'crew-exchange',
-    title: 'Crew Exchange / Schedule Swap',
-    shortcutChipLabel: 'Schedule swap',
-    keywords: ['crew', 'exchange', 'swap', 'trades', 'schedule'],
-    description: 'Post and browse trip trades with other crew members.',
-    route: '/crew-exchange',
-    iconName: 'swap-horizontal',
+    title: 'Crew Schedule & Tradeboard',
+    shortcutChipLabel: 'Crew schedule',
+    keywords: ['crew', 'exchange', 'swap', 'trades', 'schedule', 'roster'],
+    description: 'View your schedule, calendar, and tradeboard — post swaps, drops, and pickups.',
+    route: '/crew-schedule',
+    iconName: 'calendar-outline',
   },
   {
     id: 'crew-rest-calculator',

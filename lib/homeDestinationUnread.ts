@@ -21,6 +21,7 @@ function tileMatchesNotification(tileId: HomeTileId, n: NotificationItem): boole
   switch (tileId) {
     case 'crew-schedule':
       return (
+        h.includes('/crew-schedule') ||
         h.includes('/crew-exchange') ||
         h.includes('/exchange') ||
         t.startsWith('trade_') ||

@@ -61,6 +61,8 @@ export const PostTradeScreen: React.FC = () => {
   const [existingScreenshotUrl, setExistingScreenshotUrl] = useState<string | null>(null);
   const [removeExistingScreenshot, setRemoveExistingScreenshot] = useState(false);
   const [resolvedBoardId, setResolvedBoardId] = useState<string | undefined>(boardId);
+  /** Avoids infinite loops: `params` from useLocalSearchParams is a new object every render. */
+  const lastSchedulePrefillKey = React.useRef<string | null>(null);
 
   const isEditing = !!tradeId;
 
@@ -247,6 +249,51 @@ export const PostTradeScreen: React.FC = () => {
     loadTrade();
   }, [tradeId]);
 
+  /** Schedule module prefill (Crew Schedule → Post trip). */
+  React.useEffect(() => {
+    if (tradeId) {
+      lastSchedulePrefillKey.current = null;
+      return;
+    }
+    const p = params as Record<string, string | string[] | undefined>;
+    const str = (k: string) => {
+      const v = p[k];
+      const raw = Array.isArray(v) ? v[0] : v;
+      return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
+    };
+    const start = str('prefillStart');
+    if (!start) return;
+
+    const prefillKey = [
+      start,
+      str('prefillEnd') || '',
+      str('prefillPairing') || '',
+      str('prefillRoute') || '',
+      str('prefillFrom') || '',
+      str('prefillTo') || '',
+      str('prefillBase') || '',
+    ].join('\u001e');
+
+    if (lastSchedulePrefillKey.current === prefillKey) return;
+    lastSchedulePrefillKey.current = prefillKey;
+
+    const end = str('prefillEnd') || start;
+    const routeNote = str('prefillRoute');
+    setForm((prev) => ({
+      ...prev,
+      pairing_date: start,
+      end_date: end !== start ? end : prev.end_date,
+      trip_number: str('prefillPairing') || prev.trip_number,
+      route_from: str('prefillFrom') || prev.route_from,
+      route_to: str('prefillTo') || prev.route_to,
+      notes:
+        prev.notes ||
+        [routeNote && `Schedule: ${routeNote}`, str('prefillBase') && `Base ${str('prefillBase')}`]
+          .filter(Boolean)
+          .join(' · '),
+    }));
+  }, [tradeId, params]);
+
   const handleSelectScreenshot = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -392,7 +439,7 @@ export const PostTradeScreen: React.FC = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
       <AppHeader title="Crew Exchange" showLogo={false} />
 
       {/* Subheader */}
