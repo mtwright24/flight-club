@@ -36,7 +36,7 @@ function pushDataRecord(raw: unknown): Record<string, unknown> {
  */
 export function PushNotificationRoot() {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, loading: authLoading } = useAuth();
   const userId = session?.user?.id ?? null;
 
   const [bannerQueue, setBannerQueue] = useState<ForegroundBannerPayload[]>([]);
@@ -73,6 +73,12 @@ export function PushNotificationRoot() {
     [dequeueBanner, navigateFromPushData]
   );
 
+  /** High-visibility: Metro sometimes hides console.log; warn shows reliably when JS is connected. */
+  useEffect(() => {
+    if (!__DEV__) return;
+    console.warn('[Push] PushNotificationRoot mounted — if you never see this, the phone is not running JS from this Metro session.');
+  }, []);
+
   /** Register token + deactivate on logout */
   useEffect(() => {
     const prev = prevUserRef.current;
@@ -81,15 +87,18 @@ export function PushNotificationRoot() {
     }
     prevUserRef.current = userId;
 
-    if (!userId) return;
+    if (authLoading || !userId) return;
 
     void (async () => {
+      console.warn('[Push] register attempt for user', userId.slice(0, 8) + '…');
       const res = await registerPushTokenForSignedInUser(userId);
-      if (!res.ok && __DEV__) {
-        console.log('[Push] register:', res.error ?? 'failed');
+      if (res.ok) {
+        console.warn('[Push] register result', res.skipped ? { ok: true, skipped: true } : { ok: true });
+      } else {
+        console.warn('[Push] register failed', res.error);
       }
     })();
-  }, [userId]);
+  }, [authLoading, userId]);
 
   /** Refresh last_seen when returning from background (debounced). */
   useEffect(() => subscribePushTokenPresenceOnForeground(userId), [userId]);

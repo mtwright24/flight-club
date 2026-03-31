@@ -71,7 +71,7 @@ export async function registerPushTokenForSignedInUser(userId: string): Promise<
   );
 
   if (error) {
-    console.warn('[Push] user_push_tokens upsert failed:', error.message);
+    console.warn('[Push] user_push_tokens upsert failed:', error.message, error);
     return { ok: false, error: error.message };
   }
 

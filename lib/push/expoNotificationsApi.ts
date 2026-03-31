@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { Platform } from 'react-native';
 
 import * as webStub from './expoNotificationsApi.web';
 
@@ -11,9 +11,8 @@ type Impl = typeof webStub;
 function tryLoadNativeImpl(): Impl | null {
   if (Platform.OS === 'web') return null;
   try {
-    const nm = NativeModules as Record<string, unknown>;
-    if (!nm.NotificationsServerRegistrationModule) return null;
-
+    // Load JS bindings directly. A separate `requireOptionalNativeModule` pre-check could return
+    // null on some New-Arch / bridge setups and force the web stub (denied permissions, no token).
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const getExpoPushTokenAsyncDefault = require('expo-notifications/build/getExpoPushTokenAsync').default;
     // eslint-disable-next-line @typescript-eslint/no-require-imports

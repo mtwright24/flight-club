@@ -34,10 +34,13 @@ function load(): DeviceSnapshot {
     if (__DEV__ && !devWarnedMissingExpoDevice) {
       devWarnedMissingExpoDevice = true;
       console.warn(
-        '[expo-device] ExpoDevice native module missing; push treats device as simulator. Rebuild dev client with expo-device.'
+        '[expo-device] ExpoDevice native module not linked — cannot detect simulator vs phone. Attempting push registration anyway; add expo-device to the dev client for reliable device checks.'
       );
     }
-    cached = { isDevice: false, modelName: null, deviceName: null };
+    // If the native module is missing (common until dev client is rebuilt with expo-device), we used to
+    // assume "not a physical device" and skipped Supabase entirely — real phones then never got a row.
+    // Prefer attempting registration; Expo push APIs still fail on simulators when appropriate.
+    cached = { isDevice: true, modelName: null, deviceName: null };
     return cached;
   }
 
