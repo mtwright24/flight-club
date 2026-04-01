@@ -209,7 +209,13 @@ export default function ScheduleTabScreen() {
       </View>
 
       <View style={styles.readingArea}>
-        {viewMode === 'classic' && <ClassicListView trips={trips} onPressTrip={openTrip} />}
+        {viewMode === 'classic' && (
+          <ClassicListView
+            trips={trips}
+            onPressTrip={openTrip}
+            onImportSchedule={() => router.push('/crew-schedule/import-schedule')}
+          />
+        )}
         {viewMode === 'calendar' && (
           <CalendarMonthView
             year={year}
@@ -244,9 +250,9 @@ const styles = StyleSheet.create({
   scrollContent: { flexGrow: 1 },
   controlStrip: {
     backgroundColor: T.surface,
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 12,
+    paddingHorizontal: 10,
+    paddingTop: 1,
+    paddingBottom: 3,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: T.line,
   },
@@ -254,50 +260,50 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 2,
   },
-  monthText: { fontSize: 17, fontWeight: '800', color: T.text },
-  iconHit: { padding: 8 },
+  monthText: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
+  iconHit: { paddingHorizontal: 4, paddingVertical: 2 },
   viewRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 12,
+    gap: 6,
+    marginBottom: 3,
   },
   seg: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: 6,
     backgroundColor: T.surfaceMuted,
     borderWidth: 1,
     borderColor: T.line,
   },
   segActive: {
-    backgroundColor: '#FEF2F2',
+    backgroundColor: '#FFFFFF',
     borderColor: T.accent,
   },
-  segText: { fontSize: 13, fontWeight: '700', color: T.textSecondary },
+  segText: { fontSize: 11, fontWeight: '700', color: T.textSecondary },
   segTextActive: { color: T.accent },
-  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
   importBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
     backgroundColor: T.accent,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
   },
-  importBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  importBtnText: { color: '#fff', fontWeight: '800', fontSize: 11 },
   todayBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: T.line,
     backgroundColor: T.surface,
   },
-  todayText: { fontWeight: '800', color: T.accent, fontSize: 14 },
-  updated: { fontSize: 12, color: T.textSecondary, marginTop: 8 },
-  readingArea: { paddingHorizontal: 12, paddingTop: 12 },
+  todayText: { fontWeight: '800', color: T.accent, fontSize: 11 },
+  updated: { fontSize: 10, color: T.textSecondary, marginTop: 2 },
+  readingArea: { paddingHorizontal: 10, paddingTop: 1 },
 });
