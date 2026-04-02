@@ -45,7 +45,7 @@ function tryLoadNativeImpl(): Impl | null {
     };
   } catch (e) {
     if (__DEV__) {
-      console.warn('[expoNotifications] Failed to load expo-notifications native bindings; using stubs.', e);
+      console.log('[expoNotifications] Native bindings unavailable; using stubs.', e);
     }
     return null;
   }

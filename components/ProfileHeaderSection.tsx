@@ -71,23 +71,6 @@ export default function ProfileHeaderSection({
       <View style={{ alignItems: 'center', marginTop: 12 }}>
         <Text style={{ fontSize: 22, fontWeight: '800', color: '#0f172a', textAlign: 'center' }}>{user.name}</Text>
         <Text style={{ fontSize: 14, color: '#64748b', marginTop: 2, textAlign: 'center' }}>{user.subtitle}</Text>
-        {user.bio ? (
-          <Text
-            numberOfLines={2}
-            ellipsizeMode="tail"
-            style={{
-              fontSize: 13,
-              color: '#64748b',
-              textAlign: 'center',
-              marginTop: 8,
-              marginBottom: 12,
-              marginHorizontal: 32,
-              lineHeight: 18,
-            }}
-          >
-            {user.bio}
-          </Text>
-        ) : null}
       </View>
       {/* Stats row with vertical dividers */}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, marginBottom: 0 }}>

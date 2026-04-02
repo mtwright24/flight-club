@@ -35,6 +35,13 @@ export async function getMyProfile() {
       airline: '',
       base: '',
       fleet: '',
+      aviation_since_year: '',
+      commuter_status: '',
+      languages: '',
+      hometown: '',
+      lives_in: '',
+      favorite_layover_city: '',
+      interests: '',
       avatar_url: null,
       cover_url: null,
     }
@@ -57,47 +64,33 @@ export async function upsertMyProfile(updates: Record<string, any>) {
     ...updates,
   };
 
-  const { error } = await supabase
-    .from('profiles')
-    .upsert(payload, { onConflict: 'id' });
+  const attemptPayload = { ...payload } as Record<string, any>;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const { error } = await supabase
+      .from('profiles')
+      .upsert(attemptPayload, { onConflict: 'id' });
 
-  if (error) {
-    const isMissingColumn = (col: string) =>
-      error.code === 'PGRST204' &&
-      typeof error.message === 'string' &&
-      error.message.includes(`'${col}'`);
+    if (!error) return { success: true };
 
-    // If certain optional columns don't exist yet (older DB without migrations), retry without them
-    const retryPayload = { ...payload } as Record<string, any>;
-    let shouldRetry = false;
-
-    if (isMissingColumn('bio') && Object.prototype.hasOwnProperty.call(retryPayload, 'bio')) {
-      console.warn('upsertMyProfile: bio column missing on profiles table; retrying without bio');
-      delete retryPayload.bio;
-      shouldRetry = true;
-    }
-    if (isMissingColumn('display_name') && Object.prototype.hasOwnProperty.call(retryPayload, 'display_name')) {
-      console.warn('upsertMyProfile: display_name column missing on profiles table; retrying without display_name');
-      delete retryPayload.display_name;
-      shouldRetry = true;
+    const message = String(error?.message || '');
+    if (error.code !== 'PGRST204') {
+      console.error('upsertMyProfile error', { userId: user.id, error, payload: attemptPayload });
+      return { success: false, error };
     }
 
-    if (shouldRetry) {
-      const { error: retryError } = await supabase
-        .from('profiles')
-        .upsert(retryPayload, { onConflict: 'id' });
-      if (retryError) {
-        console.error('upsertMyProfile retry error', { userId: user.id, error: retryError, payload: retryPayload });
-        return { success: false, error: retryError };
-      }
-      return { success: true };
+    const colMatch = message.match(/'([^']+)'/);
+    const missingCol = colMatch?.[1];
+    if (!missingCol || !Object.prototype.hasOwnProperty.call(attemptPayload, missingCol)) {
+      console.error('upsertMyProfile missing-column parse error', { userId: user.id, error, payload: attemptPayload });
+      return { success: false, error };
     }
 
-    console.error('upsertMyProfile error', { userId: user.id, error, payload });
-    return { success: false, error };
+    console.warn(`upsertMyProfile: ${missingCol} column missing on profiles table; retrying without it`);
+    delete attemptPayload[missingCol];
   }
 
-  return { success: true };
+  return { success: false, error: new Error('Profile update failed after column compatibility retries.') };
+
 }
 
 export async function updateProfile(updates: Record<string, any>) {

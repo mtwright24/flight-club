@@ -76,7 +76,7 @@ export function PushNotificationRoot() {
   /** High-visibility: Metro sometimes hides console.log; warn shows reliably when JS is connected. */
   useEffect(() => {
     if (!__DEV__) return;
-    console.warn('[Push] PushNotificationRoot mounted — if you never see this, the phone is not running JS from this Metro session.');
+    console.log('[Push] PushNotificationRoot mounted — if you never see this, the phone is not running JS from this Metro session.');
   }, []);
 
   /** Register token + deactivate on logout */
@@ -90,12 +90,12 @@ export function PushNotificationRoot() {
     if (authLoading || !userId) return;
 
     void (async () => {
-      console.warn('[Push] register attempt for user', userId.slice(0, 8) + '…');
+      console.log('[Push] register attempt for user', userId.slice(0, 8) + '…');
       const res = await registerPushTokenForSignedInUser(userId);
       if (res.ok) {
-        console.warn('[Push] register result', res.skipped ? { ok: true, skipped: true } : { ok: true });
+        console.log('[Push] register result', res.skipped ? { ok: true, skipped: true } : { ok: true });
       } else {
-        console.warn('[Push] register failed', res.error);
+        console.log('[Push] register failed', res.error);
       }
     })();
   }, [authLoading, userId]);

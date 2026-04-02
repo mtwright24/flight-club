@@ -4,7 +4,7 @@ import { parseNotificationData } from './notifications';
 import type { Notification } from './notifications';
 import { notificationTargetHref } from './notifications';
 
-export type HomeTileId = 'crew-schedule' | 'staff-loads' | 'pad-housing' | 'utility';
+export type HomeTileId = 'crew-schedule' | 'staff-loads' | 'pad-housing' | 'flight-tracker';
 
 function hrefString(n: NotificationItem): string {
   return String(notificationTargetHref(n as unknown as Notification));
@@ -38,11 +38,12 @@ function tileMatchesNotification(tileId: HomeTileId, n: NotificationItem): boole
         t.startsWith('housing_') ||
         t.includes('listing')
       );
-    case 'utility':
+    case 'flight-tracker':
       return (
-        h.includes('/utility') ||
+        h.includes('/flight-tracker') ||
         t.includes('commute') ||
         t.includes('delay') ||
+        t.includes('flight_tracker') ||
         t === 'tool_alert' ||
         t === 'rest_warning'
       );

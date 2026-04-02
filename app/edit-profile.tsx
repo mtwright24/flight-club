@@ -18,8 +18,6 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { checkUsernameAvailable, getMyProfile, updateProfile } from '../lib/profile';
 import { uploadAvatar, uploadCover } from '../lib/storage';
-import { usePullToRefresh } from '../src/hooks/usePullToRefresh';
-import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../src/styles/refreshControl';
 
 const brandRed = '#B5161E';
 
@@ -40,6 +38,13 @@ export default function EditProfileScreen() {
   const [airline, setAirline] = useState('');
   const [base, setBase] = useState('');
   const [fleet, setFleet] = useState('');
+  const [aviationSinceYear, setAviationSinceYear] = useState('');
+  const [commuterStatus, setCommuterStatus] = useState('');
+  const [languages, setLanguages] = useState('');
+  const [hometown, setHometown] = useState('');
+  const [livesIn, setLivesIn] = useState('');
+  const [favoriteLayoverCity, setFavoriteLayoverCity] = useState('');
+  const [interests, setInterests] = useState('');
   const [avatarFile, setAvatarFile] = useState<ImagePickerAsset | null>(null);
   const [coverFile, setCoverFile] = useState<ImagePickerAsset | null>(null);
 
@@ -59,6 +64,13 @@ export default function EditProfileScreen() {
         setAirline(p.airline || '');
         setBase(p.base || '');
         setFleet(p.fleet || '');
+        setAviationSinceYear((p as any).aviation_since_year || '');
+        setCommuterStatus((p as any).commuter_status || '');
+        setLanguages(Array.isArray((p as any).languages) ? (p as any).languages.join(', ') : ((p as any).languages || ''));
+        setHometown((p as any).hometown || '');
+        setLivesIn((p as any).lives_in || '');
+        setFavoriteLayoverCity((p as any).favorite_layover_city || '');
+        setInterests(Array.isArray((p as any).interests) ? (p as any).interests.join(', ') : ((p as any).interests || ''));
       } catch (err) {
         console.error('EditProfile load error', err);
         if (!cancelled) Alert.alert('Error', 'Failed to load your profile.');
@@ -138,6 +150,13 @@ export default function EditProfileScreen() {
         airline,
         base,
         fleet,
+        aviation_since_year: aviationSinceYear,
+        commuter_status: commuterStatus,
+        languages,
+        hometown,
+        lives_in: livesIn,
+        favorite_layover_city: favoriteLayoverCity,
+        interests,
         avatar_url: avatarUrl,
         cover_url: coverUrl,
       });
@@ -163,6 +182,13 @@ export default function EditProfileScreen() {
     airline !== (profile?.airline || '') ||
     base !== (profile?.base || '') ||
     fleet !== (profile?.fleet || '') ||
+    aviationSinceYear !== (((profile as any)?.aviation_since_year as string) || '') ||
+    commuterStatus !== (((profile as any)?.commuter_status as string) || '') ||
+    languages !== (Array.isArray((profile as any)?.languages) ? (profile as any).languages.join(', ') : (((profile as any)?.languages as string) || '')) ||
+    hometown !== (((profile as any)?.hometown as string) || '') ||
+    livesIn !== (((profile as any)?.lives_in as string) || '') ||
+    favoriteLayoverCity !== (((profile as any)?.favorite_layover_city as string) || '') ||
+    interests !== (Array.isArray((profile as any)?.interests) ? (profile as any).interests.join(', ') : (((profile as any)?.interests as string) || '')) ||
     !!avatarFile ||
     !!coverFile;
 
@@ -237,10 +263,23 @@ export default function EditProfileScreen() {
               <TextInput value={base} onChangeText={setBase} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Base" />
               <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Fleet (optional)</Text>
               <TextInput value={fleet} onChangeText={setFleet} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Fleet" />
-              {/* About / Public Info */}
-              {/* TODO: Add hometown/city, interests/tags fields if supported */}
-              {/* Public Visibility Shortcuts */}
-              {/* TODO: Add toggles for public visibility fields, wired to backend/store */}
+              <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a', marginTop: 8, marginBottom: 8 }}>
+                About Details (optional)
+              </Text>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>In aviation since / seniority year</Text>
+              <TextInput value={aviationSinceYear} onChangeText={setAviationSinceYear} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="e.g. 2018" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Commuter status</Text>
+              <TextInput value={commuterStatus} onChangeText={setCommuterStatus} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="e.g. Commuter / Base local" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Languages</Text>
+              <TextInput value={languages} onChangeText={setLanguages} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Comma separated languages" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Hometown</Text>
+              <TextInput value={hometown} onChangeText={setHometown} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Hometown" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Lives in</Text>
+              <TextInput value={livesIn} onChangeText={setLivesIn} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Current city" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Favorite layover city</Text>
+              <TextInput value={favoriteLayoverCity} onChangeText={setFavoriteLayoverCity} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Favorite layover city" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Interests</Text>
+              <TextInput value={interests} onChangeText={setInterests} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Comma separated interests" />
             </View>
           </ScrollView>
           <View

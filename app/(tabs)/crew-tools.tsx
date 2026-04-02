@@ -31,7 +31,7 @@ export default function CrewToolsTabScreen() {
           Your crew tools hub. More tools and categories will appear here as the ecosystem is built out.
         </Text>
         <Text style={styles.hint}>
-          Use Home quick access for schedule, loads, and housing. The Utility Hub tile is separate from this tab.
+          Use Home quick access for schedule, loads, housing, and Flight Tracker. This tab remains the broader tools pillar.
         </Text>
       </ScrollView>
     </SafeAreaView>

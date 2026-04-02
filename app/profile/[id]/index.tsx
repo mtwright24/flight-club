@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,17 +14,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import ProfileHeaderSection from '../../../components/ProfileHeaderSection';
 import { followUser, getFollowingFeed, getIsFollowing, getMyProfile, unfollowUser } from '../../../lib/feed';
 import SectionHeader from '../../../src/components/navigation/SectionHeader';
+import ProfileAboutTab from '../../../src/components/profile/ProfileAboutTab';
 import ProfilePostsFeedWithInteractions from '../../../src/components/profile/ProfilePostsFeedWithInteractions';
 import MediaGrid from '../../../src/components/profile/MediaGrid';
 import { useDmUnreadBadge } from '../../../src/hooks/useDmUnreadBadge';
 import { useNotificationsBadge } from '../../../src/hooks/useNotificationsBadge';
+import { usePullToRefresh } from '../../../src/hooks/usePullToRefresh';
 import { startDirectConversation } from '../../../src/lib/supabase/dms';
 import { fetchUserMedia } from '../../../src/lib/supabase/profileMedia';
 import { supabase } from '../../../src/lib/supabaseClient';
-import { usePullToRefresh } from '../../../src/hooks/usePullToRefresh';
 import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../../src/styles/refreshControl';
 
-/** Card user shown in ProfileHeaderSection (view by id). */
+type TabKey = 'Posts' | 'Media' | 'About';
+
 type ProfileRouteUser = {
   name: string;
   subtitle: string;
@@ -36,10 +38,36 @@ type ProfileRouteUser = {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
-  scrollContent: { paddingBottom: 32 },
-  contentPad: { paddingHorizontal: 18 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 });
+
+function roleBaseLine(role?: string | null, base?: string | null): string {
+  const r = typeof role === 'string' ? role.trim() : '';
+  const b = typeof base === 'string' ? base.trim() : '';
+  if (r && b) return `${r} • ${b}`;
+  return r || b || '';
+}
+
+async function fetchMemberRoomNames(userId: string, isSelf: boolean): Promise<string[]> {
+  const { data: memberships, error: memberErr } = await supabase
+    .from('room_members')
+    .select('room_id')
+    .eq('user_id', userId)
+    .limit(16);
+  if (memberErr || !memberships?.length) return [];
+  const roomIds = memberships.map((m: any) => m.room_id).filter(Boolean);
+  if (!roomIds.length) return [];
+  const { data: rooms, error: roomErr } = await supabase
+    .from('rooms')
+    .select('id, name, is_private')
+    .in('id', roomIds);
+  if (roomErr || !rooms?.length) return [];
+  return rooms
+    .filter((r: any) => isSelf || !r.is_private)
+    .map((r: any) => (typeof r.name === 'string' ? r.name.trim() : ''))
+    .filter(Boolean)
+    .slice(0, 8);
+}
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -48,11 +76,12 @@ export default function ProfileScreen() {
     typeof params.id === 'string'
       ? params.id
       : Array.isArray(params.id) && params.id[0]
-        ? params.id[0]
-        : '';
+      ? params.id[0]
+      : '';
+
   const unread = useNotificationsBadge();
   const { count: dmUnread } = useDmUnreadBadge();
-  const [activeTab, setActiveTab] = useState('Posts');
+  const [activeTab, setActiveTab] = useState<TabKey>('Posts');
   const [posts, setPosts] = useState<any[]>([]);
   const [postsLoading, setPostsLoading] = useState(true);
   const [media, setMedia] = useState<string[]>([]);
@@ -62,6 +91,8 @@ export default function ProfileScreen() {
   const [profileIsPrivate, setProfileIsPrivate] = useState(false);
   const [isSelf, setIsSelf] = useState(false);
   const [user, setUser] = useState<ProfileRouteUser | null>(null);
+  const [profileRecord, setProfileRecord] = useState<Record<string, any> | null>(null);
+  const [memberRoomNames, setMemberRoomNames] = useState<string[]>([]);
   const [stats, setStats] = useState({ followers: 0, following: 0, posts: 0 });
 
   const openConnections = useCallback(
@@ -76,42 +107,42 @@ export default function ProfileScreen() {
     if (!profileId) return;
     try {
       const me = await getMyProfile();
-      setIsSelf(me.id === profileId);
+      const self = me.id === profileId;
+      setIsSelf(self);
 
       const { data: profile } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', profileId)
         .single();
+      setProfileRecord(profile);
       setUser({
         name: profile.display_name || profile.full_name || 'User',
-        subtitle: `${profile.role || ''} • ${profile.base || ''}`,
+        subtitle: roleBaseLine(profile.role, profile.base),
         avatar: profile.avatar_url || '',
         cover: profile.cover_url || 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=800&q=80',
         bio: profile.bio || '',
+        id: profileId,
       });
       setProfileIsPrivate(profile.is_private === true);
 
-      const { data: followersData } = await supabase
-        .from('follows')
-        .select('id')
-        .eq('following_id', profileId);
-      const { data: followingData } = await supabase
-        .from('follows')
-        .select('id')
-        .eq('follower_id', profileId);
-      const { data: postsData } = await supabase
-        .from('posts')
-        .select('id')
-        .eq('user_id', profileId);
+      const [followersRes, followingRes, postsRes, feed, mediaUrls, roomNames] = await Promise.all([
+        supabase.from('follows').select('id').eq('following_id', profileId),
+        supabase.from('follows').select('id').eq('follower_id', profileId),
+        supabase.from('posts').select('id').eq('user_id', profileId),
+        getFollowingFeed({ userId: profileId, limit: 20, offset: 0 }),
+        fetchUserMedia(profileId),
+        fetchMemberRoomNames(profileId, self),
+      ]);
+
+      setMemberRoomNames(roomNames);
       setStats({
-        followers: followersData ? followersData.length : 0,
-        following: followingData ? followingData.length : 0,
-        posts: postsData ? postsData.length : 0,
+        followers: followersRes.data ? followersRes.data.length : 0,
+        following: followingRes.data ? followingRes.data.length : 0,
+        posts: postsRes.data ? postsRes.data.length : 0,
       });
 
       setPostsLoading(true);
-      const feed = await getFollowingFeed({ userId: profileId, limit: 20, offset: 0 });
       const ownPosts = (feed || [])
         .filter((p: any) => p.user_id === profileId)
         .map((post: any) => {
@@ -133,21 +164,25 @@ export default function ProfileScreen() {
       setPostsLoading(false);
 
       setMediaLoading(true);
-      const mediaUrls = await fetchUserMedia(profileId);
       setMedia(mediaUrls);
       setMediaLoading(false);
 
-      setFollowingStatus(await getIsFollowing(profileId));
-      if (profile.is_private) {
-        const { data: requestData } = await supabase
-          .from('follow_requests')
-          .select('*')
-          .eq('follower_id', me.id)
-          .eq('following_id', profileId)
-          .eq('status', 'pending')
-          .single();
-        setFollowRequestPending(!!requestData);
+      if (!self) {
+        setFollowingStatus(await getIsFollowing(profileId));
+        if (profile.is_private) {
+          const { data: requestData } = await supabase
+            .from('follow_requests')
+            .select('*')
+            .eq('follower_id', me.id)
+            .eq('following_id', profileId)
+            .eq('status', 'pending')
+            .maybeSingle();
+          setFollowRequestPending(!!requestData);
+        } else {
+          setFollowRequestPending(false);
+        }
       } else {
+        setFollowingStatus(false);
         setFollowRequestPending(false);
       }
     } catch {
@@ -160,9 +195,10 @@ export default function ProfileScreen() {
     void loadProfileData();
   }, [loadProfileData]);
 
-  const { refreshing: profilePullRefreshing, onRefresh: onProfilePullRefresh } = usePullToRefresh(async () => {
-    await loadProfileData();
-  });
+  const { refreshing: profilePullRefreshing, onRefresh: onProfilePullRefresh } =
+    usePullToRefresh(async () => {
+      await loadProfileData();
+    });
 
   const handleStartDm = useCallback(async () => {
     try {
@@ -175,6 +211,119 @@ export default function ProfileScreen() {
     }
   }, [profileId, router]);
 
+  const handleFollow = useCallback(async () => {
+    try {
+      const me = await getMyProfile();
+      if (profileIsPrivate) {
+        const { error } = await supabase
+          .from('follow_requests')
+          .insert({ follower_id: me.id, following_id: profileId, status: 'pending' });
+        if (error) {
+          Alert.alert('Follow Request Failed', error.message);
+        } else {
+          setFollowRequestPending(true);
+        }
+        return;
+      }
+
+      if (!followingStatus) {
+        const { error } = await followUser(profileId);
+        if (error) {
+          Alert.alert('Follow Failed', error.message);
+          return;
+        }
+      } else {
+        const { error } = await unfollowUser(profileId);
+        if (error) {
+          Alert.alert('Unfollow Failed', error.message);
+          return;
+        }
+      }
+      await loadProfileData();
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Something went wrong');
+    }
+  }, [followingStatus, loadProfileData, profileId, profileIsPrivate]);
+
+  const bioText = useMemo(() => {
+    const b = typeof user?.bio === 'string' ? user.bio.trim() : '';
+    if (b) return b;
+    if (isSelf) return 'Add a bio in Edit Profile.';
+    return 'No bio yet.';
+  }, [isSelf, user?.bio]);
+
+  const tabRow = (
+    <View
+      style={{
+        flexDirection: 'row',
+        marginTop: 14,
+        marginBottom: 8,
+        justifyContent: 'center',
+        borderBottomWidth: 1,
+        borderBottomColor: '#E5E7EB',
+      }}
+    >
+      {(['Posts', 'Media', 'About'] as TabKey[]).map((tab, idx, arr) => (
+        <React.Fragment key={tab}>
+          <Pressable
+            style={{
+              paddingVertical: 8,
+              paddingHorizontal: 24,
+              marginHorizontal: 4,
+              borderBottomWidth: activeTab === tab ? 3 : 0,
+              borderBottomColor: activeTab === tab ? '#B5161E' : 'transparent',
+            }}
+            onPress={() => setActiveTab(tab)}
+          >
+            <Text style={{ color: activeTab === tab ? '#B5161E' : '#334155', fontWeight: '700' }}>{tab}</Text>
+          </Pressable>
+          {idx < arr.length - 1 ? (
+            <View
+              style={{
+                width: 1,
+                height: 24,
+                backgroundColor: '#E5E7EB',
+                alignSelf: 'center',
+              }}
+            />
+          ) : null}
+        </React.Fragment>
+      ))}
+    </View>
+  );
+
+  const headerBlock = (
+    <>
+      {user ? (
+        <ProfileHeaderSection
+          user={user}
+          stats={stats}
+          isSelf={isSelf}
+          followingStatus={followingStatus}
+          followRequestPending={followRequestPending}
+          profileIsPrivate={profileIsPrivate}
+          onPressFollowers={() => openConnections('followers')}
+          onPressFollowing={() => openConnections('following')}
+          onFollow={handleFollow}
+          onMessage={handleStartDm}
+          onPressAvatar={isSelf ? () => router.push('/edit-profile') : undefined}
+          router={router}
+        />
+      ) : (
+        <View style={{ height: 180, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ color: '#64748b' }}>No profile data available.</Text>
+        </View>
+      )}
+      {!!bioText && (
+        <View style={{ paddingHorizontal: 22, marginTop: 10 }}>
+          <Text style={{ color: '#334155', fontSize: 14, lineHeight: 20 }}>{bioText}</Text>
+        </View>
+      )}
+      {tabRow}
+      <View style={{ height: 1, backgroundColor: '#E5E7EB', marginHorizontal: 18, marginBottom: 0 }} />
+    </>
+  );
+
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right']}>
       <SectionHeader
@@ -182,18 +331,10 @@ export default function ProfileScreen() {
         notificationCount={unread}
         dmCount={dmUnread}
         onPressBell={() => {
-          try {
-            router.push('/notifications');
-          } catch (e) {
-            console.log('no route /notifications');
-          }
+          router.push('/notifications');
         }}
         onPressMessage={() => {
-          try {
-            router.push('/messages-inbox');
-          } catch (e) {
-            console.log('no route /messages-inbox');
-          }
+          router.push('/messages-inbox');
         }}
       />
       {activeTab === 'Posts' ? (
@@ -208,124 +349,7 @@ export default function ProfileScreen() {
             refreshing={profilePullRefreshing}
             onRefresh={onProfilePullRefresh}
             onPostsChanged={() => void loadProfileData()}
-            headerComponent={
-              <>
-                {user ? (
-                  <ProfileHeaderSection
-                    user={user}
-                    stats={stats}
-                    isSelf={isSelf}
-                    followingStatus={followingStatus}
-                    followRequestPending={followRequestPending}
-                    profileIsPrivate={profileIsPrivate}
-                    onPressFollowers={() => openConnections('followers')}
-                    onPressFollowing={() => openConnections('following')}
-                    onFollow={async () => {
-                      try {
-                        const me = await getMyProfile();
-                        if (profileIsPrivate) {
-                          const { error } = await supabase
-                            .from('follow_requests')
-                            .insert({ follower_id: me.id, following_id: profileId, status: 'pending' });
-                          if (error) {
-                            Alert.alert('Follow Request Failed', error.message);
-                            console.log('Follow request error:', error);
-                          } else {
-                            setFollowRequestPending(true);
-                            console.log('Follow request submitted');
-                          }
-                        } else {
-                          if (!followingStatus) {
-                            const { error } = await followUser(profileId);
-                            if (error) {
-                              Alert.alert('Follow Failed', error.message);
-                              console.log('Follow error:', error);
-                            } else {
-                              console.log('Followed user:', profileId);
-                            }
-                          } else {
-                            const { error } = await unfollowUser(profileId);
-                            if (error) {
-                              Alert.alert('Unfollow Failed', error.message);
-                              console.log('Unfollow error:', error);
-                            } else {
-                              console.log('Unfollowed user:', profileId);
-                            }
-                          }
-                          const { data: followersData, error: followersError } = await supabase
-                            .from('follows')
-                            .select('id')
-                            .eq('following_id', profileId);
-                          const { data: followingData, error: followingError } = await supabase
-                            .from('follows')
-                            .select('id')
-                            .eq('follower_id', profileId);
-                          const statsErr = followersError ?? followingError;
-                          if (statsErr) {
-                            Alert.alert('Stats Update Failed', statsErr.message);
-                            console.log('Stats update error:', statsErr);
-                          }
-                          setStats({
-                            followers: followersData ? followersData.length : 0,
-                            following: followingData ? followingData.length : 0,
-                            posts: stats.posts,
-                          });
-                          const newStatus = await getIsFollowing(profileId);
-                          setFollowingStatus(newStatus);
-                          console.log('Updated followingStatus:', newStatus);
-                        }
-                      } catch (err) {
-                        Alert.alert('Error', err instanceof Error ? err.message : String(err));
-                        console.log('Follow button error:', err);
-                      }
-                    }}
-                    onMessage={handleStartDm}
-                    onPressAvatar={isSelf ? () => router.push('/edit-profile') : undefined}
-                    router={router}
-                  />
-                ) : (
-                  <View style={{ height: 180, justifyContent: 'center', alignItems: 'center' }}>
-                    <Text style={{ color: '#64748b' }}>No profile data available.</Text>
-                  </View>
-                )}
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    marginTop: 24,
-                    marginBottom: 8,
-                    justifyContent: 'center',
-                    borderBottomWidth: 1,
-                    borderBottomColor: '#E5E7EB',
-                  }}
-                >
-                  {['Posts', 'Media', 'About'].map((tab, idx) => (
-                    <Pressable
-                      key={tab}
-                      style={{
-                        paddingVertical: 8,
-                        paddingHorizontal: 24,
-                        marginHorizontal: 4,
-                        borderBottomWidth: activeTab === tab ? 3 : 0,
-                        borderBottomColor: activeTab === tab ? '#B5161E' : 'transparent',
-                      }}
-                      onPress={() => setActiveTab(tab)}
-                    >
-                      <Text style={{ color: activeTab === tab ? '#B5161E' : '#334155', fontWeight: '700' }}>{tab}</Text>
-                    </Pressable>
-                  )).reduce(
-                    (acc, el, idx, arr) =>
-                      acc.concat(
-                        el,
-                        idx < arr.length - 1 ? (
-                          <View key={`divider-${idx}`} style={{ width: 1, height: 24, backgroundColor: '#E5E7EB', alignSelf: 'center' }} />
-                        ) : null,
-                      ),
-                    [] as React.ReactNode[],
-                  )}
-                </View>
-                <View style={{ height: 1, backgroundColor: '#E5E7EB', marginHorizontal: 18, marginBottom: 0 }} />
-              </>
-            }
+            headerComponent={headerBlock}
           />
         )
       ) : (
@@ -341,86 +365,7 @@ export default function ProfileScreen() {
             />
           }
         >
-          {user ? (
-            <ProfileHeaderSection
-              user={user}
-              stats={stats}
-              isSelf={isSelf}
-              followingStatus={followingStatus}
-              onPressFollowers={() => openConnections('followers')}
-              onPressFollowing={() => openConnections('following')}
-              onFollow={async () => {
-                if (profileIsPrivate) {
-                  const me = await getMyProfile();
-                  await supabase.from('follow_requests').insert({ follower_id: me.id, following_id: profileId, status: 'pending' });
-                  setFollowRequestPending(true);
-                } else {
-                  if (!followingStatus) {
-                    await followUser(profileId);
-                  } else {
-                    await unfollowUser(profileId);
-                  }
-                  const { data: followersData } = await supabase
-                    .from('follows')
-                    .select('id')
-                    .eq('following_id', profileId);
-                  const { data: followingData } = await supabase
-                    .from('follows')
-                    .select('id')
-                    .eq('follower_id', profileId);
-                  setStats({
-                    followers: followersData ? followersData.length : 0,
-                    following: followingData ? followingData.length : 0,
-                    posts: stats.posts,
-                  });
-                  setFollowingStatus(await getIsFollowing(profileId));
-                }
-              }}
-              onMessage={handleStartDm}
-              onPressAvatar={isSelf ? () => router.push('/edit-profile') : undefined}
-              router={router}
-            />
-          ) : (
-            <View style={{ height: 180, justifyContent: 'center', alignItems: 'center' }}>
-              <Text style={{ color: '#64748b' }}>No profile data available.</Text>
-            </View>
-          )}
-          <View
-            style={{
-              flexDirection: 'row',
-              marginTop: 24,
-              marginBottom: 8,
-              justifyContent: 'center',
-              borderBottomWidth: 1,
-              borderBottomColor: '#E5E7EB',
-            }}
-          >
-            {['Posts', 'Media', 'About'].map((tab, idx) => (
-              <Pressable
-                key={tab}
-                style={{
-                  paddingVertical: 8,
-                  paddingHorizontal: 24,
-                  marginHorizontal: 4,
-                  borderBottomWidth: activeTab === tab ? 3 : 0,
-                  borderBottomColor: activeTab === tab ? '#B5161E' : 'transparent',
-                }}
-                onPress={() => setActiveTab(tab)}
-              >
-                <Text style={{ color: activeTab === tab ? '#B5161E' : '#334155', fontWeight: '700' }}>{tab}</Text>
-              </Pressable>
-            )).reduce(
-              (acc, el, idx, arr) =>
-                acc.concat(
-                  el,
-                  idx < arr.length - 1 ? (
-                    <View key={`divider-${idx}`} style={{ width: 1, height: 24, backgroundColor: '#E5E7EB', alignSelf: 'center' }} />
-                  ) : null,
-                ),
-              [] as React.ReactNode[],
-            )}
-          </View>
-          <View style={{ height: 1, backgroundColor: '#E5E7EB', marginHorizontal: 18, marginBottom: 0 }} />
+          {headerBlock}
           {activeTab === 'Media' &&
             (mediaLoading ? (
               <ActivityIndicator size="small" style={{ marginTop: 12 }} />
@@ -430,13 +375,11 @@ export default function ProfileScreen() {
               <MediaGrid media={media} />
             ))}
           {activeTab === 'About' && (
-            <View style={{ marginTop: 24, paddingHorizontal: 18 }}>
-              <Text style={{ fontSize: 16, fontWeight: '700', color: '#0f172a', marginBottom: 8 }}>Bio</Text>
-              <Text style={{ color: '#334155', fontSize: 14 }}>{user && user.bio ? user.bio : 'No bio available.'}</Text>
-            </View>
+            <ProfileAboutTab profile={profileRecord} memberRoomNames={memberRoomNames} />
           )}
         </ScrollView>
       )}
     </SafeAreaView>
   );
 }
+

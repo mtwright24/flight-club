@@ -40,7 +40,9 @@ export async function registerPushTokenForSignedInUser(userId: string): Promise<
       return { ok: true, skipped: true };
     }
     if (reg.reason === 'permission_denied') {
-      console.warn('[Push] Notification permission denied — push disabled until the user enables notifications in Settings.');
+      if (__DEV__) {
+        console.log('[Push] Notification permission denied — push disabled until enabled in Settings.');
+      }
       return { ok: false, error: 'permission_denied' };
     }
     if (reg.reason === 'missing_project_id') {

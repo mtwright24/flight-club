@@ -7,17 +7,15 @@ import HousingListingCard from '../../src/components/housing/HousingListingCard'
 import { useAuth } from '../../src/hooks/useAuth';
 import { useNotificationsBadge } from '../../src/hooks/useNotificationsBadge';
 import {
-  fetchHousingListings,
-  fetchHousingNeedPosts,
-  fetchSavedListingIds,
-  fetchSavedSearches,
-  toggleSavedListing,
-  upsertSavedSearch,
-  type HousingFilters,
-  type HousingSort,
+    fetchHousingListings,
+    fetchHousingNeedPosts,
+    fetchSavedListingIds,
+    toggleSavedListing,
+    type HousingFilters,
+    type HousingSort,
 } from '../../src/lib/housing';
 import { colors, radius, shadow, spacing } from '../../src/styles/theme';
-import type { HousingListing, HousingNeedPost, HousingSavedSearch } from '../../src/types/housing';
+import type { HousingListing, HousingNeedPost } from '../../src/types/housing';
 
 type TabKey = 'crashpad' | 'room' | 'apartment' | 'wanted';
 
@@ -36,7 +34,7 @@ export default function CrashpadsHousingHubScreen() {
   const userId = session?.user?.id;
 
   const initialTab: TabKey =
-    params.type === 'room' || params.type === 'apartment' || params.type === 'wanted'
+    (params.type === 'room' || params.type === 'apartment' || params.type === 'wanted')
       ? (params.type as TabKey)
       : 'crashpad';
 
@@ -46,7 +44,6 @@ export default function CrashpadsHousingHubScreen() {
   const [listings, setListings] = useState<HousingListing[]>([]);
   const [needs, setNeeds] = useState<HousingNeedPost[]>([]);
   const [savedIds, setSavedIds] = useState<string[]>([]);
-  const [savedSearches, setSavedSearches] = useState<HousingSavedSearch[]>([]);
   const [loading, setLoading] = useState(true);
 
   const baseFromParams = typeof params.base === 'string' ? params.base : undefined;
@@ -59,7 +56,13 @@ export default function CrashpadsHousingHubScreen() {
   const filters: HousingFilters = useMemo(
     () => ({
       base_airport: baseFromParams,
-      housing_type: activeTab === 'room' ? 'room' : activeTab === 'apartment' ? 'apartment' : undefined,
+      // Default "Crashpads" tab shows the full marketplace; type-specific tabs narrow results.
+      housing_type:
+        activeTab === 'room'
+          ? 'room'
+          : activeTab === 'apartment'
+          ? 'apartment'
+          : undefined,
       bed_type: bedFromParams as any,
       min_price: minFromParams,
       max_price: maxFromParams,
@@ -70,15 +73,18 @@ export default function CrashpadsHousingHubScreen() {
     [activeTab, baseFromParams, bedFromParams, hotTonight, maxFromParams, minFromParams, sort, standbyOnlyFromParams],
   );
 
-  const hasActiveFilters = useMemo(() => {
-    const hasPrice = typeof minFromParams === 'number' || typeof maxFromParams === 'number';
-    const hasBed = !!bedFromParams;
-    const hasBaseOrArea = !!baseFromParams || !!areaFromParams;
-    const hasHot = hotTonight;
-    const hasStandby = standbyOnlyFromParams;
-    const isTypeSpecific = activeTab === 'room' || activeTab === 'apartment' || activeTab === 'wanted';
-    return hasPrice || hasBed || hasBaseOrArea || hasHot || hasStandby || isTypeSpecific;
-  }, [activeTab, areaFromParams, baseFromParams, bedFromParams, hotTonight, maxFromParams, minFromParams, standbyOnlyFromParams]);
+  const hasActiveFilters = useMemo(
+    () => {
+      const hasPrice = typeof minFromParams === 'number' || typeof maxFromParams === 'number';
+      const hasBed = !!bedFromParams;
+      const hasBaseOrArea = !!baseFromParams || !!areaFromParams;
+      const hasHot = hotTonight;
+      const hasStandby = standbyOnlyFromParams;
+      const isTypeSpecific = activeTab === 'room' || activeTab === 'apartment' || activeTab === 'wanted';
+      return hasPrice || hasBed || hasBaseOrArea || hasHot || hasStandby || isTypeSpecific;
+    },
+    [activeTab, areaFromParams, baseFromParams, bedFromParams, hotTonight, maxFromParams, minFromParams, standbyOnlyFromParams],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -99,17 +105,8 @@ export default function CrashpadsHousingHubScreen() {
       }
 
       if (userId) {
-        const [ids, searches] = await Promise.all([
-          fetchSavedListingIds(userId),
-          fetchSavedSearches(userId),
-        ]);
-        if (mounted) {
-          setSavedIds(ids);
-          setSavedSearches(searches);
-        }
-      } else if (mounted) {
-        setSavedIds([]);
-        setSavedSearches([]);
+        const ids = await fetchSavedListingIds(userId);
+        if (mounted) setSavedIds(ids);
       }
 
       if (mounted) setLoading(false);
@@ -136,15 +133,23 @@ export default function CrashpadsHousingHubScreen() {
     return 'Recommended';
   }, [sort]);
 
+  const bedLabel = useMemo(() => {
+    if (!bedFromParams) return 'Any Bed';
+    if (bedFromParams === 'hot_bed') return 'Hot Bed';
+    if (bedFromParams === 'cold_bed') return 'Cold Bed';
+    if (bedFromParams === 'private_room') return 'Private Room';
+    return 'Any Bed';
+  }, [bedFromParams]);
+
   const baseLabel = useMemo(() => {
-    if (!baseFromParams && !areaFromParams) return 'JFK / Jamaica';
+    if (!baseFromParams && !areaFromParams) return 'Any Base';
     if (baseFromParams && areaFromParams) return `${baseFromParams} / ${areaFromParams}`;
     return baseFromParams || areaFromParams || 'Any Base';
   }, [areaFromParams, baseFromParams]);
 
   const priceLabel = useMemo(() => {
-    if (!minFromParams && !maxFromParams) return '$600-$1,200';
-    if (minFromParams && maxFromParams) return `$${minFromParams}-$${maxFromParams}`;
+    if (!minFromParams && !maxFromParams) return 'Any Price';
+    if (minFromParams && maxFromParams) return `$${minFromParams}–$${maxFromParams}`;
     if (minFromParams) return `From $${minFromParams}`;
     return `Up to $${maxFromParams}`;
   }, [maxFromParams, minFromParams]);
@@ -166,42 +171,45 @@ export default function CrashpadsHousingHubScreen() {
     });
   };
 
-  const saveCurrentSearch = async () => {
-    if (!userId) return;
-    await upsertSavedSearch({
-      user_id: userId,
-      base_airport: baseFromParams || null,
-      area: areaFromParams || null,
-      housing_type:
-        activeTab === 'room'
-          ? 'room'
-          : activeTab === 'apartment'
-          ? 'apartment'
-          : activeTab === 'crashpad'
-          ? 'crashpad'
-          : null,
-      min_price: minFromParams ?? null,
-      max_price: maxFromParams ?? null,
-      bed_type: (bedFromParams as any) || null,
-      available_tonight: hotTonight,
-      standby_only: standbyOnlyFromParams,
-      alerts_enabled: true,
-    } as any);
-    const refreshed = await fetchSavedSearches(userId);
-    setSavedSearches(refreshed);
+  const handleTabPress = (key: TabKey) => {
+    setActiveTab(key);
   };
 
-  const openSavedSearch = (s: HousingSavedSearch) => {
-    const nextParams: Record<string, string> = { type: activeTab, hot: hotTonight ? '1' : '0' };
-    if (s.base_airport) nextParams.base = s.base_airport;
-    if (s.area) nextParams.area = s.area;
-    if (typeof s.min_price === 'number') nextParams.min = String(s.min_price);
-    if (typeof s.max_price === 'number') nextParams.max = String(s.max_price);
-    if (s.bed_type) nextParams.bed = s.bed_type;
-    if (s.housing_type) nextParams.type = s.housing_type;
-    if (s.available_tonight) nextParams.hot = '1';
-    if (s.standby_only) nextParams.standby = '1';
-    router.push({ pathname: '/(screens)/crashpads', params: nextParams });
+  const handleToggleHotTonight = (value: boolean) => {
+    setHotTonight(value);
+  };
+
+  const [showLocationSheet, setShowLocationSheet] = useState(false);
+  const [showPriceSheet, setShowPriceSheet] = useState(false);
+  const [showBedSheet, setShowBedSheet] = useState(false);
+
+  const applyQuickFiltersAndClose = (next: {
+    base?: string;
+    area?: string;
+    min?: string;
+    max?: string;
+    bed?: string;
+  }) => {
+    const paramsOut: any = {
+      base: next.base ?? baseFromParams,
+      area: next.area ?? areaFromParams,
+      min: next.min ?? (minFromParams ? String(minFromParams) : undefined),
+      max: next.max ?? (maxFromParams ? String(maxFromParams) : undefined),
+      bed: next.bed ?? bedFromParams,
+      type: activeTab,
+      hot: hotTonight ? '1' : '0',
+    };
+
+    Object.keys(paramsOut).forEach((key) => {
+      if (paramsOut[key] === undefined || paramsOut[key] === '') {
+        delete paramsOut[key];
+      }
+    });
+
+    router.push({ pathname: '/(screens)/crashpads', params: paramsOut });
+    setShowLocationSheet(false);
+    setShowPriceSheet(false);
+    setShowBedSheet(false);
   };
 
   return (
@@ -215,15 +223,29 @@ export default function CrashpadsHousingHubScreen() {
         onPressMenu={() => router.push('/menu')}
       />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Tabs */}
         <View style={styles.tabsRow}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsInnerRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.tabsInnerRow}
+          >
             {TABS.map((tab) => (
               <Pressable
                 key={tab.key}
-                onPress={() => setActiveTab(tab.key)}
-                style={[styles.tabPill, activeTab === tab.key && styles.tabPillActive]}
+                onPress={() => handleTabPress(tab.key)}
+                style={[
+                  styles.tabPill,
+                  activeTab === tab.key && styles.tabPillActive,
+                ]}
               >
-                <Text style={[styles.tabLabel, activeTab === tab.key && styles.tabLabelActive]} numberOfLines={1}>
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    activeTab === tab.key && styles.tabLabelActive,
+                  ]}
+                  numberOfLines={1}
+                >
                   {tab.label}
                 </Text>
               </Pressable>
@@ -231,22 +253,35 @@ export default function CrashpadsHousingHubScreen() {
           </ScrollView>
         </View>
 
-        <View style={styles.searchStripWrap}>
-          <Pressable style={styles.searchStrip} onPress={handleOpenFilters}>
-            <Ionicons name="search" size={14} color={colors.textSecondary} />
-            <Text style={styles.searchStripText} numberOfLines={1}>
+        {/* Compact search control grid */}
+        <View style={styles.searchGrid}>
+          <Pressable style={styles.searchCell} onPress={() => setShowLocationSheet(true)}>
+            <Text style={styles.searchLabel}>Base / Area</Text>
+            <Text style={styles.searchValue} numberOfLines={1}>
               {baseLabel}
             </Text>
-            <Text style={styles.searchStripDot}>•</Text>
-            <Text style={styles.searchStripText} numberOfLines={1}>
+          </Pressable>
+          <Pressable style={styles.searchCell} onPress={() => setShowPriceSheet(true)}>
+            <Text style={styles.searchLabel}>Price</Text>
+            <Text style={styles.searchValue} numberOfLines={1}>
               {priceLabel}
             </Text>
-            <View style={styles.filterPill}>
-              <Text style={styles.filterPillText}>FILTER</Text>
-            </View>
+          </Pressable>
+          <Pressable style={styles.searchCell} onPress={() => setShowBedSheet(true)}>
+            <Text style={styles.searchLabel}>Bed Type</Text>
+            <Text style={styles.searchValue} numberOfLines={1}>
+              {bedLabel}
+            </Text>
+          </Pressable>
+          <Pressable style={styles.searchCell} onPress={handleOpenFilters}>
+            <Text style={styles.searchLabel}>Filter</Text>
+            <Text style={styles.searchValueSub} numberOfLines={1}>
+              More filters
+            </Text>
           </Pressable>
         </View>
 
+        {/* Map / Sort row */}
         <View style={styles.mapSortRow}>
           <Pressable style={styles.mapButton} onPress={() => router.push('/(screens)/crashpads-map')}>
             <Ionicons name="map-outline" size={16} color={colors.textSecondary} />
@@ -258,6 +293,7 @@ export default function CrashpadsHousingHubScreen() {
           </Pressable>
         </View>
 
+        {/* Hot Bed Tonight toggle */}
         <View style={styles.hotCard}>
           <View style={styles.hotLeft}>
             <Text style={styles.hotIcon}>🔥</Text>
@@ -268,64 +304,51 @@ export default function CrashpadsHousingHubScreen() {
           </View>
           <Switch
             value={hotTonight}
-            onValueChange={setHotTonight}
+            onValueChange={handleToggleHotTonight}
             trackColor={{ false: '#CBD5E1', true: colors.primary }}
             thumbColor="#fff"
           />
         </View>
 
+        {/* Action buttons row */}
         <View style={styles.ctaBlock}>
           <View style={styles.ctaRow}>
-            <Pressable style={styles.primaryCta} onPress={() => router.push('/(screens)/crashpads-post-availability')}>
+            <Pressable
+              style={styles.primaryCta}
+              onPress={() => router.push('/(screens)/crashpads-post-availability')}
+            >
               <Text style={styles.primaryCtaText}>Post Availability</Text>
             </Pressable>
-            <Pressable style={styles.outlineCta} onPress={() => router.push('/(screens)/crashpads-post-need')}>
+            <Pressable
+              style={styles.outlineCta}
+              onPress={() => router.push('/(screens)/crashpads-post-need')}
+            >
               <Text style={styles.outlineCtaText}>Post Need</Text>
             </Pressable>
           </View>
-          <Pressable style={styles.saveSearchLink} onPress={saveCurrentSearch}>
+          <Pressable
+            style={styles.saveSearchLink}
+            onPress={handleOpenFilters}
+          >
             <Ionicons name="bookmark-outline" size={14} color={colors.textSecondary} />
             <Text style={styles.saveSearchText}>Save search & alerts</Text>
           </Pressable>
         </View>
 
-        <View style={styles.savedSection}>
-          <View style={styles.savedHeaderRow}>
-            <Text style={styles.savedHeader}>Saved Searches</Text>
-            <Pressable onPress={() => router.push('/(screens)/crashpads-saved-searches')}>
-              <Text style={styles.savedHeaderLink}>View all {'>'}</Text>
-            </Pressable>
-          </View>
-          {savedSearches.length === 0 ? (
-            <View style={styles.savedCard}>
-              <Text style={styles.savedBody}>No saved searches yet. Save your current search to get alerts.</Text>
-            </View>
-          ) : (
-            savedSearches.slice(0, 2).map((s) => (
-              <Pressable key={s.id} style={[styles.savedCard, shadow.cardShadow]} onPress={() => openSavedSearch(s)}>
-                <Text style={styles.savedTitle}>
-                  {(s.base_airport || 'Any Base')}{s.area ? ` / ${s.area}` : ''}
-                </Text>
-                <Text style={styles.savedBody}>
-                  {s.housing_type ? `${s.housing_type} • ` : ''}
-                  {s.min_price || s.max_price ? `$${s.min_price || 0}-$${s.max_price || '—'}` : 'Any Price'}
-                  {s.bed_type ? ` • ${s.bed_type.replace(/_/g, ' ')}` : ''}
-                </Text>
-              </Pressable>
-            ))
-          )}
-        </View>
-
+        {/* Result count */}
         <Text style={styles.resultCount}>{resultCount} Results</Text>
 
+        {/* Listing or need feed */}
         <View style={{ marginTop: spacing.md }}>
           {loading ? (
-            <Text style={styles.loadingText}>Loading {activeTab === 'wanted' ? 'needs' : 'listings'}...</Text>
+            <Text style={styles.loadingText}>Loading {activeTab === 'wanted' ? 'needs' : 'listings'}…</Text>
           ) : resultCount === 0 && hasActiveFilters ? (
             <View style={styles.emptyCard}>
               <Ionicons name="home-outline" size={32} color={colors.textSecondary} />
               <Text style={styles.emptyTitle}>No {activeTab === 'wanted' ? 'needs' : 'listings'} match these filters yet</Text>
-              <Text style={styles.emptyBody}>Try adjusting your filters or expanding to nearby bases.</Text>
+              <Text style={styles.emptyBody}>
+                Try adjusting your filters or expanding to nearby bases.
+              </Text>
               <Pressable style={styles.emptyButton} onPress={handleOpenFilters}>
                 <Text style={styles.emptyButtonText}>Reset filters</Text>
               </Pressable>
@@ -335,21 +358,23 @@ export default function CrashpadsHousingHubScreen() {
               <View key={need.id} style={[styles.needCard, shadow.cardShadow]}>
                 <View style={styles.needHeaderRow}>
                   <Text style={styles.needTitle}>{need.base_airport} crew need</Text>
-                  {need.need_tonight ? (
+                  {need.need_tonight && (
                     <View style={styles.needBadge}>
                       <Text style={styles.needBadgeText}>Tonight</Text>
                     </View>
-                  ) : null}
+                  )}
                 </View>
                 <Text style={styles.needMeta} numberOfLines={1}>
                   {need.need_type} • {need.duration || 'Flexible'}
                 </Text>
-                {need.budget ? <Text style={styles.needPrice}>Budget up to ${need.budget}</Text> : null}
-                {need.notes ? (
+                {need.budget && (
+                  <Text style={styles.needPrice}>Budget up to ${need.budget}</Text>
+                )}
+                {need.notes && (
                   <Text style={styles.needNotes} numberOfLines={3}>
                     {need.notes}
                   </Text>
-                ) : null}
+                )}
               </View>
             ))
           ) : (
@@ -361,15 +386,109 @@ export default function CrashpadsHousingHubScreen() {
                 onToggleSave={async () => {
                   if (!userId) return;
                   const willSave = !savedIds.includes(item.id);
-                  setSavedIds((prev) => (willSave ? [...prev, item.id] : prev.filter((id) => id !== item.id)));
+                  setSavedIds((prev) =>
+                    willSave
+                      ? [...prev, item.id]
+                      : prev.filter((id) => id !== item.id),
+                  );
                   await toggleSavedListing(userId, item.id, willSave);
                 }}
-                onPress={() => router.push({ pathname: '/(screens)/crashpads-detail', params: { id: item.id } })}
+                onPress={() =>
+                  router.push({ pathname: '/(screens)/crashpads-detail', params: { id: item.id } })
+                }
               />
             ))
           )}
         </View>
       </ScrollView>
+
+      {showLocationSheet && (
+        <View style={styles.sheetOverlay}>
+          <View style={styles.sheetCard}>
+            <Text style={styles.sheetTitle}>Location</Text>
+            <View style={{ marginBottom: spacing.md }}>
+              <Text style={styles.sheetLabel}>Base / Airport</Text>
+              <Pressable
+                style={styles.sheetChip}
+                onPress={() => applyQuickFiltersAndClose({ base: 'JFK' })}
+              >
+                <Text style={styles.sheetChipText}>JFK</Text>
+              </Pressable>
+              <Pressable
+                style={styles.sheetChip}
+                onPress={() => applyQuickFiltersAndClose({ base: 'LGA' })}
+              >
+                <Text style={styles.sheetChipText}>LGA</Text>
+              </Pressable>
+              <Pressable
+                style={styles.sheetChip}
+                onPress={() => applyQuickFiltersAndClose({ base: 'EWR' })}
+              >
+                <Text style={styles.sheetChipText}>EWR</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.sheetCancel} onPress={() => setShowLocationSheet(false)}>
+              <Text style={styles.sheetCancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {showPriceSheet && (
+        <View style={styles.sheetOverlay}>
+          <View style={styles.sheetCard}>
+            <Text style={styles.sheetTitle}>Price</Text>
+            <View style={{ marginBottom: spacing.sm }}>
+              <Pressable
+                style={styles.sheetChip}
+                onPress={() => applyQuickFiltersAndClose({ max: '50' })}
+              >
+                <Text style={styles.sheetChipText}>Under $50/night</Text>
+              </Pressable>
+              <Pressable
+                style={styles.sheetChip}
+                onPress={() => applyQuickFiltersAndClose({ max: '500' })}
+              >
+                <Text style={styles.sheetChipText}>Under $500/mo</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.sheetCancel} onPress={() => setShowPriceSheet(false)}>
+              <Text style={styles.sheetCancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {showBedSheet && (
+        <View style={styles.sheetOverlay}>
+          <View style={styles.sheetCard}>
+            <Text style={styles.sheetTitle}>Bed Type</Text>
+            <View style={{ marginBottom: spacing.sm }}>
+              <Pressable
+                style={styles.sheetChip}
+                onPress={() => applyQuickFiltersAndClose({ bed: 'hot_bed' })}
+              >
+                <Text style={styles.sheetChipText}>Hot Bed</Text>
+              </Pressable>
+              <Pressable
+                style={styles.sheetChip}
+                onPress={() => applyQuickFiltersAndClose({ bed: 'cold_bed' })}
+              >
+                <Text style={styles.sheetChipText}>Cold Bed</Text>
+              </Pressable>
+              <Pressable
+                style={styles.sheetChip}
+                onPress={() => applyQuickFiltersAndClose({ bed: 'private_room' })}
+              >
+                <Text style={styles.sheetChipText}>Private Room</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.sheetCancel} onPress={() => setShowBedSheet(false)}>
+              <Text style={styles.sheetCancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -410,44 +529,34 @@ const styles = StyleSheet.create({
   tabLabelActive: {
     color: '#fff',
   },
-  searchStripWrap: {
-    marginBottom: spacing.sm,
+  searchGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: spacing.md,
   },
-  searchStrip: {
-    minHeight: 42,
+  searchCell: {
+    width: '50%',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.cardBg,
-    paddingHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
   },
-  searchStripText: {
-    color: colors.textPrimary,
-    fontSize: 12,
-    fontWeight: '700',
-    flexShrink: 1,
-  },
-  searchStripDot: {
+  searchLabel: {
+    fontSize: 11,
     color: colors.textSecondary,
-    fontSize: 12,
+    marginBottom: 2,
+  },
+  searchValue: {
+    fontSize: 13,
     fontWeight: '700',
+    color: colors.textPrimary,
   },
-  filterPill: {
-    marginLeft: 'auto',
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    backgroundColor: '#FFF4F4',
-  },
-  filterPillText: {
-    color: colors.primary,
-    fontSize: 10,
-    fontWeight: '800',
+  searchValueSub: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
   },
   mapSortRow: {
     flexDirection: 'row',
@@ -541,45 +650,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.textSecondary,
   },
-  savedSection: {
-    marginTop: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  savedHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  savedHeader: {
-    fontSize: 14,
-    color: colors.textPrimary,
-    fontWeight: '800',
-  },
-  savedHeaderLink: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    fontWeight: '700',
-  },
-  savedCard: {
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.cardBg,
-    padding: 10,
-    marginBottom: 8,
-  },
-  savedTitle: {
-    fontSize: 13,
-    color: colors.textPrimary,
-    fontWeight: '800',
-    marginBottom: 3,
-  },
-  savedBody: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    fontWeight: '600',
-  },
   resultCount: {
     marginTop: spacing.sm,
     fontSize: 13,
@@ -667,5 +737,61 @@ const styles = StyleSheet.create({
   needNotes: {
     fontSize: 13,
     color: colors.textSecondary,
+  },
+  sheetOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    top: 0,
+    backgroundColor: 'rgba(15,23,42,0.35)',
+    justifyContent: 'flex-end',
+  },
+  sheetCard: {
+    backgroundColor: colors.cardBg,
+    padding: spacing.md,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    borderTopWidth: 1,
+    borderColor: colors.border,
+  },
+  sheetTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
+  },
+  sheetLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    marginBottom: 4,
+  },
+  sheetChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardBg,
+    marginBottom: 8,
+  },
+  sheetChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  sheetCancel: {
+    marginTop: spacing.sm,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  sheetCancelText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
   },
 });

@@ -13,7 +13,10 @@ async function fetchProfilesByUserIds(userIds: string[]): Promise<Map<string, Pr
   const map = new Map<string, ProfileLite>();
   if (!unique.length) return map;
 
-  const { data, error } = await supabase.from('profiles').select('id, display_name, avatar_url').in('id', unique);
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, display_name, full_name, avatar_url')
+    .in('id', unique);
 
   if (error) {
     console.warn('[DM] fetchProfilesByUserIds:', error.message);
@@ -21,9 +24,13 @@ async function fetchProfilesByUserIds(userIds: string[]): Promise<Map<string, Pr
   }
 
   for (const p of data || []) {
+    const resolvedDisplayName =
+      (typeof p.display_name === 'string' && p.display_name.trim()) ||
+      (typeof (p as any).full_name === 'string' && String((p as any).full_name).trim()) ||
+      null;
     map.set(p.id, {
       id: p.id,
-      display_name: p.display_name ?? null,
+      display_name: resolvedDisplayName,
       avatar_url: p.avatar_url ?? null,
     });
   }

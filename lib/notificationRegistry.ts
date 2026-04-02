@@ -47,7 +47,7 @@ const routeHousingHub = () => '/(screens)/crashpads';
 const routeHousingDetail = (n: NotificationRouteContext) =>
   `/(screens)/crashpads-detail?id=${enc(n.entity_id)}`;
 const routeLoadsHub = () => '/loads';
-const routeLoadDetail = (n: NotificationRouteContext) => `/load-details/${enc(n.entity_id)}`;
+const routeLoadDetail = (n: NotificationRouteContext) => `/loads/request/${enc(n.entity_id)}`;
 const routeNonRev = () => '/non-rev-loads';
 const routeCrewTools = () => '/(tabs)/crew-tools';
 const routeCrewSchedule = () => '/crew-schedule';
@@ -55,6 +55,11 @@ const routeAccountSettings = () => '/account-settings';
 const routeEditProfile = () => '/edit-profile';
 const routeMessagesInbox = () => '/messages-inbox';
 const routeNotifications = () => '/notifications';
+const routeCrewHonors = () => '/crew-honors';
+const routeCrewHonorDetail = (n: NotificationRouteContext) =>
+  n.entity_id ? `/crew-honors/${enc(n.entity_id)}` : '/crew-honors';
+const routeFlightTrackerDetail = (n: NotificationRouteContext) =>
+  n.entity_id ? `/flight-tracker/flight/${enc(n.entity_id)}` : '/flight-tracker';
 
 /** Legacy DB / call-site type strings → canonical registry keys. */
 export const LEGACY_NOTIFICATION_TYPE_ALIASES: Record<string, NotificationTypeKey> = {
@@ -138,7 +143,21 @@ export type NotificationTypeKey =
   | 'feature_launch'
   | 'maintenance_notice'
   | 'policy_update'
-  | 'security_alert';
+  | 'security_alert'
+  | 'crew_honor_nominations_open'
+  | 'crew_honor_voting_open'
+  | 'crew_honor_voting_ending_soon'
+  | 'crew_honor_nominated'
+  | 'crew_honor_won'
+  | 'crew_honor_nomination_selected'
+  | 'crew_honor_shared'
+  | 'crew_honor_comment'
+  | 'crew_honor_reaction'
+  | 'flight_tracker_status_change'
+  | 'flight_tracker_delay'
+  | 'flight_tracker_cancelled'
+  | 'flight_tracker_departed'
+  | 'flight_tracker_arrived';
 
 export const NOTIFICATION_REGISTRY: Record<NotificationTypeKey, NotificationRegistryEntry> = {
   // Social
@@ -509,6 +528,90 @@ export const NOTIFICATION_REGISTRY: Record<NotificationTypeKey, NotificationRegi
     priority: 'high',
     pushEligible: true,
     resolveRoute: routeAccountSettings,
+  },
+  crew_honor_nominations_open: {
+    category: 'system',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeCrewHonors,
+  },
+  crew_honor_voting_open: {
+    category: 'system',
+    priority: 'high',
+    pushEligible: true,
+    resolveRoute: routeCrewHonors,
+  },
+  crew_honor_voting_ending_soon: {
+    category: 'system',
+    priority: 'high',
+    pushEligible: true,
+    resolveRoute: routeCrewHonors,
+  },
+  crew_honor_nominated: {
+    category: 'social',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeCrewHonors,
+  },
+  crew_honor_won: {
+    category: 'social',
+    priority: 'high',
+    pushEligible: true,
+    resolveRoute: routeCrewHonorDetail,
+  },
+  crew_honor_nomination_selected: {
+    category: 'social',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeCrewHonorDetail,
+  },
+  crew_honor_shared: {
+    category: 'social',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeCrewHonorDetail,
+  },
+  crew_honor_comment: {
+    category: 'social',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeCrewHonorDetail,
+  },
+  crew_honor_reaction: {
+    category: 'social',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeCrewHonorDetail,
+  },
+  flight_tracker_status_change: {
+    category: 'alerts',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeFlightTrackerDetail,
+  },
+  flight_tracker_delay: {
+    category: 'alerts',
+    priority: 'high',
+    pushEligible: true,
+    resolveRoute: routeFlightTrackerDetail,
+  },
+  flight_tracker_cancelled: {
+    category: 'alerts',
+    priority: 'high',
+    pushEligible: true,
+    resolveRoute: routeFlightTrackerDetail,
+  },
+  flight_tracker_departed: {
+    category: 'alerts',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeFlightTrackerDetail,
+  },
+  flight_tracker_arrived: {
+    category: 'alerts',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeFlightTrackerDetail,
   },
 };
 

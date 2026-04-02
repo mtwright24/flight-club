@@ -17,6 +17,20 @@ export type HousingFilters = {
   amenities?: string[];
 };
 
+const missingHousingTablesLogged = new Set<string>();
+
+function isMissingTableError(error: unknown, tableName: string): boolean {
+  const code = String((error as any)?.code || '');
+  const message = String((error as any)?.message || '');
+  return code === 'PGRST205' && message.includes(`'public.${tableName}'`);
+}
+
+function logMissingTableOnce(tableName: string): void {
+  if (missingHousingTablesLogged.has(tableName)) return;
+  missingHousingTablesLogged.add(tableName);
+  console.log(`[Housing] ${tableName} table missing; returning empty state until migrations are applied.`);
+}
+
 export async function fetchHousingListings(filters: HousingFilters = {}): Promise<HousingListing[]> {
   let query = supabase
     .from('housing_listings')
@@ -74,6 +88,10 @@ export async function fetchHousingListings(filters: HousingFilters = {}): Promis
 
   const { data, error } = await query;
   if (error) {
+    if (isMissingTableError(error, 'housing_listings')) {
+      logMissingTableOnce('housing_listings');
+      return [];
+    }
     console.log('fetchHousingListings error', error);
     return [];
   }
@@ -114,6 +132,10 @@ export async function fetchSavedSearches(userId: string): Promise<HousingSavedSe
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
   if (error) {
+    if (isMissingTableError(error, 'housing_saved_searches')) {
+      logMissingTableOnce('housing_saved_searches');
+      return [];
+    }
     console.log('fetchSavedSearches error', error);
     return [];
   }
@@ -173,6 +195,10 @@ export async function fetchSavedListingIds(userId: string): Promise<string[]> {
     .eq('user_id', userId);
 
   if (error) {
+    if (isMissingTableError(error, 'user_saved_housing_listings')) {
+      logMissingTableOnce('user_saved_housing_listings');
+      return [];
+    }
     console.log('fetchSavedListingIds error', error);
     return [];
   }

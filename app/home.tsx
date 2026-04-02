@@ -285,9 +285,9 @@ export default function HomeScreen() {
       route: '/crashpads',
     },
     {
-      label: 'Utility\nHub',
+      label: 'Flight\nTracker',
       icon: require('../assets/images/auth/brand/icon-utility-hub.png'),
-      route: '/(screens)/utility',
+      route: '/flight-tracker',
     },
   ];
 

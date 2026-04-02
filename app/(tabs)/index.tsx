@@ -5,7 +5,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
-  ImageBackground,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -24,7 +23,7 @@ import {
   hasToolShortcutUnread,
   type HomeTileId,
 } from '../../lib/homeDestinationUnread';
-import { getCurrentUserProfile, getMonthlyAwards, getTrendingPosts } from '../../lib/home';
+import { getCurrentUserProfile, getTrendingPosts } from '../../lib/home';
 import { getHomeToolShortcutIds } from '../../lib/homeShortcutsStorage';
 import { pickRecommendedTools } from '../../lib/homeRecommendedTools';
 import { toolsRegistry, toolShortcutChipLabel } from '../../lib/toolsRegistry';
@@ -39,6 +38,7 @@ import { refreshAllBadgeCountsFromServer } from '../../lib/notificationUnreadSyn
 import { fetchMyRooms, fetchPublicRooms } from '../../src/lib/supabase/rooms';
 import type { MyRoom, Room } from '../../src/types/rooms';
 import { pickAvatarUrlFromData } from '../../lib/homeActivityAvatars';
+import CrewHonorsHomeSection from '../../src/components/crewHonors/CrewHonorsHomeSection';
 
 const tiles: { id: HomeTileId; lines: string[]; icon: number }[] = [
   {
@@ -57,8 +57,8 @@ const tiles: { id: HomeTileId; lines: string[]; icon: number }[] = [
     icon: require('../../assets/images/auth/brand/icon-crashpads-housing.png'),
   },
   {
-    id: 'utility',
-    lines: ['Utility'],
+    id: 'flight-tracker',
+    lines: ['Flight', 'Tracker'],
     icon: require('../../assets/images/auth/brand/icon-utility-hub.png'),
   },
 ];
@@ -71,8 +71,8 @@ function routeForTile(id: HomeTileId): Href {
       return '/loads';
     case 'pad-housing':
       return '/(screens)/crashpads';
-    case 'utility':
-      return '/(screens)/utility';
+    case 'flight-tracker':
+      return '/flight-tracker';
     default:
       return '/';
   }
@@ -116,48 +116,6 @@ function mapPreviewToItem(p: NotificationPreview, currentUserId: string): Notifi
     actor_display_name: typeof actorDisplay === 'string' ? actorDisplay.trim() : undefined,
     timeLabel: formatActivityTimeAgo(p.created_at),
   } as NotificationItem & { user_id: string };
-}
-
-type AwardCardModel = {
-  id: string;
-  title: string;
-  skin: number;
-  textColor: string;
-  user: { id: string; name: string; airlineRole: string; avatarUri: string };
-};
-
-function mapMonthlyAwardsToCards(awards: any[]): AwardCardModel[] {
-  const skins = [
-    require('../../assets/images/brand/award-gold.png'),
-    require('../../assets/images/brand/award-purple.png'),
-    require('../../assets/images/brand/award-blue.png'),
-  ];
-  const textColors = ['#C9A23A', '#6F4BC6', '#4A87E8'];
-  const out: AwardCardModel[] = [];
-  let idx = 0;
-  for (const award of awards || []) {
-    const winners = award?.award_winners || [];
-    for (const w of winners.slice(0, 1)) {
-      const p = w?.profiles || {};
-      const uid = p.id || w.user_id;
-      if (!uid) continue;
-      const mod = idx % 3;
-      out.push({
-        id: `${award.id}-${w.user_id}`,
-        title: award.title || award.type || 'Crew honor',
-        skin: skins[mod],
-        textColor: textColors[mod],
-        user: {
-          id: String(uid),
-          name: p.full_name || p.display_name || 'Member',
-          airlineRole: typeof p.username === 'string' && p.username ? `@${p.username}` : ' ',
-          avatarUri: p.avatar_url || 'https://i.pravatar.cc/100?img=31',
-        },
-      });
-      idx++;
-    }
-  }
-  return out;
 }
 
 function ShortcutsRow({
@@ -429,44 +387,6 @@ function LiveActionBlock({ rooms, loading }: { rooms: Room[]; loading: boolean }
   );
 }
 
-function CrewHonorsBlock({ awardsRaw, loading }: { awardsRaw: any[]; loading: boolean }) {
-  const router = useRouter();
-  const cards = useMemo(() => mapMonthlyAwardsToCards(awardsRaw), [awardsRaw]);
-  return (
-    <View style={styles.section}>
-      <View style={styles.sectionRow}>
-        <Text style={styles.sectionTitle}>CREW HONORS</Text>
-      </View>
-      {loading ? (
-        <View style={styles.rowLoading}>
-          <ActivityIndicator color={COLORS.red} />
-        </View>
-      ) : cards.length === 0 ? (
-        <View style={styles.honorsQuietCard}>
-          <Ionicons name="ribbon-outline" size={28} color={COLORS.red} style={{ marginBottom: 8 }} />
-          <Text style={styles.honorsQuietTitle}>Honors roll</Text>
-          <Text style={styles.honorsQuietBody}>
-            Monthly recognitions will appear here when your program runs an awards cycle. Check back later — nothing is
-            wrong with your account.
-          </Text>
-        </View>
-      ) : (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.awardScrollContent}
-          snapToInterval={206}
-          decelerationRate="fast"
-        >
-          {cards.map((award) => (
-            <AwardCard key={award.id} award={award} router={router} />
-          ))}
-        </ScrollView>
-      )}
-    </View>
-  );
-}
-
 export default function DashboardHome() {
   const router = useRouter();
   const { session, loading: authLoading } = useAuth();
@@ -480,8 +400,6 @@ export default function DashboardHome() {
   const [liveRooms, setLiveRooms] = useState<Room[]>([]);
   const [recoRooms, setRecoRooms] = useState<Room[]>([]);
   const [roomsLoading, setRoomsLoading] = useState(true);
-  const [awardsRaw, setAwardsRaw] = useState<any[]>([]);
-  const [awardsLoading, setAwardsLoading] = useState(true);
   const [shortcutToolIds, setShortcutToolIds] = useState<string[]>([]);
   const [activityRefreshToken, setActivityRefreshToken] = useState(0);
   const {
@@ -493,7 +411,6 @@ export default function DashboardHome() {
   const refreshHomeLists = useCallback(() => {
     setPostsLoading(true);
     setRoomsLoading(true);
-    setAwardsLoading(true);
     void getTrendingPosts().then((p) => {
       setTrendingPosts(p);
       setPostsLoading(false);
@@ -501,10 +418,6 @@ export default function DashboardHome() {
     void fetchPublicRooms({ limit: 20 }).then((r) => {
       setLiveRooms(r);
       setRoomsLoading(false);
-    });
-    void getMonthlyAwards().then((a) => {
-      setAwardsRaw(a);
-      setAwardsLoading(false);
     });
   }, []);
 
@@ -661,7 +574,7 @@ export default function DashboardHome() {
         />
         <TopTenBlock posts={trendingPosts} loading={postsLoading} />
         <LiveActionBlock rooms={liveRooms} loading={roomsLoading} />
-        <CrewHonorsBlock awardsRaw={awardsRaw} loading={awardsLoading} />
+        <CrewHonorsHomeSection userId={userId} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -934,49 +847,6 @@ function LiveActionAlertsRow({
         </Pressable>
       ))}
     </ScrollView>
-  );
-}
-
-function AwardCard({
-  award,
-  router,
-}: {
-  award: AwardCardModel;
-  router: ReturnType<typeof useRouter>;
-}) {
-  return (
-    <Pressable
-      style={styles.awardCard}
-      onPress={() => router.push(`/profile/${award.user.id}` as Href)}
-    >
-      <ImageBackground
-        source={award.skin}
-        style={styles.awardBackground}
-        resizeMode="cover"
-        imageStyle={styles.awardBackgroundImage}
-      >
-        <View style={styles.awardContent}>
-          <Pressable
-            style={styles.awardAvatarAbsolute}
-            onPress={(e: any) => {
-              if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
-              router.push(`/profile/${award.user.id}` as Href);
-            }}
-          >
-            <Image
-              source={{ uri: award.user.avatarUri }}
-              style={styles.awardAvatarImage}
-              resizeMode="cover"
-            />
-          </Pressable>
-
-          <View style={styles.awardBottomSection}>
-            <Text style={[styles.awardUserName, { color: award.textColor }]}>{award.user.name}</Text>
-            <Text style={[styles.awardUserRole, { color: award.textColor }]}>{award.title}</Text>
-          </View>
-        </View>
-      </ImageBackground>
-    </Pressable>
   );
 }
 

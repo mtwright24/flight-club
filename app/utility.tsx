@@ -1,6 +1,5 @@
-import UtilityHubPlaceholderScreen from '../src/screens/UtilityHubPlaceholderScreen';
+import { Redirect } from 'expo-router';
 
-/** Standalone `/utility` — same placeholder as `/(screens)/utility` (Home Row 1 tile). */
 export default function UtilityRoute() {
-  return <UtilityHubPlaceholderScreen />;
+  return <Redirect href="/flight-tracker" />;
 }

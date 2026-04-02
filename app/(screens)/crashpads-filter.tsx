@@ -1,6 +1,7 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
 import { useAuth } from '../../src/hooks/useAuth';
 import { upsertSavedSearch } from '../../src/lib/housing';
@@ -8,22 +9,31 @@ import { colors, radius, spacing } from '../../src/styles/theme';
 
 type ChipOption = { key: string; label: string };
 
-const CREW_RULES: ChipOption[] = [
-  { key: 'women_only', label: 'Women only' },
-  { key: 'crew_only', label: 'Crew only' },
+const BASES: ChipOption[] = [
+  { key: 'JFK', label: 'JFK' },
+  { key: 'LGA', label: 'LGA' },
+  { key: 'EWR', label: 'EWR' },
 ];
 
-const LIFESTYLE_TAGS: ChipOption[] = [
-  { key: 'reserve_friendly', label: 'Reserve-friendly' },
-  { key: 'quiet_hours', label: 'Quiet hours' },
-  { key: 'party_friendly', label: 'Social / lively' },
+const HOUSING_TYPES: ChipOption[] = [
+  { key: 'crashpad', label: 'Crashpad' },
+  { key: 'room', label: 'Room' },
+  { key: 'apartment', label: 'Apartment' },
+  { key: 'short_term', label: 'Short-Term Stay' },
+];
+
+const PREFS: ChipOption[] = [
+  { key: 'women_only', label: 'Women only' },
+  { key: 'men_only', label: 'Men only' },
+  { key: 'coed', label: 'Coed' },
+  { key: 'crew_only', label: 'Airline crew only' },
 ];
 
 const AMENITIES: ChipOption[] = [
-  { key: 'washer_dryer', label: 'Washer / dryer' },
+  { key: 'near_public_transit', label: 'Near public transit' },
+  { key: 'airport_shuttle', label: 'Shuttle to airport' },
+  { key: 'washer_dryer', label: 'Washer/dryer' },
   { key: 'kitchen_access', label: 'Kitchen access' },
-  { key: 'wifi', label: 'Fast Wi‑Fi' },
-  { key: 'shuttle', label: 'Shuttle' },
 ];
 
 export default function HousingFilterModalScreen() {
@@ -32,28 +42,15 @@ export default function HousingFilterModalScreen() {
   const { session } = useAuth();
   const userId = session?.user?.id;
 
-  const [baseAirport, setBaseAirport] = useState(
-    (typeof params.base === 'string' && params.base) || 'JFK',
-  );
-  const [area, setArea] = useState(typeof params.area === 'string' ? params.area : '');
-  const [housingType, setHousingType] = useState(
-    (typeof params.type === 'string' && params.type) || 'crashpad',
-  );
-  const [minPrice, setMinPrice] = useState(
-    typeof params.min === 'string' ? params.min : '',
-  );
-  const [maxPrice, setMaxPrice] = useState(
-    typeof params.max === 'string' ? params.max : '',
-  );
-  const [bedType, setBedType] = useState(
-    typeof params.bed === 'string' ? params.bed : '',
-  );
+  const [baseAirport, setBaseAirport] = useState((typeof params.base === 'string' && params.base) || 'JFK');
+  const [area, setArea] = useState(typeof params.area === 'string' ? params.area : 'Jamaica');
+  const [housingType, setHousingType] = useState((typeof params.type === 'string' && params.type) || 'crashpad');
+  const [minPrice, setMinPrice] = useState(typeof params.min === 'string' ? params.min : '600');
+  const [maxPrice, setMaxPrice] = useState(typeof params.max === 'string' ? params.max : '1200');
+  const [bedType, setBedType] = useState(typeof params.bed === 'string' ? params.bed : '');
   const [availableTonight, setAvailableTonight] = useState(params.hot === '1');
-  const [standbyOnly, setStandbyOnly] = useState(false);
-
-  const [crewRules, setCrewRules] = useState([] as string[]);
-  const [lifestyleTags, setLifestyleTags] = useState([] as string[]);
-  const [amenities, setAmenities] = useState([] as string[]);
+  const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
+  const [selectedAmenities, setSelectedAmenities] = useState<string[]>([]);
 
   const hasFilters = useMemo(
     () =>
@@ -64,42 +61,23 @@ export default function HousingFilterModalScreen() {
       !!bedType ||
       !!housingType ||
       availableTonight ||
-      standbyOnly ||
-      crewRules.length > 0 ||
-      lifestyleTags.length > 0 ||
-      amenities.length > 0,
-    [
-      amenities.length,
-      area,
-      availableTonight,
-      baseAirport,
-      bedType,
-      crewRules.length,
-      housingType,
-      lifestyleTags.length,
-      maxPrice,
-      minPrice,
-      standbyOnly,
-    ],
+      selectedPrefs.length > 0 ||
+      selectedAmenities.length > 0,
+    [area, availableTonight, baseAirport, bedType, housingType, maxPrice, minPrice, selectedAmenities.length, selectedPrefs.length],
   );
 
-  const toggleFromList = (
-    list: string[],
-    setList: (next: string[]) => void,
-    key: string,
-  ) => {
+  const toggleFromList = (list: string[], setList: (next: string[]) => void, key: string) => {
     setList(list.includes(key) ? list.filter((k) => k !== key) : [...list, key]);
   };
 
   const handleShowResults = () => {
-    const paramsOut: any = { hot: availableTonight ? '1' : '0' };
+    const paramsOut: Record<string, string> = { hot: availableTonight ? '1' : '0' };
     if (baseAirport) paramsOut.base = baseAirport;
     if (area) paramsOut.area = area;
     if (minPrice) paramsOut.min = minPrice;
     if (maxPrice) paramsOut.max = maxPrice;
     if (bedType) paramsOut.bed = bedType;
     if (housingType) paramsOut.type = housingType;
-    if (standbyOnly) paramsOut.standby = '1';
     router.push({ pathname: '/(screens)/crashpads', params: paramsOut });
   };
 
@@ -115,11 +93,9 @@ export default function HousingFilterModalScreen() {
       bed_type: (bedType as any) || null,
       available_tonight: availableTonight,
       filters: {
-        crew_rules: crewRules,
-        lifestyle_tags: lifestyleTags,
-        amenities,
+        living_preferences: selectedPrefs,
+        amenities: selectedAmenities,
       },
-      standby_only: standbyOnly,
       alerts_enabled: true,
     } as any);
     router.push('/(screens)/crashpads-saved-searches');
@@ -133,216 +109,116 @@ export default function HousingFilterModalScreen() {
     setMaxPrice('');
     setBedType('');
     setAvailableTonight(false);
-    setStandbyOnly(false);
-    setCrewRules([]);
-    setLifestyleTags([]);
-    setAmenities([]);
+    setSelectedPrefs([]);
+    setSelectedAmenities([]);
   };
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <FlightClubHeader title="Filter" showLogo={false} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Base + Area */}
-        <View style={styles.section}>
+        <View style={styles.panel}>
+          <View style={styles.panelHeader}>
+            <Text style={styles.panelTitle}>Filter</Text>
+            <Pressable disabled={!hasFilters} onPress={handleReset}>
+              <Text style={[styles.resetText, !hasFilters && styles.resetDisabled]}>RESET</Text>
+            </Pressable>
+          </View>
+
           <Text style={styles.sectionTitle}>Base</Text>
-          <TextInput
-            style={styles.input}
-            value={baseAirport}
-            onChangeText={setBaseAirport}
-            placeholder="JFK, LGA, EWR, IAH, FLL..."
-          />
-          <Text style={[styles.sectionTitle, { marginTop: spacing.sm }]}>Area / Neighborhood</Text>
+          <View style={styles.chipRow}>
+            {BASES.map((opt) => (
+              <Pressable
+                key={opt.key}
+                style={[styles.baseChip, baseAirport === opt.key && styles.baseChipActive]}
+                onPress={() => setBaseAirport(opt.key)}
+              >
+                <Text style={[styles.baseChipText, baseAirport === opt.key && styles.baseChipTextActive]}>{opt.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+
+          <Text style={styles.sectionTitle}>Area</Text>
           <TextInput
             style={styles.input}
             value={area}
             onChangeText={setArea}
-            placeholder="Jamaica, Queens / Houston near IAH..."
+            placeholder="Jamaica, Queens..."
+            placeholderTextColor="rgba(255,255,255,0.8)"
           />
-        </View>
 
-        {/* Housing Type */}
-        <View style={styles.section}>
           <Text style={styles.sectionTitle}>Housing Type</Text>
-          <View style={styles.chipRow}>
-            {[
-              { key: 'crashpad', label: 'Crashpad' },
-              { key: 'room', label: 'Room' },
-              { key: 'apartment', label: 'Apartment' },
-              { key: 'short_term', label: 'Short-Term' },
-            ].map((opt) => (
+          <View style={styles.chipGrid}>
+            {HOUSING_TYPES.map((opt) => (
               <Pressable
                 key={opt.key}
-                style={[styles.chip, housingType === opt.key && styles.chipActive]}
-                onPress={() => setHousingType(opt.key as any)}
+                style={[styles.typeChip, housingType === opt.key && styles.typeChipActive]}
+                onPress={() => setHousingType(opt.key)}
               >
-                <Text style={[styles.chipText, housingType === opt.key && styles.chipTextActive]}>
-                  {opt.label}
-                </Text>
+                <Ionicons name="bed-outline" size={13} color={housingType === opt.key ? colors.primary : '#fff'} />
+                <Text style={[styles.typeChipText, housingType === opt.key && styles.typeChipTextActive]}>{opt.label}</Text>
               </Pressable>
             ))}
           </View>
-        </View>
 
-        {/* Price */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Price Range (USD)</Text>
-          <View style={styles.row}>
+          <Text style={styles.sectionTitle}>Price Range</Text>
+          <View style={styles.priceRow}>
             <TextInput
-              style={[styles.input, styles.inputHalf]}
+              style={[styles.input, styles.priceInput]}
               value={minPrice}
               onChangeText={setMinPrice}
-              placeholder="Min"
               keyboardType="numeric"
+              placeholder="MINIMUM PRICE"
+              placeholderTextColor="rgba(255,255,255,0.8)"
             />
             <TextInput
-              style={[styles.input, styles.inputHalf]}
+              style={[styles.input, styles.priceInput]}
               value={maxPrice}
               onChangeText={setMaxPrice}
-              placeholder="Max"
               keyboardType="numeric"
+              placeholder="MAX PRICE"
+              placeholderTextColor="rgba(255,255,255,0.8)"
             />
           </View>
-        </View>
 
-        {/* Bed Type */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Bed Type</Text>
-          <View style={styles.chipRow}>
-            {[
-              { key: '', label: 'Any' },
-              { key: 'hot_bed', label: 'Hot Bed' },
-              { key: 'cold_bed', label: 'Cold Bed' },
-              { key: 'private_room', label: 'Private Room' },
-            ].map((opt) => (
-              <Pressable
-                key={opt.key || 'any'}
-                style={[styles.chip, bedType === opt.key && styles.chipActive]}
-                onPress={() => setBedType(opt.key as any)}
-              >
-                <Text style={[styles.chipText, bedType === opt.key && styles.chipTextActive]}>
-                  {opt.label}
-                </Text>
+          <Text style={styles.sectionTitle}>Living preferences</Text>
+          {PREFS.map((opt) => {
+            const selected = selectedPrefs.includes(opt.key);
+            return (
+              <Pressable key={opt.key} style={styles.checkRow} onPress={() => toggleFromList(selectedPrefs, setSelectedPrefs, opt.key)}>
+                <Ionicons name={selected ? 'checkbox' : 'square-outline'} size={18} color="#fff" />
+                <Text style={styles.checkRowText}>{opt.label}</Text>
               </Pressable>
-            ))}
-          </View>
-        </View>
+            );
+          })}
 
-        {/* Availability */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Availability</Text>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>Available Tonight</Text>
-            <Switch
-              value={availableTonight}
-              onValueChange={setAvailableTonight}
-              trackColor={{ false: '#CBD5E1', true: colors.primary }}
-              thumbColor="#fff"
-            />
-          </View>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>Standby beds only</Text>
-            <Switch
-              value={standbyOnly}
-              onValueChange={setStandbyOnly}
-              trackColor={{ false: '#CBD5E1', true: colors.primary }}
-              thumbColor="#fff"
-            />
-          </View>
-        </View>
-
-        {/* Crew Rules */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Crew Rules</Text>
-          <View style={styles.chipRow}>
-            {CREW_RULES.map((opt) => (
-              <Pressable
-                key={opt.key}
-                style={[
-                  styles.chip,
-                  crewRules.includes(opt.key) && styles.chipActive,
-                ]}
-                onPress={() => toggleFromList(crewRules, setCrewRules, opt.key)}
-              >
-                <Text
-                  style={[
-                    styles.chipText,
-                    crewRules.includes(opt.key) && styles.chipTextActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
+          {AMENITIES.map((opt) => {
+            const selected = selectedAmenities.includes(opt.key);
+            return (
+              <Pressable key={opt.key} style={styles.checkRow} onPress={() => toggleFromList(selectedAmenities, setSelectedAmenities, opt.key)}>
+                <Ionicons name={selected ? 'checkbox' : 'square-outline'} size={18} color="#fff" />
+                <Text style={styles.checkRowText}>{opt.label}</Text>
               </Pressable>
-            ))}
-          </View>
-        </View>
+            );
+          })}
 
-        {/* Lifestyle / Fit */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Lifestyle / Fit</Text>
-          <View style={styles.chipRow}>
-            {LIFESTYLE_TAGS.map((opt) => (
-              <Pressable
-                key={opt.key}
-                style={[
-                  styles.chip,
-                  lifestyleTags.includes(opt.key) && styles.chipActive,
-                ]}
-                onPress={() => toggleFromList(lifestyleTags, setLifestyleTags, opt.key)}
-              >
-                <Text
-                  style={[
-                    styles.chipText,
-                    lifestyleTags.includes(opt.key) && styles.chipTextActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        </View>
-
-        {/* Amenities */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Amenities / Access</Text>
-          <View style={styles.chipRow}>
-            {AMENITIES.map((opt) => (
-              <Pressable
-                key={opt.key}
-                style={[
-                  styles.chip,
-                  amenities.includes(opt.key) && styles.chipActive,
-                ]}
-                onPress={() => toggleFromList(amenities, setAmenities, opt.key)}
-              >
-                <Text
-                  style={[
-                    styles.chipText,
-                    amenities.includes(opt.key) && styles.chipTextActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
-              </Pressable>
-            ))}
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Hot bed tonight</Text>
+            <Pressable onPress={() => setAvailableTonight((v) => !v)} style={[styles.togglePill, availableTonight && styles.togglePillActive]}>
+              <Text style={[styles.togglePillText, availableTonight && styles.togglePillTextActive]}>
+                {availableTonight ? 'On' : 'Off'}
+              </Text>
+            </Pressable>
           </View>
         </View>
       </ScrollView>
 
       <View style={styles.bottomBar}>
-        <Pressable
-          style={[styles.bottomSecondary, !hasFilters && { opacity: 0.5 }]}
-          onPress={handleReset}
-          disabled={!hasFilters}
-        >
-          <Text style={styles.bottomSecondaryText}>Reset</Text>
+        <Pressable style={styles.secondaryCta} onPress={handleSaveSearch}>
+          <Text style={styles.secondaryCtaText}>SAVE SEARCH</Text>
         </Pressable>
-        <Pressable style={styles.bottomSecondary} onPress={handleSaveSearch}>
-          <Text style={styles.bottomSecondaryText}>Save Search</Text>
-        </Pressable>
-        <Pressable style={styles.bottomPrimary} onPress={handleShowResults}>
-          <Text style={styles.bottomPrimaryText}>Show Results</Text>
+        <Pressable style={styles.primaryCta} onPress={handleShowResults}>
+          <Text style={styles.primaryCtaText}>SHOW CRASHPADS</Text>
         </Pressable>
       </View>
     </View>
@@ -355,101 +231,182 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     paddingBottom: spacing.xl,
   },
-  section: {
-    marginBottom: spacing.lg,
+  panel: {
+    borderRadius: radius.xl,
+    overflow: 'hidden',
+    backgroundColor: colors.primary,
+    padding: spacing.md,
+  },
+  panelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  panelTitle: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  resetText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  resetDisabled: {
+    opacity: 0.5,
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: colors.textPrimary,
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: spacing.sm,
     marginBottom: 8,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 6,
+  },
+  baseChip: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.5)',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  baseChipActive: {
+    backgroundColor: '#fff',
+    borderColor: '#fff',
+  },
+  baseChipText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  baseChipTextActive: {
+    color: colors.primary,
   },
   input: {
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.cardBg,
+    borderColor: 'rgba(255,255,255,0.6)',
+    color: '#fff',
     paddingHorizontal: spacing.md,
     paddingVertical: 10,
     fontSize: 14,
-    color: colors.textPrimary,
+    backgroundColor: 'rgba(255,255,255,0.08)',
   },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  inputHalf: {
-    flex: 1,
-  },
-  chipRow: {
+  chipGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
   },
-  chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: radius.pill,
+  typeChip: {
+    borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.cardBg,
+    borderColor: 'rgba(255,255,255,0.5)',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  chipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+  typeChipActive: {
+    backgroundColor: '#fff',
+    borderColor: '#fff',
   },
-  chipText: {
-    fontSize: 13,
-    color: colors.textSecondary,
+  typeChipText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  typeChipTextActive: {
+    color: colors.primary,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  priceInput: {
+    flex: 1,
+  },
+  checkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+  },
+  checkRowText: {
+    color: '#fff',
+    fontSize: 14,
     fontWeight: '600',
   },
-  chipTextActive: {
-    color: '#fff',
-  },
-  switchRow: {
+  toggleRow: {
+    marginTop: spacing.md,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  switchLabel: {
-    fontSize: 13,
-    color: colors.textPrimary,
+  toggleLabel: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  togglePill: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  togglePillActive: {
+    backgroundColor: '#fff',
+    borderColor: '#fff',
+  },
+  togglePillText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  togglePillTextActive: {
+    color: colors.primary,
   },
   bottomBar: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     flexDirection: 'row',
+    gap: 8,
     borderTopWidth: 1,
     borderColor: colors.border,
-    padding: spacing.md,
     backgroundColor: colors.cardBg,
   },
-  bottomSecondary: {
+  secondaryCta: {
     flex: 1,
-    marginRight: 6,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
+    paddingVertical: 11,
+    backgroundColor: colors.cardBg,
   },
-  bottomPrimary: {
-    flex: 1,
-    marginLeft: 6,
+  secondaryCtaText: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  primaryCta: {
+    flex: 1.3,
     borderRadius: radius.lg,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
+    paddingVertical: 11,
   },
-  bottomSecondaryText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  bottomPrimaryText: {
-    fontSize: 14,
-    fontWeight: '700',
+  primaryCtaText: {
     color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
   },
 });

@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getMockTripById } from '../mockScheduleData';
+import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
 import type { CrewScheduleTrip, ScheduleDutyStatus } from '../types';
 import CrewScheduleHeader from '../components/CrewScheduleHeader';
@@ -73,6 +74,42 @@ export default function TripDetailScreen() {
 
   const t = trip;
   const hotel = t.hotel;
+  const [legStatuses, setLegStatuses] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let mounted = true;
+    const run = async () => {
+      const statusMap: Record<string, string> = {};
+      for (const leg of t.legs) {
+        if (!leg.flightNumber) continue;
+        const ident = leg.flightNumber.trim().toUpperCase();
+        const airline = ident.replace(/\d+.*/, '');
+        const number = ident.replace(/^[A-Z]+/, '');
+        if (!number) continue;
+        try {
+          const enriched = await enrichCrewScheduleSegment({
+            airline_code: airline || null,
+            flight_number: number,
+            departure_date: t.startDate,
+            origin_airport: leg.departureAirport,
+            destination_airport: leg.arrivalAirport,
+          });
+          if (enriched.matched && enriched.normalized_status) {
+            statusMap[leg.id] = enriched.delay_minutes != null
+              ? `${enriched.normalized_status.replace(/_/g, ' ')} · ${enriched.delay_minutes}m delay`
+              : enriched.normalized_status.replace(/_/g, ' ');
+          }
+        } catch {
+          // noop: keep schedule detail resilient when external flight lookup fails
+        }
+      }
+      if (mounted) setLegStatuses(statusMap);
+    };
+    void run();
+    return () => {
+      mounted = false;
+    };
+  }, [t.legs, t.startDate]);
 
   return (
     <View style={styles.shell}>
@@ -125,6 +162,21 @@ export default function TripDetailScreen() {
                 Rpt {leg.reportLocal ?? '—'} · Dep {leg.departLocal ?? '—'} · Arr {leg.arriveLocal ?? '—'}
                 {leg.releaseLocal ? ` · Rel ${leg.releaseLocal}` : ''}
               </Text>
+              {legStatuses[leg.id] ? <Text style={styles.liveStatus}>Live: {legStatuses[leg.id]}</Text> : null}
+              {leg.flightNumber ? (
+                <Pressable
+                  style={styles.trackBtn}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/flight-tracker/results',
+                      params: { q: leg.flightNumber },
+                    })
+                  }
+                >
+                  <Ionicons name="airplane-outline" size={14} color={T.accent} />
+                  <Text style={styles.trackBtnText}>Track this leg</Text>
+                </Pressable>
+              ) : null}
             </View>
           ))
         )}
@@ -244,6 +296,21 @@ const styles = StyleSheet.create({
   dhText: { fontSize: 11, fontWeight: '800', color: '#3730A3' },
   fn: { fontSize: 13, color: T.textSecondary, marginTop: 4 },
   legTimes: { fontSize: 13, color: T.text, marginTop: 8, lineHeight: 18 },
+  trackBtn: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: T.line,
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  trackBtnText: { fontSize: 12, fontWeight: '700', color: T.accent },
+  liveStatus: { marginTop: 6, fontSize: 12, fontWeight: '700', color: '#1D4ED8' },
   hotelName: { fontSize: 16, fontWeight: '800', color: T.text },
   note: { fontSize: 13, color: T.text, marginTop: 8 },
   placeholder: { fontSize: 12, color: T.textSecondary, marginTop: 6, fontStyle: 'italic' },

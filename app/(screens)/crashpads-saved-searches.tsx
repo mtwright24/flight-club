@@ -1,17 +1,18 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
 import { useAuth } from '../../src/hooks/useAuth';
 import { deleteSavedSearch, fetchSavedSearches } from '../../src/lib/housing';
-import { colors, radius, spacing } from '../../src/styles/theme';
+import { colors, radius, shadow, spacing } from '../../src/styles/theme';
 import type { HousingSavedSearch } from '../../src/types/housing';
 
 export default function SavedHousingSearchesScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user?.id;
-  const [items, setItems] = useState([] as HousingSavedSearch[]);
+  const [items, setItems] = useState<HousingSavedSearch[]>([]);
 
   useEffect(() => {
     let mounted = true;
@@ -38,33 +39,57 @@ export default function SavedHousingSearchesScreen() {
       <FlightClubHeader title="Saved Searches" showLogo={false} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {items.length === 0 ? (
-          <Text style={styles.emptyText}>You have no saved searches yet.</Text>
+          <View style={styles.emptyCard}>
+            <Ionicons name="bookmark-outline" size={20} color={colors.textSecondary} />
+            <Text style={styles.emptyText}>You have no saved searches yet.</Text>
+          </View>
         ) : (
           items.map((s: HousingSavedSearch) => (
-            <View key={s.id} style={styles.card}>
-              <Text style={styles.title}>{s.base_airport} • {s.housing_type || 'Any type'}</Text>
-              <Text style={styles.meta}>
-                {s.bed_type || 'Any bed'}
-                {s.min_price || s.max_price ? ` • $${s.min_price || 0}–$${s.max_price || '—'}` : ''}
+            <View key={s.id} style={[styles.card, shadow.cardShadow]}>
+              <Text style={styles.title}>
+                {s.base_airport || 'Any Base'}{s.area ? ` / ${s.area}` : ''}
               </Text>
-              <View style={styles.row}>
-                <View style={styles.rowLeft}>
-                  <Text style={styles.label}>Alerts</Text>
-                  <Switch value={s.alerts_enabled} onValueChange={() => {}} disabled />
-                </View>
-                <View style={styles.rowRight}>
-                  <Pressable onPress={() => router.push('/(screens)/crashpads')}>
-                    <Text style={styles.link}>View</Text>
-                  </Pressable>
-                  <Pressable onPress={() => handleDelete(s.id)}>
-                    <Text style={[styles.link, { color: colors.dangerRed }]}>Delete</Text>
-                  </Pressable>
-                </View>
+              <Text style={styles.meta}>
+                {s.housing_type ? `${s.housing_type} • ` : ''}
+                {s.min_price || s.max_price ? `$${s.min_price || 0}-$${s.max_price || '—'}` : 'Any Price'}
+              </Text>
+              <View style={styles.actionsRow}>
+                <Pressable
+                  style={styles.actionButton}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(screens)/crashpads',
+                      params: {
+                        base: s.base_airport || undefined,
+                        area: s.area || undefined,
+                        min: typeof s.min_price === 'number' ? String(s.min_price) : undefined,
+                        max: typeof s.max_price === 'number' ? String(s.max_price) : undefined,
+                        type: s.housing_type || undefined,
+                        bed: s.bed_type || undefined,
+                        hot: s.available_tonight ? '1' : '0',
+                      },
+                    })
+                  }
+                >
+                  <Text style={styles.actionButtonText}>View</Text>
+                </Pressable>
+                <Pressable style={styles.actionButtonOutline} onPress={() => handleDelete(s.id)}>
+                  <Text style={styles.actionButtonOutlineText}>Delete</Text>
+                </Pressable>
               </View>
             </View>
           ))
         )}
       </ScrollView>
+
+      <View style={styles.bottomActions}>
+        <Pressable style={styles.bottomPrimary} onPress={() => router.push('/(screens)/crashpads-filter')}>
+          <Text style={styles.bottomPrimaryText}>SAVE SEARCH</Text>
+        </Pressable>
+        <Pressable style={styles.bottomSecondary} onPress={() => router.push('/(screens)/crashpads-post-need')}>
+          <Text style={styles.bottomSecondaryText}>POST NEED</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -74,6 +99,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.xl,
+  },
+  emptyCard: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardBg,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   emptyText: {
     fontSize: 14,
@@ -88,7 +123,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   title: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
     color: colors.textPrimary,
     marginBottom: 2,
@@ -98,28 +133,69 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginBottom: spacing.sm,
   },
-  row: {
+  actionsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  rowLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 8,
   },
-  rowRight: {
+  actionButton: {
+    borderRadius: radius.pill,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  actionButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  actionButtonOutline: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: colors.cardBg,
+  },
+  actionButtonOutlineText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  bottomActions: {
+    borderTopWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardBg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     flexDirection: 'row',
+    gap: 8,
+  },
+  bottomPrimary: {
+    flex: 1,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
     alignItems: 'center',
-    gap: 16,
+    justifyContent: 'center',
+    paddingVertical: 11,
+    backgroundColor: colors.cardBg,
   },
-  label: {
-    fontSize: 13,
-    color: colors.textSecondary,
+  bottomPrimaryText: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '800',
   },
-  link: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.primary,
+  bottomSecondary: {
+    flex: 1,
+    borderRadius: radius.lg,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 11,
+  },
+  bottomSecondaryText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
   },
 });

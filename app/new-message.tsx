@@ -37,12 +37,19 @@ export default function NewMessageScreen() {
   searchRef.current = search;
   const router = useRouter();
   const navigation = useNavigation();
-  const sharePostParam = useLocalSearchParams<{ sharePostId?: string | string[] }>().sharePostId;
+  const params = useLocalSearchParams<{ sharePostId?: string | string[]; shareText?: string | string[] }>();
+  const sharePostParam = params.sharePostId;
+  const shareTextParam = params.shareText;
   const sharePostId = useMemo(() => {
     if (typeof sharePostParam === 'string') return sharePostParam.trim();
     if (Array.isArray(sharePostParam) && sharePostParam[0]) return String(sharePostParam[0]).trim();
     return '';
   }, [sharePostParam]);
+  const shareText = useMemo(() => {
+    if (typeof shareTextParam === 'string') return shareTextParam.trim();
+    if (Array.isArray(shareTextParam) && shareTextParam[0]) return String(shareTextParam[0]).trim();
+    return '';
+  }, [shareTextParam]);
 
   const handleSearch = useCallback(async (text: string) => {
     setSearch(text);
@@ -68,7 +75,7 @@ export default function NewMessageScreen() {
           };
         });
       setResults(people);
-    } catch (e) {
+    } catch {
       setResults([]);
     } finally {
       setSearching(false);
@@ -102,6 +109,12 @@ export default function NewMessageScreen() {
             'Could not attach post',
             'The conversation was opened but the shared post could not be sent. You can try sharing again from the post.',
           );
+        }
+      } else if (shareText) {
+        try {
+          await sendMessage(convId, userId, shareText);
+        } catch (shareErr) {
+          console.warn('[DM] share text to thread failed:', shareErr);
         }
       }
       openThread(convId);

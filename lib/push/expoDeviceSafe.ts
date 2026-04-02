@@ -33,7 +33,7 @@ function load(): DeviceSnapshot {
   if (!native) {
     if (__DEV__ && !devWarnedMissingExpoDevice) {
       devWarnedMissingExpoDevice = true;
-      console.warn(
+      console.log(
         '[expo-device] ExpoDevice native module not linked — cannot detect simulator vs phone. Attempting push registration anyway; add expo-device to the dev client for reliable device checks.'
       );
     }
