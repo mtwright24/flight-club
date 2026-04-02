@@ -17,46 +17,47 @@ export default function CrewScheduleTabsLayout() {
           backgroundColor: '#fff',
           borderTopWidth: 1,
           borderTopColor: '#E5E7EB',
-          height: 62,
-          paddingBottom: 6,
-          paddingTop: 6,
+          height: 56,
+          paddingBottom: 3,
+          paddingTop: 2,
         },
-        tabBarLabelStyle: { fontSize: 10, fontWeight: '700' },
+        tabBarItemStyle: { paddingHorizontal: 0, minWidth: 0 },
+        tabBarLabelStyle: { fontSize: 8, fontWeight: '700' },
       }}
     >
       <Tabs.Screen
-        name="index"
+        name="alerts"
         options={{
-          title: 'Schedule',
-          tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size ?? 22} color={color} />,
+          title: 'Alerts',
+          tabBarIcon: ({ color, size }) => <Ionicons name="notifications-outline" size={size ?? 17} color={color} />,
         }}
       />
       <Tabs.Screen
         name="tradeboard"
         options={{
           title: 'Tradeboard',
-          tabBarIcon: ({ color, size }) => <Ionicons name="swap-horizontal" size={size ?? 22} color={color} />,
+          tabBarIcon: ({ color, size }) => <Ionicons name="swap-horizontal" size={size ?? 17} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: 'Schedule',
+          tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size ?? 17} color={color} />,
         }}
       />
       <Tabs.Screen
         name="trip-chat"
         options={{
           title: 'Trip Chat',
-          tabBarIcon: ({ color, size }) => <Ionicons name="chatbubbles-outline" size={size ?? 22} color={color} />,
+          tabBarIcon: ({ color, size }) => <Ionicons name="chatbubbles-outline" size={size ?? 17} color={color} />,
         }}
       />
       <Tabs.Screen
         name="hotels"
         options={{
           title: 'Hotels',
-          tabBarIcon: ({ color, size }) => <Ionicons name="bed-outline" size={size ?? 22} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="alerts"
-        options={{
-          title: 'Alerts',
-          tabBarIcon: ({ color, size }) => <Ionicons name="notifications-outline" size={size ?? 22} color={color} />,
+          tabBarIcon: ({ color, size }) => <Ionicons name="bed-outline" size={size ?? 17} color={color} />,
         }}
       />
     </Tabs>

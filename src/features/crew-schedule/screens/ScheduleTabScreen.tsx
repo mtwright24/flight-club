@@ -153,7 +153,7 @@ export default function ScheduleTabScreen() {
   return (
     <ScrollView
       style={styles.scroll}
-      contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 24 }]}
+      contentContainerStyle={[styles.scrollContent, { paddingBottom: 0 }]}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -305,5 +305,5 @@ const styles = StyleSheet.create({
   },
   todayText: { fontWeight: '800', color: T.accent, fontSize: 11 },
   updated: { fontSize: 10, color: T.textSecondary, marginTop: 2 },
-  readingArea: { paddingHorizontal: 10, paddingTop: 1 },
+  readingArea: { paddingHorizontal: 0, paddingTop: 4 },
 });

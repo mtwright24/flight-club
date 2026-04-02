@@ -26,9 +26,13 @@ type DayRow = {
   isWeekend: boolean;
   pairingText: string;
   reportText: string;
-  routeText: string;
-  detailText: string;
+  cityText: string;
+  dEndText: string;
+  layoverText: string;
+  wxText: string;
   statusText: string;
+  reportMinutes: number | null;
+  releaseMinutes: number | null;
   isToday: boolean;
   groupedWithPrev: boolean;
   groupedWithNext: boolean;
@@ -64,7 +68,7 @@ function statusToKind(trip: CrewScheduleTrip): RowKind {
 
 function buildRowLabel(trip: CrewScheduleTrip): string {
   const kind = statusToKind(trip);
-  if (kind === 'off') return 'OFF';
+  if (kind === 'off') return '';
   if (kind === 'pto') return 'PTO';
   if (kind === 'reserve') return trip.pairingCode && trip.pairingCode !== '—' ? trip.pairingCode : 'RSV';
   if (kind === 'unavailable') {
@@ -91,36 +95,42 @@ function toCompactTime(raw?: string): string {
   return `${String(hour).padStart(2, '0')}${minute}`;
 }
 
+function compactToken(raw?: string): string {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  if (/^[A-Z]{3,4}$/.test(v)) return v;
+  const cleaned = v.replace(/[^A-Za-z]/g, '').toUpperCase();
+  if (cleaned.length >= 3) return cleaned.slice(0, 3);
+  return cleaned || v.slice(0, 3).toUpperCase();
+}
+
 function buildRowForTrip(dateIso: string, trip: CrewScheduleTrip, isProxyContinuation: boolean): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
   const d = parseLocalNoon(dateIso);
   const dayIdx = d.getDay();
   const kind = isProxyContinuation ? 'continuation' : statusToKind(trip);
   const leg = trip.legs[0];
-  const pairingText = buildRowLabel(trip);
+  const pairingText = kind === 'continuation' ? '' : buildRowLabel(trip);
   const reportText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
       : toCompactTime(leg?.reportLocal || leg?.departLocal);
-  const routeText =
+  const cityText =
     kind === 'off' || kind === 'pto'
       ? ''
       : kind === 'reserve'
-        ? trip.base
-          ? `Base ${trip.base}`
-          : 'Base'
-        : trip.routeSummary || [trip.origin, trip.destination].filter(Boolean).join(' -> ');
-  const detailText =
-    kind === 'off'
+        ? compactToken(trip.base)
+        : kind === 'continuation'
+          ? compactToken(trip.origin) || compactToken(trip.layoverCity) || compactToken(trip.destination)
+        : compactToken(trip.origin) || compactToken(trip.routeSummary);
+  const dEndText =
+    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
-      : kind === 'pto'
-        ? 'Paid time off'
-        : kind === 'reserve'
-          ? 'Reserve day'
-          : kind === 'continuation'
-            ? trip.destination
-              ? `Dest ${trip.destination}`
-              : 'Continuation day'
-            : toCompactTime(leg?.releaseLocal || leg?.arriveLocal);
+      : toCompactTime(leg?.releaseLocal || leg?.arriveLocal);
+  const layoverText = '';
+  const wxText =
+    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special'
+      ? ''
+      : '☀︎';
   const statusText =
     kind === 'continuation'
       ? 'CONT'
@@ -130,7 +140,9 @@ function buildRowForTrip(dateIso: string, trip: CrewScheduleTrip, isProxyContinu
           ? 'PTO'
           : kind === 'reserve'
             ? 'RSV'
-            : trip.layoverCity || '';
+            : '';
+  const reportMinutes = parseHourMinute(leg?.reportLocal || leg?.departLocal);
+  const releaseMinutes = parseHourMinute(leg?.releaseLocal || leg?.arriveLocal);
 
   return {
     id: `${trip.id}:${dateIso}:${isProxyContinuation ? 'cont' : 'start'}`,
@@ -142,9 +154,13 @@ function buildRowForTrip(dateIso: string, trip: CrewScheduleTrip, isProxyContinu
     isWeekend: dayIdx === 0 || dayIdx === 6,
     pairingText,
     reportText,
-    routeText,
-    detailText,
+    cityText,
+    dEndText,
+    layoverText,
+    wxText,
     statusText,
+    reportMinutes,
+    releaseMinutes,
   };
 }
 
@@ -198,11 +214,15 @@ function rowsFromTrips(trips: CrewScheduleTrip[]): DayRow[] {
         dayCode: DOW[parseLocalNoon(dateIso).getDay()],
         dayNum: parseLocalNoon(dateIso).getDate(),
         isWeekend: [0, 6].includes(parseLocalNoon(dateIso).getDay()),
-        pairingText: '-',
+        pairingText: '',
         reportText: '',
-        routeText: '',
-        detailText: '',
+        cityText: '',
+        dEndText: '',
+        layoverText: '',
+        wxText: '',
         statusText: '',
+        reportMinutes: null,
+        releaseMinutes: null,
         isToday: dateIso === todayIso,
         groupedWithPrev: false,
         groupedWithNext: false,
@@ -239,6 +259,20 @@ function rowsFromTrips(trips: CrewScheduleTrip[]): DayRow[] {
       isTripLikeKind(cur.kind) &&
       isTripLikeKind(next.kind);
   }
+  for (let i = 0; i < rows.length - 1; i += 1) {
+    const cur = rows[i];
+    const next = rows[i + 1];
+    const curPair = cur.trip?.pairingCode || '';
+    const nextPair = next.trip?.pairingCode || '';
+    if (!curPair || curPair === '—' || curPair !== nextPair) continue;
+    if (!isTripLikeKind(cur.kind) || !isTripLikeKind(next.kind)) continue;
+    if (cur.releaseMinutes == null || next.reportMinutes == null) continue;
+    let delta = next.reportMinutes - cur.releaseMinutes;
+    if (delta < 0) delta += 24 * 60;
+    const hh = Math.floor(delta / 60);
+    const mm = delta % 60;
+    rows[i].layoverText = `${String(hh).padStart(2, '0')}${String(mm).padStart(2, '0')}`;
+  }
   return rows;
 }
 
@@ -248,7 +282,7 @@ function kindTint(kind: RowKind): string {
   if (kind === 'reserve') return '#FFFBEB';
   if (kind === 'unavailable') return '#F8FAFC';
   if (kind === 'special') return '#F8FAFC';
-  if (kind === 'continuation') return '#F7FAFF';
+  if (kind === 'continuation') return '#FFFFFF';
   if (kind === 'deadhead') return '#F8FAFC';
   if (kind === 'empty') return '#FFFFFF';
   return '#FFFFFF';
@@ -321,40 +355,35 @@ const ScheduleRow = memo(function ScheduleRow({
 }) {
   const debugLoggedRef = useRef(false);
   const isEmpty = row.kind === 'empty';
-  const dateValue = `${row.dayCode} ${String(row.dayNum).padStart(2, '0')}`;
-  const pairingValue = row.pairingText || (isEmpty ? '-' : '');
+  const dayInitial = row.dayCode.slice(0, 1);
+  const dayNumber = String(row.dayNum).padStart(2, '0');
+  const pairingValue = row.pairingText || '';
   const reportValue = row.reportText || '';
-  const routeValue = row.routeText || '';
-  const detailValue = row.detailText || '';
-  const statusValue = row.statusText || '';
+  const cityValue = row.cityText || '';
+  const dEndValue = row.dEndText || '';
+  const layoverValue = row.layoverText || '';
+  const wxValue = row.wxText || '';
   const rowStyle = [
     styles.row,
-    isEmpty && styles.emptyRow,
     { backgroundColor: kindTint(row.kind) },
     row.isWeekend && styles.weekendRow,
     row.isToday && styles.todayRow,
     row.groupedWithPrev && styles.tripChainRow,
   ];
 
-  if (!debugLoggedRef.current && row.dateIso.endsWith('-24')) {
-    debugLoggedRef.current = true;
-    console.log('[ClassicList debug row]', {
-      dateIso: row.dateIso,
-      date: `${row.dayCode} ${String(row.dayNum).padStart(2, '0')}`,
-      pairing: pairingValue,
-      report: reportValue,
-      route: routeValue,
-      detail: detailValue,
-      status: statusValue,
-    });
-  }
+  if (!debugLoggedRef.current && row.dateIso.endsWith('-24')) debugLoggedRef.current = true;
 
   const content = (
     <>
       <View style={[styles.rowCell, styles.cellDate]}>
-        <Text style={[styles.cellText, styles.dateInline, row.isToday && styles.todayDateInline]} numberOfLines={1} ellipsizeMode="tail">
-          {dateValue}
-        </Text>
+        <View style={styles.dateInlineWrap}>
+          <Text style={[styles.cellText, styles.dateDayInline, row.isToday && styles.todayDateInline]} numberOfLines={1}>
+            {dayInitial}
+          </Text>
+          <Text style={[styles.cellText, styles.dateNumInline, row.isToday && styles.todayDateInline]} numberOfLines={1}>
+            {dayNumber}
+          </Text>
+        </View>
       </View>
       <View style={[styles.rowCell, styles.cellPairing]}>
         <Text
@@ -365,6 +394,7 @@ const ScheduleRow = memo(function ScheduleRow({
             row.kind === 'pto' && styles.ptoCode,
             row.kind === 'reserve' && styles.reserveCode,
             row.kind === 'unavailable' && styles.unavailableCode,
+            row.kind === 'continuation' && styles.continuationCode,
             isEmpty && styles.routePlaceholder,
           ]}
           numberOfLines={1}
@@ -380,17 +410,22 @@ const ScheduleRow = memo(function ScheduleRow({
       </View>
       <View style={[styles.rowCell, styles.cellRoute]}>
         <Text style={[styles.cellText, styles.routeMain, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
-          {routeValue}
+          {cityValue}
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellDetail]}>
         <Text style={[styles.cellText, styles.detailCellText, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
-          {detailValue}
+          {dEndValue}
         </Text>
       </View>
-      <View style={[styles.rowCell, styles.cellStatus]}>
-        <Text style={[styles.cellText, styles.statusCellText, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
-          {statusValue}
+      <View style={[styles.rowCell, styles.cellLayover]}>
+        <Text style={[styles.cellText, styles.detailCellText, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
+          {layoverValue}
+        </Text>
+      </View>
+      <View style={[styles.rowCell, styles.cellWx]}>
+        <Text style={[styles.cellText, styles.wxCellText, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
+          {wxValue}
         </Text>
       </View>
     </>
@@ -443,7 +478,7 @@ export default function ClassicListView({ trips, onPressTrip: _onPressTrip, onIm
 
       <View style={styles.headerRow}>
         <View style={[styles.headerCell, styles.cellDate]}>
-          <Text style={styles.headerText} numberOfLines={1}>DATE</Text>
+          <Text style={[styles.headerText, styles.dateHeaderText]} numberOfLines={1}>DATE</Text>
         </View>
         <View style={[styles.headerCell, styles.cellPairing]}>
           <Text style={styles.headerText} numberOfLines={1}>PAIRING</Text>
@@ -452,13 +487,16 @@ export default function ClassicListView({ trips, onPressTrip: _onPressTrip, onIm
           <Text style={styles.headerText} numberOfLines={1}>REPORT</Text>
         </View>
         <View style={[styles.headerCell, styles.cellRoute]}>
-          <Text style={styles.headerText} numberOfLines={1}>CITY / ROUTE</Text>
+          <Text style={styles.headerText} numberOfLines={1}>CITY</Text>
         </View>
         <View style={[styles.headerCell, styles.cellDetail]}>
-          <Text style={styles.headerText} numberOfLines={1}>D-END / DETAIL</Text>
+          <Text style={styles.headerText} numberOfLines={1}>D-END</Text>
         </View>
-        <View style={[styles.headerCell, styles.cellStatus]}>
-          <Text style={styles.headerText} numberOfLines={1}>LAYOVER / STATUS</Text>
+        <View style={[styles.headerCell, styles.cellLayover]}>
+          <Text style={styles.headerText} numberOfLines={1}>LAYOVER</Text>
+        </View>
+        <View style={[styles.headerCell, styles.cellWx]}>
+          <Text style={[styles.headerText, styles.wxHeaderText]} numberOfLines={1}>WX</Text>
         </View>
       </View>
 
@@ -480,60 +518,68 @@ export default function ClassicListView({ trips, onPressTrip: _onPressTrip, onIm
 const styles = StyleSheet.create({
   tableWrap: {
     backgroundColor: '#FFFFFF',
+    width: '100%',
+    paddingLeft: 4,
+    paddingRight: 4,
   },
   wrap: { paddingBottom: 0 },
   summaryStrip: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-start',
-    gap: 10,
-    borderBottomWidth: DIV,
-    borderBottomColor: '#E2E8F0',
-    backgroundColor: '#FAFBFC',
+    borderBottomWidth: 0,
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 6,
-    paddingVertical: 1,
+    paddingTop: 0,
+    paddingBottom: 1,
   },
   summaryInlineItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    marginRight: 8,
   },
   summaryKey: {
-    fontSize: 7,
+    fontSize: 6.6,
     fontWeight: '700',
-    color: '#64748B',
-    letterSpacing: 0.15,
+    color: '#7A8BA1',
+    letterSpacing: 0.05,
+    marginRight: 2,
   },
   summaryValue: {
-    fontSize: 10,
+    fontSize: 8.8,
     fontWeight: '800',
-    color: '#0F172A',
+    color: '#1B2A3E',
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 16,
-    backgroundColor: '#F8FAFC',
+    minHeight: 18,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: DIV,
-    borderBottomColor: '#D8E2EE',
+    borderBottomColor: '#F7FAFD',
   },
   headerText: {
-    fontSize: 7,
-    fontWeight: '800',
-    color: '#64748B',
-    letterSpacing: 0.1,
+    fontSize: 6.7,
+    fontWeight: '700',
+    color: '#8393A8',
+    letterSpacing: 0,
+    width: '100%',
+    textAlign: 'left',
+  },
+  dateHeaderText: {
+    marginLeft: 0,
   },
   headerCell: {
     height: 18,
-    paddingHorizontal: 2,
+    paddingHorizontal: 1,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'stretch',
     flexDirection: 'row',
     overflow: 'hidden',
   },
   rowCell: {
     height: 22,
-    paddingHorizontal: 2,
+    paddingHorizontal: 0,
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
@@ -547,20 +593,18 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
     paddingHorizontal: 0,
     borderBottomWidth: DIV,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: '#F8FAFD',
     overflow: 'hidden',
   },
-  emptyRow: {
-    height: 14,
-  },
-  cellDate: { width: 48, minWidth: 48, maxWidth: 48, borderRightWidth: DIV, borderRightColor: '#E2E8F0', alignItems: 'flex-start' },
-  cellPairing: { width: 58, minWidth: 58, maxWidth: 58, borderRightWidth: DIV, borderRightColor: '#E2E8F0', alignItems: 'flex-start' },
-  cellReport: { width: 46, minWidth: 46, maxWidth: 46, borderRightWidth: DIV, borderRightColor: '#E2E8F0', alignItems: 'flex-start' },
-  cellRoute: { flex: 1.2, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#E2E8F0', alignItems: 'flex-start' },
-  cellDetail: { width: 76, minWidth: 76, maxWidth: 76, borderRightWidth: DIV, borderRightColor: '#E2E8F0', alignItems: 'flex-start' },
-  cellStatus: { width: 76, minWidth: 76, maxWidth: 76, alignItems: 'flex-start' },
+  cellDate: { flex: 1.1, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 3, paddingRight: 0.5 },
+  cellPairing: { flex: 1.25, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
+  cellReport: { flex: 1.0, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
+  cellRoute: { flex: 0.9, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
+  cellDetail: { flex: 1.0, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
+  cellLayover: { flex: 1.0, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
+  cellWx: { width: 22, minWidth: 22, maxWidth: 22, alignItems: 'flex-start', paddingLeft: 0, paddingRight: 0 },
   weekendRow: {
-    backgroundColor: '#F5F7FA',
+    backgroundColor: '#FBFCFD',
   },
   noPressRow: {
     opacity: 0.96,
@@ -569,19 +613,43 @@ const styles = StyleSheet.create({
     opacity: 0.95,
   },
   todayRow: {
-    backgroundColor: '#E9EEF6',
+    backgroundColor: '#EFF4FA',
   },
-  tripChainRow: {
-    borderLeftWidth: 0,
+  tripChainRow: { opacity: 0.992 },
+  cellText: { width: '100%', fontSize: 7.8, color: '#243447', lineHeight: 10, fontWeight: '600' },
+  dateInlineWrap: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  cellText: { width: '100%', fontSize: 8, color: '#334155', lineHeight: 10, fontWeight: '700' },
-  dateInline: { fontSize: 8, fontWeight: '700', color: '#334155', lineHeight: 10, letterSpacing: 0.1 },
+  dateDayInline: {
+    width: 10,
+    fontSize: 8.1,
+    fontWeight: '700',
+    color: '#334155',
+    lineHeight: 10,
+    letterSpacing: 0,
+    textAlign: 'left',
+  },
+  dateNumInline: {
+    width: 18,
+    marginLeft: 2,
+    fontSize: 8.1,
+    fontWeight: '700',
+    color: '#334155',
+    lineHeight: 10,
+    letterSpacing: 0,
+    textAlign: 'left',
+    fontVariant: ['tabular-nums'],
+  },
   todayDateInline: { color: '#1E3A8A', fontWeight: '800' },
-  assignmentCode: { fontSize: 9, fontWeight: '800', color: T.text, lineHeight: 10 },
-  routeMain: { fontSize: 9, fontWeight: '700', color: '#0F172A', lineHeight: 10 },
-  detailCellText: { fontSize: 8, color: '#4B5563', lineHeight: 10, fontWeight: '600' },
-  statusCellText: { fontSize: 8, color: '#334155', lineHeight: 10, fontWeight: '700' },
-  routePlaceholder: { fontSize: 8, color: '#B0BFD1', lineHeight: 10 },
+  assignmentCode: { fontSize: 8.2, fontWeight: '700', color: T.text, lineHeight: 10 },
+  routeMain: { fontSize: 7.8, fontWeight: '600', color: '#B5161E', lineHeight: 10 },
+  detailCellText: { fontSize: 7.8, color: '#607086', lineHeight: 10, fontWeight: '600' },
+  wxCellText: { fontSize: 8, color: '#EAB308', lineHeight: 10, fontWeight: '700', textAlign: 'left', marginLeft: -2 },
+  wxHeaderText: { marginLeft: -2 },
+  continuationCode: { color: '#425972', fontWeight: '600' },
+  routePlaceholder: { fontSize: 7.8, color: '#C6D1DE', lineHeight: 10 },
   offCode: { color: '#475569' },
   ptoCode: { color: '#047857' },
   reserveCode: { color: '#92400E' },
