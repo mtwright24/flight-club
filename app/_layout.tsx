@@ -5,6 +5,7 @@ import { ActivityIndicator, Linking, LogBox, View } from "react-native";
 import 'react-native-url-polyfill/auto';
 import { DmBadgeNavigationSync } from '../src/components/DmBadgeNavigationSync';
 import FloatingBackButton from '../src/components/FloatingBackButton';
+import { LocalNotificationDebugListeners } from '../src/components/LocalNotificationDebugListeners';
 import { PushNotificationRoot } from '../src/components/PushNotificationRoot';
 import { ThemeProvider } from '../src/context/ThemeContext';
 import { clearProfileDraft, getProfileDraft } from '../src/lib/profileDraft';
@@ -201,6 +202,7 @@ export default function RootLayout() {
           />
         </Stack>
         <DmBadgeNavigationSync />
+        {__DEV__ ? <LocalNotificationDebugListeners /> : null}
         <PushNotificationRoot />
         <FloatingBackButton />
         {loading && (

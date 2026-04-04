@@ -58,14 +58,33 @@ export async function createSocialPostComment(
       };
     }
 
-    // Fire-and-forget notification to the post author when someone comments
+    // Fire-and-forget: reply → parent comment author; top-level comment → post author
     try {
       const { data: post, error: postError } = await supabase
         .from('posts')
         .select('id, user_id')
         .eq('id', postId)
         .single();
-      if (!postError && post && post.user_id && post.user_id !== userId) {
+
+      if (parentCommentId && data?.id) {
+        const { data: parent } = await supabase
+          .from('post_comments')
+          .select('user_id')
+          .eq('id', parentCommentId)
+          .maybeSingle();
+        if (parent?.user_id && parent.user_id !== userId) {
+          await createNotification({
+            user_id: parent.user_id,
+            actor_id: userId,
+            type: 'reply_comment',
+            entity_type: 'post',
+            entity_id: postId,
+            secondary_id: data.id,
+            body,
+            data: { route: `/post/${postId}` },
+          });
+        }
+      } else if (!postError && post && post.user_id && post.user_id !== userId) {
         await createNotification({
           user_id: post.user_id,
           actor_id: userId,
@@ -73,12 +92,12 @@ export async function createSocialPostComment(
           entity_type: 'post',
           entity_id: postId,
           secondary_id: data?.id ?? null,
-          body: body,
+          body,
           data: { route: `/post/${postId}` },
         });
       }
     } catch (notifyError) {
-      console.log('[Notifications] Failed to create comment_post notification:', notifyError);
+      console.log('[Notifications] Failed to create social comment notification:', notifyError);
     }
 
     return { success: true };

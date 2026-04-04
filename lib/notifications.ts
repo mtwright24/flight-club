@@ -21,6 +21,11 @@ export { notificationPathToHref } from './notificationPathMapping';
 
 let missingNotificationsTableLogged = false;
 
+/**
+ * Unified in-app + push notification row (`public.notifications`).
+ * Navigation uses `type` + `entity_*` + JSON `data` via `lib/notificationRegistry.ts` and `lib/notificationRouting.ts`.
+ * Remote pushes embed the same fields plus `notification_id` for mark-read on tap.
+ */
 export type Notification = {
   id: string;
   created_at: string;
@@ -659,6 +664,7 @@ async function sendPushForNotification(n: Notification): Promise<void> {
       entity_type: n.entity_type,
       entity_id: n.entity_id,
       secondary_id: n.secondary_id ?? null,
+      notification_id: n.id,
     },
   }));
 
@@ -703,6 +709,12 @@ function buildPushTitle(n: Notification, actorName?: string): string {
       return `${who} sent you a message`;
     case 'message_request':
       return `${who} wants to message you`;
+    case 'message_request_accepted':
+      return 'Message request accepted';
+    case 'message_request_declined':
+      return 'Message request declined';
+    case 'trade_interest':
+      return `${who} is interested in your trade`;
     case 'dm_share_post':
       return `${who} shared a post with you`;
     case 'dm_share_media':

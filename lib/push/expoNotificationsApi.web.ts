@@ -14,11 +14,31 @@ export enum AndroidImportance {
   MAX = 7,
 }
 
+export enum AndroidNotificationVisibility {
+  UNKNOWN = 0,
+  PUBLIC = 1,
+  PRIVATE = 2,
+  SECRET = 3,
+}
+
+/** Subset of `Notifications.types` used in-app (keeps `typeof webStub` compatible with native impl). */
+export enum SchedulableTriggerInputTypes {
+  CALENDAR = 'calendar',
+  DAILY = 'daily',
+  WEEKLY = 'weekly',
+  MONTHLY = 'monthly',
+  YEARLY = 'yearly',
+  DATE = 'date',
+  TIME_INTERVAL = 'timeInterval',
+}
+
 export const getExpoPushTokenAsync = async (_options?: {
   projectId?: string;
 }): Promise<{ data: string; type?: string }> => ({
   data: '',
 });
+
+export const scheduleNotificationAsync = async (_request: unknown): Promise<string> => '';
 
 export const setNotificationChannelAsync = async (
   _id: string,

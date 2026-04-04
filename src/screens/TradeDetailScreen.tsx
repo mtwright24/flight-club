@@ -25,6 +25,7 @@ import { useAuth } from '../hooks/useAuth';
 import type { TradePost } from '../types/trades';
 import AppHeader from '../components/AppHeader';
 import { checkDuplicateRoom, createRoomWithTemplate, joinRoom } from '../lib/supabase/rooms';
+import { createNotification } from '../../lib/notifications';
 
 export const TradeDetailScreen: React.FC = () => {
   const router = useRouter();
@@ -120,6 +121,23 @@ export const TradeDetailScreen: React.FC = () => {
 
         setInterested(true);
         setInterestCount((prev) => prev + 1);
+
+        if (trade.user_id && trade.user_id !== user.id) {
+          try {
+            await createNotification({
+              user_id: trade.user_id,
+              actor_id: user.id,
+              type: 'trade_interest',
+              entity_type: 'trade',
+              entity_id: trade.id,
+              title: 'New interest',
+              body: 'Someone is interested in your trade post.',
+              data: { route: `/crew-exchange/${trade.id}` },
+            });
+          } catch (notifyErr) {
+            console.warn('[Notifications] trade_interest notification:', notifyErr);
+          }
+        }
       }
     } catch (err) {
       console.error('Error toggling interest:', err);

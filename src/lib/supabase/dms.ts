@@ -988,7 +988,7 @@ async function updatePendingDmMessageRequestForRecipient(
       q = q.eq('conversation_id', cid);
     }
 
-    return q.select('id, status').maybeSingle();
+    return q.select('id, status, from_user_id, conversation_id').maybeSingle();
   };
 
   let { data, error } = rid ? await run('by-request-and-convo') : await run('by-conversation-only');
@@ -1005,6 +1005,31 @@ async function updatePendingDmMessageRequestForRecipient(
         'No pending request found for this conversation. Pull to refresh or open it again from Message requests.',
     };
   }
+
+  const fromUid = (data as { from_user_id?: string }).from_user_id;
+  const convoId = (data as { conversation_id?: string }).conversation_id ?? cid;
+  const reqRowId = (data as { id?: string }).id;
+  if (fromUid && convoId && reqRowId) {
+    try {
+      await createNotification({
+        user_id: fromUid,
+        actor_id: recipientUserId,
+        type: nextStatus === 'accepted' ? 'message_request_accepted' : 'message_request_declined',
+        entity_type: 'conversation',
+        entity_id: convoId,
+        secondary_id: reqRowId,
+        title: nextStatus === 'accepted' ? 'Request accepted' : 'Request declined',
+        body:
+          nextStatus === 'accepted'
+            ? 'You can message them now.'
+            : 'Your message request was declined.',
+        data: { route: '/messages-inbox' },
+      });
+    } catch (notifyErr) {
+      console.warn('[DM] message request outcome notification:', notifyErr);
+    }
+  }
+
   return { error: null };
 }
 

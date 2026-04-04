@@ -59,6 +59,7 @@ function coalesceEntityId(key: NotificationTypeKey, data: Record<string, unknown
     case 'message':
     case 'message_request':
     case 'message_request_accepted':
+    case 'message_request_declined':
     case 'message_reaction':
     case 'message_media':
       return pick('entity_id', 'conversation_id', 'conversationId', 'thread_id');
@@ -116,6 +117,8 @@ function inferEntityType(key: NotificationTypeKey, data: Record<string, unknown>
   switch (key) {
     case 'message':
     case 'message_request':
+    case 'message_request_accepted':
+    case 'message_request_declined':
     case 'message_reaction':
     case 'message_media':
       return 'conversation';
@@ -341,6 +344,7 @@ export function notificationRecordToRoutingPayload(n: Notification): Record<stri
     entity_type: n.entity_type,
     entity_id: n.entity_id,
     secondary_id: n.secondary_id ?? pickStr(data.secondary_id) ?? null,
+    notification_id: n.id,
   };
 }
 

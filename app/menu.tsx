@@ -86,6 +86,14 @@ export default function MenuScreen() {
           <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
         </Pressable>
 
+        {__DEV__ ? (
+          <Pressable style={styles.menuItem} onPress={() => router.push('/dev/local-notification-test')}>
+            <Ionicons name="notifications-outline" size={24} color={colors.textPrimary} />
+            <Text style={styles.menuText}>Notification test (dev)</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </Pressable>
+        ) : null}
+
         <Pressable style={styles.menuItem} onPress={() => router.push('/help-support')}>
           <Ionicons name="help-circle-outline" size={24} color={colors.textPrimary} />
           <Text style={styles.menuText}>Help & Support</Text>

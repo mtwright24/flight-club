@@ -64,6 +64,11 @@ export default function ScheduleTabScreen() {
   const [viewMode, setViewMode] = useState<ScheduleViewMode>('classic');
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string>(new Date().toISOString());
+  const goToday = () => {
+    const d = new Date();
+    persistMonth(d.getFullYear(), d.getMonth() + 1);
+  };
+
 
   useEffect(() => {
     void loadScheduleViewMode().then(setViewMode);
@@ -93,11 +98,6 @@ export default function ScheduleTabScreen() {
   const goNextMonth = () => {
     if (month === 12) persistMonth(year + 1, 1);
     else persistMonth(year, month + 1);
-  };
-
-  const goToday = () => {
-    const d = new Date();
-    persistMonth(d.getFullYear(), d.getMonth() + 1);
   };
 
   const onRefresh = useCallback(async () => {
@@ -241,6 +241,7 @@ export default function ScheduleTabScreen() {
           />
         )}
       </View>
+
     </ScrollView>
   );
 }

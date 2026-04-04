@@ -97,6 +97,7 @@ export type NotificationTypeKey =
   | 'message'
   | 'message_request'
   | 'message_request_accepted'
+  | 'message_request_declined'
   | 'message_reaction'
   | 'message_media'
   | 'room_post'
@@ -235,6 +236,12 @@ export const NOTIFICATION_REGISTRY: Record<NotificationTypeKey, NotificationRegi
     resolveRoute: routeDm,
   },
   message_request_accepted: {
+    category: 'messages',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: routeMessagesInbox,
+  },
+  message_request_declined: {
     category: 'messages',
     priority: 'medium',
     pushEligible: true,
@@ -670,6 +677,7 @@ const CHIP_MESSAGES = new Set([
   'message',
   'message_request',
   'message_request_accepted',
+  'message_request_declined',
   'message_reaction',
   'message_media',
   'dm_share_post',

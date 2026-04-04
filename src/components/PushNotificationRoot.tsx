@@ -4,9 +4,9 @@ import {
   getLastNotificationResponseAsync,
   setNotificationHandler,
 } from '../../lib/push/expoNotificationsApi';
+import { markNotificationReadFromPushPayload } from '../../lib/push/notificationTapSideEffects';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   deactivatePushTokensForUser,
   registerPushTokenForSignedInUser,
@@ -15,7 +15,6 @@ import {
 } from '../../lib/push';
 import { refreshAllBadgeCountsFromServer } from '../../lib/notificationUnreadSync';
 import { useAuth } from '../hooks/useAuth';
-import ForegroundNotificationBanner, { type ForegroundBannerPayload } from './ForegroundNotificationBanner';
 
 const NAV_DEBOUNCE_MS = 900;
 
@@ -25,36 +24,40 @@ type PushNotificationLike = {
 };
 type PushResponseLike = { notification: PushNotificationLike };
 
+type HandlerNotification = {
+  request: { content: { data?: unknown } };
+};
+
 function pushDataRecord(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
   return {};
 }
 
 /**
- * Global push registration, foreground in-app banner queue, tap routing, and badge refresh hooks.
- * Mount once under the root navigator (e.g. `app/_layout.tsx`).
+ * Global push registration, OS foreground presentation, tap routing, badge refresh.
+ * Foreground alerts use the system banner + Notification Center (no duplicate in-app banner).
  */
 export function PushNotificationRoot() {
   const router = useRouter();
   const { session, loading: authLoading } = useAuth();
   const userId = session?.user?.id ?? null;
 
-  const [bannerQueue, setBannerQueue] = useState<ForegroundBannerPayload[]>([]);
-  const currentBanner = bannerQueue[0] ?? null;
-
-  const prevUserRef = useRef<string | null>(null);
   const lastPushNavAt = useRef(0);
   const coldStartHandledRef = useRef(false);
-
-  const dequeueBanner = useCallback(() => {
-    setBannerQueue((q) => q.slice(1));
-  }, []);
+  const prevUserRef = useRef<string | null>(null);
 
   const navigateFromPushData = useCallback(
-    (data: Record<string, unknown>) => {
+    async (data: Record<string, unknown>) => {
+      if (data.flightClubLocalTest === true) {
+        console.log('[LocalNotifTest] skipping navigation for local test notification');
+        return;
+      }
       const now = Date.now();
       if (now - lastPushNavAt.current < NAV_DEBOUNCE_MS) return;
       lastPushNavAt.current = now;
+
+      await markNotificationReadFromPushPayload(data);
+
       const href = resolveNotificationHrefFromPayload(data);
       try {
         router.push(href);
@@ -63,14 +66,6 @@ export function PushNotificationRoot() {
       }
     },
     [router]
-  );
-
-  const onBannerPress = useCallback(
-    (item: ForegroundBannerPayload) => {
-      dequeueBanner();
-      navigateFromPushData(item.data);
-    },
-    [dequeueBanner, navigateFromPushData]
   );
 
   /** High-visibility: Metro sometimes hides console.log; warn shows reliably when JS is connected. */
@@ -103,56 +98,26 @@ export function PushNotificationRoot() {
   /** Refresh last_seen when returning from background (debounced). */
   useEffect(() => subscribePushTokenPresenceOnForeground(userId), [userId]);
 
-  /** OS banner off; must run after module load so stub/native impl is ready. */
+  /** OS presents banner / list / sound / badge while app is open. */
   useEffect(() => {
     setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: false,
-        shouldShowList: false,
+      handleNotification: async (_notification: HandlerNotification) => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
         shouldPlaySound: true,
-        shouldSetBadge: false,
+        shouldSetBadge: true,
       }),
     });
   }, []);
 
-  /**
-   * Foreground pushes: in-app banner + immediate DB recount (bell + DM — no fake push counts).
-   */
+  /** Foreground delivery: recount bell + DM badges (real DB counts). */
   useEffect(() => {
     const receivedSub = addNotificationReceivedListener((event: PushNotificationLike) => {
-      const content = event.request.content;
-      const data = pushDataRecord(content.data);
-      const title = typeof content.title === 'string' ? content.title : '';
-      const body = typeof content.body === 'string' ? content.body : '';
-      const avatarUrl =
-        typeof data.avatar_url === 'string'
-          ? data.avatar_url
-          : typeof data.actor_avatar_url === 'string'
-            ? data.actor_avatar_url
-            : undefined;
-      const iconUrl =
-        typeof data.icon_url === 'string'
-          ? data.icon_url
-          : typeof data.notification_icon_url === 'string'
-            ? data.notification_icon_url
-            : undefined;
-
+      const data = pushDataRecord(event.request.content.data);
+      if (data.flightClubLocalTest === true) {
+        return;
+      }
       void refreshAllBadgeCountsFromServer();
-
-      if (AppState.currentState !== 'active') return;
-
-      const id = `${event.request.identifier}-${Date.now()}`;
-      setBannerQueue((q) => [
-        ...q,
-        {
-          id,
-          title,
-          body,
-          avatarUrl,
-          iconUrl,
-          data,
-        },
-      ]);
     });
 
     return () => receivedSub.remove();
@@ -162,8 +127,12 @@ export function PushNotificationRoot() {
   useEffect(() => {
     const responseSub = addNotificationResponseReceivedListener((response: PushResponseLike) => {
       const data = pushDataRecord(response.notification.request.content.data);
+      if (data.flightClubLocalTest === true) {
+        console.log('[LocalNotifTest] notification response — deep link disabled for local test');
+        return;
+      }
       void refreshAllBadgeCountsFromServer();
-      navigateFromPushData(data);
+      void navigateFromPushData(data);
     });
     return () => responseSub.remove();
   }, [navigateFromPushData]);
@@ -177,7 +146,11 @@ export function PushNotificationRoot() {
       coldStartHandledRef.current = true;
       if (!response) return;
       const data = pushDataRecord(response.notification.request.content.data);
-      navigateFromPushData(data);
+      if (data.flightClubLocalTest === true) {
+        console.log('[LocalNotifTest] cold start from local test tray — skipping navigation');
+        return;
+      }
+      void navigateFromPushData(data);
       void refreshAllBadgeCountsFromServer();
     });
     return () => {
@@ -185,11 +158,5 @@ export function PushNotificationRoot() {
     };
   }, [userId, navigateFromPushData]);
 
-  return (
-    <ForegroundNotificationBanner
-      item={currentBanner}
-      onDismiss={dequeueBanner}
-      onPress={onBannerPress}
-    />
-  );
+  return null;
 }
