@@ -9,7 +9,8 @@ type Props = {
   onPressTrip: (trip: CrewScheduleTrip) => void;
   onPost?: (trip: CrewScheduleTrip) => void;
   onChat?: (trip: CrewScheduleTrip) => void;
-  onHotel?: (trip: CrewScheduleTrip) => void;
+  /** Open module Manage (replaces former hotel shortcut). */
+  onManageSchedule?: () => void;
   onAlert?: (trip: CrewScheduleTrip) => void;
 };
 
@@ -21,7 +22,7 @@ function formatRange(trip: CrewScheduleTrip): string {
   return `${a.toLocaleDateString(undefined, opts)}–${b.toLocaleDateString(undefined, { day: 'numeric' })}`;
 }
 
-export default function SmartListView({ trips, onPressTrip, onPost, onChat, onHotel, onAlert }: Props) {
+export default function SmartListView({ trips, onPressTrip, onPost, onChat, onManageSchedule, onAlert }: Props) {
   return (
     <View style={styles.wrap}>
       {trips.map((trip) => {
@@ -46,7 +47,7 @@ export default function SmartListView({ trips, onPressTrip, onPost, onChat, onHo
             <View style={styles.actions}>
               <MiniAction icon="swap-horizontal" label="Post" onPress={() => onPost?.(trip)} />
               <MiniAction icon="chatbubbles-outline" label="Chat" onPress={() => onChat?.(trip)} />
-              <MiniAction icon="bed-outline" label="Hotel" onPress={() => onHotel?.(trip)} />
+              <MiniAction icon="options-outline" label="Manage" onPress={() => onManageSchedule?.()} />
               <MiniAction icon="alarm-outline" label="Alert" onPress={() => onAlert?.(trip)} />
             </View>
           </View>

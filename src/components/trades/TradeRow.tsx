@@ -12,7 +12,6 @@ import {
   Pressable,
   Text,
   StyleSheet,
-  useColorScheme,
 } from 'react-native';
 import type { TradePost } from '../../types/trades';
 
@@ -29,9 +28,6 @@ export const TradeRow: React.FC<TradeRowProps> = ({
   onInterestPress,
   userInterested,
 }) => {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
-
   // Format route display
   const routeDisplay = getRouteDisplay(trade);
   
@@ -47,11 +43,11 @@ export const TradeRow: React.FC<TradeRowProps> = ({
   // Interest count
   const interestCount = trade.interest_count || 0;
 
-  const styles = getStyles(isDark);
+  const styles = getStyles();
 
   return (
     <View style={styles.container}>
-      <Pressable style={styles.pressArea} onPress={onPress} android_ripple={{ color: isDark ? '#2A2A2A' : '#EAEAEA' }}>
+      <Pressable style={styles.pressArea} onPress={onPress} android_ripple={{ color: '#EAEAEA' }}>
         {/* Line 1: Route, Trip, Type, Badges */}
         <View style={styles.line1}>
           <View style={styles.line1Left}>
@@ -61,7 +57,7 @@ export const TradeRow: React.FC<TradeRowProps> = ({
             </Text>
 
             {/* Type Badge */}
-            <View style={[styles.typeBadge, getTypeBadgeStyle(trade.type, isDark)]}>
+            <View style={[styles.typeBadge, getTypeBadgeStyle(trade.type)]}>
               <Text style={styles.typeBadgeText}>{trade.type.toUpperCase()}</Text>
             </View>
 
@@ -173,10 +169,7 @@ function formatMinutes(minutes?: number): string {
   return `${minutes} CR`;
 }
 
-function getTypeBadgeStyle(
-  type: string,
-  isDark: boolean
-): any {
+function getTypeBadgeStyle(type: string): any {
   const styles: Record<string, any> = {
     swap: {
       backgroundColor: '#1D4ED8',
@@ -195,13 +188,13 @@ function getTypeBadgeStyle(
  * Styles
  */
 
-function getStyles(isDark: boolean) {
+function getStyles() {
   return StyleSheet.create({
     container: {
       position: 'relative',
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#2A3A4A' : '#E5E5E5',
-      backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+      borderBottomColor: '#E5E5E5',
+      backgroundColor: '#FFFFFF',
     },
 
     pressArea: {
@@ -227,7 +220,7 @@ function getStyles(isDark: boolean) {
     routeText: {
       fontSize: 14,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     typeBadge: {
@@ -262,7 +255,7 @@ function getStyles(isDark: boolean) {
     interestCount: {
       fontSize: 12,
       fontWeight: '600',
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       marginLeft: 8,
     },
 
@@ -274,7 +267,7 @@ function getStyles(isDark: boolean) {
 
     metaText: {
       fontSize: 12,
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
     },
 
     // Interest button
@@ -287,11 +280,11 @@ function getStyles(isDark: boolean) {
       borderRadius: 14,
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: isDark ? '#2A2A2A' : '#F0F0F0',
+      backgroundColor: '#F0F0F0',
     },
 
     interestButtonActive: {
-      backgroundColor: isDark ? '#3A2A2A' : '#FFE8E8',
+      backgroundColor: '#FFE8E8',
     },
 
     interestButtonText: {

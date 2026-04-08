@@ -1,5 +1,6 @@
 import React from 'react';
 import { Modal, View, Text, StyleSheet, Pressable, Switch } from 'react-native';
+import { colors } from '../../styles/theme';
 
 export default function OptionsSheet({ visible, onClose, options, setOptions }: any) {
   // Example options state: { cabin: 'Any', travelerType: 'Non-rev', timeWindow: 'Any', maxConnections: 0, directOnly: false, saveDefault: false }
@@ -68,10 +69,10 @@ const styles = StyleSheet.create({
   label: { fontWeight: '600', marginTop: 16, marginBottom: 6, color: '#222' },
   row: { flexDirection: 'row', marginBottom: 8 },
   segment: { flex: 1, padding: 10, borderRadius: 8, backgroundColor: '#f5f5f5', marginHorizontal: 2, alignItems: 'center' },
-  segmentActive: { backgroundColor: '#DC3545' },
+  segmentActive: { backgroundColor: colors.headerRed },
   segmentText: { color: '#333', fontWeight: '600' },
   segmentTextActive: { color: '#fff', fontWeight: '700' },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 },
   closeBtn: { alignItems: 'center', marginTop: 18 },
-  closeText: { color: '#DC3545', fontWeight: '700', fontSize: 16 },
+  closeText: { color: colors.headerRed, fontWeight: '700', fontSize: 16 },
 });

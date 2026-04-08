@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Pressable, Text, StyleSheet } from 'react-native';
+import { colors } from '../../styles/theme';
 
 interface LoadsSegmentedControlProps {
   tabs: string[];
@@ -59,13 +60,9 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 16,
   },
   tabActive: {
-    backgroundColor: '#fff',
+    backgroundColor: 'transparent',
     borderBottomWidth: 3,
-    borderBottomColor: '#DC3545',
-    shadowColor: '#DC3545',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
+    borderBottomColor: colors.headerRed,
     zIndex: 2,
   },
   tabText: {
@@ -75,7 +72,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   tabTextActive: {
-    color: '#DC3545',
+    color: colors.headerRed,
     fontWeight: '800',
     fontSize: 16,
     letterSpacing: 0.2,

@@ -73,7 +73,7 @@ export default function ProfileHeaderSection({
         <Text style={{ fontSize: 14, color: '#64748b', marginTop: 2, textAlign: 'center' }}>{user.subtitle}</Text>
       </View>
       {/* Stats row with vertical dividers */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, marginBottom: 0 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, marginBottom: 0, paddingBottom: 14, paddingHorizontal: 4 }}>
         <Pressable
           style={{ flex: 1, alignItems: 'center' }}
           onPress={onPressFollowers}
@@ -102,11 +102,11 @@ export default function ProfileHeaderSection({
         </View>
       </View>
       {/* Divider under stats row */}
-      <View style={{ height: 1, backgroundColor: '#E5E7EB', marginHorizontal: 18, marginBottom: 0 }} />
+      <View style={{ height: 1, backgroundColor: '#E5E7EB', marginHorizontal: 18, marginTop: 0, marginBottom: 12 }} />
       {/* Actions row for self profile: Edit Profile and Messages */}
       {isSelf && (
         <View>
-          <View style={{ flexDirection: 'row', marginHorizontal: 18, marginTop: 24 }}>
+          <View style={{ flexDirection: 'row', marginHorizontal: 18, marginTop: 0 }}>
             <Pressable
               style={{ flex: 1, backgroundColor: '#B5161E', paddingVertical: 12, borderRadius: 12, alignItems: 'center', marginRight: 8, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 6, elevation: 2 }}
               onPress={() => {
@@ -131,7 +131,7 @@ export default function ProfileHeaderSection({
       {/* Primary actions row for other user profile only */}
       {!isSelf && (
         <View>
-          <View style={{ flexDirection: 'row', marginHorizontal: 18, marginTop: 24 }}>
+          <View style={{ flexDirection: 'row', marginHorizontal: 18, marginTop: 0 }}>
             <TouchableOpacity
               style={[
                 { flex: 1, backgroundColor: followingStatus ? '#F3F4F6' : '#B5161E', paddingVertical: 12, borderRadius: 12, alignItems: 'center', marginRight: 8, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 6, elevation: 2 },

@@ -56,7 +56,6 @@ export default function RootLayout() {
     let mounted = true;
     LogBox.ignoreLogs([
       "SafeAreaView has been deprecated and will be removed in a future release.",
-      '[expo-av]: Expo AV has been deprecated and will be removed in SDK 54.',
     ]);
 
     (async () => {

@@ -1,0 +1,4 @@
+# Edge Function: validate user inside the function (getUser(accessToken)).
+# Gateway JWT verification can return "Invalid JWT" for some token/signing setups.
+[functions.import-schedule-ocr]
+verify_jwt = false

@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ReactionSummaryRow from '../components/posts/ReactionSummaryRow';
 import ReactionTrayOverlay from '../components/posts/ReactionTrayOverlay';
@@ -19,6 +19,13 @@ import {
   toggleSocialCommentReaction,
 } from '../lib/supabase/reactions';
 import { isFeedVideoMedia } from '../lib/media/videoDetection';
+
+function SocialPostDetailVideo({ uri, style }: { uri: string; style: object }) {
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = false;
+  });
+  return <VideoView player={player} style={style} contentFit="contain" nativeControls />;
+}
 
 interface SocialPostDetailScreenProps {
   postId: string;
@@ -210,13 +217,7 @@ export default function SocialPostDetailScreen({ postId, onClose }: SocialPostDe
         )}
         {post.media_urls && post.media_urls.length > 0 && (
           isFeedVideoMedia(post, post.media_urls[0]) ? (
-            <Video
-              source={{ uri: post.media_urls[0] }}
-              style={styles.media}
-              resizeMode={ResizeMode.CONTAIN}
-              useNativeControls
-              shouldPlay={false}
-            />
+            <SocialPostDetailVideo uri={post.media_urls[0]} style={styles.media} />
           ) : (
             <Image source={{ uri: post.media_urls[0] }} style={styles.media} />
           )

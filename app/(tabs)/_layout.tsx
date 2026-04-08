@@ -40,9 +40,10 @@ function CrewToolsHeaderNav() {
   const unread = useNotificationsBadge();
   const { count: dmUnread } = useDmUnreadBadge();
   return (
-    <SectionHeader
+    <FlightClubHeader
       title="Crew Tools"
-		  notificationCount={unread}
+      showLogo={false}
+      bellCount={unread}
       dmCount={dmUnread}
       onPressBell={() => router.push('/notifications')}
       onPressMessage={() => router.push('/messages-inbox')}
@@ -129,7 +130,7 @@ export default function TabsLayout() {
           tabBarLabel: 'Crew Tools',
           header: () => <CrewToolsHeaderNav />,
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'grid' : 'grid-outline'} size={24} color={color} />
+            <Ionicons name={focused ? 'briefcase' : 'briefcase-outline'} size={24} color={color} />
           ),
         }}
       />

@@ -254,17 +254,11 @@ export default function EditProfileScreen() {
               ) : null}
               <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Bio</Text>
               <TextInput value={bio} onChangeText={setBio} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12, minHeight: 96, maxHeight: 160 }} multiline numberOfLines={6} placeholder="Tell us about yourself" />
-              {/* Crew Identity */}
-              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Role</Text>
-              <TextInput value={role} onChangeText={setRole} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Role" />
-              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Airline</Text>
-              <TextInput value={airline} onChangeText={setAirline} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Airline" />
-              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Base</Text>
-              <TextInput value={base} onChangeText={setBase} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Base" />
-              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Fleet (optional)</Text>
-              <TextInput value={fleet} onChangeText={setFleet} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Fleet" />
-              <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a', marginTop: 8, marginBottom: 8 }}>
-                About Details (optional)
+              <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a', marginTop: 4, marginBottom: 8 }}>
+                About details (optional)
+              </Text>
+              <Text style={{ fontSize: 12, color: '#64748b', marginBottom: 10, lineHeight: 17 }}>
+                Languages, hometown, layover city, and interests — scroll here right under your bio.
               </Text>
               <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>In aviation since / seniority year</Text>
               <TextInput value={aviationSinceYear} onChangeText={setAviationSinceYear} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="e.g. 2018" />
@@ -280,6 +274,17 @@ export default function EditProfileScreen() {
               <TextInput value={favoriteLayoverCity} onChangeText={setFavoriteLayoverCity} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Favorite layover city" />
               <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Interests</Text>
               <TextInput value={interests} onChangeText={setInterests} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Comma separated interests" />
+              <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a', marginTop: 8, marginBottom: 8 }}>
+                Crew (optional)
+              </Text>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Role</Text>
+              <TextInput value={role} onChangeText={setRole} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Role" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Airline</Text>
+              <TextInput value={airline} onChangeText={setAirline} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Airline" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Base</Text>
+              <TextInput value={base} onChangeText={setBase} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Base" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', marginBottom: 4 }}>Fleet (optional)</Text>
+              <TextInput value={fleet} onChangeText={setFleet} style={{ backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', padding: 12, marginBottom: 12 }} placeholder="Fleet" />
             </View>
           </ScrollView>
           <View

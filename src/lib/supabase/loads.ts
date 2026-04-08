@@ -1,12 +1,13 @@
-// Get credits ledger/history for the current user
-export async function getCreditsLedger() {
-  return supabase.from('credits_ledger').select('*').order('created_at', { ascending: false });
-}
 /**
  * Supabase helpers for Non-Rev / Staff Loads feature
  */
 
 import { supabase } from '../supabaseClient';
+
+// Get credits ledger/history for the current user (RLS limits to own rows)
+export async function getCreditsLedger() {
+  return supabase.from('credits_ledger').select('*').order('created_at', { ascending: false });
+}
 
 // Types
 export interface NonRevSearch {
@@ -111,6 +112,13 @@ function generateMockFlights(
   return flights.sort((a, b) => new Date(a.depart_at).getTime() - new Date(b.depart_at).getTime());
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isValidUuid(s: string): boolean {
+  return typeof s === 'string' && UUID_RE.test(s.trim());
+}
+
 /**
  * Search for flights (generate mock data and store in DB)
  */
@@ -122,14 +130,19 @@ export async function searchFlights(
   date: string
 ): Promise<{ flights: NonRevLoadFlight[]; error?: string }> {
   try {
-    // Log search
-    await supabase.from('nonrev_searches').insert({
-      user_id: userId,
-      airline_code: airline,
-      from_airport: from,
-      to_airport: to,
-      travel_date: date,
-    }).throwOnError();
+    // Best-effort search history (requires auth user id)
+    if (isValidUuid(userId)) {
+      const { error: logError } = await supabase.from('nonrev_searches').insert({
+        user_id: userId,
+        airline_code: airline,
+        from_airport: from,
+        to_airport: to,
+        travel_date: date,
+      });
+      if (logError) {
+        console.warn('[Loads] Search history not saved:', logError.message);
+      }
+    }
 
     // Generate mock flights
     const mockFlights = generateMockFlights(airline, from, to, date);
@@ -143,8 +156,14 @@ export async function searchFlights(
       .select();
 
     if (error) {
-      console.error('[Loads] Search error:', error);
-      return { flights: [], error: error.message };
+      console.warn('[Loads] nonrev_load_flights upsert failed, returning in-memory results:', error.message);
+      return {
+        flights: mockFlights.map((f, i) => ({
+          ...f,
+          id: `local-${i}-${f.flight_number}`,
+          created_at: new Date().toISOString(),
+        })) as NonRevLoadFlight[],
+      };
     }
 
     return { flights: data || [] };
@@ -174,15 +193,31 @@ export async function getFlight(flightId: string): Promise<{
 
     const { data: reports, error: reportsError } = await supabase
       .from('nonrev_load_reports')
-      .select('*, user:user_id(display_name)')
+      .select('*')
       .eq('flight_id', flightId)
       .order('created_at', { ascending: false });
 
     if (reportsError) throw reportsError;
 
+    const reportRows = reports || [];
+    const authorIds = [...new Set(reportRows.map((r) => r.user_id).filter(Boolean))];
+    const { data: authorProfiles } =
+      authorIds.length > 0
+        ? await supabase.from('profiles').select('id, display_name').in('id', authorIds)
+        : { data: [] as { id: string; display_name: string | null }[] };
+    const nameByUserId = Object.fromEntries((authorProfiles || []).map((p) => [p.id, p.display_name]));
+
+    const normalizedReports = reportRows.map((r: any) => {
+      const displayName = nameByUserId[r.user_id] ?? undefined;
+      return {
+        ...r,
+        user: displayName != null ? { display_name: displayName } : undefined,
+      } as NonRevLoadReport;
+    });
+
     return {
       flight: flight || null,
-      reports: (reports || []) as NonRevLoadReport[],
+      reports: normalizedReports,
     };
   } catch (error: any) {
     const msg = error?.message || 'Get flight failed';
@@ -392,13 +427,10 @@ export async function canPostLoadsRequest(userId: string): Promise<{
       return { allowed: false, mode: 'NONE', reason: 'Unable to check access' };
     }
 
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('credits_balance')
-      .eq('id', userId)
-      .single();
+    const { data: ucRow } = await supabase.from('user_credits').select('balance').eq('user_id', userId).maybeSingle();
+    const { data: profile } = await supabase.from('profiles').select('credits_balance').eq('id', userId).maybeSingle();
 
-    const creditsBalance = profile?.credits_balance || 0;
+    const creditsBalance = Math.max(ucRow?.balance ?? 0, profile?.credits_balance ?? 0);
     const now = new Date().toISOString();
 
     // Check active plan
@@ -475,8 +507,21 @@ export interface CreditsLedger {
 
 
 // Create a new load request
-export async function createLoadRequest({ airline_code, from_airport, to_airport, travel_date, options }: Partial<LoadRequest>) {
-  return supabase.from('load_requests').insert([{ airline_code, from_airport, to_airport, travel_date, options }]);
+export async function createLoadRequest({
+  airline_code,
+  from_airport,
+  to_airport,
+  travel_date,
+  options,
+}: Pick<LoadRequest, 'airline_code' | 'from_airport' | 'to_airport' | 'travel_date'> & { options?: any }) {
+  const { data: userData } = await supabase.auth.getUser();
+  const uid = userData?.user?.id;
+  if (!uid) {
+    return { data: null, error: { message: 'Not signed in' } as any };
+  }
+  return supabase
+    .from('load_requests')
+    .insert([{ user_id: uid, airline_code, from_airport, to_airport, travel_date, options }]);
 }
 
 // List load requests by status (open/answered)
@@ -496,12 +541,22 @@ export async function listLoadAnswers(requestId: string) {
 
 // Post an answer to a load request
 export async function postLoadAnswer(requestId: string, payload: { load_level: string; notes?: string }) {
-  return supabase.from('load_answers').insert([{ request_id: requestId, ...payload }]);
+  const { data: userData } = await supabase.auth.getUser();
+  const uid = userData?.user?.id;
+  if (!uid) {
+    return { data: null, error: { message: 'Not signed in' } as any };
+  }
+  return supabase.from('load_answers').insert([{ request_id: requestId, user_id: uid, ...payload }]);
 }
 
 // Get current user's credits balance
 export async function getCreditsBalance() {
-  return supabase.from('user_credits').select('balance').single();
+  const { data: userData } = await supabase.auth.getUser();
+  const uid = userData?.user?.id;
+  if (!uid) {
+    return { data: null, error: { message: 'Not signed in' } as any };
+  }
+  return supabase.from('user_credits').select('balance').eq('user_id', uid).maybeSingle();
 }
 
 // Purchase credits (stub, updates UI and simulates purchase)

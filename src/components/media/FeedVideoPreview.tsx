@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Video, ResizeMode } from 'expo-av';
-import React, { useRef } from 'react';
-import { Pressable, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import React, { useState } from 'react';
+import { Image, Pressable, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 
 type Props = {
   uri: string;
@@ -24,23 +24,30 @@ export function FeedVideoPreview({
   onPress,
   showPlayBadge = true,
 }: Props) {
-  const ref = useRef<Video>(null);
+  const [posterHidden, setPosterHidden] = useState(!posterUri);
+  const player = useVideoPlayer(uri, (p) => {
+    p.muted = true;
+    p.loop = false;
+  });
   const boxStyle: StyleProp<ViewStyle> = [styles.wrap, height != null ? { height } : null, style];
+  const showPosterLayer = Boolean(posterUri) && !posterHidden;
 
   const core = (
     <View style={boxStyle}>
-      <Video
-        ref={ref}
-        source={{ uri }}
+      <VideoView
+        player={player}
         style={StyleSheet.absoluteFill}
-        resizeMode={ResizeMode.COVER}
-        isMuted
-        shouldPlay={false}
-        isLooping={false}
-        useNativeControls={false}
-        posterSource={posterUri ? { uri: posterUri } : undefined}
-        posterStyle={StyleSheet.absoluteFill}
+        contentFit="cover"
+        nativeControls={false}
+        onFirstFrameRender={() => {
+          if (posterUri) setPosterHidden(true);
+        }}
       />
+      {showPosterLayer ? (
+        <View style={[StyleSheet.absoluteFillObject, styles.posterOverlay]} pointerEvents="none">
+          <Image source={{ uri: posterUri! }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+        </View>
+      ) : null}
       {showPlayBadge ? (
         <View style={styles.playBadge} pointerEvents="none">
           <View style={styles.playCircle}>
@@ -63,10 +70,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f172a',
     overflow: 'hidden',
   },
+  posterOverlay: {
+    zIndex: 1,
+  },
   playBadge: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 2,
   },
   playCircle: {
     backgroundColor: 'rgba(0,0,0,0.45)',

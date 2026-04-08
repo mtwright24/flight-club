@@ -114,7 +114,7 @@ const styles = StyleSheet.create({
     marginLeft: spacing.md,
   },
   logo: { height: 40, width: 200, marginLeft: -20 },
-  title: { color: colors.cardBg, fontSize: 16, fontWeight: '800', marginLeft: 8 },
+  title: { color: colors.cardBg, fontSize: 18, fontWeight: '800', marginLeft: 8, textAlignVertical: 'center' },
   titleNoLogo: { marginLeft: 0 },
   iconButton: {
     minWidth: 44,

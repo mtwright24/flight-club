@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { colors } from '../../styles/theme';
 
 interface FlightCardProps {
   flightNumber: string;
@@ -55,11 +56,11 @@ interface LoadStatusPillProps {
 }
 
 export const LoadStatusPill: React.FC<LoadStatusPillProps> = ({ status, size = 'md' }) => {
-  const colors: Record<string, { bg: string; text: string }> = {
+  const statusColors: Record<string, { bg: string; text: string }> = {
     LIGHT: { bg: '#d4edda', text: '#155724' },
     MEDIUM: { bg: '#fff3cd', text: '#856404' },
     HEAVY: { bg: '#f8d7da', text: '#721c24' },
-    FULL: { bg: '#DC3545', text: '#fff' },
+    FULL: { bg: colors.headerRed, text: '#fff' },
   };
 
   const labels: Record<string, string> = {
@@ -81,7 +82,7 @@ export const LoadStatusPill: React.FC<LoadStatusPillProps> = ({ status, size = '
     lg: 14,
   };
 
-  const color = colors[status];
+  const color = statusColors[status];
 
   return (
     <View
@@ -160,8 +161,8 @@ const styles = StyleSheet.create({
   },
   reportCount: {
     fontSize: 14,
-    fontWeight: '700',
-    color: '#DC3545',
+    fontWeight: '800',
+    color: colors.headerRed,
   },
   reportLabel: {
     fontSize: 10,

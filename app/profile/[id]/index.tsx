@@ -256,8 +256,9 @@ export default function ProfileScreen() {
     <View
       style={{
         flexDirection: 'row',
-        marginTop: 14,
-        marginBottom: 8,
+        marginTop: 20,
+        marginBottom: 24,
+        paddingTop: 4,
         justifyContent: 'center',
         borderBottomWidth: 1,
         borderBottomColor: '#E5E7EB',
@@ -320,7 +321,6 @@ export default function ProfileScreen() {
         </View>
       )}
       {tabRow}
-      <View style={{ height: 1, backgroundColor: '#E5E7EB', marginHorizontal: 18, marginBottom: 0 }} />
     </>
   );
 

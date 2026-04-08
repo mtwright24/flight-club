@@ -69,7 +69,7 @@ export const toolsRegistry: ToolEntry[] = [
     keywords: ['tools', 'crew tools', 'ecosystem', 'catalog', 'utilities'],
     description: 'Open the Crew Tools tab — main tools pillar in the bottom navigation.',
     route: '/(tabs)/crew-tools',
-    iconName: 'apps-outline',
+    iconName: 'briefcase-outline',
   },
   {
     id: 'crew-rooms',

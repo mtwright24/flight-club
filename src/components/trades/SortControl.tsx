@@ -12,7 +12,6 @@ import {
     StyleSheet,
     Text,
     TouchableOpacity,
-    useColorScheme,
     View,
 } from 'react-native';
 import { colors } from '../../styles/theme';
@@ -36,9 +35,7 @@ const SORT_OPTIONS: SortOption[] = [
 ];
 
 export const SortControl: React.FC<SortControlProps> = ({ sort, onSortChange }) => {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
-  const styles = getStyles(isDark);
+  const styles = getStyles();
 
   const [showSort1Menu, setShowSort1Menu] = useState(false);
   const [showSort2Menu, setShowSort2Menu] = useState(false);
@@ -264,14 +261,14 @@ export const SortControl: React.FC<SortControlProps> = ({ sort, onSortChange }) 
  * Styles
  */
 
-function getStyles(isDark: boolean) {
+function getStyles() {
   return StyleSheet.create({
     container: {
       paddingHorizontal: 16,
       paddingVertical: 12,
-      backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#2A3A4A' : '#E5E5E5',
+      borderBottomColor: '#E5E5E5',
     },
 
     header: {
@@ -281,7 +278,7 @@ function getStyles(isDark: boolean) {
     headerText: {
       fontSize: 14,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     sortSection: {
@@ -295,7 +292,7 @@ function getStyles(isDark: boolean) {
     sortLabelText: {
       fontSize: 11,
       fontWeight: '600',
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       textTransform: 'uppercase',
     },
 
@@ -310,15 +307,15 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 12,
       paddingVertical: 8,
       borderRadius: 6,
-      backgroundColor: isDark ? '#2A2A2A' : '#F0F0F0',
+      backgroundColor: '#F0F0F0',
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
     },
 
     sortButtonText: {
       fontSize: 12,
       fontWeight: '500',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     directionButton: {
@@ -340,7 +337,7 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 8,
       paddingVertical: 8,
       borderRadius: 6,
-      backgroundColor: isDark ? '#3A2A2A' : '#FFE8E8',
+      backgroundColor: '#FFE8E8',
     },
 
     clearButtonText: {
@@ -348,7 +345,6 @@ function getStyles(isDark: boolean) {
       color: colors.headerRed,
     },
 
-    // Modal
     modalOverlay: {
       flex: 1,
       backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -358,7 +354,7 @@ function getStyles(isDark: boolean) {
 
     modalContent: {
       borderRadius: 12,
-      backgroundColor: isDark ? '#2A2A2A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       paddingVertical: 8,
       minWidth: 200,
     },
@@ -371,16 +367,16 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 16,
       paddingVertical: 12,
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#3A3A3A' : '#F0F0F0',
+      borderBottomColor: '#F0F0F0',
     },
 
     menuItemActive: {
-      backgroundColor: isDark ? '#3A3A3A' : '#F5F5F5',
+      backgroundColor: '#F5F5F5',
     },
 
     menuItemText: {
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     menuItemTextActive: {

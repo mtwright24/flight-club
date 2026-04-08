@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { StyleSheet, View } from 'react-native';
 import CrewScheduleHeader from '../../../src/features/crew-schedule/components/CrewScheduleHeader';
 
 const ACTIVE = '#B5161E';
@@ -54,12 +55,36 @@ export default function CrewScheduleTabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="hotels"
+        name="manage"
         options={{
-          title: 'Hotels',
-          tabBarIcon: ({ color, size }) => <Ionicons name="bed-outline" size={size ?? 17} color={color} />,
+          title: 'Manage',
+          tabBarIcon: ({ color, size }) => (
+            <View style={styles.manageIconWrap} accessibilityLabel="Manage schedule">
+              <Ionicons name="calendar-outline" size={size ?? 17} color={color} />
+              <Ionicons
+                name="settings-outline"
+                size={Math.max(10, (size ?? 17) - 5)}
+                color={color}
+                style={styles.manageGear}
+              />
+            </View>
+          ),
         }}
       />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  manageIconWrap: {
+    width: 28,
+    height: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manageGear: {
+    position: 'absolute',
+    right: -1,
+    bottom: -2,
+  },
+});

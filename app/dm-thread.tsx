@@ -36,6 +36,7 @@ import {
   sendMessage,
   subscribeToConversationMessages,
 } from '../src/lib/supabase/dms';
+import { supabase } from '../src/lib/supabaseClient';
 import { pickAndUploadMessageMedia } from '../src/lib/uploadMessageMedia';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -384,6 +385,45 @@ export default function DMThread() {
     return participants.find((p: any) => p.user_id !== userId) || participants[0] || null;
   }, [participants, userId]);
 
+  const [resolvedThreadDisplayName, setResolvedThreadDisplayName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const oid = typeof otherParticipant?.user_id === 'string' ? otherParticipant.user_id.trim() : '';
+    if (!oid) {
+      setResolvedThreadDisplayName(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('display_name, full_name')
+        .eq('id', oid)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error || !data) {
+        setResolvedThreadDisplayName(null);
+        return;
+      }
+      const dn =
+        (typeof data.display_name === 'string' && data.display_name.trim()) ||
+        (typeof (data as { full_name?: string }).full_name === 'string' &&
+          String((data as { full_name?: string }).full_name).trim()) ||
+        '';
+      setResolvedThreadDisplayName(dn || null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [otherParticipant?.user_id, conversationId]);
+
+  const threadHeaderDisplayName = useMemo(() => {
+    if (resolvedThreadDisplayName) return resolvedThreadDisplayName;
+    const raw = otherParticipant?.profile?.display_name;
+    if (typeof raw === 'string' && raw.trim()) return raw.trim();
+    return 'User';
+  }, [otherParticipant, resolvedThreadDisplayName]);
+
   const isRecipient = !!requestRow && requestRow.to_user_id === userId;
   const isRequester = !!requestRow && requestRow.from_user_id === userId;
   const composerEnabled =
@@ -529,6 +569,10 @@ export default function DMThread() {
     profileUserId?: string | null;
   }) => {
     const canOpenProfile = typeof profileUserId === 'string' && profileUserId.length > 0;
+    const openPeerProfile = () => {
+      if (!canOpenProfile) return;
+      router.push(`/profile/${profileUserId}`);
+    };
     return (
       <View style={styles.threadHeaderOuter}>
         <View style={styles.threadHeaderRow}>
@@ -540,31 +584,44 @@ export default function DMThread() {
           >
             <Ionicons name="chevron-back" size={22} color="#64748b" />
           </Pressable>
-          <Pressable
-            onPress={() => {
-              if (!canOpenProfile) return;
-              router.push(`/profile/${profileUserId}`);
-            }}
-            disabled={!canOpenProfile}
-            style={({ pressed }) => [
-              styles.threadHeaderIdentity,
-              canOpenProfile && pressed && { opacity: 0.85 },
-            ]}
-            accessibilityRole={canOpenProfile ? 'button' : undefined}
-            accessibilityLabel={canOpenProfile ? 'View profile' : undefined}
-          >
-            <View style={styles.threadAvatarWrap}>
+          <View style={styles.threadHeaderIdentity}>
+            <Pressable
+              onPress={openPeerProfile}
+              style={({ pressed }) => [
+                styles.threadAvatarWrap,
+                canOpenProfile && pressed && { opacity: 0.85 },
+              ]}
+              accessibilityRole={canOpenProfile ? 'button' : undefined}
+              accessibilityLabel={canOpenProfile ? 'View profile' : undefined}
+            >
               {avatarUrl ? (
                 <Image source={{ uri: avatarUrl }} style={styles.threadAvatarImg} />
               ) : (
                 <Ionicons name="person-circle" size={32} color="#cbd5e1" />
               )}
+            </Pressable>
+            {/* Plain View for gutter: padding on Pressable is unreliable on Android and can overlap the avatar. */}
+            <View style={styles.threadHeaderTitleWrap}>
+              <Pressable
+                onPress={openPeerProfile}
+                style={({ pressed }) => [
+                  styles.threadTitleColPressable,
+                  canOpenProfile && pressed && { opacity: 0.85 },
+                ]}
+                accessibilityRole={canOpenProfile ? 'button' : undefined}
+                accessibilityLabel={canOpenProfile ? `View ${title} profile` : undefined}
+              >
+                <View style={styles.threadTitleColInner}>
+                  <Text style={styles.threadTitle} numberOfLines={1} ellipsizeMode="tail">
+                    {title}
+                  </Text>
+                  <Text style={styles.threadSubtitle} numberOfLines={1} ellipsizeMode="tail">
+                    Private crew conversation
+                  </Text>
+                </View>
+              </Pressable>
             </View>
-            <View style={styles.threadTitleCol}>
-              <Text style={styles.threadTitle}>{title}</Text>
-              <Text style={styles.threadSubtitle}>Private crew conversation</Text>
-            </View>
-          </Pressable>
+          </View>
           {/* No other actions in this deep task header. */}
           <View style={{ width: 40 }} />
         </View>
@@ -687,7 +744,7 @@ export default function DMThread() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F8FAFC' }} edges={['left', 'right', 'top', 'bottom']}>
       <ThreadHeader
-        title={otherParticipant?.profile?.display_name || 'Direct Message'}
+        title={threadHeaderDisplayName}
         avatarUrl={otherParticipant?.profile?.avatar_url}
         profileUserId={otherParticipant?.user_id ?? null}
       />
@@ -897,7 +954,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: 10,
+    paddingBottom: 12,
+    minHeight: 48,
   },
   threadBackBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   threadHeaderIdentity: {
@@ -905,6 +963,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     minWidth: 0,
+    overflow: 'visible',
   },
   threadAvatarWrap: {
     width: 36,
@@ -913,11 +972,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#E2E8F0',
+    flexShrink: 0,
+    overflow: 'hidden',
+    marginRight: 4,
   },
   threadAvatarImg: { width: 36, height: 36, borderRadius: 18 },
-  threadTitleCol: { flex: 1, paddingLeft: 12 },
-  threadTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
-  threadSubtitle: { fontSize: 12, fontWeight: '600', color: '#64748b', marginTop: 2 },
+  threadHeaderTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 12,
+    justifyContent: 'center',
+  },
+  threadTitleColPressable: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
+    paddingRight: 6,
+    paddingVertical: 2,
+    justifyContent: 'center',
+  },
+  threadTitleColInner: {
+    width: '100%',
+    flexShrink: 1,
+  },
+  threadTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+    lineHeight: 20,
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : {}),
+  },
+  threadSubtitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+    marginTop: 2,
+    lineHeight: 16,
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : {}),
+  },
   loadErrorText: { fontSize: 13, fontWeight: '600', color: '#64748b' },
   threadDivider: { height: 1, backgroundColor: '#E5E7EB' },
   bubbleRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: 10 },

@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { getCreditsBalance, purchaseCredits, getCreditsLedger } from '../../src/lib/supabase/loads';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
 import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
+import { colors } from '../../src/styles/theme';
 
 const PACKAGES = [
   { id: '1', amount: 1, price: '$0.99' },
@@ -74,7 +75,7 @@ export default function LoadsWalletScreen() {
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Current Balance</Text>
         {loading ? (
-          <ActivityIndicator size="small" color="#DC3545" />
+          <ActivityIndicator size="small" color={colors.headerRed} />
         ) : (
           <Text style={styles.balanceValue}>{balance ?? 0} credits</Text>
         )}
@@ -96,7 +97,7 @@ export default function LoadsWalletScreen() {
               >
                 <Text style={styles.amount}>{pkg.amount}</Text>
                 <Text style={styles.price}>{pkg.price}</Text>
-                {selected === pkg.id && <Ionicons name="checkmark-circle" size={20} color="#DC3545" style={{ marginLeft: 8 }} />}
+                {selected === pkg.id && <Ionicons name="checkmark-circle" size={20} color={colors.headerRed} style={{ marginLeft: 8 }} />}
               </Pressable>
             ))}
             <Pressable style={styles.ctaButton} onPress={handlePurchase} disabled={purchasing}>
@@ -112,7 +113,7 @@ export default function LoadsWalletScreen() {
       <View style={styles.ledgerCard}>
         <Text style={styles.ledgerTitle}>Credits History</Text>
         {ledgerLoading ? (
-          <ActivityIndicator size="small" color="#DC3545" style={{ marginTop: 12 }} />
+          <ActivityIndicator size="small" color={colors.headerRed} style={{ marginTop: 12 }} />
         ) : ledger.length === 0 ? (
           <View style={styles.emptyLedger}>
             <Ionicons name="receipt-outline" size={32} color="#ddd" />
@@ -167,30 +168,30 @@ const styles = StyleSheet.create({
   balanceLabel: { color: '#888', fontWeight: '600', fontSize: 15 },
   balanceValue: { color: '#222', fontWeight: '700', fontSize: 28, marginTop: 6, marginBottom: 12 },
   ctaButton: {
-    backgroundColor: '#DC3545',
+    backgroundColor: colors.headerRed,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
     marginTop: 12,
     minWidth: 140,
   },
-  ctaButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  message: { color: '#DC3545', fontWeight: '600', marginTop: 8 },
+  ctaButtonText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  message: { color: colors.headerRed, fontWeight: '600', marginTop: 8 },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-end' },
   sheet: { backgroundColor: '#fff', borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18 },
   sheetTitle: { fontWeight: '700', fontSize: 18, marginBottom: 12, textAlign: 'center' },
   packageRow: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 10, marginBottom: 8, backgroundColor: '#f5f5f5' },
-  selectedRow: { backgroundColor: '#fff5f5', borderColor: '#DC3545', borderWidth: 1 },
+  selectedRow: { backgroundColor: 'rgba(181, 22, 30, 0.06)', borderColor: colors.headerRed, borderWidth: 1 },
   amount: { fontWeight: '700', fontSize: 16, flex: 1 },
   price: { color: '#222', fontWeight: '600', fontSize: 16 },
   closeBtn: { alignItems: 'center', marginTop: 18 },
-  closeText: { color: '#DC3545', fontWeight: '700', fontSize: 16 },
+  closeText: { color: colors.headerRed, fontWeight: '800', fontSize: 16 },
   ledgerCard: { backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 8, borderWidth: 1, borderColor: '#eee' },
   ledgerTitle: { fontWeight: '700', fontSize: 16, marginBottom: 10 },
   emptyLedger: { alignItems: 'center', marginTop: 12, paddingBottom: 24 },
   emptyLedgerText: { color: '#888', fontSize: 15, marginTop: 8 },
   ledgerRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
-  ledgerAmount: { fontWeight: '700', fontSize: 15, color: '#DC3545', width: 48 },
+  ledgerAmount: { fontWeight: '800', fontSize: 15, color: colors.headerRed, width: 48 },
   ledgerReason: { color: '#222', fontSize: 14, flex: 1 },
   ledgerDate: { color: '#888', fontSize: 13, marginLeft: 8 },
 });

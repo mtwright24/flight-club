@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { FlatList, Modal, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View, useColorScheme } from 'react-native';
+import { FlatList, Modal, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 const DEFAULT_AIRPORTS = [
@@ -48,8 +48,7 @@ export const AirportPickerField: React.FC<AirportPickerFieldProps> = ({
   multiSelect = false,
   onChange,
 }) => {
-  const isDark = useColorScheme() === 'dark';
-  const styles = getStyles(isDark);
+  const styles = getStyles();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [multiValues, setMultiValues] = useState<string[]>(values || []);
@@ -57,8 +56,9 @@ export const AirportPickerField: React.FC<AirportPickerFieldProps> = ({
   const filtered = useMemo(() => {
     const term = search.toLowerCase().trim();
     if (!term) return DEFAULT_AIRPORTS;
-    return DEFAULT_AIRPORTS.filter((airport) =>
-      airport.code.toLowerCase().includes(term) || airport.name.toLowerCase().includes(term)
+    return DEFAULT_AIRPORTS.filter(
+      (airport) =>
+        airport.code.toLowerCase().includes(term) || airport.name.toLowerCase().includes(term)
     );
   }, [search]);
 
@@ -74,9 +74,7 @@ export const AirportPickerField: React.FC<AirportPickerFieldProps> = ({
   };
 
   const toggleMulti = (code: string) => {
-    setMultiValues((prev) =>
-      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
-    );
+    setMultiValues((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
   };
 
   const renderPills = (list: string[]) => (
@@ -94,11 +92,15 @@ export const AirportPickerField: React.FC<AirportPickerFieldProps> = ({
       {label ? <Text style={styles.label}>{label}</Text> : null}
       <Pressable style={styles.field} onPress={openModal}>
         {multiSelect ? (
-          values && values.length > 0 ? renderPills(values) : <Text style={styles.placeholder}>{placeholder}</Text>
+          values && values.length > 0 ? (
+            renderPills(values)
+          ) : (
+            <Text style={styles.placeholder}>{placeholder}</Text>
+          )
         ) : (
           <Text style={value ? styles.valueText : styles.placeholder}>{value || placeholder}</Text>
         )}
-        <Ionicons name="chevron-down" size={18} color={isDark ? '#FFFFFF' : '#000000'} />
+        <Ionicons name="chevron-down" size={18} color="#000000" />
       </Pressable>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
@@ -108,7 +110,7 @@ export const AirportPickerField: React.FC<AirportPickerFieldProps> = ({
             <TextInput
               style={styles.search}
               placeholder="Search by code or city"
-              placeholderTextColor={isDark ? '#666' : '#999'}
+              placeholderTextColor="#999"
               value={search}
               onChangeText={setSearch}
             />
@@ -152,22 +154,22 @@ export const AirportPickerField: React.FC<AirportPickerFieldProps> = ({
   );
 };
 
-const getStyles = (isDark: boolean) =>
+const getStyles = () =>
   StyleSheet.create({
     label: {
       fontSize: 12,
       fontWeight: '700',
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       marginBottom: 6,
       textTransform: 'uppercase',
     },
     field: {
       borderRadius: 10,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       paddingHorizontal: 12,
       paddingVertical: 10,
-      backgroundColor: isDark ? '#2A2A2A' : '#F9F9F9',
+      backgroundColor: '#F9F9F9',
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
@@ -175,11 +177,11 @@ const getStyles = (isDark: boolean) =>
     valueText: {
       fontSize: 13,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     placeholder: {
       fontSize: 13,
-      color: isDark ? '#666666' : '#999999',
+      color: '#999999',
     },
     pillRow: {
       flexDirection: 'row',
@@ -191,12 +193,12 @@ const getStyles = (isDark: boolean) =>
       paddingHorizontal: 8,
       paddingVertical: 4,
       borderRadius: 12,
-      backgroundColor: isDark ? '#3A3A3A' : '#EEEEEE',
+      backgroundColor: '#EEEEEE',
     },
     pillText: {
       fontSize: 11,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     overlay: {
       flex: 1,
@@ -209,31 +211,31 @@ const getStyles = (isDark: boolean) =>
       width: '100%',
       maxWidth: 420,
       maxHeight: 520,
-      backgroundColor: isDark ? '#2A2A2A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       borderRadius: 12,
       padding: 16,
     },
     title: {
       fontSize: 16,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       marginBottom: 10,
     },
     search: {
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       paddingHorizontal: 12,
       paddingVertical: 8,
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
-      backgroundColor: isDark ? '#1A1A1A' : '#F9F9F9',
+      color: '#000000',
+      backgroundColor: '#F9F9F9',
       marginBottom: 10,
     },
     item: {
       paddingVertical: 10,
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#3A3A3A' : '#F0F0F0',
+      borderBottomColor: '#F0F0F0',
       flexDirection: 'row',
       alignItems: 'center',
       gap: 10,
@@ -246,7 +248,7 @@ const getStyles = (isDark: boolean) =>
     },
     name: {
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       flex: 1,
     },
     actions: {
@@ -256,7 +258,7 @@ const getStyles = (isDark: boolean) =>
     },
     actionText: {
       fontSize: 14,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     actionPrimary: {
       color: '#DC3545',

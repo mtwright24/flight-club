@@ -11,7 +11,6 @@ import {
   Text,
   ScrollView,
   StyleSheet,
-  useColorScheme,
 } from 'react-native';
 import type { TradeFilter } from '../../types/trades';
 
@@ -32,9 +31,7 @@ export const QuickFilterChips: React.FC<QuickFilterChipsProps> = ({
   filters,
   onFilterChange,
 }) => {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
-  const styles = getStyles(isDark);
+  const styles = getStyles();
 
   // Define available chips
   const chips: QuickFilterChip[] = useMemo(
@@ -163,12 +160,12 @@ export const QuickFilterChips: React.FC<QuickFilterChipsProps> = ({
  * Styles
  */
 
-function getStyles(isDark: boolean) {
+function getStyles() {
   return StyleSheet.create({
     scrollContainer: {
-      backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#2A3A4A' : '#E5E5E5',
+      borderBottomColor: '#E5E5E5',
       paddingVertical: 8,
     },
 
@@ -183,7 +180,7 @@ function getStyles(isDark: boolean) {
       height: 32,
       borderRadius: 16,
       marginRight: 8,
-      backgroundColor: isDark ? '#2A2A2A' : '#F0F0F0',
+      backgroundColor: '#F0F0F0',
       borderWidth: 1,
       borderColor: 'transparent',
       justifyContent: 'center',
@@ -198,7 +195,7 @@ function getStyles(isDark: boolean) {
     chipText: {
       fontSize: 12,
       fontWeight: '500',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     chipTextActive: {

@@ -1,5 +1,5 @@
 import React, { memo, useMemo, useRef } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip } from '../types';
 import { scheduleTheme as T } from '../scheduleTheme';
 
@@ -276,18 +276,6 @@ function rowsFromTrips(trips: CrewScheduleTrip[]): DayRow[] {
   return rows;
 }
 
-function kindTint(kind: RowKind): string {
-  if (kind === 'off') return '#F4F7FC';
-  if (kind === 'pto') return '#ECFDF5';
-  if (kind === 'reserve') return '#FFFBEB';
-  if (kind === 'unavailable') return '#F8FAFC';
-  if (kind === 'special') return '#F8FAFC';
-  if (kind === 'continuation') return '#FFFFFF';
-  if (kind === 'deadhead') return '#F8FAFC';
-  if (kind === 'empty') return '#FFFFFF';
-  return '#FFFFFF';
-}
-
 function formatHours(value: number | null): string {
   if (value == null || Number.isNaN(value)) return '--';
   return value.toFixed(2);
@@ -365,7 +353,7 @@ const ScheduleRow = memo(function ScheduleRow({
   const wxValue = row.wxText || '';
   const rowStyle = [
     styles.row,
-    { backgroundColor: kindTint(row.kind) },
+    styles.bodyRow,
     row.isWeekend && styles.weekendRow,
     row.isToday && styles.todayRow,
     row.groupedWithPrev && styles.tripChainRow,
@@ -433,18 +421,33 @@ const ScheduleRow = memo(function ScheduleRow({
   return <View style={rowStyle}>{content}</View>;
 });
 
-function EmptyMonth({
-  onImportSchedule,
-}: {
-  onImportSchedule?: () => void;
-}) {
+/** Band B: fixed size (no per-cell auto-shrink) so short labels like CITY don’t sit in oversized columns vs D-END. */
+function BandBHeaderLabel({ children, align }: { children: string; align: 'left' | 'center' }) {
+  return (
+    <Text
+      numberOfLines={1}
+      ellipsizeMode="clip"
+      style={[
+        styles.headerText,
+        align === 'center' ? styles.headerTextWx : styles.headerTextLeft,
+        Platform.OS === 'android' ? styles.headerTextAndroid : null,
+      ]}
+    >
+      {children}
+    </Text>
+  );
+}
+
+function EmptyMonth({ onOpenManage }: { onOpenManage?: () => void }) {
   return (
     <View style={styles.emptyMonth}>
       <Text style={styles.emptyMonthTitle}>No schedule for this month</Text>
-      <Text style={styles.emptyMonthBody}>Import your schedule to populate Classic List.</Text>
-      {onImportSchedule ? (
-        <Pressable style={styles.importBtn} onPress={onImportSchedule}>
-          <Text style={styles.importBtnText}>Import Schedule</Text>
+      <Text style={styles.emptyMonthBody}>
+        Import and view options are in Manage. Open Manage to import a schedule or switch Classic / Calendar / Smart.
+      </Text>
+      {onOpenManage ? (
+        <Pressable style={styles.importBtn} onPress={onOpenManage}>
+          <Text style={styles.importBtnText}>Open Manage</Text>
         </Pressable>
       ) : null}
     </View>
@@ -454,15 +457,16 @@ function EmptyMonth({
 type Props = {
   trips: CrewScheduleTrip[];
   onPressTrip: (trip: CrewScheduleTrip) => void;
-  onImportSchedule?: () => void;
+  /** Opens Crew Schedule → Manage (import + view mode). */
+  onOpenManage?: () => void;
 };
 
-export default function ClassicListView({ trips, onPressTrip: _onPressTrip, onImportSchedule }: Props) {
+export default function ClassicListView({ trips, onPressTrip: _onPressTrip, onOpenManage }: Props) {
   const rows = useMemo(() => rowsFromTrips(trips), [trips]);
   const summary = useMemo(() => buildSummaryMetrics(trips), [trips]);
 
   if (!trips.length) {
-    return <EmptyMonth onImportSchedule={onImportSchedule} />;
+    return <EmptyMonth onOpenManage={onOpenManage} />;
   }
 
   return (
@@ -477,26 +481,26 @@ export default function ClassicListView({ trips, onPressTrip: _onPressTrip, onIm
       </View>
 
       <View style={styles.headerRow}>
-        <View style={[styles.headerCell, styles.cellDate]}>
-          <Text style={[styles.headerText, styles.dateHeaderText]} numberOfLines={1}>DATE</Text>
+        <View style={[styles.headerBandCell, styles.cellDate]}>
+          <BandBHeaderLabel align="left">DATE</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerCell, styles.cellPairing]}>
-          <Text style={styles.headerText} numberOfLines={1}>PAIRING</Text>
+        <View style={[styles.headerBandCell, styles.cellPairing]}>
+          <BandBHeaderLabel align="left">PAIRING</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerCell, styles.cellReport]}>
-          <Text style={styles.headerText} numberOfLines={1}>REPORT</Text>
+        <View style={[styles.headerBandCell, styles.cellReport]}>
+          <BandBHeaderLabel align="left">REPORT</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerCell, styles.cellRoute]}>
-          <Text style={styles.headerText} numberOfLines={1}>CITY</Text>
+        <View style={[styles.headerBandCell, styles.cellRoute]}>
+          <BandBHeaderLabel align="left">CITY</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerCell, styles.cellDetail]}>
-          <Text style={styles.headerText} numberOfLines={1}>D-END</Text>
+        <View style={[styles.headerBandCell, styles.cellDetail]}>
+          <BandBHeaderLabel align="left">D-END</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerCell, styles.cellLayover]}>
-          <Text style={styles.headerText} numberOfLines={1}>LAYOVER</Text>
+        <View style={[styles.headerBandCell, styles.cellLayover]}>
+          <BandBHeaderLabel align="left">LAYOVER</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerCell, styles.cellWx]}>
-          <Text style={[styles.headerText, styles.wxHeaderText]} numberOfLines={1}>WX</Text>
+        <View style={[styles.headerBandCell, styles.cellWx]}>
+          <BandBHeaderLabel align="center">WX</BandBHeaderLabel>
         </View>
       </View>
 
@@ -519,63 +523,75 @@ const styles = StyleSheet.create({
   tableWrap: {
     backgroundColor: '#FFFFFF',
     width: '100%',
-    paddingLeft: 4,
-    paddingRight: 4,
+    paddingLeft: 2,
+    paddingRight: 2,
   },
   wrap: { paddingBottom: 0 },
   summaryStrip: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    borderBottomWidth: 0,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 6,
-    paddingTop: 0,
-    paddingBottom: 1,
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#B8BEC6',
+    backgroundColor: '#D4D7DD',
+    paddingHorizontal: 4,
+    paddingVertical: 12,
   },
   summaryInlineItem: {
-    flexDirection: 'row',
+    flex: 1,
+    flexDirection: 'column',
     alignItems: 'center',
-    marginRight: 8,
+    justifyContent: 'center',
+    paddingHorizontal: 2,
   },
   summaryKey: {
-    fontSize: 6.6,
+    fontSize: 9,
     fontWeight: '700',
-    color: '#7A8BA1',
-    letterSpacing: 0.05,
-    marginRight: 2,
+    color: '#64748B',
+    letterSpacing: 0.3,
+    marginBottom: 4,
+    textAlign: 'center',
   },
   summaryValue: {
-    fontSize: 8.8,
+    fontSize: 13,
     fontWeight: '800',
-    color: '#1B2A3E',
+    color: '#0F172A',
+    textAlign: 'center',
   },
+  /** Band B: lighter frosted neutral than Band A; not body white. */
   headerRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 18,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: DIV,
-    borderBottomColor: '#F7FAFD',
+    alignItems: 'stretch',
+    gap: 4,
+    backgroundColor: '#F5F6F8',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#D8DCE2',
+  },
+  headerBandCell: {
+    justifyContent: 'center',
+    minHeight: 40,
+    paddingVertical: 10,
+    paddingHorizontal: 0,
+    overflow: 'visible',
   },
   headerText: {
-    fontSize: 6.7,
+    fontSize: 7.2,
     fontWeight: '700',
-    color: '#8393A8',
+    color: '#334155',
     letterSpacing: 0,
+    lineHeight: 10,
     width: '100%',
+    textTransform: 'uppercase',
+  },
+  headerTextLeft: {
     textAlign: 'left',
   },
-  dateHeaderText: {
-    marginLeft: 0,
+  headerTextWx: {
+    textAlign: 'center',
+    letterSpacing: 0.02,
   },
-  headerCell: {
-    height: 18,
-    paddingHorizontal: 1,
-    justifyContent: 'center',
-    alignItems: 'stretch',
-    flexDirection: 'row',
-    overflow: 'hidden',
+  headerTextAndroid: {
+    includeFontPadding: false,
   },
   rowCell: {
     height: 22,
@@ -589,22 +605,42 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'nowrap',
     alignItems: 'center',
+    gap: 4,
     height: 22,
     paddingVertical: 0,
     paddingHorizontal: 0,
     borderBottomWidth: DIV,
-    borderBottomColor: '#F8FAFD',
+    borderBottomColor: '#E8EAED',
     overflow: 'hidden',
   },
-  cellDate: { flex: 1.1, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 3, paddingRight: 0.5 },
-  cellPairing: { flex: 1.25, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
-  cellReport: { flex: 1.0, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
-  cellRoute: { flex: 0.9, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
-  cellDetail: { flex: 1.0, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
-  cellLayover: { flex: 1.0, borderRightWidth: DIV, borderRightColor: '#F8FAFD', alignItems: 'flex-start', paddingLeft: 1, paddingRight: 1 },
-  cellWx: { width: 22, minWidth: 22, maxWidth: 22, alignItems: 'flex-start', paddingLeft: 0, paddingRight: 0 },
+  /** Default body fill: no status-based row tints (PTO/RSV/DH/OFF/etc. use text color only). */
+  bodyRow: {
+    backgroundColor: '#FFFFFF',
+  },
+  /**
+   * CITY is usually 3 letters; D-END is times. Equal flex (1/1) left a wide empty band in CITY vs D-END.
+   * Narrow CITY / widen D-END (0.82 + 1.18 = 2) so the gap between labels matches other columns optically.
+   */
+  cellDate: { flex: 0.9, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingLeft: 2, paddingRight: 2 },
+  cellPairing: { flex: 1, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingHorizontal: 2 },
+  cellReport: { flex: 1, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingHorizontal: 2 },
+  cellRoute: { flex: 0.82, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingHorizontal: 2 },
+  cellDetail: { flex: 1.18, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingLeft: 2, paddingRight: 0 },
+  /** Pull toward D-END: no pl + negative ml eats row gap so LAYOVER/WX clip less on the right. */
+  cellLayover: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: -4,
+    borderRightWidth: DIV,
+    borderRightColor: '#ECEEF1',
+    alignItems: 'flex-start',
+    paddingLeft: 0,
+    paddingRight: 2,
+  },
+  cellWx: { width: 24, minWidth: 24, maxWidth: 24, alignItems: 'flex-start', paddingHorizontal: 0 },
+  /** Only weekend + today override bodyRow; cool neutral, not beige/pink. */
   weekendRow: {
-    backgroundColor: '#FBFCFD',
+    backgroundColor: '#F8F9FA',
   },
   noPressRow: {
     opacity: 0.96,
@@ -613,7 +649,7 @@ const styles = StyleSheet.create({
     opacity: 0.95,
   },
   todayRow: {
-    backgroundColor: '#EFF4FA',
+    backgroundColor: '#F9F0F2',
   },
   tripChainRow: { opacity: 0.992 },
   cellText: { width: '100%', fontSize: 7.8, color: '#243447', lineHeight: 10, fontWeight: '600' },
@@ -642,12 +678,11 @@ const styles = StyleSheet.create({
     textAlign: 'left',
     fontVariant: ['tabular-nums'],
   },
-  todayDateInline: { color: '#1E3A8A', fontWeight: '800' },
+  todayDateInline: { color: '#8A2E3C', fontWeight: '800' },
   assignmentCode: { fontSize: 8.2, fontWeight: '700', color: T.text, lineHeight: 10 },
   routeMain: { fontSize: 7.8, fontWeight: '600', color: '#B5161E', lineHeight: 10 },
   detailCellText: { fontSize: 7.8, color: '#607086', lineHeight: 10, fontWeight: '600' },
   wxCellText: { fontSize: 8, color: '#EAB308', lineHeight: 10, fontWeight: '700', textAlign: 'left', marginLeft: -2 },
-  wxHeaderText: { marginLeft: -2 },
   continuationCode: { color: '#425972', fontWeight: '600' },
   routePlaceholder: { fontSize: 7.8, color: '#C6D1DE', lineHeight: 10 },
   offCode: { color: '#475569' },

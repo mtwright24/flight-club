@@ -20,6 +20,8 @@ if (!rawUrl.startsWith('http')) rawUrl = `https://${rawUrl}`;
 if (rawUrl.endsWith('/')) rawUrl = rawUrl.slice(0, -1);
 
 export const SUPABASE_URL = rawUrl;
+/** Public anon key (same as createClient second arg). Edge Functions need `apikey` + `Authorization` on raw fetch. */
+export const SUPABASE_ANON_KEY = supabaseAnonKey;
 console.log('Supabase URL:', SUPABASE_URL);
 
 // Supabase session blobs can exceed SecureStore's ~2048 byte limit.

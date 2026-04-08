@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View, useColorScheme } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -16,8 +16,7 @@ export const DatePickerField: React.FC<DatePickerFieldProps> = ({
   placeholder = 'Select date',
   onChange,
 }) => {
-  const isDark = useColorScheme() === 'dark';
-  const styles = getStyles(isDark);
+  const styles = getStyles();
   const [open, setOpen] = useState(false);
   const [dateValue, setDateValue] = useState<Date>(value ? new Date(value) : new Date());
 
@@ -36,7 +35,7 @@ export const DatePickerField: React.FC<DatePickerFieldProps> = ({
       {label ? <Text style={styles.label}>{label}</Text> : null}
       <Pressable style={styles.field} onPress={() => setOpen(true)}>
         <Text style={display ? styles.valueText : styles.placeholder}>{display || placeholder}</Text>
-        <Ionicons name="calendar-outline" size={18} color={isDark ? '#FFFFFF' : '#000000'} />
+        <Ionicons name="calendar-outline" size={18} color="#000000" />
       </Pressable>
 
       <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
@@ -65,22 +64,22 @@ export const DatePickerField: React.FC<DatePickerFieldProps> = ({
   );
 };
 
-const getStyles = (isDark: boolean) =>
+const getStyles = () =>
   StyleSheet.create({
     label: {
       fontSize: 12,
       fontWeight: '700',
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       marginBottom: 6,
       textTransform: 'uppercase',
     },
     field: {
       borderRadius: 10,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       paddingHorizontal: 12,
       paddingVertical: 10,
-      backgroundColor: isDark ? '#2A2A2A' : '#F9F9F9',
+      backgroundColor: '#F9F9F9',
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
@@ -88,11 +87,11 @@ const getStyles = (isDark: boolean) =>
     valueText: {
       fontSize: 13,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     placeholder: {
       fontSize: 13,
-      color: isDark ? '#666666' : '#999999',
+      color: '#999999',
     },
     overlay: {
       flex: 1,
@@ -100,7 +99,7 @@ const getStyles = (isDark: boolean) =>
       justifyContent: 'flex-end',
     },
     sheet: {
-      backgroundColor: isDark ? '#2A2A2A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       paddingHorizontal: 16,
       paddingTop: 12,
       paddingBottom: 24,
@@ -114,7 +113,7 @@ const getStyles = (isDark: boolean) =>
     },
     actionText: {
       fontSize: 14,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     actionPrimary: {
       color: '#DC3545',

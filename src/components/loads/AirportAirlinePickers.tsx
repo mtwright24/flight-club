@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../../styles/theme';
 
 const AIRPORTS = [
   { code: 'JFK', city: 'New York', name: 'John F. Kennedy Intl' },
@@ -74,7 +75,7 @@ export const AirportPickerModal: React.FC<AirportPickerModalProps> = ({
       <SafeAreaView style={{ flex: 1, backgroundColor: '#fff', paddingTop: 20 }} edges={['top']}> 
         <View style={styles.header}>
           <Pressable onPress={onClose}>
-            <Ionicons name="close" size={24} color="#DC3545" />
+            <Ionicons name="close" size={24} color={colors.headerRed} />
           </Pressable>
           <Text style={styles.headerTitle}>Select Airport</Text>
           <View style={{ width: 24 }} />
@@ -110,7 +111,7 @@ export const AirportPickerModal: React.FC<AirportPickerModalProps> = ({
                 <Text style={styles.airportCity}>{item.city}</Text>
               </View>
               {selected === item.code && (
-                <Ionicons name="checkmark-circle" size={24} color="#DC3545" />
+                <Ionicons name="checkmark-circle" size={24} color={colors.headerRed} />
               )}
             </Pressable>
           )}
@@ -151,7 +152,7 @@ export const AirlinePickerModal: React.FC<AirlinePickerModalProps> = ({
     <Modal visible={visible} animationType="slide" transparent={false}>
       <View style={styles.header}>
         <Pressable onPress={onClose}>
-          <Ionicons name="close" size={24} color="#DC3545" />
+          <Ionicons name="close" size={24} color={colors.headerRed} />
         </Pressable>
         <Text style={styles.headerTitle}>Select Airline</Text>
         <View style={{ width: 24 }} />
@@ -176,7 +177,7 @@ export const AirlinePickerModal: React.FC<AirlinePickerModalProps> = ({
               <Text style={styles.airlineCode}>{item.code}</Text>
             </View>
             {selected === item.code && (
-              <Ionicons name="checkmark-circle" size={24} color="#DC3545" />
+              <Ionicons name="checkmark-circle" size={24} color={colors.headerRed} />
             )}
           </Pressable>
         )}
@@ -200,7 +201,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '800',
     color: '#000',
   },
   searchContainer: {
@@ -230,7 +231,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f0f0f0',
   },
   airportRowSelected: {
-    backgroundColor: '#fff5f5',
+    backgroundColor: 'rgba(181, 22, 30, 0.06)',
   },
   airportInfo: {
     flex: 1,
@@ -255,7 +256,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f0f0f0',
   },
   airlineRowSelected: {
-    backgroundColor: '#fff5f5',
+    backgroundColor: 'rgba(181, 22, 30, 0.06)',
   },
   airlineName: {
     fontSize: 16,

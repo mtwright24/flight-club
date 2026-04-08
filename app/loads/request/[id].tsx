@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator, FlatList, Pressable } from '
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { getLoadRequest, listLoadAnswers, postLoadAnswer } from '../../../src/lib/supabase/loads';
+import { colors } from '../../../src/styles/theme';
 
 export default function LoadRequestDetailScreen() {
   const { id } = useLocalSearchParams();
@@ -23,7 +24,7 @@ export default function LoadRequestDetailScreen() {
     setLoading(false);
   }, [id]);
 
-  if (loading) return <ActivityIndicator style={{ marginTop: 32 }} size="large" color="#DC3545" />;
+  if (loading) return <ActivityIndicator style={{ marginTop: 32 }} size="large" color={colors.headerRed} />;
   if (error) return <Text style={styles.errorText}>{error}</Text>;
   if (!request) return <Text style={styles.errorText}>Request not found.</Text>;
 
@@ -65,15 +66,15 @@ const styles = StyleSheet.create({
   headerCard: { backgroundColor: '#fff', borderRadius: 16, padding: 18, marginBottom: 18, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, borderWidth: 1, borderColor: '#eee' },
   title: { fontWeight: '700', fontSize: 18, color: '#222' },
   sub: { color: '#888', fontSize: 15, marginTop: 2 },
-  status: { color: '#DC3545', fontWeight: '700', fontSize: 13, marginTop: 8 },
+  status: { color: colors.headerRed, fontWeight: '800', fontSize: 13, marginTop: 8 },
   answersTitle: { fontWeight: '700', fontSize: 16, marginBottom: 10 },
   emptyState: { alignItems: 'center', marginTop: 32 },
   emptyText: { color: '#888', fontSize: 16, marginTop: 12 },
   answerCard: { backgroundColor: '#f5f5f5', borderRadius: 10, padding: 14, marginBottom: 10 },
-  answerLevel: { fontWeight: '700', fontSize: 15, color: '#DC3545' },
+  answerLevel: { fontWeight: '800', fontSize: 15, color: colors.headerRed },
   answerNotes: { color: '#222', fontSize: 14, marginTop: 2 },
   answerTime: { color: '#888', fontSize: 12, marginTop: 4 },
-  ctaButton: { backgroundColor: '#DC3545', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 18 },
-  ctaButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  errorText: { color: '#DC3545', fontWeight: '700', fontSize: 16, textAlign: 'center', marginTop: 24 },
+  ctaButton: { backgroundColor: colors.headerRed, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 18 },
+  ctaButtonText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  errorText: { color: colors.headerRed, fontWeight: '700', fontSize: 16, textAlign: 'center', marginTop: 24 },
 });

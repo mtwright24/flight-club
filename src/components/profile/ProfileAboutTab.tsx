@@ -65,6 +65,9 @@ export default function ProfileAboutTab({ profile, memberRoomNames }: Props) {
     );
   }
 
+  const bio = toCleanString(profile.bio);
+  const bioRows = bio ? [{ label: 'Bio', value: bio }] : [];
+
   const role = firstTruthy(profile.role);
   const airline = firstTruthy(profile.airline);
   const base = firstTruthy(profile.base);
@@ -108,7 +111,12 @@ export default function ProfileAboutTab({ profile, memberRoomNames }: Props) {
     { label: 'Interests', value: interests },
   ].filter((r) => r.value);
 
-  const hasAnySection = crewRows.length > 0 || profileRows.length > 0 || moreRows.length > 0 || memberRoomNames.length > 0;
+  const hasAnySection =
+    bioRows.length > 0 ||
+    crewRows.length > 0 ||
+    profileRows.length > 0 ||
+    moreRows.length > 0 ||
+    memberRoomNames.length > 0;
 
   if (!hasAnySection) {
     return (
@@ -120,6 +128,7 @@ export default function ProfileAboutTab({ profile, memberRoomNames }: Props) {
 
   return (
     <View style={styles.wrap}>
+      <InfoSection title="About" rows={bioRows} />
       <InfoSection title="Crew Info" rows={crewRows} />
       {memberRoomNames.length > 0 ? (
         <View style={styles.sectionCard}>

@@ -12,7 +12,7 @@ import {
   PanResponder,
   Animated,
 } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -51,6 +51,14 @@ import { isFeedVideoMedia } from '../lib/media/videoDetection';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
+
+function PostMediaViewerVideo({ uri, style }: { uri: string; style: object }) {
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = true;
+    p.play();
+  });
+  return <VideoView player={player} style={style} contentFit="contain" nativeControls />;
+}
 
 interface RoomData {
   id: string;
@@ -394,14 +402,7 @@ export default function PostMediaViewerScreen() {
             >
               {currentImageUrl &&
                 (currentIsVideo ? (
-                  <Video
-                    source={{ uri: currentImageUrl }}
-                    style={styles.image}
-                    resizeMode={ResizeMode.CONTAIN}
-                    useNativeControls
-                    shouldPlay
-                    isLooping
-                  />
+                  <PostMediaViewerVideo key={currentImageUrl} uri={currentImageUrl} style={styles.image} />
                 ) : (
                   <Image
                     source={{ uri: currentImageUrl }}

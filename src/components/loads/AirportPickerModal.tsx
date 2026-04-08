@@ -1,5 +1,6 @@
 import React from 'react';
 import { Modal, View, Text, StyleSheet, FlatList, Pressable, TextInput } from 'react-native';
+import { colors } from '../../styles/theme';
 
 const AIRPORTS = [
   { code: 'JFK', name: 'New York JFK' },
@@ -57,9 +58,9 @@ const styles = StyleSheet.create({
   sheet: { backgroundColor: '#fff', borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, maxHeight: '80%' },
   input: { backgroundColor: '#f5f5f5', borderRadius: 8, padding: 10, marginBottom: 12 },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  selectedRow: { backgroundColor: '#fff5f5' },
+  selectedRow: { backgroundColor: 'rgba(181, 22, 30, 0.06)' },
   code: { fontWeight: '700', fontSize: 16, width: 60 },
   name: { fontSize: 15, color: '#333' },
   closeBtn: { alignItems: 'center', marginTop: 12 },
-  closeText: { color: '#DC3545', fontWeight: '700', fontSize: 16 },
+  closeText: { color: colors.headerRed, fontWeight: '700', fontSize: 16 },
 });

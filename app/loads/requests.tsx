@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator, FlatList, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { listLoadRequests, LoadRequest } from '../../src/lib/supabase/loads';
+import { colors } from '../../src/styles/theme';
 import LoadsSegmentedControl from '../../src/components/loads/LoadsSegmentedControl';
 import { useRouter } from 'expo-router';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
@@ -14,7 +15,7 @@ function RequestCard({ request }: { request: LoadRequest }) {
   return (
     <Pressable style={styles.card} onPress={() => router.push(`/loads/request/${request.id}`)}>
       <View style={styles.cardRow}>
-        <Ionicons name="airplane" size={28} color="#DC3545" style={{ marginRight: 12 }} />
+        <Ionicons name="airplane" size={28} color={colors.headerRed} style={{ marginRight: 12 }} />
         <View style={{ flex: 1 }}>
           <Text style={styles.cardTitle}>{request.airline_code} {request.from_airport} → {request.to_airport}</Text>
           <Text style={styles.cardSub}>{request.travel_date}</Text>
@@ -58,7 +59,7 @@ export default function LoadsRequestsScreen() {
         selectedIndex={tab === 'open' ? 0 : 1}
         onTabPress={i => setTab(i === 0 ? 'open' : 'answered')}
       />
-      {loading ? <ActivityIndicator style={{ marginTop: 24 }} size="large" color="#DC3545" /> : null}
+      {loading ? <ActivityIndicator style={{ marginTop: 24 }} size="large" color={colors.headerRed} /> : null}
       {!loading && error ? <Text style={styles.errorText}>{error}</Text> : null}
     </>
   );
@@ -95,7 +96,7 @@ export default function LoadsRequestsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff', padding: 8 },
-  errorText: { color: '#DC3545', fontWeight: '700', fontSize: 16, textAlign: 'center', marginTop: 24 },
+  errorText: { color: colors.headerRed, fontWeight: '700', fontSize: 16, textAlign: 'center', marginTop: 24 },
   emptyState: { alignItems: 'center', marginTop: 32 },
   emptyText: { color: '#888', fontSize: 16, marginTop: 12 },
   card: {
@@ -114,5 +115,5 @@ const styles = StyleSheet.create({
   cardRow: { flexDirection: 'row', alignItems: 'center' },
   cardTitle: { fontWeight: '700', fontSize: 16, color: '#222' },
   cardSub: { color: '#888', fontSize: 14, marginTop: 2 },
-  cardStatus: { color: '#DC3545', fontWeight: '700', fontSize: 13, marginLeft: 12 },
+  cardStatus: { color: colors.headerRed, fontWeight: '800', fontSize: 13, marginLeft: 12 },
 });

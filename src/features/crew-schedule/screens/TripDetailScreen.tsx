@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { fetchTripGroupEntries } from '../scheduleApi';
+import { entriesToSingleTrip } from '../tripMapper';
 import { getMockTripById } from '../mockScheduleData';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
@@ -30,15 +32,50 @@ function statusLabel(s: ScheduleDutyStatus): string {
   }
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export default function TripDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { tripId: tripIdParam } = useLocalSearchParams<{ tripId?: string }>();
   const tripId = typeof tripIdParam === 'string' ? tripIdParam : tripIdParam?.[0];
 
-  const trip = useMemo((): CrewScheduleTrip | undefined => {
-    if (!tripId) return undefined;
-    return getMockTripById(tripId);
+  const [trip, setTrip] = useState<CrewScheduleTrip | undefined>(undefined);
+  const [loadingTrip, setLoadingTrip] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      if (!tripId) {
+        setTrip(undefined);
+        setLoadingTrip(false);
+        return;
+      }
+      setLoadingTrip(true);
+      if (tripId.startsWith('demo-')) {
+        setTrip(getMockTripById(tripId));
+        setLoadingTrip(false);
+        return;
+      }
+      if (UUID_RE.test(tripId)) {
+        try {
+          const rows = await fetchTripGroupEntries(tripId);
+          if (!cancelled) setTrip(entriesToSingleTrip(rows));
+        } catch {
+          if (!cancelled) setTrip(undefined);
+        } finally {
+          if (!cancelled) setLoadingTrip(false);
+        }
+        return;
+      }
+      setTrip(getMockTripById(tripId));
+      setLoadingTrip(false);
+    }
+    void run();
+    return () => {
+      cancelled = true;
+    };
   }, [tripId]);
 
   const openPost = (t: CrewScheduleTrip) => {
@@ -57,13 +94,40 @@ export default function TripDetailScreen() {
     });
   };
 
-  if (!tripId || !trip) {
+  if (!tripId) {
     return (
       <View style={styles.shell}>
         <CrewScheduleHeader title="Trip detail" />
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>Trip not found</Text>
-          <Text style={styles.emptySub}>This trip may be outside the demo month or was removed.</Text>
+          <Text style={styles.emptySub}>Missing trip id.</Text>
+          <Pressable style={styles.primaryBtn} onPress={() => router.back()}>
+            <Text style={styles.primaryBtnText}>Go back</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  if (loadingTrip && !trip) {
+    return (
+      <View style={styles.shell}>
+        <CrewScheduleHeader title="Trip detail" />
+        <View style={styles.empty}>
+          <Text style={styles.emptyTitle}>Loading…</Text>
+          <Text style={styles.emptySub}>Loading trip details.</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (!trip) {
+    return (
+      <View style={styles.shell}>
+        <CrewScheduleHeader title="Trip detail" />
+        <View style={styles.empty}>
+          <Text style={styles.emptyTitle}>Trip not found</Text>
+          <Text style={styles.emptySub}>This trip may be outside the current month or was removed.</Text>
           <Pressable style={styles.primaryBtn} onPress={() => router.back()}>
             <Text style={styles.primaryBtnText}>Go back</Text>
           </Pressable>
@@ -215,9 +279,9 @@ export default function TripDetailScreen() {
             }
           />
           <ActionTile
-            icon="bed-outline"
-            label="View hotel"
-            onPress={() => router.push({ pathname: '/crew-schedule/hotels', params: { tripId: t.id } })}
+            icon="options-outline"
+            label="Manage"
+            onPress={() => router.push({ pathname: '/crew-schedule/manage', params: { tripId: t.id } })}
           />
           <ActionTile
             icon="alarm-outline"

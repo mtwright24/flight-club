@@ -6,7 +6,6 @@ export default function CrewScheduleStackLayout() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="trip-detail" />
       <Stack.Screen name="import-schedule" />
-      <Stack.Screen name="import-review" />
     </Stack>
   );
 }

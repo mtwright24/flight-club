@@ -24,16 +24,17 @@ export async function saveScheduleViewMode(mode: ScheduleViewMode): Promise<void
   }
 }
 
-export type CrewScheduleTabName = 'index' | 'tradeboard' | 'trip-chat' | 'hotels' | 'alerts';
+export type CrewScheduleTabName = 'index' | 'tradeboard' | 'trip-chat' | 'manage' | 'alerts';
 
 export async function loadLastTab(): Promise<CrewScheduleTabName | null> {
   try {
     const v = await AsyncStorage.getItem(KEY_TAB);
+    if (v === 'hotels') return 'manage';
     if (
       v === 'index' ||
       v === 'tradeboard' ||
       v === 'trip-chat' ||
-      v === 'hotels' ||
+      v === 'manage' ||
       v === 'alerts'
     ) {
       return v;

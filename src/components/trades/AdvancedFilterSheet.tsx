@@ -9,7 +9,6 @@ import {
   TouchableOpacity,
   Text,
   StyleSheet,
-  useColorScheme,
   ScrollView,
   TextInput,
   Modal,
@@ -38,8 +37,7 @@ export const AdvancedFilterSheet: React.FC<AdvancedFilterSheetProps> = ({
   visible,
   onSaveAsAlert,
 }) => {
-  const isDark = useColorScheme() === 'dark';
-  const styles = getStyles(isDark);
+  const styles = getStyles();
 
   const [localFilters, setLocalFilters] = useState<TradeFilter>({});
   const [showSaveAlert, setShowSaveAlert] = useState(false);
@@ -189,14 +187,14 @@ export const AdvancedFilterSheet: React.FC<AdvancedFilterSheetProps> = ({
         <View style={styles.container}>
           <View style={styles.header}>
             <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={22} color={isDark ? '#FFFFFF' : '#000000'} />
+              <Ionicons name="close" size={22} color="#000000" />
             </TouchableOpacity>
             <Text style={styles.headerTitle}>Advanced Filters</Text>
             <TouchableOpacity onPress={() => setShowSaveAlert(true)} disabled={!hasActiveFilters}>
               <Ionicons
                 name="bookmark"
                 size={18}
-                color={hasActiveFilters ? '#DC3545' : isDark ? '#555555' : '#BBBBBB'}
+                color={hasActiveFilters ? '#DC3545' : '#BBBBBB'}
               />
             </TouchableOpacity>
           </View>
@@ -421,7 +419,7 @@ export const AdvancedFilterSheet: React.FC<AdvancedFilterSheetProps> = ({
               <TextInput
                 style={styles.input}
                 placeholder="Search notes"
-                placeholderTextColor={isDark ? '#666' : '#999'}
+                placeholderTextColor="#999"
                 value={localFilters.search_notes || ''}
                 onChangeText={(text) => updateLocal({ search_notes: text || undefined })}
               />
@@ -449,7 +447,7 @@ export const AdvancedFilterSheet: React.FC<AdvancedFilterSheetProps> = ({
             <TextInput
               style={styles.alertInput}
               placeholder="e.g., 'JFK swaps'"
-              placeholderTextColor={isDark ? '#666' : '#999'}
+              placeholderTextColor="#999"
               value={alertName}
               onChangeText={setAlertName}
               autoFocus
@@ -469,11 +467,11 @@ export const AdvancedFilterSheet: React.FC<AdvancedFilterSheetProps> = ({
   );
 };
 
-function getStyles(isDark: boolean) {
+function getStyles() {
   return StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       paddingTop: 44,
     },
     header: {
@@ -483,12 +481,12 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 16,
       paddingVertical: 12,
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#2A3A4A' : '#E5E5E5',
+      borderBottomColor: '#E5E5E5',
     },
     headerTitle: {
       fontSize: 16,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     content: {
       flex: 1,
@@ -498,8 +496,8 @@ function getStyles(isDark: boolean) {
     card: {
       borderRadius: 12,
       borderWidth: 1,
-      borderColor: isDark ? '#2F2F2F' : '#E6E6E6',
-      backgroundColor: isDark ? '#222222' : '#F8F8F8',
+      borderColor: '#E6E6E6',
+      backgroundColor: '#F8F8F8',
       padding: 12,
       marginBottom: 12,
       gap: 10,
@@ -507,7 +505,7 @@ function getStyles(isDark: boolean) {
     sectionTitle: {
       fontSize: 12,
       fontWeight: '700',
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       textTransform: 'uppercase',
     },
     rowGap: {
@@ -527,8 +525,8 @@ function getStyles(isDark: boolean) {
       paddingVertical: 6,
       borderRadius: 16,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
-      backgroundColor: isDark ? '#2A2A2A' : '#F0F0F0',
+      borderColor: '#E0E0E0',
+      backgroundColor: '#F0F0F0',
     },
     chipActive: {
       backgroundColor: '#DC3545',
@@ -536,7 +534,7 @@ function getStyles(isDark: boolean) {
     },
     chipText: {
       fontSize: 12,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       fontWeight: '600',
     },
     chipTextActive: {
@@ -545,12 +543,12 @@ function getStyles(isDark: boolean) {
     input: {
       borderRadius: 10,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       paddingHorizontal: 12,
       paddingVertical: 10,
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
-      backgroundColor: isDark ? '#2A2A2A' : '#F9F9F9',
+      color: '#000000',
+      backgroundColor: '#F9F9F9',
     },
     toggleRow: {
       flexDirection: 'row',
@@ -560,7 +558,7 @@ function getStyles(isDark: boolean) {
     },
     toggleLabel: {
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       fontWeight: '600',
     },
     footer: {
@@ -570,20 +568,20 @@ function getStyles(isDark: boolean) {
       paddingBottom: 20,
       paddingTop: 12,
       borderTopWidth: 1,
-      borderTopColor: isDark ? '#2A3A4A' : '#E5E5E5',
+      borderTopColor: '#E5E5E5',
     },
     resetButton: {
       flex: 1,
       paddingVertical: 12,
       borderRadius: 10,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       alignItems: 'center',
     },
     resetButtonText: {
       fontSize: 14,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     applyButton: {
       flex: 1,
@@ -606,7 +604,7 @@ function getStyles(isDark: boolean) {
     },
     alertBox: {
       borderRadius: 12,
-      backgroundColor: isDark ? '#2A2A2A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       paddingHorizontal: 16,
       paddingVertical: 20,
       minWidth: 280,
@@ -614,23 +612,23 @@ function getStyles(isDark: boolean) {
     alertTitle: {
       fontSize: 16,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       marginBottom: 4,
     },
     alertSubtitle: {
       fontSize: 12,
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       marginBottom: 12,
     },
     alertInput: {
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       paddingHorizontal: 12,
       paddingVertical: 10,
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
-      backgroundColor: isDark ? '#1A1A1A' : '#F9F9F9',
+      color: '#000000',
+      backgroundColor: '#F9F9F9',
       marginBottom: 16,
     },
     alertButtonRow: {
@@ -642,7 +640,7 @@ function getStyles(isDark: boolean) {
       paddingVertical: 10,
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
     },
     alertButtonSave: {
       flex: 1,
@@ -654,7 +652,7 @@ function getStyles(isDark: boolean) {
       textAlign: 'center',
       fontSize: 13,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     alertButtonTextSave: {
       textAlign: 'center',

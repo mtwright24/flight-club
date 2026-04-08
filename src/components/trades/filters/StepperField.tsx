@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View, useColorScheme } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 interface StepperFieldProps {
   label: string;
@@ -18,8 +18,7 @@ export const StepperField: React.FC<StepperFieldProps> = ({
   step = 10,
   onChange,
 }) => {
-  const isDark = useColorScheme() === 'dark';
-  const styles = getStyles(isDark);
+  const styles = getStyles();
 
   const decrement = () => {
     if (value === undefined) return onChange(min);
@@ -50,7 +49,7 @@ export const StepperField: React.FC<StepperFieldProps> = ({
   );
 };
 
-const getStyles = (isDark: boolean) =>
+const getStyles = () =>
   StyleSheet.create({
     container: {
       flex: 1,
@@ -58,15 +57,15 @@ const getStyles = (isDark: boolean) =>
     label: {
       fontSize: 11,
       fontWeight: '700',
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       marginBottom: 6,
       textTransform: 'uppercase',
     },
     stepper: {
       borderRadius: 10,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
-      backgroundColor: isDark ? '#2A2A2A' : '#F9F9F9',
+      borderColor: '#E0E0E0',
+      backgroundColor: '#F9F9F9',
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
@@ -79,20 +78,20 @@ const getStyles = (isDark: boolean) =>
       borderRadius: 14,
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: isDark ? '#3A3A3A' : '#E6E6E6',
+      backgroundColor: '#E6E6E6',
     },
     buttonText: {
       fontSize: 16,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     value: {
       fontSize: 13,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
     valueMuted: {
-      color: isDark ? '#777777' : '#999999',
+      color: '#999999',
       fontWeight: '600',
     },
   });

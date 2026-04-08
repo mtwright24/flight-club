@@ -9,7 +9,6 @@ import {
   TouchableOpacity,
   Text,
   StyleSheet,
-  useColorScheme,
   ScrollView,
   ActivityIndicator,
   Image,
@@ -31,9 +30,7 @@ export const TradeDetailScreen: React.FC = () => {
   const router = useRouter();
   const { id } = useLocalSearchParams();
   const { session } = useAuth();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
-  const styles = getStyles(isDark);
+  const styles = getStyles();
 
   const [trade, setTrade] = useState<TradePost | null>(null);
   const [loading, setLoading] = useState(true);
@@ -254,7 +251,7 @@ export const TradeDetailScreen: React.FC = () => {
             <View
               style={[
                 styles.typeIndicator,
-                getTypeIndicatorStyle(trade.type, isDark),
+                getTypeIndicatorStyle(trade.type),
               ]}
             >
               <Text style={styles.typeIndicatorText}>{trade.type.toUpperCase()}</Text>
@@ -516,7 +513,7 @@ export const TradeDetailScreen: React.FC = () => {
             <TextInput
               style={styles.messageInput}
               placeholder="Type your message..."
-              placeholderTextColor={isDark ? '#666' : '#999'}
+              placeholderTextColor="#999"
               value={messageText}
               onChangeText={setMessageText}
               multiline
@@ -589,7 +586,7 @@ function formatRelativeTime(dateStr: string): string {
   }
 }
 
-function getTypeIndicatorStyle(type: string, isDark: boolean): any {
+function getTypeIndicatorStyle(type: string): any {
   const styles: Record<string, any> = {
     swap: { backgroundColor: '#1D4ED8' },
     drop: { backgroundColor: '#DC3545' },
@@ -602,11 +599,11 @@ function getTypeIndicatorStyle(type: string, isDark: boolean): any {
  * Styles
  */
 
-function getStyles(isDark: boolean) {
+function getStyles() {
   return StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
     },
 
     header: {
@@ -616,7 +613,7 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 16,
       paddingVertical: 12,
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#2A3A4A' : '#E5E5E5',
+      borderBottomColor: '#E5E5E5',
     },
 
     backButton: {
@@ -628,7 +625,7 @@ function getStyles(isDark: boolean) {
     headerTitle: {
       fontSize: 16,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     centerContent: {
@@ -639,7 +636,7 @@ function getStyles(isDark: boolean) {
 
     errorText: {
       fontSize: 14,
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
     },
 
     content: {
@@ -650,12 +647,12 @@ function getStyles(isDark: boolean) {
 
     card: {
       borderRadius: 8,
-      backgroundColor: isDark ? '#2A2A2A' : '#F9F9F9',
+      backgroundColor: '#F9F9F9',
       paddingHorizontal: 12,
       paddingVertical: 12,
       marginBottom: 12,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E5E5E5',
+      borderColor: '#E5E5E5',
     },
 
     tradeTypeRow: {
@@ -694,13 +691,13 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 10,
       paddingVertical: 6,
       borderRadius: 6,
-      backgroundColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      backgroundColor: '#E0E0E0',
     },
 
     screenshotIndicatorText: {
       fontSize: 11,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     dateRow: {
@@ -710,7 +707,7 @@ function getStyles(isDark: boolean) {
     dateText: {
       fontSize: 13,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     detailRow: {
@@ -719,30 +716,30 @@ function getStyles(isDark: boolean) {
       alignItems: 'center',
       paddingVertical: 6,
       borderTopWidth: 1,
-      borderTopColor: isDark ? '#3A3A3A' : '#E6E6E6',
+      borderTopColor: '#E6E6E6',
     },
 
     detailLabel: {
       fontSize: 11,
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       fontWeight: '600',
     },
 
     detailValue: {
       fontSize: 12,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       fontWeight: '600',
     },
 
     detailValueMuted: {
-      color: isDark ? '#7A7A7A' : '#9A9A9A',
+      color: '#9A9A9A',
       fontWeight: '500',
     },
 
     sectionTitle: {
       fontSize: 12,
       fontWeight: '700',
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       marginBottom: 8,
       textTransform: 'uppercase',
     },
@@ -757,33 +754,33 @@ function getStyles(isDark: boolean) {
       paddingVertical: 10,
       paddingHorizontal: 8,
       borderRadius: 6,
-      backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       alignItems: 'center',
       borderWidth: 1,
-      borderColor: isDark ? '#2A3A4A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
     },
 
     metricLabel: {
       fontSize: 10,
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       marginBottom: 4,
     },
 
     metricValue: {
       fontSize: 14,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     metricValueMuted: {
       fontSize: 12,
-      color: isDark ? '#7A7A7A' : '#9A9A9A',
+      color: '#9A9A9A',
       fontWeight: '500',
     },
 
     notesText: {
       fontSize: 13,
-      color: isDark ? '#D0D0D0' : '#333333',
+      color: '#333333',
       lineHeight: 18,
     },
 
@@ -847,7 +844,7 @@ function getStyles(isDark: boolean) {
     },
 
     messageInlineButtonDisabled: {
-      backgroundColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      backgroundColor: '#E0E0E0',
     },
 
     messageInlineButtonText: {
@@ -859,19 +856,19 @@ function getStyles(isDark: boolean) {
     userName: {
       fontSize: 13,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     postedTime: {
       fontSize: 11,
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       marginTop: 2,
     },
 
     interestCount: {
       fontSize: 14,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     footer: {
@@ -881,7 +878,7 @@ function getStyles(isDark: boolean) {
       paddingTop: 12,
       gap: 10,
       borderTopWidth: 1,
-      borderTopColor: isDark ? '#2A3A4A' : '#E5E5E5',
+      borderTopColor: '#E5E5E5',
     },
 
     button: {
@@ -889,20 +886,20 @@ function getStyles(isDark: boolean) {
       paddingVertical: 12,
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       justifyContent: 'center',
       alignItems: 'center',
     },
 
     buttonActive: {
       borderColor: '#DC3545',
-      backgroundColor: isDark ? '#3A2A2A' : '#FFE8E8',
+      backgroundColor: '#FFE8E8',
     },
 
     buttonText: {
       fontSize: 13,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     buttonTextActive: {
@@ -928,7 +925,7 @@ function getStyles(isDark: boolean) {
       flex: 1,
       paddingVertical: 12,
       borderRadius: 6,
-      backgroundColor: isDark ? '#5A3A3A' : '#FFE8E8',
+      backgroundColor: '#FFE8E8',
       borderWidth: 1,
       borderColor: '#DC3545',
       justifyContent: 'center',
@@ -950,7 +947,7 @@ function getStyles(isDark: boolean) {
     messageBox: {
       borderTopLeftRadius: 12,
       borderTopRightRadius: 12,
-      backgroundColor: isDark ? '#2A2A2A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       paddingHorizontal: 16,
       paddingVertical: 16,
     },
@@ -965,23 +962,23 @@ function getStyles(isDark: boolean) {
     messageTitle: {
       fontSize: 16,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     messageClose: {
       fontSize: 20,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     messageInput: {
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       paddingHorizontal: 12,
       paddingVertical: 10,
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
-      backgroundColor: isDark ? '#1A1A1A' : '#F9F9F9',
+      color: '#000000',
+      backgroundColor: '#F9F9F9',
       marginBottom: 12,
       maxHeight: 100,
     },
@@ -996,7 +993,7 @@ function getStyles(isDark: boolean) {
       paddingVertical: 10,
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       justifyContent: 'center',
       alignItems: 'center',
     },
@@ -1013,7 +1010,7 @@ function getStyles(isDark: boolean) {
     messageButtonText: {
       fontSize: 13,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     messageButtonSendText: {

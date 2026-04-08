@@ -9,7 +9,6 @@ import {
   TouchableOpacity,
   Text,
   StyleSheet,
-  useColorScheme,
   FlatList,
   ActivityIndicator,
   Modal,
@@ -37,10 +36,7 @@ type CrewExchangeScreenProps = {
 export const CrewExchangeScreen: React.FC<CrewExchangeScreenProps> = ({ embedded = false }) => {
   const router = useRouter();
   const { session } = useAuth();
-  // Use the same color scheme logic as the rest of the app for consistency
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
-  const styles = getStyles(isDark);
+  const styles = getStyles();
 
   // Data hooks
   const { boards, loading: boardsLoading } = useTradeBoards();
@@ -251,9 +247,9 @@ export const CrewExchangeScreen: React.FC<CrewExchangeScreenProps> = ({ embedded
             activeOpacity={0.7}
           >
             <View style={styles.filterButtonContent}>
-              <Ionicons name="funnel-outline" size={14} color={isDark ? '#FFFFFF' : '#000000'} />
+              <Ionicons name="funnel-outline" size={14} color="#000000" />
               <Text style={styles.filterButtonText}>Filters</Text>
-              <Ionicons name="chevron-down" size={14} color={isDark ? '#FFFFFF' : '#000000'} />
+              <Ionicons name="chevron-down" size={14} color="#000000" />
             </View>
           </TouchableOpacity>
 
@@ -377,11 +373,11 @@ export const CrewExchangeScreen: React.FC<CrewExchangeScreenProps> = ({ embedded
  * Styles
  */
 
-function getStyles(isDark: boolean) {
+function getStyles() {
   return StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: isDark ? '#1A1A1A' : '#F5F5F5',
+      backgroundColor: '#F5F5F5',
     },
 
     centerContent: {
@@ -398,20 +394,20 @@ function getStyles(isDark: boolean) {
     loadingText: {
       marginTop: 12,
       fontSize: 14,
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
     },
 
     emptyText: {
       fontSize: 16,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       textAlign: 'center',
       marginBottom: 6,
     },
 
     emptySubtext: {
       fontSize: 12,
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       textAlign: 'center',
       marginBottom: 16,
     },
@@ -430,11 +426,10 @@ function getStyles(isDark: boolean) {
       color: '#FFFFFF',
     },
 
-    // Sticky Controls Area
     stickyControls: {
-      backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#2A3A4A' : '#E5E5E5',
+      borderBottomColor: '#E5E5E5',
       paddingHorizontal: 16,
       paddingTop: 12,
       paddingBottom: 10,
@@ -442,19 +437,19 @@ function getStyles(isDark: boolean) {
     },
 
     boardIdentityCard: {
-      backgroundColor: isDark ? '#222222' : '#F7F7F7',
+      backgroundColor: '#F7F7F7',
       borderRadius: 12,
       paddingHorizontal: 14,
       paddingVertical: 16,
       borderWidth: 1,
-      borderColor: isDark ? '#2F2F2F' : '#E6E6E6',
+      borderColor: '#E6E6E6',
       width: '100%',
     },
 
     boardIdentityTitle: {
       fontSize: 18,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       width: '100%',
       textAlign: 'center',
     },
@@ -462,7 +457,7 @@ function getStyles(isDark: boolean) {
     boardIdentitySubtitle: {
       marginTop: 6,
       fontSize: 14,
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       width: '100%',
       textAlign: 'center',
     },
@@ -482,9 +477,9 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 12,
       paddingVertical: 6,
       borderRadius: 6,
-      backgroundColor: isDark ? '#2A2A2A' : '#F0F0F0',
+      backgroundColor: '#F0F0F0',
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
     },
 
     filterButtonContent: {
@@ -498,7 +493,7 @@ function getStyles(isDark: boolean) {
     filterButtonText: {
       fontSize: 12,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     postButton: {
@@ -516,7 +511,6 @@ function getStyles(isDark: boolean) {
       color: '#FFFFFF',
     },
 
-    // Quick Filter Chips
     quickChipsContainer: {
       paddingVertical: 4,
     },
@@ -531,7 +525,7 @@ function getStyles(isDark: boolean) {
       height: 32,
       borderRadius: 16,
       marginRight: 8,
-      backgroundColor: isDark ? '#2A2A2A' : '#F0F0F0',
+      backgroundColor: '#F0F0F0',
       borderWidth: 1,
       borderColor: 'transparent',
       justifyContent: 'center',
@@ -546,7 +540,7 @@ function getStyles(isDark: boolean) {
     quickChipText: {
       fontSize: 12,
       fontWeight: '500',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     quickChipTextActive: {
@@ -554,7 +548,6 @@ function getStyles(isDark: boolean) {
       fontWeight: '600',
     },
 
-    // Modals
     sortOverlay: {
       flex: 1,
       backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -567,7 +560,7 @@ function getStyles(isDark: boolean) {
       width: '100%',
       maxWidth: 420,
       borderRadius: 12,
-      backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       overflow: 'hidden',
     },
   });

@@ -9,7 +9,6 @@ import {
   TouchableOpacity,
   Text,
   StyleSheet,
-  useColorScheme,
   ScrollView,
   FlatList,
   TextInput,
@@ -40,9 +39,7 @@ export const PostTradeScreen: React.FC = () => {
   const tradeIdParam = params?.tradeId;
   const tradeId = Array.isArray(tradeIdParam) ? tradeIdParam[0] : tradeIdParam;
   const { session } = useAuth();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
-  const styles = getStyles(isDark);
+  const styles = getStyles();
 
   const [form, setForm] = useState<PostTradeFormData>({
     type: 'swap',
@@ -504,7 +501,7 @@ export const PostTradeScreen: React.FC = () => {
             <Text style={form.pairing_date ? styles.pickerText : styles.pickerPlaceholder}>
               {form.pairing_date ? formatDateDisplay(form.pairing_date) : 'Select date'}
             </Text>
-            <Ionicons name="calendar-outline" size={18} color={isDark ? '#FFFFFF' : '#000000'} />
+            <Ionicons name="calendar-outline" size={18} color="#000000" />
           </Pressable>
         </View>
 
@@ -519,7 +516,7 @@ export const PostTradeScreen: React.FC = () => {
             <Text style={form.end_date ? styles.pickerText : styles.pickerPlaceholder}>
               {form.end_date ? formatDateDisplay(form.end_date) : 'Select end date'}
             </Text>
-            <Ionicons name="calendar-outline" size={18} color={isDark ? '#FFFFFF' : '#000000'} />
+            <Ionicons name="calendar-outline" size={18} color="#000000" />
           </Pressable>
         </View>
 
@@ -534,7 +531,7 @@ export const PostTradeScreen: React.FC = () => {
             <Text style={form.report_time ? styles.pickerText : styles.pickerPlaceholder}>
               {form.report_time ? formatTimeDisplay(form.report_time) : 'Select time'}
             </Text>
-            <Ionicons name="time-outline" size={18} color={isDark ? '#FFFFFF' : '#000000'} />
+            <Ionicons name="time-outline" size={18} color="#000000" />
           </Pressable>
         </View>
 
@@ -549,7 +546,7 @@ export const PostTradeScreen: React.FC = () => {
             <Text style={form.route_from ? styles.pickerText : styles.pickerPlaceholder}>
               {form.route_from || 'Select airport'}
             </Text>
-            <Ionicons name="chevron-down" size={18} color={isDark ? '#FFFFFF' : '#000000'} />
+            <Ionicons name="chevron-down" size={18} color="#000000" />
           </Pressable>
         </View>
 
@@ -564,7 +561,7 @@ export const PostTradeScreen: React.FC = () => {
             <Text style={form.route_to ? styles.pickerText : styles.pickerPlaceholder}>
               {form.route_to || 'Select airport'}
             </Text>
-            <Ionicons name="chevron-down" size={18} color={isDark ? '#FFFFFF' : '#000000'} />
+            <Ionicons name="chevron-down" size={18} color="#000000" />
           </Pressable>
         </View>
 
@@ -574,7 +571,7 @@ export const PostTradeScreen: React.FC = () => {
           <TextInput
             style={styles.input}
             placeholder="e.g., 123A"
-            placeholderTextColor={isDark ? '#666' : '#999'}
+            placeholderTextColor="#999"
             value={form.trip_number || ''}
             onChangeText={(text) =>
               setForm({ ...form, trip_number: text || undefined })
@@ -591,7 +588,7 @@ export const PostTradeScreen: React.FC = () => {
             <TextInput
               style={[styles.input, styles.metricsInput]}
               placeholder="Credit"
-              placeholderTextColor={isDark ? '#666' : '#999'}
+              placeholderTextColor="#999"
               keyboardType="number-pad"
               value={form.credit_minutes ? String(form.credit_minutes) : ''}
               onChangeText={(text) =>
@@ -605,7 +602,7 @@ export const PostTradeScreen: React.FC = () => {
             <TextInput
               style={[styles.input, styles.metricsInput]}
               placeholder="Block"
-              placeholderTextColor={isDark ? '#666' : '#999'}
+              placeholderTextColor="#999"
               keyboardType="number-pad"
               value={form.block_minutes ? String(form.block_minutes) : ''}
               onChangeText={(text) =>
@@ -622,7 +619,7 @@ export const PostTradeScreen: React.FC = () => {
             <TextInput
               style={[styles.input, styles.metricsInput]}
               placeholder="Duty"
-              placeholderTextColor={isDark ? '#666' : '#999'}
+              placeholderTextColor="#999"
               keyboardType="number-pad"
               value={form.duty_minutes ? String(form.duty_minutes) : ''}
               onChangeText={(text) =>
@@ -636,7 +633,7 @@ export const PostTradeScreen: React.FC = () => {
             <TextInput
               style={[styles.input, styles.metricsInput]}
               placeholder="TAFB"
-              placeholderTextColor={isDark ? '#666' : '#999'}
+              placeholderTextColor="#999"
               keyboardType="number-pad"
               value={form.tafb_minutes ? String(form.tafb_minutes) : ''}
               onChangeText={(text) =>
@@ -656,7 +653,7 @@ export const PostTradeScreen: React.FC = () => {
           <TextInput
             style={[styles.input, { height: 100 }]}
             placeholder="Any additional details..."
-            placeholderTextColor={isDark ? '#666' : '#999'}
+            placeholderTextColor="#999"
             multiline
             value={form.notes || ''}
             onChangeText={(text) => setForm({ ...form, notes: text || undefined })}
@@ -682,7 +679,7 @@ export const PostTradeScreen: React.FC = () => {
               <TextInput
                 style={styles.input}
                 placeholder="Amount ($)"
-                placeholderTextColor={isDark ? '#666' : '#999'}
+                placeholderTextColor="#999"
                 keyboardType="number-pad"
                 value={
                   form.incentive_amount ? String(form.incentive_amount) : ''
@@ -698,7 +695,7 @@ export const PostTradeScreen: React.FC = () => {
               <TextInput
                 style={[styles.input, { marginTop: 8 }]}
                 placeholder="Incentive note (optional)"
-                placeholderTextColor={isDark ? '#666' : '#999'}
+                placeholderTextColor="#999"
                 value={form.incentive_note || ''}
                 onChangeText={(text) =>
                   setForm({
@@ -841,7 +838,7 @@ export const PostTradeScreen: React.FC = () => {
             <TextInput
               style={styles.airportSearch}
               placeholder="Search by code or city"
-              placeholderTextColor={isDark ? '#666' : '#999'}
+              placeholderTextColor="#999"
               value={airportSearch}
               onChangeText={setAirportSearch}
             />
@@ -876,11 +873,11 @@ export const PostTradeScreen: React.FC = () => {
  * Styles
  */
 
-function getStyles(isDark: boolean) {
+function getStyles() {
   return StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
     },
 
     header: {
@@ -890,7 +887,7 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 16,
       paddingVertical: 12,
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#2A3A4A' : '#E5E5E5',
+      borderBottomColor: '#E5E5E5',
     },
 
     backButton: {
@@ -902,7 +899,7 @@ function getStyles(isDark: boolean) {
     headerTitle: {
       fontSize: 16,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     submitButton: {
@@ -935,7 +932,7 @@ function getStyles(isDark: boolean) {
     sectionTitle: {
       fontSize: 12,
       fontWeight: '700',
-      color: isDark ? '#A0A0A0' : '#666666',
+      color: '#666666',
       marginBottom: 8,
       textTransform: 'uppercase',
     },
@@ -943,21 +940,21 @@ function getStyles(isDark: boolean) {
     input: {
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       paddingHorizontal: 12,
       paddingVertical: 10,
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
-      backgroundColor: isDark ? '#2A2A2A' : '#F9F9F9',
+      color: '#000000',
+      backgroundColor: '#F9F9F9',
     },
 
     pickerInput: {
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       paddingHorizontal: 12,
       paddingVertical: 10,
-      backgroundColor: isDark ? '#2A2A2A' : '#F9F9F9',
+      backgroundColor: '#F9F9F9',
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
@@ -965,13 +962,13 @@ function getStyles(isDark: boolean) {
 
     pickerText: {
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       fontWeight: '600',
     },
 
     pickerPlaceholder: {
       fontSize: 13,
-      color: isDark ? '#666666' : '#999999',
+      color: '#999999',
     },
 
     typeGrid: {
@@ -985,19 +982,19 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 12,
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       alignItems: 'center',
     },
 
     typeButtonActive: {
       borderColor: '#DC3545',
-      backgroundColor: isDark ? '#3A2A2A' : '#FFE8E8',
+      backgroundColor: '#FFE8E8',
     },
 
     typeButtonText: {
       fontSize: 12,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     typeButtonTextActive: {
@@ -1026,7 +1023,7 @@ function getStyles(isDark: boolean) {
       position: 'relative',
       borderRadius: 6,
       overflow: 'hidden',
-      backgroundColor: isDark ? '#2A2A2A' : '#F0F0F0',
+      backgroundColor: '#F0F0F0',
     },
 
     screenshotImage: {
@@ -1062,14 +1059,14 @@ function getStyles(isDark: boolean) {
       paddingHorizontal: 12,
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       alignItems: 'center',
     },
 
     screenshotButtonText: {
       fontSize: 12,
       fontWeight: '600',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     pickerOverlay: {
@@ -1079,7 +1076,7 @@ function getStyles(isDark: boolean) {
     },
 
     pickerSheet: {
-      backgroundColor: isDark ? '#2A2A2A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       paddingHorizontal: 16,
       paddingTop: 12,
       paddingBottom: 24,
@@ -1095,7 +1092,7 @@ function getStyles(isDark: boolean) {
 
     pickerActionText: {
       fontSize: 14,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
     },
 
     pickerActionPrimary: {
@@ -1115,7 +1112,7 @@ function getStyles(isDark: boolean) {
       width: '100%',
       maxWidth: 420,
       maxHeight: 500,
-      backgroundColor: isDark ? '#2A2A2A' : '#FFFFFF',
+      backgroundColor: '#FFFFFF',
       borderRadius: 12,
       padding: 16,
     },
@@ -1123,26 +1120,26 @@ function getStyles(isDark: boolean) {
     airportTitle: {
       fontSize: 16,
       fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       marginBottom: 10,
     },
 
     airportSearch: {
       borderRadius: 6,
       borderWidth: 1,
-      borderColor: isDark ? '#3A3A3A' : '#E0E0E0',
+      borderColor: '#E0E0E0',
       paddingHorizontal: 12,
       paddingVertical: 8,
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
-      backgroundColor: isDark ? '#1A1A1A' : '#F9F9F9',
+      color: '#000000',
+      backgroundColor: '#F9F9F9',
       marginBottom: 10,
     },
 
     airportItem: {
       paddingVertical: 10,
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#3A3A3A' : '#F0F0F0',
+      borderBottomColor: '#F0F0F0',
       flexDirection: 'row',
       alignItems: 'center',
       gap: 10,
@@ -1157,7 +1154,7 @@ function getStyles(isDark: boolean) {
 
     airportName: {
       fontSize: 13,
-      color: isDark ? '#FFFFFF' : '#000000',
+      color: '#000000',
       flex: 1,
     },
 

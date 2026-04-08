@@ -1,0 +1,17 @@
+/**
+ * FLICA / monthly-table noise stripping — reusable preprocessor for any FLICA-* template.
+ */
+
+const NOISE_LINE = /^(last\s+updated|pto\s+hours|refrigerator\s+list|©|copyright)/i;
+
+export function preprocessFlicaMonthly(raw: string): string {
+  const lines = raw.split(/\r?\n/);
+  const out: string[] = [];
+  for (const line of lines) {
+    const t = line.replace(/\s+/g, ' ').trim();
+    if (t.length < 2) continue;
+    if (NOISE_LINE.test(t)) continue;
+    out.push(t);
+  }
+  return out.join('\n');
+}
