@@ -13,7 +13,11 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { airportBoardFetch, inboundAircraftFetch } from '../../src/features/flight-tracker/api/flightTrackerService';
+import {
+  airportBoardFetch,
+  flightTrackerDevLog,
+  inboundAircraftFetch,
+} from '../../src/features/flight-tracker/api/flightTrackerService';
 import type { NormalizedBoardRow } from '../../src/features/flight-tracker/types';
 import {
   ActiveTrackedCard,
@@ -71,6 +75,7 @@ export default function FlightTrackerHubScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [boardRows, setBoardRows] = useState<NormalizedBoardRow[]>([]);
   const [boardLoading, setBoardLoading] = useState(true);
+  const [boardError, setBoardError] = useState<string | null>(null);
   const [inboundHints, setInboundHints] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
@@ -102,27 +107,31 @@ export default function FlightTrackerHubScreen() {
     void load();
   }, [load]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      setBoardLoading(true);
-      try {
-        const res = await airportBoardFetch({
-          airportCode: PREVIEW_AIRPORT,
-          boardType: 'departures',
-        });
-        if (!cancelled) setBoardRows(res.rows.slice(0, 6));
-      } catch {
-        if (!cancelled) setBoardRows([]);
-      } finally {
-        if (!cancelled) setBoardLoading(false);
+  const loadBoardPreview = useCallback(async () => {
+    setBoardLoading(true);
+    setBoardError(null);
+    try {
+      const res = await airportBoardFetch({
+        airportCode: PREVIEW_AIRPORT,
+        boardType: 'departures',
+      });
+      setBoardRows(res.rows.slice(0, 6));
+      if (res.rows.length === 0) {
+        flightTrackerDevLog('hub-board', 'preview_empty', { airport: PREVIEW_AIRPORT, source: res.source });
       }
-    };
-    void run();
-    return () => {
-      cancelled = true;
-    };
+    } catch (e: unknown) {
+      setBoardRows([]);
+      const msg = e instanceof Error ? e.message : 'Board preview failed';
+      setBoardError(msg);
+      flightTrackerDevLog('hub-board', 'preview_error', { message: msg });
+    } finally {
+      setBoardLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadBoardPreview();
+  }, [loadBoardPreview]);
 
   useEffect(() => {
     if (!userId || watched.length === 0) {
@@ -136,14 +145,17 @@ export default function FlightTrackerHubScreen() {
         if (!w.tracked_flight_id) continue;
         try {
           const r = await inboundAircraftFetch({ trackedFlightId: w.tracked_flight_id });
+          if (r.supported === false) continue;
           const sum = r.flight.inboundSummary;
           if (sum?.delayMinutes != null && sum.delayMinutes > 0) {
             next[w.id] = `Inbound aircraft arriving ${sum.delayMinutes}m late`;
           } else if (r.minutesLate != null && r.minutesLate > 0) {
             next[w.id] = `Inbound aircraft arriving ${r.minutesLate}m late`;
           }
-        } catch {
-          /* optional */
+        } catch (e: unknown) {
+          flightTrackerDevLog('hub-inbound', 'hint_fetch_failed', {
+            message: e instanceof Error ? e.message : String(e),
+          });
         }
       }
       if (!cancelled) setInboundHints(next);
@@ -177,16 +189,8 @@ export default function FlightTrackerHubScreen() {
         });
       }
     }
-    const congested = boardRows.filter((r) => r.status === 'delayed').length >= 3;
-    if (rows.length === 0 && congested) {
-      rows.push({
-        id: 'congestion',
-        title: `${PREVIEW_AIRPORT} departures`,
-        subtitle: 'Heavy delays on the board — allow extra taxi and gate time.',
-      });
-    }
     return rows.slice(0, 5);
-  }, [watched, inboundHints, boardRows]);
+  }, [watched, inboundHints]);
 
   const activeTracked = watched.filter((w) => w.flight);
 
@@ -386,8 +390,17 @@ export default function FlightTrackerHubScreen() {
             <View style={styles.sectionLoading}>
               <ActivityIndicator color={colors.primary} />
             </View>
+          ) : boardError ? (
+            <View>
+              <Text style={styles.errorText}>{boardError}</Text>
+              <Pressable style={styles.retryBtn} onPress={() => void loadBoardPreview()}>
+                <Text style={styles.retryText}>Retry preview</Text>
+              </Pressable>
+            </View>
           ) : boardRows.length === 0 ? (
-            <Text style={styles.emptyMuted}>Airport board unavailable right now.</Text>
+            <Text style={styles.emptyMuted}>
+              No departures returned for {PREVIEW_AIRPORT} today — the provider may have no matching flights for this date, or try again shortly.
+            </Text>
           ) : (
             <>
               <View style={styles.boardHeaderRow}>

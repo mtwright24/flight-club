@@ -65,7 +65,7 @@ export default function ScheduleSyncScreen() {
       <View style={styles.intro}>
         <Text style={styles.introTitle}>Crew schedule ↔ live flights</Text>
         <Text style={styles.introBody}>
-          When you open a trip in Crew Schedule, legs sync here through FlightAware. Matched rows link your pairing to tracked flights for delays, gates, and alerts.
+          When schedule legs sync, we match them to live flight data from your configured provider. Rows below show Synced when a real flight was found, or Not found when the lookup returned no match.
         </Text>
         <Pressable style={styles.ctaOutline} onPress={() => router.push('/crew-schedule')}>
           <Text style={styles.ctaOutlineText}>Open Crew Schedule</Text>
@@ -111,6 +111,11 @@ export default function ScheduleSyncScreen() {
                 </View>
               </View>
               <Text style={styles.meta}>Date {item.flight_date}</Text>
+              {item.sync_status === 'not_found' ? (
+                <Text style={styles.meta}>Last lookup did not find a matching live flight for this leg.</Text>
+              ) : item.sync_status === 'matched' && item.tracked_flight_id ? (
+                <Text style={styles.meta}>Linked to a tracked flight for live updates.</Text>
+              ) : null}
               {item.last_synced_at ? (
                 <Text style={styles.metaSmall}>Updated {new Date(item.last_synced_at).toLocaleString()}</Text>
               ) : null}

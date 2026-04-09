@@ -4,7 +4,8 @@ import React, { useState } from 'react';
 import { Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, radius, spacing } from '../../src/styles/theme';
 
-const EXAMPLES = ['DL4825', 'B6 1234', 'JFK to FLL', 'MCO', 'BOS-MIA'];
+/** Example query strings only — not live results; each runs a real search when tapped. */
+const EXAMPLE_QUERIES = ['DL4825', 'B6 1234', 'JFK to FLL', 'MCO', 'BOS-MIA'];
 
 export default function FlightTrackerSearchScreen() {
   const router = useRouter();
@@ -45,9 +46,9 @@ export default function FlightTrackerSearchScreen() {
           <Text style={styles.searchBtnText}>Search flights</Text>
         </Pressable>
 
-        <Text style={styles.examplesTitle}>Examples</Text>
+        <Text style={styles.examplesTitle}>Try a query</Text>
         <View style={styles.examplesWrap}>
-          {EXAMPLES.map((e) => (
+          {EXAMPLE_QUERIES.map((e) => (
             <Pressable key={e} style={styles.exampleChip} onPress={() => runSearch(e)}>
               <Text style={styles.exampleText}>{e}</Text>
             </Pressable>

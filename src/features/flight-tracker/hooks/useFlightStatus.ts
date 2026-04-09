@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { flightStatus } from '../api/flightTrackerService';
+import { flightStatus, flightTrackerDevLog } from '../api/flightTrackerService';
 import type { NormalizedFlightTrackerResult } from '../types';
 
 export function useFlightStatus() {
@@ -20,7 +20,9 @@ export function useFlightStatus() {
         const res = await flightStatus(params);
         setFlight(res.flight);
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : 'Flight status unavailable.');
+        const msg = e instanceof Error ? e.message : 'Flight status unavailable.';
+        flightTrackerDevLog('flight-status', 'invoke_failed', { message: msg });
+        setError(msg);
         setFlight(null);
       } finally {
         setLoading(false);

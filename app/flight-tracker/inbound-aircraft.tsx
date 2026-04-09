@@ -4,7 +4,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '../../src/hooks/useAuth';
 import { buildFlightKey } from '../../src/lib/supabase/flightTracker';
-import { inboundAircraftFetch, listTrackedFlightsFromDb } from '../../src/features/flight-tracker/api/flightTrackerService';
+import {
+  flightTrackerDevLog,
+  inboundAircraftFetch,
+  listTrackedFlightsFromDb,
+} from '../../src/features/flight-tracker/api/flightTrackerService';
 import type { NormalizedFlightTrackerResult } from '../../src/features/flight-tracker/types';
 import { colors, radius, spacing } from '../../src/styles/theme';
 
@@ -15,7 +19,8 @@ type Row = {
   route: string;
   risk: string;
   detail: string;
-  flight: NormalizedFlightTrackerResult;
+  flight?: NormalizedFlightTrackerResult;
+  unsupported?: boolean;
 };
 
 export default function InboundAircraftScreen() {
@@ -46,10 +51,8 @@ export default function InboundAircraftScreen() {
             flightDate: t.flight_date,
             providerFlightId: t.api_flight_id ?? undefined,
           });
-          const inbound = res.flight.inboundSummary;
           const fk =
             t.flight_key ||
-            res.flight.flightKey ||
             buildFlightKey({
               airlineCode: t.carrier_code,
               flightNumber: t.flight_number,
@@ -57,9 +60,23 @@ export default function InboundAircraftScreen() {
               origin: t.departure_airport,
               destination: t.arrival_airport,
             });
+          if (res.supported === false) {
+            next.push({
+              id: t.id,
+              flightKey: fk,
+              label: `${t.carrier_code} ${t.flight_number}`,
+              route: `${t.departure_airport} → ${t.arrival_airport}`,
+              risk: '—',
+              detail: 'Inbound aircraft analysis is not available with the current flight data provider.',
+              unsupported: true,
+            });
+            continue;
+          }
+          const inbound = res.flight.inboundSummary;
+          const fkResolved = t.flight_key || res.flight.flightKey || fk;
           next.push({
             id: t.id,
-            flightKey: fk,
+            flightKey: fkResolved,
             label: `${t.carrier_code} ${t.flight_number}`,
             route: `${t.departure_airport} → ${t.arrival_airport}`,
             risk: res.riskLevel,
@@ -68,7 +85,10 @@ export default function InboundAircraftScreen() {
               : 'No inbound aircraft match for this tail at your gate yet.',
             flight: res.flight,
           });
-        } catch {
+        } catch (e: unknown) {
+          flightTrackerDevLog('inbound-screen', 'row_error', {
+            message: e instanceof Error ? e.message : String(e),
+          });
           const fk =
             t.flight_key ||
             buildFlightKey({
@@ -85,7 +105,6 @@ export default function InboundAircraftScreen() {
             route: `${t.departure_airport} → ${t.arrival_airport}`,
             risk: 'unknown',
             detail: 'Unable to compute inbound chain for this flight.',
-            flight: {} as NormalizedFlightTrackerResult,
           });
         }
       }
@@ -141,14 +160,19 @@ export default function InboundAircraftScreen() {
             <Pressable
               style={styles.card}
               onPress={() => {
-                const fk = item.flightKey || item.flight.flightKey;
+                const fk = item.flightKey || item.flight?.flightKey;
                 if (fk) router.push(`/flight-tracker/flight/${encodeURIComponent(fk)}`);
               }}
             >
               <View style={styles.cardTop}>
                 <Text style={styles.code}>{item.label}</Text>
-                <View style={[styles.badge, item.risk === 'high' ? styles.badgeHi : styles.badgeLo]}>
-                  <Text style={styles.badgeText}>{item.risk}</Text>
+                <View
+                  style={[
+                    styles.badge,
+                    item.unsupported ? styles.badgeInfo : item.risk === 'high' ? styles.badgeHi : styles.badgeLo,
+                  ]}
+                >
+                  <Text style={styles.badgeText}>{item.unsupported ? 'Info' : item.risk}</Text>
                 </View>
               </View>
               <Text style={styles.route}>{item.route}</Text>
@@ -194,5 +218,6 @@ const styles = StyleSheet.create({
   badge: { borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 4 },
   badgeLo: { backgroundColor: '#E2E8F0' },
   badgeHi: { backgroundColor: '#FEE2E2' },
+  badgeInfo: { backgroundColor: '#E0F2FE' },
   badgeText: { fontWeight: '800', fontSize: 10, textTransform: 'uppercase' },
 });

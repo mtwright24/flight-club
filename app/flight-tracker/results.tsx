@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '../../src/hooks/useAuth';
+import { flightTrackerDevLog } from '../../src/features/flight-tracker/api/flightTrackerService';
 import {
   saveFlightSearchHistory,
   searchFlights,
@@ -41,11 +42,15 @@ export default function FlightTrackerResultsScreen() {
     try {
       const res = await searchFlights(query);
       setRows(res.flights);
-      if (userId) {
+      if (res.flights.length === 0) {
+        flightTrackerDevLog('results', 'no_flights', { source: res.source });
+      }
+      if (userId && res.flights.length > 0) {
         const inferredType = /^[A-Z]{3}$/.test(query) ? 'airport' : /(?:\sTO\s|[-/])/.test(query) ? 'route' : 'flight';
         await saveFlightSearchHistory(userId, query, inferredType as 'flight' | 'route' | 'airport', res.flights[0]?.flight_key || null).catch(() => {});
       }
     } catch (e: any) {
+      flightTrackerDevLog('results', 'search_failed', { message: e?.message ?? String(e) });
       setError(e?.message || 'Flight Tracker search failed.');
     } finally {
       setLoading(false);
@@ -122,7 +127,7 @@ export default function FlightTrackerResultsScreen() {
                 </View>
                 <Text style={styles.routeLine}>{item.origin_airport} {'->'} {item.destination_airport}</Text>
                 <Text style={styles.metaLine}>
-                  {item.scheduled_departure ? new Date(item.scheduled_departure).toLocaleString() : 'No departure time'} · {item.aircraft_type || 'Aircraft TBD'}
+                  {item.scheduled_departure ? new Date(item.scheduled_departure).toLocaleString() : 'No departure time'} · {item.aircraft_type || '—'}
                 </Text>
                 <Text style={styles.metaLine}>
                   {item.estimated_arrival ? `ETA ${new Date(item.estimated_arrival).toLocaleTimeString()}` : 'ETA unavailable'}{item.delay_minutes != null ? ` · ${item.delay_minutes}m delay` : ''}

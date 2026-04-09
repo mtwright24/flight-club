@@ -10,9 +10,11 @@ export type TrackerStatus =
   | 'diverted'
   | 'unknown';
 
+export type FlightProviderId = 'flightaware' | 'aviationstack';
+
 export type NormalizedFlightTrackerResult = {
   providerFlightId?: string;
-  provider?: 'flightaware';
+  provider?: FlightProviderId;
   flightKey?: string;
   carrierCode: string;
   flightNumber: string;
@@ -36,6 +38,11 @@ export type NormalizedFlightTrackerResult = {
   aircraftType?: string | null;
   routeLabel?: string | null;
   progressPercent?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  altitude?: number | null;
+  heading?: number | null;
+  speedHorizontal?: number | null;
   isPinned?: boolean;
   alertsEnabled?: boolean;
   inboundSummary?: {

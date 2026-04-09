@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '../../src/hooks/useAuth';
 import { listWatchedFlights, type TrackedFlightItem } from '../../src/lib/supabase/flightTracker';
@@ -14,7 +14,7 @@ export default function DelayWatcherScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!userId) {
       setRows([]);
       setLoading(false);
@@ -22,14 +22,20 @@ export default function DelayWatcherScreen() {
     }
     setLoading(true);
     setError(null);
-    listWatchedFlights(userId)
-      .then(setRows)
-      .catch((e: unknown) => {
-        setError(e instanceof Error ? e.message : 'Unable to load delay watch list.');
-        setRows([]);
-      })
-      .finally(() => setLoading(false));
+    try {
+      const data = await listWatchedFlights(userId);
+      setRows(data);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Unable to load delay watch list.');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
   }, [userId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const risks = useMemo(() => {
     return rows.filter((r) => {
@@ -56,6 +62,9 @@ export default function DelayWatcherScreen() {
       ) : error ? (
         <View style={styles.center}>
           <Text style={styles.err}>{error}</Text>
+          <Pressable style={styles.cta} onPress={() => void load()}>
+            <Text style={styles.ctaText}>Retry</Text>
+          </Pressable>
         </View>
       ) : rows.length === 0 ? (
         <View style={styles.empty}>

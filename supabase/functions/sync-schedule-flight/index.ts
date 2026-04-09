@@ -3,8 +3,8 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 // @ts-expect-error Deno esm
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts';
-import { getAeroApiKey, getAeroBaseUrl } from '../_shared/env.ts';
-import { lookupFlightFromProvider, type Json } from '../_shared/normalize.ts';
+import { getFlightTrackerProvider } from '../_shared/flight_providers/adapter.ts';
+import type { Json } from '../_shared/normalize.ts';
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -17,10 +17,7 @@ serve(async (req: Request) => {
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
     // @ts-expect-error Deno
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-    const base = getAeroBaseUrl();
-    const apiKey = getAeroApiKey();
     if (!supabaseUrl || !serviceRole || !anonKey) throw new Error('Missing Supabase env');
-    if (!apiKey) throw new Error('Missing FlightAware API key (FLIGHTAWARE_AEROAPI_KEY)');
 
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
@@ -58,8 +55,10 @@ serve(async (req: Request) => {
       return jsonResponse({ ok: false, error: 'Schedule entry not found' }, 404);
     }
 
+    const provider = getFlightTrackerProvider();
+    console.log('[sync-schedule-flight]', 'request', { provider: provider.id, flightDate, scheduleItemIdLen: scheduleItemId.length });
     const ident = `${carrierCode}${flightNumber}`;
-    const live = await lookupFlightFromProvider(base, apiKey, {
+    const live = await provider.lookupFlight({
       ident,
       serviceDate: flightDate,
       airlineCode: carrierCode,
@@ -85,7 +84,7 @@ serve(async (req: Request) => {
         ok: true,
         data: {
           syncStatus: 'not_found',
-          message: 'No matching FlightAware flight for this schedule row.',
+          message: 'No matching flight for this schedule row.',
         },
       });
     }
@@ -112,7 +111,7 @@ serve(async (req: Request) => {
       status: live.status,
       tail_number: live.tailNumber ?? null,
       aircraft_type: live.aircraftType ?? null,
-      api_provider: 'flightaware',
+      api_provider: live.provider ?? provider.id,
       api_flight_id: live.providerFlightId ?? null,
       alerts_enabled: true,
       is_pinned: false,
@@ -143,6 +142,7 @@ serve(async (req: Request) => {
       { onConflict: 'user_id,schedule_item_id' },
     );
 
+    console.log('[sync-schedule-flight]', 'matched', { provider: provider.id });
     return jsonResponse({
       ok: true,
       data: {

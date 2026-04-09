@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { airportBoardFetch } from '../api/flightTrackerService';
+import { airportBoardFetch, flightTrackerDevLog } from '../api/flightTrackerService';
 import type { NormalizedBoardRow } from '../types';
 
 export function useAirportBoard() {
@@ -13,8 +13,13 @@ export function useAirportBoard() {
     try {
       const res = await airportBoardFetch({ airportCode, boardType, date });
       setRows(res.rows);
+      if (res.rows.length === 0) {
+        flightTrackerDevLog('airport-board', 'empty_rows', { airportCode, boardType, source: res.source });
+      }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Airport board unavailable.');
+      const msg = e instanceof Error ? e.message : 'Airport board unavailable.';
+      flightTrackerDevLog('airport-board', 'invoke_failed', { message: msg });
+      setError(msg);
       setRows([]);
     } finally {
       setLoading(false);

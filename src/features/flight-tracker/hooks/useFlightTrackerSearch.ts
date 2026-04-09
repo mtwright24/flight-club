@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { flightSearch } from '../api/flightTrackerService';
+import { flightSearch, flightTrackerDevLog } from '../api/flightTrackerService';
 import type { NormalizedSearchResultItem } from '../types';
 
 export function useFlightTrackerSearch() {
@@ -18,8 +18,13 @@ export function useFlightTrackerSearch() {
     try {
       const res = await flightSearch(query, date);
       setResults(res.results);
+      if (res.results.length === 0) {
+        flightTrackerDevLog('search', 'empty_results', { source: res.source });
+      }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Flight Tracker search failed.');
+      const msg = e instanceof Error ? e.message : 'Flight Tracker search failed.';
+      flightTrackerDevLog('search', 'invoke_failed', { message: msg });
+      setError(msg);
       setResults([]);
     } finally {
       setLoading(false);

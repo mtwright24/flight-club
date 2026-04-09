@@ -24,6 +24,15 @@ async function invokeFn<T>(name: string, body: Record<string, unknown>): Promise
   return res.data as T;
 }
 
+/** Manual QA checklist: `src/features/flight-tracker/FLIGHT_TRACKER_TEST_CHECKLIST.md`. */
+
+/** Dev-only diagnostics for manual QA. Never pass tokens, API keys, or raw auth headers. */
+export function flightTrackerDevLog(scope: string, message: string, extra?: Record<string, unknown>): void {
+  if (!__DEV__) return;
+  if (extra && Object.keys(extra).length > 0) console.log(`[FlightTracker:${scope}]`, message, extra);
+  else console.log(`[FlightTracker:${scope}]`, message);
+}
+
 export async function flightSearch(q: string, date?: string, searchType?: string): Promise<{
   results: NormalizedSearchResultItem[];
   source: string;
@@ -61,19 +70,32 @@ export async function airportBoardFetch(params: {
   });
 }
 
+export type InboundAircraftData =
+  | {
+      supported: true;
+      flight: NormalizedFlightTrackerResult;
+      inboundFlight: NormalizedFlightTrackerResult | null;
+      riskLevel: string;
+      minutesLate: number | null;
+    }
+  | {
+      supported: false;
+      provider: string;
+      reason: string;
+    };
+
 export async function inboundAircraftFetch(params: {
   trackedFlightId?: string;
   carrierCode?: string;
   flightNumber?: string;
   flightDate?: string;
   providerFlightId?: string;
-}): Promise<{
-  flight: NormalizedFlightTrackerResult;
-  inboundFlight: NormalizedFlightTrackerResult | null;
-  riskLevel: string;
-  minutesLate: number | null;
-}> {
-  return invokeFn('inbound-aircraft', params);
+}): Promise<InboundAircraftData> {
+  const data = await invokeFn<InboundAircraftData>('inbound-aircraft', params);
+  if (__DEV__ && data && 'supported' in data && data.supported === false) {
+    flightTrackerDevLog('inbound', 'unsupported_response', { provider: data.provider, reason: data.reason });
+  }
+  return data;
 }
 
 export async function saveTrackedFlight(flight: NormalizedFlightTrackerResult, options?: { isPinned?: boolean }): Promise<{

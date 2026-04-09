@@ -3,9 +3,9 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 // @ts-expect-error Deno esm
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts';
-import { getAeroApiKey, getAeroBaseUrl } from '../_shared/env.ts';
-import { boardCacheKey, readAirportBoardCache, writeAirportBoardCache } from '../_shared/cache_db.ts';
-import { airportBoard, toBoardRow, type Json } from '../_shared/normalize.ts';
+import { getFlightTrackerProvider } from '../_shared/flight_providers/adapter.ts';
+import { airportBoardCacheKey, readAirportBoardCache, writeAirportBoardCache } from '../_shared/cache_db.ts';
+import { toBoardRow, type Json } from '../_shared/normalize.ts';
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -16,10 +16,7 @@ serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     // @ts-expect-error Deno
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const base = getAeroBaseUrl();
-    const apiKey = getAeroApiKey();
     if (!supabaseUrl || !serviceRole) throw new Error('Missing Supabase env');
-    if (!apiKey) throw new Error('Missing FlightAware API key (FLIGHTAWARE_AEROAPI_KEY)');
 
     const supabase = createClient(supabaseUrl, serviceRole);
     const body = (await req.json()) as Json;
@@ -34,9 +31,13 @@ serve(async (req: Request) => {
       return jsonResponse({ ok: false, error: 'Invalid airport code' }, 400);
     }
 
-    const ckey = boardCacheKey(airportCode, boardType, dateKey);
+    const provider = getFlightTrackerProvider();
+    const ckey = airportBoardCacheKey(provider.id, airportCode, boardType, dateKey);
+    console.log('[airport-board]', 'request', { provider: provider.id, airportCode, boardType, dateKey });
     const cached = await readAirportBoardCache(supabase, ckey);
     if (cached && Array.isArray((cached as Json).rows)) {
+      const n = ((cached as Json).rows as unknown[]).length;
+      console.log('[airport-board]', 'cache_hit', { provider: provider.id, rows: n });
       return jsonResponse({
         ok: true,
         data: {
@@ -47,18 +48,29 @@ serve(async (req: Request) => {
         },
       });
     }
+    console.log('[airport-board]', 'cache_miss', { provider: provider.id });
 
-    const flights = await airportBoard(base, apiKey, airportCode, boardType, serviceDate);
+    const flights = await provider.getAirportBoard(airportCode, boardType, serviceDate);
     const rows = flights.map((f) => toBoardRow(f, boardType));
-    const exp = new Date(Date.now() + 3 * 60 * 1000).toISOString();
-    await writeAirportBoardCache(supabase, {
-      cacheKey: ckey,
-      airportCode,
-      boardType,
-      dateKey,
-      payload: { rows, airportCode, boardType } as unknown as Json,
-      expiresAt: exp,
-    });
+
+    if (rows.length === 0) {
+      console.log('[airport-board]', 'empty_rows', { provider: provider.id, airportCode, boardType });
+    } else {
+      console.log('[airport-board]', 'provider_ok', { provider: provider.id, rows: rows.length });
+    }
+
+    if (rows.length > 0) {
+      const exp = new Date(Date.now() + 3 * 60 * 1000).toISOString();
+      await writeAirportBoardCache(supabase, {
+        cacheKey: ckey,
+        airportCode,
+        boardType,
+        dateKey,
+        payload: { rows, airportCode, boardType } as unknown as Json,
+        expiresAt: exp,
+        provider: provider.id,
+      });
+    }
 
     return jsonResponse({
       ok: true,

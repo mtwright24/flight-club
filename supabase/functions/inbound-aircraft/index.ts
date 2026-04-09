@@ -3,15 +3,8 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 // @ts-expect-error Deno esm
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts';
-import { getAeroApiKey, getAeroBaseUrl } from '../_shared/env.ts';
-import {
-  airportBoard,
-  lookupFlightFromProvider,
-  mapProviderFlightToNormalized,
-  riskFromInboundDelay,
-  type Json,
-  type NormalizedFlightTrackerResult,
-} from '../_shared/normalize.ts';
+import { getFlightTrackerProvider } from '../_shared/flight_providers/adapter.ts';
+import { riskFromInboundDelay, type Json, type NormalizedFlightTrackerResult } from '../_shared/normalize.ts';
 
 function pickInboundFromArrivals(
   main: NormalizedFlightTrackerResult,
@@ -53,10 +46,7 @@ serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     // @ts-expect-error Deno
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const base = getAeroBaseUrl();
-    const apiKey = getAeroApiKey();
     if (!supabaseUrl || !serviceRole) throw new Error('Missing Supabase env');
-    if (!apiKey) throw new Error('Missing FlightAware API key (FLIGHTAWARE_AEROAPI_KEY)');
 
     const supabase = createClient(supabaseUrl, serviceRole);
     const body = (await req.json()) as Json;
@@ -65,6 +55,19 @@ serve(async (req: Request) => {
     const flightNumber = String(body.flightNumber || '').trim().toUpperCase();
     const flightDate = String(body.flightDate || new Date().toISOString().slice(0, 10)).trim();
     const providerFlightId = body.providerFlightId ? String(body.providerFlightId).trim() : '';
+
+    const provider = getFlightTrackerProvider();
+    if (provider.id === 'aviationstack') {
+      console.log('[inbound-aircraft]', 'unsupported_provider', { provider: 'aviationstack' });
+      return jsonResponse({
+        ok: true,
+        data: {
+          supported: false,
+          provider: 'aviationstack',
+          reason: 'insufficient provider data',
+        },
+      });
+    }
 
     let main: NormalizedFlightTrackerResult | null = null;
 
@@ -77,7 +80,7 @@ serve(async (req: Request) => {
       if (error) throw error;
       if (row) {
         const ident = `${row.carrier_code}${row.flight_number}`;
-        main = await lookupFlightFromProvider(base, apiKey, {
+        main = await provider.lookupFlight({
           ident,
           serviceDate: String(row.flight_date),
           airlineCode: row.carrier_code,
@@ -89,22 +92,16 @@ serve(async (req: Request) => {
     }
 
     if (!main && providerFlightId) {
-      const { fetchProviderJson, firstProviderFlight } = await import('../_shared/flightaware_aeroapi.ts');
-      const { ok, json } = await fetchProviderJson(base, apiKey, `flights/${encodeURIComponent(providerFlightId)}`);
-      if (ok) {
-        const pf = firstProviderFlight(json);
-        if (pf) {
-          main = mapProviderFlightToNormalized(pf, {
-            airlineCode: carrierCode,
-            flightNumber,
-            serviceDate: flightDate,
-          });
-        }
-      }
+      main = await provider.getFlightStatus({
+        carrierCode,
+        flightNumber,
+        flightDate,
+        providerFlightId,
+      });
     }
 
     if (!main && carrierCode && flightNumber) {
-      main = await lookupFlightFromProvider(base, apiKey, {
+      main = await provider.lookupFlight({
         ident: `${carrierCode}${flightNumber}`,
         serviceDate: flightDate,
         airlineCode: carrierCode,
@@ -116,7 +113,7 @@ serve(async (req: Request) => {
       return jsonResponse({ ok: false, error: 'Unable to resolve flight for inbound analysis' });
     }
 
-    const arrivals = await airportBoard(base, apiKey, main.departureAirport, 'arrivals', flightDate);
+    const arrivals = await provider.getAirportBoard(main.departureAirport, 'arrivals', flightDate);
     const inbound = pickInboundFromArrivals(main, arrivals);
 
     let minutesLate: number | null = null;
@@ -165,6 +162,7 @@ serve(async (req: Request) => {
     return jsonResponse({
       ok: true,
       data: {
+        supported: true,
         flight: merged,
         inboundFlight: inbound,
         riskLevel,

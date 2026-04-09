@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { flightTrackerDevLog } from '../../src/features/flight-tracker/api/flightTrackerService';
 import { getAirportBoard, statusTone, type NormalizedFlight } from '../../src/lib/supabase/flightTracker';
 import { colors, radius, spacing } from '../../src/styles/theme';
 
@@ -12,6 +13,7 @@ export default function AirportBoardScreen() {
   const [rows, setRows] = useState<NormalizedFlight[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasFetched, setHasFetched] = useState(false);
 
   const run = async () => {
     const code = airportCode.trim().toUpperCase();
@@ -21,11 +23,27 @@ export default function AirportBoardScreen() {
     try {
       const result = await getAirportBoard(code, boardType);
       setRows(result.flights);
-    } catch (e: any) {
+      setHasFetched(true);
+      if (result.flights.length === 0) {
+        flightTrackerDevLog('airport-board-screen', 'empty_after_fetch', { boardType, source: result.source });
+      }
+    } catch (e: unknown) {
       setRows([]);
-      setError(e?.message || 'Unable to load board.');
+      const msg = e instanceof Error ? e.message : 'Unable to load board.';
+      flightTrackerDevLog('airport-board-screen', 'fetch_failed', { message: msg });
+      setError(msg);
+      setHasFetched(true);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const formatTime = (iso: string | null | undefined) => {
+    if (!iso) return '—';
+    try {
+      return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    } catch {
+      return '—';
     }
   };
 
@@ -57,6 +75,9 @@ export default function AirportBoardScreen() {
             <Text style={[styles.typeText, boardType === 'arrivals' && styles.typeTextActive]}>Arrivals</Text>
           </Pressable>
         </View>
+        <Text style={styles.typeHint}>
+          Showing {boardType} for the selected airport and today&apos;s date (from live data).
+        </Text>
         <Pressable style={styles.runBtn} onPress={() => void run()}>
           <Text style={styles.runBtnText}>Load board</Text>
         </Pressable>
@@ -65,9 +86,23 @@ export default function AirportBoardScreen() {
       {loading ? (
         <View style={styles.center}><ActivityIndicator color={colors.primary} /></View>
       ) : error ? (
-        <View style={styles.center}><Text style={styles.errorText}>{error}</Text></View>
+        <View style={styles.center}>
+          <Text style={styles.errorText}>{error}</Text>
+          <Pressable style={styles.retryBtn} onPress={() => void run()}>
+            <Text style={styles.retryText}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : !hasFetched ? (
+        <View style={styles.center}>
+          <Text style={styles.emptyText}>Enter a 3-letter airport code and tap Load board.</Text>
+        </View>
       ) : rows.length === 0 ? (
-        <View style={styles.center}><Text style={styles.emptyText}>No board data loaded yet.</Text></View>
+        <View style={styles.center}>
+          <Text style={styles.emptyTitle}>No flights on this board</Text>
+          <Text style={styles.emptyText}>
+            The provider returned no {boardType} for this airport and date. Try the other board type or confirm the airport code.
+          </Text>
+        </View>
       ) : (
         <FlatList
           data={rows}
@@ -84,7 +119,10 @@ export default function AirportBoardScreen() {
                   </View>
                 </View>
                 <Text style={styles.route}>{item.origin_airport} {'->'} {item.destination_airport}</Text>
-                <Text style={styles.meta}>{item.scheduled_departure ? new Date(item.scheduled_departure).toLocaleTimeString() : 'Time TBD'}</Text>
+                <Text style={styles.meta}>
+                  {boardType === 'departures' ? 'Dep' : 'Arr'} {formatTime(boardType === 'departures' ? item.scheduled_departure : item.scheduled_arrival)}
+                  {item.delay_minutes != null && item.delay_minutes > 0 ? ` · +${item.delay_minutes}m` : ''}
+                </Text>
               </Pressable>
             );
           }}
@@ -106,6 +144,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: { color: '#fff', fontWeight: '800', fontSize: 16 },
   toolbar: { padding: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
+  typeHint: { marginTop: 6, fontSize: 11, fontWeight: '600', color: colors.textSecondary },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 9, color: colors.textPrimary, fontWeight: '700', fontSize: 14 },
   typeRow: { marginTop: 8, flexDirection: 'row', gap: 8 },
   typeBtn: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: '#fff' },
@@ -116,7 +155,10 @@ const styles = StyleSheet.create({
   runBtnText: { color: '#fff', fontWeight: '800', fontSize: 13 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg },
   errorText: { color: colors.error, fontWeight: '700', textAlign: 'center' },
-  emptyText: { color: colors.textSecondary, fontWeight: '600', textAlign: 'center' },
+  emptyTitle: { color: colors.textPrimary, fontWeight: '800', fontSize: 15, textAlign: 'center' },
+  emptyText: { color: colors.textSecondary, fontWeight: '600', textAlign: 'center', marginTop: 6 },
+  retryBtn: { marginTop: 12, borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: 16, paddingVertical: 10 },
+  retryText: { color: colors.textPrimary, fontWeight: '800', fontSize: 13 },
   card: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, backgroundColor: '#fff', padding: 12, marginBottom: 10 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   code: { color: colors.textPrimary, fontWeight: '800', fontSize: 15 },

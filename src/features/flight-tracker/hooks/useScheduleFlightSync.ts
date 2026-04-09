@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { syncScheduleFlight } from '../api/flightTrackerService';
+import { flightTrackerDevLog, syncScheduleFlight } from '../api/flightTrackerService';
 import type { NormalizedFlightTrackerResult } from '../types';
 
 export function useScheduleFlightSync() {
@@ -9,6 +9,8 @@ export function useScheduleFlightSync() {
     syncStatus: string;
     trackedFlightId?: string;
     flight?: NormalizedFlightTrackerResult;
+    flightKey?: string;
+    message?: string;
   } | null>(null);
 
   const sync = useCallback(
@@ -23,9 +25,14 @@ export function useScheduleFlightSync() {
       try {
         const res = await syncScheduleFlight(params);
         setResult(res);
+        flightTrackerDevLog('schedule-sync', res.syncStatus === 'matched' ? 'matched' : 'not_found_or_other', {
+          syncStatus: res.syncStatus,
+        });
         return res;
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : 'Schedule sync failed.');
+        const msg = e instanceof Error ? e.message : 'Schedule sync failed.';
+        flightTrackerDevLog('schedule-sync', 'invoke_failed', { message: msg });
+        setError(msg);
         setResult(null);
         throw e;
       } finally {

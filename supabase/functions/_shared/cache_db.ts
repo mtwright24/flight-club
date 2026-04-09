@@ -1,20 +1,38 @@
-import type { Json } from './normalize.ts';
-import type { NormalizedFlightTrackerResult } from './normalize.ts';
+import type { FlightProviderId, Json, NormalizedFlightTrackerResult } from './normalize.ts';
 
-export function statusCacheKey(
+/** Provider-scoped keys so FlightAware and Aviationstack caches never collide. */
+export function flightStatusCacheKey(
+  providerId: FlightProviderId,
   carrierCode: string,
   flightNumber: string,
   flightDate: string,
 ): string {
-  return `fa:${carrierCode.toUpperCase()}:${flightNumber.toUpperCase()}:${flightDate}`;
+  return `${providerId}:flight-status:${carrierCode.toUpperCase()}:${flightNumber.toUpperCase()}:${flightDate}`;
 }
 
-export function statusCacheKeyByFaId(faId: string): string {
-  return `fa:id:${faId}`;
+export function flightStatusCacheKeyByProviderFlightId(
+  providerId: FlightProviderId,
+  providerFlightId: string,
+): string {
+  return `${providerId}:flight-status:id:${providerFlightId}`;
 }
 
-export function boardCacheKey(airportCode: string, boardType: string, dateKey: string): string {
-  return `board:${airportCode.toUpperCase()}:${boardType}:${dateKey}`;
+export function airportBoardCacheKey(
+  providerId: FlightProviderId,
+  airportCode: string,
+  boardType: string,
+  dateKey: string,
+): string {
+  return `${providerId}:airport-board:${airportCode.toUpperCase()}:${boardType}:${dateKey}`;
+}
+
+export function flightSearchCacheKey(
+  providerId: FlightProviderId,
+  kind: string,
+  q: string,
+  date: string,
+): string {
+  return `${providerId}:flight-search:${kind}:${q.trim().toUpperCase()}:${date}`;
 }
 
 export function statusTtlMs(f: NormalizedFlightTrackerResult): number {
@@ -48,6 +66,7 @@ export async function writeFlightStatusCache(
     flightDate: string | null;
     payload: Json;
     expiresAt: string;
+    provider: FlightProviderId;
   },
 ): Promise<void> {
   const { error } = await supabase.from('flight_status_cache').upsert(
@@ -57,7 +76,7 @@ export async function writeFlightStatusCache(
       flight_number: args.flightNumber,
       flight_date: args.flightDate,
       payload_json: args.payload,
-      provider: 'flightaware',
+      provider: args.provider,
       fetched_at: new Date().toISOString(),
       expires_at: args.expiresAt,
     },
@@ -90,6 +109,7 @@ export async function writeAirportBoardCache(
     dateKey: string;
     payload: Json;
     expiresAt: string;
+    provider: FlightProviderId;
   },
 ): Promise<void> {
   const { error } = await supabase.from('airport_boards_cache').upsert(
@@ -99,7 +119,7 @@ export async function writeAirportBoardCache(
       board_type: args.boardType,
       date_key: args.dateKey,
       payload_json: args.payload,
-      provider: 'flightaware',
+      provider: args.provider,
       fetched_at: new Date().toISOString(),
       expires_at: args.expiresAt,
     },
