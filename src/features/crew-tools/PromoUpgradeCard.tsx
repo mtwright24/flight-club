@@ -8,58 +8,75 @@ export default function PromoUpgradeCard({ onPress }: { onPress?: () => void }) 
     <Pressable
       style={({ pressed }) => [styles.wrap, pressed && styles.pressed]}
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Learn about Pro tools and bundles"
     >
       <View style={styles.iconBox}>
-        <Ionicons name="ribbon-outline" size={26} color="#B45309" />
+        <Ionicons name="layers-outline" size={24} color={colors.headerRed} />
       </View>
       <View style={styles.textCol}>
-        <Text style={styles.title}>Use Crew Tools to the fullest</Text>
-        <Text style={styles.sub}>Upgrade to access Pro tools & curated bundles.</Text>
+        <Text style={styles.title}>More tools when your roster demands them</Text>
+        <Text style={styles.sub}>
+          Pro adds focused utilities—duty, language, contract help—without replacing the free tools you already rely on. Bundles group what commuters and frequent flyers use together.
+        </Text>
       </View>
       <View style={styles.ctaPill}>
-        <Text style={styles.ctaText}>Unlock</Text>
+        <Text style={styles.ctaText}>{"See what's included"}</Text>
       </View>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  pressed: { opacity: 0.95 },
+  pressed: { opacity: 0.96 },
   wrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'column',
     marginHorizontal: 16,
     marginVertical: 20,
-    padding: spacing.md,
+    padding: spacing.lg,
     borderRadius: radius.lg,
     backgroundColor: colors.cardBg,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#E8E0DC',
     shadowColor: '#0F172A',
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
     elevation: 2,
   },
   iconBox: {
-    marginRight: 12,
-    width: 52,
-    height: 52,
+    alignSelf: 'flex-start',
+    width: 48,
+    height: 48,
     borderRadius: 14,
-    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+    backgroundColor: 'rgba(181, 22, 30, 0.08)',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 12,
   },
-  textCol: { flex: 1, minWidth: 0 },
-  title: { fontSize: 15, fontWeight: '800', color: colors.textPrimary },
-  sub: { fontSize: 13, color: colors.textSecondary, marginTop: 4, lineHeight: 18 },
+  textCol: { width: '100%' },
+  title: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    lineHeight: 23,
+    letterSpacing: -0.3,
+  },
+  sub: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginTop: 8,
+    lineHeight: 21,
+  },
   ctaPill: {
-    paddingHorizontal: 14,
+    alignSelf: 'flex-start',
+    marginTop: 16,
+    paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: radius.pill,
-    backgroundColor: 'rgba(180, 83, 9, 0.16)',
+    backgroundColor: 'rgba(181, 22, 30, 0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(180, 83, 9, 0.35)',
+    borderColor: 'rgba(181, 22, 30, 0.2)',
   },
-  ctaText: { fontSize: 13, fontWeight: '800', color: '#B45309' },
+  ctaText: { fontSize: 13, fontWeight: '800', color: colors.headerRed },
 });

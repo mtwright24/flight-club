@@ -14,6 +14,8 @@ export type ScheduleDutyStatus =
 
 export interface CrewScheduleLeg {
   id: string;
+  /** schedule_entries.id for Flight Tracker sync */
+  scheduleEntryId?: string;
   departureAirport: string;
   arrivalAirport: string;
   reportLocal?: string;

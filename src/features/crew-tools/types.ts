@@ -25,6 +25,8 @@ export type CrewTool = {
   reviewCount?: number;
   cta: ToolCta;
   roleHint?: string;
+  /** Short benefit line for Featured spotlight (optional) */
+  spotlight?: string;
   categories?: string[];
 };
 

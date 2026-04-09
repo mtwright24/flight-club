@@ -15,7 +15,7 @@ export default function SectionHeading({ title, onSeeAll }: Props) {
       {onSeeAll ? (
         <Pressable onPress={onSeeAll} hitSlop={8} style={({ pressed }) => [styles.seeAllRow, pressed && styles.pressed]}>
           <Text style={styles.seeAll}>See all</Text>
-          <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+          <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} style={{ marginLeft: 2 }} />
         </Pressable>
       ) : null}
     </View>
@@ -28,7 +28,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 12,
-    paddingHorizontal: 4,
+    paddingHorizontal: 16,
   },
   title: {
     fontSize: 18,
@@ -36,7 +36,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     letterSpacing: -0.3,
   },
-  seeAllRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  seeAllRow: { flexDirection: 'row', alignItems: 'center' },
   seeAll: {
     fontSize: 14,
     fontWeight: '600',

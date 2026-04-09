@@ -227,12 +227,6 @@ export default function FlightTrackerDetailScreen() {
             <Pressable style={styles.actionBtn} onPress={() => router.push('/flight-tracker/delay-watcher')}>
               <Text style={styles.actionBtnText}>Open Delay Watcher</Text>
             </Pressable>
-            <Pressable
-              style={styles.actionBtn}
-              onPress={() => router.push('/loads')}
-            >
-              <Text style={styles.actionBtnText}>Open Staff Loads request</Text>
-            </Pressable>
           </View>
         </ScrollView>
       )}

@@ -46,21 +46,22 @@ export default function CrewToolsSegmentedControl({ mode, onChange }: Props) {
 
 const styles = StyleSheet.create({
   wrap: {
-    marginTop: 12,
-    marginBottom: 4,
+    marginTop: 10,
+    marginBottom: 6,
   },
   scrollContent: {
     flexGrow: 1,
     paddingHorizontal: 16,
-    gap: 8,
-    justifyContent: 'center',
+    alignItems: 'center',
   },
   tab: {
-    paddingHorizontal: 16,
-    paddingVertical: 9,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    minHeight: 36,
+    justifyContent: 'center',
     borderRadius: 999,
     backgroundColor: '#F1F5F9',
-    marginRight: 8,
+    marginRight: 6,
   },
   tabActive: {
     backgroundColor: colors.headerRed,
@@ -69,7 +70,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#475569',
-    letterSpacing: 0.1,
+    letterSpacing: 0.02,
   },
   tabTextActive: {
     color: '#FFFFFF',

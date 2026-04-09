@@ -46,7 +46,7 @@ export default function FlightTrackerResultsScreen() {
         await saveFlightSearchHistory(userId, query, inferredType as 'flight' | 'route' | 'airport', res.flights[0]?.flight_key || null).catch(() => {});
       }
     } catch (e: any) {
-      setError(e?.message || 'Unable to fetch flight results.');
+      setError(e?.message || 'Flight Tracker search failed.');
     } finally {
       setLoading(false);
     }

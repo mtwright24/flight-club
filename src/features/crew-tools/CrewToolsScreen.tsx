@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,8 +15,15 @@ import { usePullToRefresh } from '../../hooks/usePullToRefresh';
 import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../styles/refreshControl';
 import { colors, spacing } from '../../styles/theme';
 import BundleCard from './BundleCard';
+import {
+  CrewToolCardCompact,
+  CrewToolCardFeatured,
+  CrewToolCardStore,
+} from './CrewToolCards';
 import CrewToolsSearchBar from './CrewToolsSearchBar';
 import CrewToolsSegmentedControl from './CrewToolsSegmentedControl';
+import ExploreToolsGrid from './ExploreToolsGrid';
+import FeaturedToolCarousel from './FeaturedToolCarousel';
 import PromoUpgradeCard from './PromoUpgradeCard';
 import {
   CREW_BUNDLES,
@@ -37,30 +45,17 @@ import {
   TRENDING_IDS,
   TRY_LATER_IDS,
 } from './data';
+import { standardCarouselCardWidth } from './layoutTokens';
 import { matchesBundleQuery, matchesToolQuery } from './search';
 import SectionHeading from './SectionHeading';
+import ToolCarousel from './ToolCarousel';
 import type { CrewBundle, CrewTool, CrewToolsMode } from './types';
-import {
-  ExploreHeroCard,
-  FeaturedToolCard,
-  RowToolCard,
-  StoreToolCard,
-} from './ToolCards';
-
-function HorizontalRow({ children }: { children: React.ReactNode }) {
-  return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.hScroll}
-    >
-      {children}
-    </ScrollView>
-  );
-}
 
 export default function CrewToolsScreen() {
   const router = useRouter();
+  const { width: screenW } = useWindowDimensions();
+  const carouselCardW = useMemo(() => standardCarouselCardWidth(screenW), [screenW]);
+
   const [mode, setMode] = useState<CrewToolsMode>('my');
   const [query, setQuery] = useState('');
 
@@ -194,6 +189,7 @@ export default function CrewToolsScreen() {
     <SafeAreaView style={styles.safe} edges={['left', 'right']}>
       <ScrollView
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -219,22 +215,24 @@ export default function CrewToolsScreen() {
             {myFavorites.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Favorites" onSeeAll={() => seeAll('Favorites')} />
-                <HorizontalRow>
-                  {myFavorites.map((t) => (
-                    <RowToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="favorites"
+                  tools={myFavorites}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardCompact tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {myRecent.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Recently used" onSeeAll={() => seeAll('Recently used')} />
-                <HorizontalRow>
-                  {myRecent.map((t) => (
-                    <RowToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="recent"
+                  tools={myRecent}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardCompact tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
@@ -244,27 +242,30 @@ export default function CrewToolsScreen() {
                   title="Included in your plan"
                   onSeeAll={() => seeAll('Included in your plan')}
                 />
-                <HorizontalRow>
-                  {myIncluded.map((t) => (
-                    <RowToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="included"
+                  tools={myIncluded}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardCompact tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {mySuggested.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Suggested for you" onSeeAll={() => seeAll('Suggested for you')} />
-                <HorizontalRow>
-                  {mySuggested.map((t) => (
-                    <StoreToolCard
-                      key={t.id}
+                <ToolCarousel
+                  listKey="suggested"
+                  tools={mySuggested}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => (
+                    <CrewToolCardStore
                       tool={t}
                       onPress={onToolPress}
                       goldPro={t.id === 'crew-calendar-pro'}
                     />
-                  ))}
-                </HorizontalRow>
+                  )}
+                />
               </View>
             ) : null}
 
@@ -275,102 +276,107 @@ export default function CrewToolsScreen() {
         {mode === 'explore' && !showEmpty ? (
           <>
             {featured.length > 0 ? (
-              <View style={styles.section}>
+              <View style={styles.exploreFeaturedBand}>
                 <SectionHeading title="Featured" onSeeAll={() => seeAll('Featured')} />
-                <HorizontalRow>
-                  {featured.map((t) => (
-                    <FeaturedToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <FeaturedToolCarousel
+                  tools={featured}
+                  screenWidth={screenW}
+                  renderCard={(t) => <CrewToolCardFeatured tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {exploreGrid.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Explore tools" onSeeAll={() => seeAll('Explore tools')} />
-                <HorizontalRow>
-                  <ExploreHeroCard tool={exploreGrid[0]} onPress={onToolPress} />
-                  {exploreGrid.slice(1).map((t) => (
-                    <StoreToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ExploreToolsGrid
+                  tools={exploreGrid}
+                  renderCard={(t) => <CrewToolCardStore tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {topFree.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Top free tools" onSeeAll={() => seeAll('Top free tools')} />
-                <HorizontalRow>
-                  {topFree.map((t) => (
-                    <StoreToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="topfree"
+                  tools={topFree}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardStore tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {topPremium.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Top premium tools" onSeeAll={() => seeAll('Top premium tools')} />
-                <HorizontalRow>
-                  {topPremium.map((t) => (
-                    <StoreToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="toppremium"
+                  tools={topPremium}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardStore tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {trending.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Trending" onSeeAll={() => seeAll('Trending')} />
-                <HorizontalRow>
-                  {trending.map((t) => (
-                    <RowToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="trending"
+                  tools={trending}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardCompact tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {newTools.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="New tools" onSeeAll={() => seeAll('New tools')} />
-                <HorizontalRow>
-                  {newTools.map((t) => (
-                    <StoreToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="newtools"
+                  tools={newTools}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardStore tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {bestCommuters.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Best for commuters" onSeeAll={() => seeAll('Best for commuters')} />
-                <HorizontalRow>
-                  {bestCommuters.map((t) => (
-                    <StoreToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="commuters"
+                  tools={bestCommuters}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardStore tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {bestInflight.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Best for inflight" onSeeAll={() => seeAll('Best for inflight')} />
-                <HorizontalRow>
-                  {bestInflight.map((t) => (
-                    <StoreToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="inflight"
+                  tools={bestInflight}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardStore tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
 
             {bestPilots.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Best for pilots" onSeeAll={() => seeAll('Best for pilots')} />
-                <HorizontalRow>
-                  {bestPilots.map((t) => (
-                    <StoreToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="pilots"
+                  tools={bestPilots}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardStore tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
           </>
@@ -389,11 +395,12 @@ export default function CrewToolsScreen() {
             {savedTools.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Saved tools" onSeeAll={() => seeAll('Saved tools')} />
-                <HorizontalRow>
-                  {savedTools.map((t) => (
-                    <RowToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="savedtools"
+                  tools={savedTools}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardCompact tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
             {savedBundles.length > 0 ? (
@@ -407,11 +414,12 @@ export default function CrewToolsScreen() {
             {tryLater.length > 0 ? (
               <View style={styles.section}>
                 <SectionHeading title="Try later" onSeeAll={() => seeAll('Try later')} />
-                <HorizontalRow>
-                  {tryLater.map((t) => (
-                    <StoreToolCard key={t.id} tool={t} onPress={onToolPress} />
-                  ))}
-                </HorizontalRow>
+                <ToolCarousel
+                  listKey="trylater"
+                  tools={tryLater}
+                  cardWidth={carouselCardW}
+                  renderCard={(t) => <CrewToolCardStore tool={t} onPress={onToolPress} />}
+                />
               </View>
             ) : null}
           </>
@@ -424,21 +432,18 @@ export default function CrewToolsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.screenBg },
   scrollContent: { paddingBottom: spacing.xl + 24 },
-  hScroll: {
-    paddingHorizontal: 16,
-    paddingBottom: 4,
-  },
   section: {
-    marginTop: 8,
-    marginBottom: 4,
+    marginTop: 4,
+    marginBottom: 8,
   },
   bundleBlock: {
     paddingHorizontal: 16,
-    marginTop: 8,
+    marginTop: 12,
+    paddingBottom: 8,
   },
   bundleBlockTight: {
     paddingHorizontal: 16,
-    marginTop: 8,
+    marginTop: 12,
   },
   empty: {
     paddingHorizontal: 24,
@@ -447,4 +452,12 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: 17, fontWeight: '800', color: colors.textPrimary },
   emptySub: { fontSize: 14, color: colors.textSecondary, marginTop: 8, textAlign: 'center' },
+  exploreFeaturedBand: {
+    paddingTop: 8,
+    paddingBottom: 14,
+    marginBottom: 10,
+    backgroundColor: '#F8FAFC',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E2E8F0',
+  },
 });

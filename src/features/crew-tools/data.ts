@@ -10,6 +10,7 @@ export const CREW_TOOL_CATALOG: CrewTool[] = [
     access: 'pro',
     route: '/utility',
     cta: 'open',
+    spotlight: 'Door-to-base timing and traffic-aware routing in one place.',
     categories: ['commute', 'transit', 'base'],
   },
   {
@@ -49,6 +50,7 @@ export const CREW_TOOL_CATALOG: CrewTool[] = [
     icon: 'document-text-outline',
     access: 'pro',
     cta: 'unlock',
+    spotlight: 'Cut through dense policy language when you need a fast answer.',
     categories: ['contract', 'union', 'policy'],
   },
   {
@@ -58,6 +60,7 @@ export const CREW_TOOL_CATALOG: CrewTool[] = [
     icon: 'language-outline',
     access: 'pro',
     cta: 'unlock',
+    spotlight: 'Phrases and audio tuned for crew travel—not textbook travel.',
     categories: ['language', 'international'],
   },
   {
@@ -80,6 +83,7 @@ export const CREW_TOOL_CATALOG: CrewTool[] = [
     rating: 4.8,
     reviewCount: 214,
     roleHint: 'Great for commuters',
+    spotlight: 'Crew-trusted food, rest, and transit picks for each airport.',
     categories: ['layover', 'local'],
   },
   {
@@ -98,6 +102,7 @@ export const CREW_TOOL_CATALOG: CrewTool[] = [
     icon: 'shield-checkmark-outline',
     access: 'free',
     cta: 'add',
+    spotlight: 'Fewer surprises at security with reminders that match your trip.',
     categories: ['security', 'kcm'],
   },
   {
@@ -108,6 +113,7 @@ export const CREW_TOOL_CATALOG: CrewTool[] = [
     access: 'included',
     route: '/flight-tracker',
     cta: 'open',
+    spotlight: 'Boards, delays, and gate changes without hopping between apps.',
     categories: ['ops', 'delays'],
   },
   {
@@ -117,6 +123,7 @@ export const CREW_TOOL_CATALOG: CrewTool[] = [
     icon: 'shield-outline',
     access: 'pro',
     cta: 'unlock',
+    spotlight: 'Clearer visibility into duty and rest before you’re on the wrong side of a limit.',
     categories: ['duty', 'rest', 'legal'],
   },
   {

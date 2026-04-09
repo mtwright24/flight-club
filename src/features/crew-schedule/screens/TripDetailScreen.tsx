@@ -157,6 +157,7 @@ export default function TripDetailScreen() {
             departure_date: t.startDate,
             origin_airport: leg.departureAirport,
             destination_airport: leg.arrivalAirport,
+            schedule_entry_id: leg.scheduleEntryId ?? null,
           });
           if (enriched.matched && enriched.normalized_status) {
             statusMap[leg.id] = enriched.delay_minutes != null

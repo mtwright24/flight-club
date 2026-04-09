@@ -1,5 +1,28 @@
 import { createNotification } from '../../../lib/notifications';
+import {
+  airportBoardFetch,
+  flightSearch,
+  flightStatus,
+  listTrackedFlightsFromDb,
+  saveTrackedFlight as saveTrackedFlightEdge,
+  syncScheduleFlight,
+} from '../../features/flight-tracker/api/flightTrackerService';
+import {
+  buildFlightKey as buildFlightKeyImpl,
+  parseFlightKey as parseFlightKeyImpl,
+} from '../../features/flight-tracker/flightKeys';
+import {
+  boardRowToLegacyFlight,
+  legacyToNormalized,
+  searchItemToLegacyFlight,
+  toLegacyNormalizedFlight,
+  trackedRowToLegacyFlight,
+} from '../../features/flight-tracker/mappers';
 import { supabase } from '../supabaseClient';
+
+/** Re-export with explicit bindings — Hermes rejects `export { x }` re-exports of imported getters. */
+export const buildFlightKey = buildFlightKeyImpl;
+export const parseFlightKey = parseFlightKeyImpl;
 
 export type FlightTrackerStatus =
   | 'scheduled'
@@ -81,16 +104,11 @@ export type TrackedFlightItem = {
   id: string;
   user_id: string;
   flight_key: string;
+  tracked_flight_id?: string;
   created_at: string;
   updated_at: string;
   alerts: FlightAlertPreferences;
   flight: NormalizedFlight | null;
-};
-
-type FlightTrackerInvokeResponse<T> = {
-  ok: boolean;
-  data?: T;
-  error?: string;
 };
 
 function isMissingTableError(error: unknown, tableName: string): boolean {
@@ -99,23 +117,18 @@ function isMissingTableError(error: unknown, tableName: string): boolean {
   return code === 'PGRST205' && message.includes(`'public.${tableName}'`);
 }
 
-function toIsoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+const warnedMissingTables = new Set<string>();
+function warnMissingTableOnce(table: string) {
+  if (!__DEV__) return;
+  if (warnedMissingTables.has(table)) return;
+  warnedMissingTables.add(table);
+  console.warn(
+    `[FlightTracker] Table "${table}" is not exposed in PostgREST — apply Supabase migrations to enable this feature.`,
+  );
 }
 
-export function buildFlightKey(input: {
-  airlineCode: string;
-  flightNumber: string;
-  serviceDate: string;
-  origin?: string | null;
-  destination?: string | null;
-}): string {
-  const airline = String(input.airlineCode || '').trim().toUpperCase();
-  const flight = String(input.flightNumber || '').trim().toUpperCase();
-  const date = String(input.serviceDate || '').trim();
-  const origin = String(input.origin || '').trim().toUpperCase();
-  const destination = String(input.destination || '').trim().toUpperCase();
-  return `${airline}-${flight}-${date}-${origin || 'UNK'}-${destination || 'UNK'}`;
+function toIsoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
 }
 
 export function parseFlightSearchInput(rawInput: string): FlightSearchQuery {
@@ -136,40 +149,42 @@ export function parseFlightSearchInput(rawInput: string): FlightSearchQuery {
   return { raw, type: 'flight', ident: identCompact };
 }
 
-async function invokeFlightTracker<T>(action: string, payload: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke('flight-tracker', {
-    body: { action, ...payload },
-  });
-  if (error) throw error;
-  const res = data as FlightTrackerInvokeResponse<T>;
-  if (!res?.ok) {
-    throw new Error(res?.error || 'Flight tracker request failed.');
-  }
-  return res.data as T;
-}
-
 export async function searchFlights(rawQuery: string, serviceDate?: string): Promise<FlightSearchResult> {
-  const parsed = parseFlightSearchInput(rawQuery);
   const date = serviceDate || toIsoDate(new Date());
-  return invokeFlightTracker<FlightSearchResult>('search', { query: parsed, serviceDate: date });
+  const res = await flightSearch(rawQuery, date);
+  const flights = res.results.map((r) => searchItemToLegacyFlight(r));
+  return { flights, source: res.source as FlightSearchResult['source'] };
 }
 
-export async function getLiveFlightDetail(flightKey: string, forceRefresh = false): Promise<NormalizedFlight | null> {
-  const res = await invokeFlightTracker<{ flight: NormalizedFlight | null }>('detail', {
-    flightKey,
-    forceRefresh,
-  });
-  return res.flight ?? null;
+export async function getLiveFlightDetail(flightKey: string, _forceRefresh = false): Promise<NormalizedFlight | null> {
+  const parsed = parseFlightKey(flightKey);
+  if (!parsed) return null;
+  try {
+    const st = await flightStatus({
+      carrierCode: parsed.airlineCode,
+      flightNumber: parsed.flightNumber,
+      flightDate: parsed.serviceDate,
+      providerFlightId: null,
+    });
+    return toLegacyNormalizedFlight(st.flight);
+  } catch {
+    return null;
+  }
 }
 
 export async function getAirportBoard(
   airportCode: string,
   boardType: 'arrivals' | 'departures',
 ): Promise<AirportBoardResult> {
-  return invokeFlightTracker<AirportBoardResult>('airport_board', {
-    airportCode: airportCode.trim().toUpperCase(),
-    boardType,
-  });
+  const date = toIsoDate(new Date());
+  const res = await airportBoardFetch({ airportCode: airportCode.trim().toUpperCase(), boardType, date });
+  const flights = res.rows.map((r) => boardRowToLegacyFlight(r, date));
+  return {
+    airport_code: res.airportCode,
+    board_type: res.boardType as 'arrivals' | 'departures',
+    flights,
+    source: res.source as AirportBoardResult['source'],
+  };
 }
 
 export async function listRecentFlightSearches(userId: string, limit = 10): Promise<{ query: string; query_type: string; flight_key: string | null }[]> {
@@ -181,7 +196,7 @@ export async function listRecentFlightSearches(userId: string, limit = 10): Prom
     .limit(limit);
   if (error) {
     if (isMissingTableError(error, 'flight_search_history')) {
-      if (__DEV__) console.log('[FlightTracker] flight_search_history table missing; returning empty history.');
+      warnMissingTableOnce('flight_search_history');
       return [];
     }
     throw error;
@@ -209,14 +224,14 @@ export async function saveFlightSearchHistory(
   });
   if (error) {
     if (isMissingTableError(error, 'flight_search_history')) {
-      if (__DEV__) console.log('[FlightTracker] flight_search_history table missing; skipping history write.');
+      warnMissingTableOnce('flight_search_history');
       return;
     }
     throw error;
   }
 }
 
-export async function listWatchedFlights(userId: string): Promise<TrackedFlightItem[]> {
+async function listLegacyUserTrackedFlights(userId: string): Promise<TrackedFlightItem[]> {
   const { data, error } = await supabase
     .from('user_tracked_flights')
     .select('*, flight:tracked_flights_cache(*)')
@@ -224,7 +239,7 @@ export async function listWatchedFlights(userId: string): Promise<TrackedFlightI
     .order('updated_at', { ascending: false });
   if (error) {
     if (isMissingTableError(error, 'user_tracked_flights')) {
-      if (__DEV__) console.log('[FlightTracker] user_tracked_flights table missing; returning empty watchlist.');
+      warnMissingTableOnce('user_tracked_flights');
       return [];
     }
     throw error;
@@ -246,6 +261,53 @@ export async function listWatchedFlights(userId: string): Promise<TrackedFlightI
   }));
 }
 
+export async function listWatchedFlights(userId: string): Promise<TrackedFlightItem[]> {
+  const rows = await listTrackedFlightsFromDb(userId);
+  if (rows === null) {
+    warnMissingTableOnce('tracked_flights');
+    return listLegacyUserTrackedFlights(userId);
+  }
+
+  const out: TrackedFlightItem[] = [];
+  for (const row of rows.slice(0, 40)) {
+    let flight: NormalizedFlight | null = null;
+    try {
+      const st = await flightStatus({
+        carrierCode: row.carrier_code,
+        flightNumber: row.flight_number,
+        flightDate: row.flight_date,
+        providerFlightId: row.api_flight_id,
+      });
+      flight = toLegacyNormalizedFlight(st.flight);
+    } catch {
+      flight = trackedRowToLegacyFlight(row);
+    }
+    out.push({
+      id: row.id,
+      user_id: row.user_id,
+      flight_key: flight?.flight_key ?? row.flight_key ?? buildFlightKey({
+        airlineCode: row.carrier_code,
+        flightNumber: row.flight_number,
+        serviceDate: row.flight_date,
+        origin: row.departure_airport,
+        destination: row.arrival_airport,
+      }),
+      tracked_flight_id: row.id,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      alerts: {
+        alert_on_delay: true,
+        alert_on_cancel: true,
+        alert_on_departure: true,
+        alert_on_arrival: true,
+        alert_on_gate_change: true,
+      },
+      flight,
+    });
+  }
+  return out;
+}
+
 export async function watchFlight(
   userId: string,
   flight: {
@@ -256,43 +318,90 @@ export async function watchFlight(
     destination_airport: string;
     service_date: string;
   },
-  alerts?: Partial<FlightAlertPreferences>,
+  _alerts?: Partial<FlightAlertPreferences>,
 ): Promise<void> {
-  await invokeFlightTracker<{ flight_key: string }>('upsert_cached_flight', {
-    flight,
-  });
-  const { error } = await supabase.from('user_tracked_flights').upsert(
-    {
-      user_id: userId,
+  void userId;
+  try {
+    const st = await flightStatus({
+      carrierCode: flight.airline_code,
+      flightNumber: flight.flight_number,
+      flightDate: flight.service_date,
+      providerFlightId: null,
+    });
+    await saveTrackedFlightEdge(st.flight);
+  } catch {
+    const partial = legacyToNormalized({
       flight_key: flight.flight_key,
-      alert_on_delay: alerts?.alert_on_delay ?? true,
-      alert_on_cancel: alerts?.alert_on_cancel ?? true,
-      alert_on_departure: alerts?.alert_on_departure ?? true,
-      alert_on_arrival: alerts?.alert_on_arrival ?? true,
-      alert_on_gate_change: alerts?.alert_on_gate_change ?? true,
-    },
-    { onConflict: 'user_id,flight_key' },
-  );
-  if (error) {
-    if (isMissingTableError(error, 'user_tracked_flights')) {
-      throw new Error('Flight Tracker database migration is missing. Apply migrations and retry.');
-    }
-    throw error;
+      provider_flight_id: null,
+      airline_code: flight.airline_code,
+      airline_name: null,
+      flight_number: flight.flight_number,
+      origin_airport: flight.origin_airport,
+      destination_airport: flight.destination_airport,
+      service_date: flight.service_date,
+      normalized_status: 'unknown',
+      flight_status_raw: null,
+      scheduled_departure: null,
+      scheduled_arrival: null,
+      estimated_departure: null,
+      estimated_arrival: null,
+      actual_departure: null,
+      actual_arrival: null,
+      delay_minutes: null,
+      aircraft_type: null,
+      registration: null,
+      terminal: null,
+      gate: null,
+      altitude: null,
+      speed: null,
+      heading: null,
+      latitude: null,
+      longitude: null,
+      route_data: null,
+      last_provider_update_at: null,
+      cached_at: null,
+      updated_at: null,
+    } as NormalizedFlight);
+    await saveTrackedFlightEdge(partial);
+  }
+
+  try {
+    await supabase.from('user_tracked_flights').upsert(
+      {
+        user_id: userId,
+        flight_key: flight.flight_key,
+        alert_on_delay: _alerts?.alert_on_delay ?? true,
+        alert_on_cancel: _alerts?.alert_on_cancel ?? true,
+        alert_on_departure: _alerts?.alert_on_departure ?? true,
+        alert_on_arrival: _alerts?.alert_on_arrival ?? true,
+        alert_on_gate_change: _alerts?.alert_on_gate_change ?? true,
+      },
+      { onConflict: 'user_id,flight_key' },
+    );
+  } catch {
+    /* legacy table optional */
   }
 }
 
 export async function unwatchFlight(userId: string, flightKey: string): Promise<void> {
-  const { error } = await supabase
-    .from('user_tracked_flights')
-    .delete()
-    .eq('user_id', userId)
-    .eq('flight_key', flightKey);
-  if (error) {
-    if (isMissingTableError(error, 'user_tracked_flights')) {
-      if (__DEV__) console.log('[FlightTracker] user_tracked_flights table missing; unsave skipped.');
-      return;
-    }
-    throw error;
+  const parsed = parseFlightKey(flightKey);
+  let q = supabase.from('tracked_flights').delete().eq('user_id', userId);
+  if (parsed) {
+    q = q
+      .eq('carrier_code', parsed.airlineCode)
+      .eq('flight_number', parsed.flightNumber)
+      .eq('flight_date', parsed.serviceDate);
+  } else {
+    q = q.eq('flight_key', flightKey);
+  }
+  const { error } = await q;
+  if (error && !isMissingTableError(error, 'tracked_flights')) {
+    if (__DEV__) console.warn('[FlightTracker] tracked_flights delete:', error.message);
+  }
+  try {
+    await supabase.from('user_tracked_flights').delete().eq('user_id', userId).eq('flight_key', flightKey);
+  } catch {
+    /* legacy table optional */
   }
 }
 
@@ -323,6 +432,12 @@ export function subscribeTrackedFlights(userId: string, onChange: () => void): (
       event: '*',
       schema: 'public',
       table: 'user_tracked_flights',
+      filter: `user_id=eq.${userId}`,
+    }, onChange)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'tracked_flights',
       filter: `user_id=eq.${userId}`,
     }, onChange)
     .on('postgres_changes', {
@@ -363,7 +478,23 @@ export function buildTrackedFlightShareText(flight: NormalizedFlight): string {
 }
 
 export async function runWatchedFlightsRefreshSweep(): Promise<void> {
-  await invokeFlightTracker<{ refreshed: number }>('refresh_watched', {});
+  const { data: session } = await supabase.auth.getSession();
+  const uid = session.session?.user?.id;
+  if (!uid) return;
+  const rows = await listTrackedFlightsFromDb(uid);
+  if (rows === null) return;
+  for (const row of rows.slice(0, 25)) {
+    try {
+      await flightStatus({
+        carrierCode: row.carrier_code,
+        flightNumber: row.flight_number,
+        flightDate: row.flight_date,
+        providerFlightId: row.api_flight_id,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export async function validateAndEnrichStaffLoadFlight(input: {
@@ -380,7 +511,25 @@ export async function validateAndEnrichStaffLoadFlight(input: {
   scheduled_arrival_at?: string | null;
   normalized_status?: FlightTrackerStatus;
 }> {
-  return invokeFlightTracker('enrich_staff_load', { input });
+  try {
+    const st = await flightStatus({
+      carrierCode: input.airline_code,
+      flightNumber: input.flight_number,
+      flightDate: input.departure_date,
+      providerFlightId: null,
+    });
+    const leg = toLegacyNormalizedFlight(st.flight);
+    return {
+      exists: true,
+      flight_key: leg.flight_key,
+      aircraft_type: leg.aircraft_type,
+      scheduled_departure_at: leg.scheduled_departure,
+      scheduled_arrival_at: leg.scheduled_arrival,
+      normalized_status: leg.normalized_status,
+    };
+  } catch {
+    return { exists: false };
+  }
 }
 
 export async function enrichCrewScheduleSegment(input: {
@@ -389,6 +538,7 @@ export async function enrichCrewScheduleSegment(input: {
   departure_date: string;
   origin_airport?: string | null;
   destination_airport?: string | null;
+  schedule_entry_id?: string | null;
 }): Promise<{
   matched: boolean;
   flight_key?: string;
@@ -397,7 +547,57 @@ export async function enrichCrewScheduleSegment(input: {
   estimated_departure?: string | null;
   estimated_arrival?: string | null;
 }> {
-  return invokeFlightTracker('enrich_schedule_segment', { input });
+  const carrier = String(input.airline_code || '')
+    .trim()
+    .toUpperCase();
+  const fn = String(input.flight_number || '').trim();
+
+  if (input.schedule_entry_id && carrier) {
+    try {
+      const r = await syncScheduleFlight({
+        scheduleItemId: input.schedule_entry_id,
+        carrierCode: carrier,
+        flightNumber: fn.replace(/^[A-Z]+/i, ''),
+        flightDate: input.departure_date,
+      });
+      if (r.syncStatus === 'matched' && r.flight) {
+        const leg = toLegacyNormalizedFlight(r.flight);
+        return {
+          matched: true,
+          flight_key: leg.flight_key,
+          normalized_status: leg.normalized_status,
+          delay_minutes: r.flight.delayMinutes ?? null,
+          estimated_departure: r.flight.estimatedDepartureUtc ?? null,
+          estimated_arrival: r.flight.estimatedArrivalUtc ?? null,
+        };
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+
+  try {
+    const ident = fn.replace(/\s+/g, '');
+    const digits = ident.replace(/^[A-Z]+/i, '');
+    const code = carrier || ident.replace(/\d.*/, '') || 'ZZ';
+    const st = await flightStatus({
+      carrierCode: code,
+      flightNumber: digits || fn,
+      flightDate: input.departure_date,
+      providerFlightId: null,
+    });
+    const leg = toLegacyNormalizedFlight(st.flight);
+    return {
+      matched: true,
+      flight_key: leg.flight_key,
+      normalized_status: leg.normalized_status,
+      delay_minutes: leg.delay_minutes,
+      estimated_departure: leg.estimated_departure,
+      estimated_arrival: leg.estimated_arrival,
+    };
+  } catch {
+    return { matched: false };
+  }
 }
 
 export async function notifyFlightStatusChange(params: {

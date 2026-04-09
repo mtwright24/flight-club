@@ -69,6 +69,7 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
   if (status === 'flying' || status === 'deadhead' || status === 'continuation') {
     legs.push({
       id: `${first.id}-leg`,
+      scheduleEntryId: first.id,
       departureAirport: origin ?? '—',
       arrivalAirport: destination ?? '—',
       reportLocal: formatTimeDisplay(first.report_time),
