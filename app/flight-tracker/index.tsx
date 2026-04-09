@@ -18,12 +18,12 @@ import type { NormalizedBoardRow } from '../../src/features/flight-tracker/types
 import {
   ActiveTrackedCard,
   BoardPreviewRow,
+  DashboardSection,
   DelayAlertRow,
   ftHub,
   getFlightTrackerQuickTileWidth,
   QuickActionTile,
   RecentSearchChip,
-  SectionHeader,
   SectionHeaderLink,
   WatchlistRow,
 } from '../../src/features/flight-tracker/components/FlightTrackerHubParts';
@@ -35,7 +35,7 @@ import {
   listWatchedFlights,
   type TrackedFlightItem,
 } from '../../src/lib/supabase/flightTracker';
-import { colors, radius, shadow, spacing } from '../../src/styles/theme';
+import { colors, radius, spacing } from '../../src/styles/theme';
 
 const PREVIEW_AIRPORT = 'JFK';
 
@@ -52,6 +52,9 @@ const QUICK_ACTIONS: {
   { title: 'Inbound Aircraft', subtitle: 'Track your inbound aircraft', icon: 'arrow-down-circle-outline', href: '/flight-tracker/inbound-aircraft' },
   { title: 'Schedule Sync', subtitle: 'Import & sync your pairings', icon: 'sync-outline', href: '/flight-tracker/schedule-sync' },
 ];
+
+/** Fixed 3×2 layout — avoids flexWrap + min-width bugs that collapse to one column */
+const QUICK_ACTION_ROWS = [QUICK_ACTIONS.slice(0, 2), QUICK_ACTIONS.slice(2, 4), QUICK_ACTIONS.slice(4, 6)];
 
 export default function FlightTrackerHubScreen() {
   const { width: windowWidth } = useWindowDimensions();
@@ -268,32 +271,35 @@ export default function FlightTrackerHubScreen() {
         </Pressable>
 
         <View style={styles.quickGrid}>
-          {QUICK_ACTIONS.map((a) => (
-            <QuickActionTile
-              key={a.href}
-              title={a.title}
-              subtitle={a.subtitle}
-              icon={a.icon}
-              tileWidth={quickTileWidth}
-              onPress={() => router.push(a.href as never)}
-            />
+          {QUICK_ACTION_ROWS.map((row, rowIdx) => (
+            <View key={`row-${rowIdx}`} style={styles.quickRow}>
+              {row.map((a) => (
+                <QuickActionTile
+                  key={a.href}
+                  title={a.title}
+                  subtitle={a.subtitle}
+                  icon={a.icon}
+                  tileWidth={quickTileWidth}
+                  onPress={() => router.push(a.href as never)}
+                />
+              ))}
+            </View>
           ))}
         </View>
 
         {loadError ? (
-          <View style={styles.sectionCard}>
+          <DashboardSection title="Couldn’t load data">
             <Text style={styles.errorText}>{loadError}</Text>
             <Pressable style={styles.retryBtn} onPress={() => void load()}>
               <Text style={styles.retryText}>Try again</Text>
             </Pressable>
-          </View>
+          </DashboardSection>
         ) : null}
 
-        <View style={styles.sectionCard}>
-          <SectionHeader
-            title="Active tracked flights"
-            right={<SectionHeaderLink label="View all" onPress={() => router.push('/flight-tracker/saved')} />}
-          />
+        <DashboardSection
+          title="Active tracked flights"
+          right={<SectionHeaderLink label="View all" onPress={() => router.push('/flight-tracker/saved')} />}
+        >
           {loading ? (
             <View style={styles.sectionLoading}>
               <ActivityIndicator color={colors.primary} />
@@ -301,38 +307,38 @@ export default function FlightTrackerHubScreen() {
           ) : activeTracked.length === 0 ? (
             <Text style={styles.emptyMuted}>Save a flight to pin live tracker cards here.</Text>
           ) : (
-            activeTracked.slice(0, 8).map((w) => (
+            activeTracked.slice(0, 8).map((w, i, arr) => (
               <ActiveTrackedCard
                 key={w.id}
                 item={w}
                 inboundHint={inboundHints[w.id]}
+                isLast={i === arr.length - 1}
                 onPress={() => router.push(`/flight-tracker/flight/${encodeURIComponent(w.flight_key)}`)}
               />
             ))
           )}
-        </View>
+        </DashboardSection>
 
-        <View style={styles.sectionCard}>
-          <SectionHeader title="Delay alerts" />
+        <DashboardSection title="Delay alerts">
           {delayRisks.length === 0 ? (
             <Text style={styles.emptyMuted}>No current delay risks on your saved flights.</Text>
           ) : (
-            delayRisks.map((d) => (
+            delayRisks.map((d, i, arr) => (
               <DelayAlertRow
                 key={d.id}
                 title={d.title}
                 subtitle={d.subtitle}
+                isLast={i === arr.length - 1}
                 onPress={d.flightKey ? () => router.push(`/flight-tracker/flight/${encodeURIComponent(d.flightKey!)}`) : undefined}
               />
             ))
           )}
-        </View>
+        </DashboardSection>
 
-        <View style={styles.sectionCard}>
-          <SectionHeader
-            title="Saved watchlist"
-            right={<SectionHeaderLink label="View all" onPress={() => router.push('/flight-tracker/saved')} />}
-          />
+        <DashboardSection
+          title="Saved watchlist"
+          right={<SectionHeaderLink label="View all" onPress={() => router.push('/flight-tracker/saved')} />}
+        >
           {loading ? (
             <View style={styles.sectionLoading}>
               <ActivityIndicator color={colors.primary} />
@@ -340,21 +346,21 @@ export default function FlightTrackerHubScreen() {
           ) : watched.length === 0 ? (
             <Text style={styles.emptyMuted}>No saved flights yet.</Text>
           ) : (
-            watched.slice(0, 4).map((w) => (
+            watched.slice(0, 4).map((w, i, arr) => (
               <WatchlistRow
                 key={w.id}
                 item={w}
+                isLast={i === arr.length - 1}
                 onPress={() => router.push(`/flight-tracker/flight/${encodeURIComponent(w.flight_key)}`)}
               />
             ))
           )}
-        </View>
+        </DashboardSection>
 
-        <View style={styles.sectionCard}>
-          <SectionHeader
-            title="Recent searches"
-            right={<SectionHeaderLink label="View all" onPress={() => router.push('/flight-tracker/search')} />}
-          />
+        <DashboardSection
+          title="Recent searches"
+          right={<SectionHeaderLink label="View all" onPress={() => router.push('/flight-tracker/search')} />}
+        >
           {recent.length === 0 ? (
             <Text style={styles.emptyMuted}>Search for a flight number, route, or airport.</Text>
           ) : (
@@ -370,13 +376,12 @@ export default function FlightTrackerHubScreen() {
               ))}
             </View>
           )}
-        </View>
+        </DashboardSection>
 
-        <View style={styles.sectionCard}>
-          <SectionHeader
-            title={`${PREVIEW_AIRPORT} departures`}
-            right={<SectionHeaderLink label="View board" onPress={() => router.push('/flight-tracker/airport-board')} />}
-          />
+        <DashboardSection
+          title={`${PREVIEW_AIRPORT} departures`}
+          right={<SectionHeaderLink label="View board" onPress={() => router.push('/flight-tracker/airport-board')} />}
+        >
           {boardLoading ? (
             <View style={styles.sectionLoading}>
               <ActivityIndicator color={colors.primary} />
@@ -391,12 +396,16 @@ export default function FlightTrackerHubScreen() {
                 <Text style={styles.boardH}>Time</Text>
                 <Text style={styles.boardH}>Gate</Text>
               </View>
-              {boardRows.map((row, i) => (
-                <BoardPreviewRow key={`${row.providerFlightId ?? row.displayFlightNumber}-${i}`} row={row} />
+              {boardRows.map((row, i, arr) => (
+                <BoardPreviewRow
+                  key={`${row.providerFlightId ?? row.displayFlightNumber}-${i}`}
+                  row={row}
+                  isLast={i === arr.length - 1}
+                />
               ))}
             </>
           )}
-        </View>
+        </DashboardSection>
       </ScrollView>
     </SafeAreaView>
   );
@@ -483,11 +492,15 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   quickGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'stretch',
-    gap: ftHub.quickTileGap,
+    width: '100%',
     marginBottom: 16,
+  },
+  quickRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    marginBottom: ftHub.quickTileGap,
   },
   recentGrid: {
     flexDirection: 'row',
@@ -495,20 +508,7 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     gap: ftHub.quickTileGap,
   },
-  sectionCard: {
-    backgroundColor: '#fff',
-    borderRadius: ftHub.sectionRadius,
-    padding: 12,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: ftHub.sectionBorder,
-    ...shadow.cardShadow,
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
-  },
-  sectionLoading: { paddingVertical: 18, alignItems: 'center' },
+  sectionLoading: { paddingVertical: 14, alignItems: 'center' },
   emptyMuted: { color: colors.textSecondary, fontSize: 12, fontWeight: '600', lineHeight: 17 },
   errorText: { color: colors.error, fontWeight: '700', textAlign: 'center' },
   retryBtn: {
@@ -524,10 +524,10 @@ const styles = StyleSheet.create({
   boardHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingBottom: 6,
-    marginBottom: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    paddingBottom: 8,
+    marginBottom: 2,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E8ECF0',
     gap: 8,
   },
   boardH: { width: 72, fontSize: 10, fontWeight: '800', color: colors.textSecondary, textTransform: 'uppercase' },
