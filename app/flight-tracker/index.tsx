@@ -9,7 +9,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,7 +24,6 @@ import {
   DashboardSection,
   DelayAlertRow,
   ftHub,
-  getFlightTrackerQuickTileWidth,
   QuickActionTile,
   RecentSearchChip,
   SectionHeaderLink,
@@ -61,8 +59,6 @@ const QUICK_ACTIONS: {
 const QUICK_ACTION_ROWS = [QUICK_ACTIONS.slice(0, 2), QUICK_ACTIONS.slice(2, 4), QUICK_ACTIONS.slice(4, 6)];
 
 export default function FlightTrackerHubScreen() {
-  const { width: windowWidth } = useWindowDimensions();
-  const quickTileWidth = getFlightTrackerQuickTileWidth(windowWidth, spacing.md, ftHub.quickTileGap);
   const router = useRouter();
   const unread = useNotificationsBadge();
   const { count: dmUnread } = useDmUnreadBadge();
@@ -261,7 +257,7 @@ export default function FlightTrackerHubScreen() {
           style={styles.searchWrap}
           onPress={() => router.push({ pathname: '/flight-tracker/results', params: { q: query.trim() } })}
         >
-          <Ionicons name="search" size={20} color={colors.textSecondary} />
+          <Ionicons name="search" size={18} color={colors.textSecondary} />
           <TextInput
             style={styles.searchInput}
             placeholder="Track by flight, route, airport, or tail number"
@@ -277,15 +273,15 @@ export default function FlightTrackerHubScreen() {
         <View style={styles.quickGrid}>
           {QUICK_ACTION_ROWS.map((row, rowIdx) => (
             <View key={`row-${rowIdx}`} style={styles.quickRow}>
-              {row.map((a) => (
-                <QuickActionTile
-                  key={a.href}
-                  title={a.title}
-                  subtitle={a.subtitle}
-                  icon={a.icon}
-                  tileWidth={quickTileWidth}
-                  onPress={() => router.push(a.href as never)}
-                />
+              {row.map((a, i) => (
+                <View key={a.href} style={[styles.quickTileCell, i > 0 && styles.quickTileCellGap]}>
+                  <QuickActionTile
+                    title={a.title}
+                    subtitle={a.subtitle}
+                    icon={a.icon}
+                    onPress={() => router.push(a.href as never)}
+                  />
+                </View>
               ))}
             </View>
           ))}
@@ -374,7 +370,6 @@ export default function FlightTrackerHubScreen() {
                   key={`${r.query}-${idx}`}
                   label={r.query}
                   meta={r.query_type}
-                  chipWidth={quickTileWidth}
                   onPress={() => router.push({ pathname: '/flight-tracker/results', params: { q: r.query } })}
                 />
               ))}
@@ -441,7 +436,7 @@ const styles = StyleSheet.create({
   titleWrap: { flex: 1, minWidth: 0, paddingHorizontal: spacing.xs },
   headerTitle: {
     color: colors.cardBg,
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '800',
     letterSpacing: -0.2,
   },
@@ -473,12 +468,12 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing.md, paddingTop: 8, paddingBottom: spacing.xl * 2 },
   heroSubtitle: {
     color: '#6B7280',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
-    marginBottom: 12,
-    marginTop: 6,
-    letterSpacing: -0.15,
-    lineHeight: 18,
+    marginBottom: 10,
+    marginTop: 4,
+    letterSpacing: -0.12,
+    lineHeight: 16,
   },
   searchWrap: {
     borderWidth: 1,
@@ -498,10 +493,10 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    paddingVertical: 11,
+    paddingVertical: 9,
     paddingHorizontal: 6,
     color: colors.textPrimary,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '500',
   },
   quickGrid: {
@@ -512,8 +507,17 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     alignItems: 'stretch',
-    justifyContent: 'space-between',
     marginBottom: ftHub.quickTileGap,
+  },
+  /** Equal 2-col split — Pressable as direct flex child does not expand reliably on native */
+  quickTileCell: {
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: 0,
+  },
+  quickTileCellGap: {
+    marginLeft: ftHub.quickTileGap,
   },
   recentGrid: {
     flexDirection: 'row',
@@ -522,7 +526,7 @@ const styles = StyleSheet.create({
     gap: ftHub.quickTileGap,
   },
   sectionLoading: { paddingVertical: 14, alignItems: 'center' },
-  emptyMuted: { color: colors.textSecondary, fontSize: 12, fontWeight: '600', lineHeight: 17 },
+  emptyMuted: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', lineHeight: 16 },
   errorText: { color: colors.error, fontWeight: '700', textAlign: 'center' },
   retryBtn: {
     marginTop: 10,
@@ -543,6 +547,6 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E8ECF0',
     gap: 8,
   },
-  boardH: { width: 72, fontSize: 10, fontWeight: '800', color: colors.textSecondary, textTransform: 'uppercase' },
+  boardH: { width: 72, fontSize: 9, fontWeight: '800', color: colors.textSecondary, textTransform: 'uppercase' },
   boardHFlex: { flex: 1, width: undefined },
 });

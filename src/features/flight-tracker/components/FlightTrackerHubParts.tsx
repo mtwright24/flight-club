@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { NormalizedBoardRow } from '../types';
 import { colors, radius, shadow, spacing } from '../../../styles/theme';
 import type { TrackedFlightItem } from '../../../lib/supabase/flightTracker';
@@ -8,12 +8,12 @@ import type { TrackedFlightItem } from '../../../lib/supabase/flightTracker';
 /** Flight Tracker hub — matches approved dashboard mockup */
 export const ftHub = {
   screenBg: '#F9FAFB',
-  /** Visible on white / gray — mockup “thin red outline” */
-  quickTileBorder: '#FCA5A5',
-  quickIcon: '#EF4444',
-  quickRadius: 12 as const,
+  /** Mockup: clear red outline on white tiles (brand red, not pale pink) */
+  quickTileBorder: colors.primary,
+  quickIcon: colors.primary,
+  quickRadius: 10 as const,
   /** Min height so each row lines up; interior is icon | text (mockup) */
-  quickTileMinHeight: 96,
+  quickTileMinHeight: 84,
   quickTileGap: 10,
   contentPaddingH: 16,
   sectionRadius: 14 as const,
@@ -24,13 +24,14 @@ export const ftHub = {
 
 /**
  * Pixel width for each quick-action tile (2 columns + gap inside padded content).
- * Do NOT enforce a minimum width: if min were too large vs. the row, flexWrap would put
- * one tile per row → a false “single column” list (common on phones & narrow web panes).
+ * On native, `useWindowDimensions().width` can be 0 on the first paint — treat as unknown
+ * and use a typical phone width so we never compute ~1px-wide tiles (“icons only”).
  */
 export function getFlightTrackerQuickTileWidth(screenWidth: number, contentPaddingH = ftHub.contentPaddingH, gap = ftHub.quickTileGap) {
-  const inner = Math.max(0, screenWidth - 2 * contentPaddingH);
+  const sw = screenWidth > 0 ? screenWidth : 375;
+  const inner = Math.max(0, sw - 2 * contentPaddingH);
   const w = Math.floor((inner - gap) / 2);
-  return Math.max(1, w);
+  return Math.max(8, w);
 }
 
 export function formatFlightTime(iso: string | null | undefined): string {
@@ -61,34 +62,31 @@ export function QuickActionTile(props: {
   title: string;
   subtitle: string;
   icon: React.ComponentProps<typeof Ionicons>['name'];
-  tileWidth: number;
   onPress: () => void;
 }) {
   return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.qaTile,
-        { width: props.tileWidth, minHeight: ftHub.quickTileMinHeight },
-        pressed && styles.qaTilePressed,
-      ]}
-      onPress={props.onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`${props.title}. ${props.subtitle}`}
-    >
-      <View style={styles.qaInnerRow}>
-        <View style={styles.qaIconWrap}>
-          <Ionicons name={props.icon} size={22} color={ftHub.quickIcon} />
+    <View style={styles.qaTileOuter}>
+      <Pressable
+        style={({ pressed }) => [styles.qaTileInner, pressed && styles.qaTilePressed]}
+        onPress={props.onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`${props.title}. ${props.subtitle}`}
+      >
+        <View style={styles.qaInnerRow}>
+          <View style={styles.qaIconWrap}>
+            <Ionicons name={props.icon} size={19} color={ftHub.quickIcon} />
+          </View>
+          <View style={styles.qaTextCol}>
+            <Text style={styles.qaTitle} numberOfLines={2}>
+              {props.title}
+            </Text>
+            <Text style={styles.qaSubtitle} numberOfLines={3}>
+              {props.subtitle}
+            </Text>
+          </View>
         </View>
-        <View style={styles.qaTextCol}>
-          <Text style={styles.qaTitle} numberOfLines={2}>
-            {props.title}
-          </Text>
-          <Text style={styles.qaSubtitle} numberOfLines={3}>
-            {props.subtitle}
-          </Text>
-        </View>
-      </View>
-    </Pressable>
+      </Pressable>
+    </View>
   );
 }
 
@@ -269,50 +267,66 @@ export function BoardPreviewRow(props: { row: NormalizedBoardRow; isLast?: boole
 }
 
 const styles = StyleSheet.create({
-  qaTile: {
-    backgroundColor: '#FFFFFF',
+  /** Border on View — Pressable + elevation often hides strokes on Android */
+  qaTileOuter: {
+    width: '100%',
+    minHeight: ftHub.quickTileMinHeight,
+    alignSelf: 'stretch',
     borderRadius: ftHub.quickRadius,
-    paddingHorizontal: 11,
-    paddingVertical: 11,
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: ftHub.quickTileBorder,
+    backgroundColor: '#FFFFFF',
     overflow: 'hidden',
-    shadowColor: '#0F172A',
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOpacity: 0.08,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+      },
+      android: {
+        elevation: 0,
+      },
+      default: {},
+    }),
   },
-  qaTilePressed: { opacity: 0.94, backgroundColor: '#FFF5F5' },
+  qaTileInner: {
+    width: '100%',
+    paddingHorizontal: 9,
+    paddingVertical: 9,
+    backgroundColor: '#FFFFFF',
+  },
+  qaTilePressed: { opacity: 0.96, backgroundColor: '#FFF1F2' },
   qaInnerRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     width: '100%',
   },
   qaIconWrap: {
-    marginRight: 10,
+    marginRight: 8,
     paddingTop: 1,
     alignItems: 'center',
     justifyContent: 'flex-start',
-    width: 24,
+    width: 22,
   },
   qaTextCol: {
     flex: 1,
+    flexShrink: 1,
     minWidth: 0,
   },
   qaTitle: {
     color: '#1A1A1A',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '800',
-    letterSpacing: -0.25,
-    lineHeight: 18,
+    letterSpacing: -0.2,
+    lineHeight: 15,
   },
   qaSubtitle: {
     color: '#6B7280',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '500',
-    marginTop: 4,
-    lineHeight: 15,
+    marginTop: 3,
+    lineHeight: 13,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -321,7 +335,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingBottom: 2,
   },
-  sectionTitle: { color: '#1A1A1A', fontSize: 15, fontWeight: '800', letterSpacing: -0.2 },
+  sectionTitle: { color: '#1A1A1A', fontSize: 13, fontWeight: '800', letterSpacing: -0.2 },
   /** Outer dashboard card: mockup shadow + border frame */
   dashCard: {
     backgroundColor: '#FFFFFF',
@@ -351,10 +365,10 @@ const styles = StyleSheet.create({
     minWidth: 0,
     marginRight: 10,
     color: '#111827',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
     letterSpacing: -0.2,
-    lineHeight: 17,
+    lineHeight: 16,
   },
   dashHeaderRight: { flexShrink: 0, justifyContent: 'center' },
   dashDivider: {
@@ -369,8 +383,8 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   sectionLinkWrap: { flexDirection: 'row', alignItems: 'center' },
-  sectionLink: { color: colors.accentBlue, fontWeight: '700', fontSize: 12 },
-  sectionLinkChevron: { color: colors.accentBlue, fontWeight: '700', fontSize: 13, marginLeft: 2 },
+  sectionLink: { color: colors.accentBlue, fontWeight: '700', fontSize: 11 },
+  sectionLinkChevron: { color: colors.accentBlue, fontWeight: '700', fontSize: 12, marginLeft: 2 },
   activeCard: {
     backgroundColor: '#FAFAFA',
     borderRadius: 10,
@@ -388,11 +402,11 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
   activeTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  activeFlight: { color: colors.textPrimary, fontSize: 15, fontWeight: '800' },
-  activeRoute: { color: colors.textSecondary, fontSize: 12, fontWeight: '600', marginTop: 3 },
+  activeFlight: { color: colors.textPrimary, fontSize: 13, fontWeight: '800' },
+  activeRoute: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginTop: 3 },
   timeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   timeLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-  timeVal: { color: colors.textPrimary, fontSize: 13, fontWeight: '800' },
+  timeVal: { color: colors.textPrimary, fontSize: 12, fontWeight: '800' },
   delayPill: {
     marginLeft: 'auto',
     backgroundColor: '#FEF3C7',
@@ -409,7 +423,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   progressFill: { height: '100%', backgroundColor: colors.primary, borderRadius: 3 },
-  inboundHint: { marginTop: 8, color: colors.textSecondary, fontSize: 12, fontWeight: '600', fontStyle: 'italic' },
+  inboundHint: { marginTop: 8, color: colors.textSecondary, fontSize: 11, fontWeight: '600', fontStyle: 'italic' },
   badge: { borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4 },
   badgeOk: { backgroundColor: '#E2E8F0' },
   badgeDelay: { backgroundColor: '#FEF3C7' },
@@ -432,8 +446,8 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
   delayTextCol: { flex: 1 },
-  delayTitle: { color: colors.textPrimary, fontSize: 13, fontWeight: '800' },
-  delaySub: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginTop: 2, lineHeight: 15 },
+  delayTitle: { color: colors.textPrimary, fontSize: 12, fontWeight: '800' },
+  delaySub: { color: colors.textSecondary, fontSize: 10, fontWeight: '600', marginTop: 2, lineHeight: 14 },
   watchRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -447,10 +461,10 @@ const styles = StyleSheet.create({
   },
   watchLeft: { flex: 1, minWidth: 0 },
   watchRight: { alignItems: 'flex-end', marginLeft: 8 },
-  watchFlight: { color: colors.textPrimary, fontSize: 15, fontWeight: '800' },
-  watchRoute: { color: colors.textSecondary, fontSize: 12, fontWeight: '600', marginTop: 2 },
-  watchTime: { color: colors.textPrimary, fontSize: 13, fontWeight: '800' },
-  watchStatus: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginTop: 2, textTransform: 'capitalize' },
+  watchFlight: { color: colors.textPrimary, fontSize: 13, fontWeight: '800' },
+  watchRoute: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginTop: 2 },
+  watchTime: { color: colors.textPrimary, fontSize: 12, fontWeight: '800' },
+  watchStatus: { color: colors.textSecondary, fontSize: 10, fontWeight: '600', marginTop: 2, textTransform: 'capitalize' },
   recentChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -462,10 +476,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E8ECF1',
     marginBottom: 0,
+    flexGrow: 1,
+    minWidth: '48%',
   },
   recentChipText: { flex: 1, minWidth: 0 },
-  recentChipLabel: { color: colors.textPrimary, fontSize: 13, fontWeight: '700' },
-  recentChipMeta: { color: colors.textSecondary, fontSize: 10, fontWeight: '600', marginTop: 2, textTransform: 'uppercase' },
+  recentChipLabel: { color: colors.textPrimary, fontSize: 12, fontWeight: '700' },
+  recentChipMeta: { color: colors.textSecondary, fontSize: 9, fontWeight: '600', marginTop: 2, textTransform: 'uppercase' },
   boardRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -477,8 +493,8 @@ const styles = StyleSheet.create({
   boardRowLast: {
     borderBottomWidth: 0,
   },
-  boardFn: { width: 72, color: colors.textPrimary, fontSize: 12, fontWeight: '800' },
-  boardRoute: { flex: 1, color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
-  boardTime: { width: 56, color: colors.textPrimary, fontSize: 12, fontWeight: '700', textAlign: 'right' },
-  boardGate: { width: 40, color: colors.textSecondary, fontSize: 11, fontWeight: '600', textAlign: 'right' },
+  boardFn: { width: 72, color: colors.textPrimary, fontSize: 11, fontWeight: '800' },
+  boardRoute: { flex: 1, color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
+  boardTime: { width: 56, color: colors.textPrimary, fontSize: 11, fontWeight: '700', textAlign: 'right' },
+  boardGate: { width: 40, color: colors.textSecondary, fontSize: 10, fontWeight: '600', textAlign: 'right' },
 });
