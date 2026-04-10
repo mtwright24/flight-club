@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchTripGroupEntries } from '../scheduleApi';
 import { entriesToSingleTrip } from '../tripMapper';
 import { getMockTripById } from '../mockScheduleData';
+import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
 import type { CrewScheduleTrip, ScheduleDutyStatus } from '../types';
@@ -234,7 +235,10 @@ export default function TripDetailScreen() {
                   onPress={() =>
                     router.push({
                       pathname: '/flight-tracker/results',
-                      params: { q: leg.flightNumber },
+                      params: {
+                        q: leg.flightNumber,
+                        date: /^\d{4}-\d{2}-\d{2}/.test(t.startDate) ? t.startDate.slice(0, 10) : localCalendarDate(),
+                      },
                     })
                   }
                 >

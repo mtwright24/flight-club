@@ -27,12 +27,24 @@ export async function aviationstackGet(
   }
 
   const safeLogTarget = `${endpoint}?…`; // no query string in logs
-  const res = await fetch(url.toString(), { method: 'GET', headers: { Accept: 'application/json' } });
+  let res = await fetch(url.toString(), { method: 'GET', headers: { Accept: 'application/json' } });
   let body: AviationstackJsonResponse = {};
   try {
     body = (await res.json()) as AviationstackJsonResponse;
   } catch {
     body = {};
+  }
+
+  // Free tier: HTTPS often returns 403 (sometimes without JSON `error.code`) — retry once over plain HTTP.
+  if (!res.ok && res.status === 403 && url.protocol === 'https:') {
+    const httpUrl = new URL(url.toString());
+    httpUrl.protocol = 'http:';
+    res = await fetch(httpUrl.toString(), { method: 'GET', headers: { Accept: 'application/json' } });
+    try {
+      body = (await res.json()) as AviationstackJsonResponse;
+    } catch {
+      body = {};
+    }
   }
 
   if (!res.ok) {
@@ -53,4 +65,44 @@ export function firstFlightRow(body: AviationstackJsonResponse): Record<string, 
 export function allFlightRows(body: AviationstackJsonResponse): Record<string, unknown>[] {
   const arr = Array.isArray(body.data) ? body.data : [];
   return arr.filter((r): r is Record<string, unknown> => r && typeof r === 'object');
+}
+
+/** True when Aviationstack rejects filtered queries (free tier) or HTTPS (use HTTP fallback or unfiltered request). */
+export function isAviationstackPlanRestrictedError(res: { body: AviationstackJsonResponse }): boolean {
+  const code = res.body.error?.code;
+  return code === 'function_access_restricted' || code === 'https_access_restricted';
+}
+
+/**
+ * Use a second request with only `access_key` (global sample) when:
+ * - API returns `function_access_restricted` / `https_access_restricted` in JSON, or
+ * - bare HTTP 403 (common with WAF / edge when body is empty or non-JSON).
+ */
+export function shouldTryAviationstackUnfilteredFallback(res: {
+  ok: boolean;
+  status: number;
+  body: AviationstackJsonResponse;
+}): boolean {
+  if (isAviationstackPlanRestrictedError(res)) return true;
+  if (!res.ok && res.status === 403) return true;
+  return false;
+}
+
+/** Turn HTTP / API error payloads into thrown errors so we do not show empty results when the provider failed. */
+export function throwIfAviationstackFailed(
+  res: { ok: boolean; status: number; body: AviationstackJsonResponse },
+  context: string,
+): void {
+  if (!res.ok) {
+    const e = res.body.error;
+    if (e?.code || e?.message) {
+      throw new Error(`Aviationstack: ${[e.code, e.message].filter(Boolean).join(' — ')} (${context})`);
+    }
+    throw new Error(`Aviationstack HTTP ${res.status} (${context})`);
+  }
+  if (res.body.error) {
+    const e = res.body.error;
+    const detail = [e.code, e.message].filter(Boolean).join(' ');
+    throw new Error(detail ? `Aviationstack: ${detail}` : `Aviationstack API error (${context})`);
+  }
 }

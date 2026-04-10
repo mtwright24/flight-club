@@ -1,7 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
-import { Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { FlightTrackerSubScreenShell } from '../../src/features/flight-tracker/components/FlightTrackerSubScreenShell';
+import { FlightTrackerDateField } from '../../src/features/flight-tracker/components/FlightTrackerDateField';
+import { parseFlightTrackerDateParam } from '../../src/features/flight-tracker/flightDateLocal';
 import { colors, radius, spacing } from '../../src/styles/theme';
 
 /** Example query strings only — not live results; each runs a real search when tapped. */
@@ -9,24 +12,23 @@ const EXAMPLE_QUERIES = ['DL4825', 'B6 1234', 'JFK to FLL', 'MCO', 'BOS-MIA'];
 
 export default function FlightTrackerSearchScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ date?: string | string[] }>();
+  const dateFromRoute = useMemo(() => parseFlightTrackerDateParam(params.date), [params.date]);
   const [query, setQuery] = useState('');
+  const [searchDate, setSearchDate] = useState(dateFromRoute);
+
+  useEffect(() => {
+    setSearchDate(dateFromRoute);
+  }, [dateFromRoute]);
 
   const runSearch = (next?: string) => {
     const q = (next ?? query).trim();
     if (!q) return;
-    router.push({ pathname: '/flight-tracker/results', params: { q } });
+    router.push({ pathname: '/flight-tracker/results', params: { q, date: searchDate } });
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={8}>
-          <Ionicons name="chevron-back" size={22} color="#fff" />
-        </Pressable>
-        <Text style={styles.headerTitle}>Track a Flight</Text>
-        <View style={{ width: 24 }} />
-      </View>
-
+    <FlightTrackerSubScreenShell title="Track a Flight">
       <View style={styles.content}>
         <Text style={styles.label}>Search by flight, route, or airport</Text>
         <View style={styles.inputWrap}>
@@ -46,6 +48,9 @@ export default function FlightTrackerSearchScreen() {
           <Text style={styles.searchBtnText}>Search flights</Text>
         </Pressable>
 
+        <Text style={styles.dateLabel}>Flight date</Text>
+        <FlightTrackerDateField value={searchDate} onChange={setSearchDate} />
+
         <Text style={styles.examplesTitle}>Try a query</Text>
         <View style={styles.examplesWrap}>
           {EXAMPLE_QUERIES.map((e) => (
@@ -55,22 +60,12 @@ export default function FlightTrackerSearchScreen() {
           ))}
         </View>
       </View>
-    </SafeAreaView>
+    </FlightTrackerSubScreenShell>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
-  header: {
-    backgroundColor: colors.headerRed,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  headerTitle: { color: '#fff', fontWeight: '800', fontSize: 16 },
-  content: { padding: spacing.md },
+  content: { flex: 1, padding: spacing.md },
   label: { fontSize: 13, color: colors.textSecondary, fontWeight: '600', marginBottom: 8 },
   inputWrap: {
     borderWidth: 1,
@@ -91,6 +86,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   searchBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  dateLabel: { marginTop: 14, marginBottom: 8, color: colors.textSecondary, fontWeight: '600', fontSize: 13 },
   examplesTitle: { marginTop: 16, marginBottom: 8, color: colors.textPrimary, fontWeight: '800', fontSize: 14 },
   examplesWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   exampleChip: {

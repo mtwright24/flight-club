@@ -1,7 +1,7 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlightTrackerSubScreenShell } from '../../src/features/flight-tracker/components/FlightTrackerSubScreenShell';
 import { useAuth } from '../../src/hooks/useAuth';
 import { listScheduleFlightLinks, type ScheduleFlightLinkRow } from '../../src/features/flight-tracker/api/flightTrackerService';
 import { colors, radius, spacing } from '../../src/styles/theme';
@@ -53,15 +53,7 @@ export default function ScheduleSyncScreen() {
   }, [load]);
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={8}>
-          <Ionicons name="chevron-back" size={22} color="#fff" />
-        </Pressable>
-        <Text style={styles.headerTitle}>Schedule Sync</Text>
-        <View style={{ width: 24 }} />
-      </View>
-
+    <FlightTrackerSubScreenShell title="Schedule Sync">
       <View style={styles.intro}>
         <Text style={styles.introTitle}>Crew schedule ↔ live flights</Text>
         <Text style={styles.introBody}>
@@ -123,21 +115,11 @@ export default function ScheduleSyncScreen() {
           )}
         />
       )}
-    </SafeAreaView>
+    </FlightTrackerSubScreenShell>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
-  header: {
-    backgroundColor: colors.headerRed,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerTitle: { color: '#fff', fontWeight: '800', fontSize: 16 },
   intro: { padding: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
   introTitle: { color: colors.textPrimary, fontWeight: '800', fontSize: 15 },
   introBody: { color: colors.textSecondary, fontWeight: '600', fontSize: 13, marginTop: 6, lineHeight: 19 },

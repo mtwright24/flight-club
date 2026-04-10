@@ -74,6 +74,20 @@ export function parseIdentToFlightQuery(ident: string): {
   return { airlineCode: m[1], flightNumber: m[2], flightIata: `${m[1]}${m[2]}` };
 }
 
+function airportIataFromEndpoint(depOrArr: Record<string, unknown> | undefined): string {
+  if (!depOrArr) return '';
+  const direct = depOrArr.iata ?? depOrArr.iataCode ?? (depOrArr as { iata_code?: unknown }).iata_code;
+  if (typeof direct === 'string' && direct.length >= 3) return direct.trim().toUpperCase().slice(0, 3);
+  const ap = depOrArr.airport;
+  if (ap && typeof ap === 'object') {
+    const a = ap as Record<string, unknown>;
+    const fromNested = a.iata ?? a.iata_code ?? a.iataCode;
+    if (typeof fromNested === 'string' && fromNested.length >= 3) return fromNested.trim().toUpperCase().slice(0, 3);
+  }
+  if (typeof ap === 'string' && ap.length === 3) return ap.trim().toUpperCase();
+  return '';
+}
+
 export function mapAviationstackFlightToNormalized(row: Record<string, unknown>): NormalizedFlightTrackerResult | null {
   const dep = sub(row, 'departure');
   const arr = sub(row, 'arrival');
@@ -82,11 +96,28 @@ export function mapAviationstackFlightToNormalized(row: Record<string, unknown>)
   const aircraft = sub(row, 'aircraft');
   const live = sub(row, 'live');
 
-  const airlineCode = String(airline?.iata ?? '').trim().toUpperCase();
-  const flightNumber = String(flight?.number ?? '').trim().toUpperCase();
-  const flightDate = String(row.flight_date ?? '').trim();
-  const depIata = String(dep?.iata ?? '').trim().toUpperCase();
-  const arrIata = String(arr?.iata ?? '').trim().toUpperCase();
+  const airlineRec = airline as Record<string, unknown> | undefined;
+  let airlineCode = String(airline?.iata ?? airlineRec?.iata_code ?? '').trim().toUpperCase();
+
+  const flightRec = flight as Record<string, unknown> | undefined;
+  let flightNumber = String(flight?.number ?? flightRec?.number ?? '').trim().toUpperCase();
+  const flightIataFromApi = String(flight?.iata ?? flightRec?.iata ?? '').trim().toUpperCase();
+  if (!flightNumber && flightIataFromApi) {
+    const m = flightIataFromApi.match(/^([A-Z0-9]{2})(\d{1,4}[A-Z]?)$/);
+    if (m) {
+      if (!airlineCode) airlineCode = m[1];
+      flightNumber = m[2];
+    }
+  }
+
+  const schedDep = typeof dep?.scheduled === 'string' ? dep.scheduled : '';
+  const schedArr = typeof arr?.scheduled === 'string' ? arr.scheduled : '';
+  const flightDate =
+    String(row.flight_date ?? '').trim() ||
+    (schedDep.length >= 10 ? schedDep.slice(0, 10) : '') ||
+    (schedArr.length >= 10 ? schedArr.slice(0, 10) : '');
+  const depIata = airportIataFromEndpoint(dep) || String(dep?.iata ?? '').trim().toUpperCase();
+  const arrIata = airportIataFromEndpoint(arr) || String(arr?.iata ?? '').trim().toUpperCase();
 
   if (!airlineCode || !flightNumber || !flightDate || !depIata || !arrIata) return null;
 
@@ -100,8 +131,7 @@ export function mapAviationstackFlightToNormalized(row: Record<string, unknown>)
   const status = mapAsStatus(String(row.flight_status ?? ''));
   const delayMinutes = computeDelayFromDepArr(dep, arr);
 
-  const flightIataRaw = String(flight?.iata ?? '').trim().toUpperCase();
-  const flightIata = flightIataRaw || `${airlineCode}${flightNumber}`;
+  const flightIata = flightIataFromApi || `${airlineCode}${flightNumber}`;
 
   const providerFlightId = buildAviationstackProviderFlightId(flightIata, flightDate, depIata, arrIata);
 

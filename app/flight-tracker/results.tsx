@@ -1,9 +1,11 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlightTrackerSubScreenShell } from '../../src/features/flight-tracker/components/FlightTrackerSubScreenShell';
+import { FlightTrackerDateField } from '../../src/features/flight-tracker/components/FlightTrackerDateField';
+import { parseFlightTrackerDateParam } from '../../src/features/flight-tracker/flightDateLocal';
 import { useAuth } from '../../src/hooks/useAuth';
-import { flightTrackerDevLog } from '../../src/features/flight-tracker/api/flightTrackerService';
+import { flightTrackerDevLog, flightTrackerDiag } from '../../src/features/flight-tracker/api/flightTrackerService';
 import {
   saveFlightSearchHistory,
   searchFlights,
@@ -15,13 +17,18 @@ import { colors, radius, spacing } from '../../src/styles/theme';
 
 export default function FlightTrackerResultsScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ q?: string | string[] }>();
+  const params = useLocalSearchParams<{ q?: string | string[]; date?: string | string[] }>();
   const qParam = params.q;
   const query = useMemo(() => {
     if (typeof qParam === 'string') return qParam.trim();
     if (Array.isArray(qParam) && qParam[0]) return String(qParam[0]).trim();
     return '';
   }, [qParam]);
+  const dateFromParams = useMemo(() => parseFlightTrackerDateParam(params.date), [params.date]);
+  const [searchDate, setSearchDate] = useState(dateFromParams);
+  useEffect(() => {
+    setSearchDate(dateFromParams);
+  }, [dateFromParams]);
   const { session } = useAuth();
   const userId = session?.user?.id || null;
 
@@ -32,6 +39,7 @@ export default function FlightTrackerResultsScreen() {
 
   const load = useCallback(async () => {
     if (!query) {
+      flightTrackerDiag('results', 'skip load — empty query', { qParam: typeof qParam });
       setRows([]);
       setLoading(false);
       setError(null);
@@ -39,8 +47,10 @@ export default function FlightTrackerResultsScreen() {
     }
     setLoading(true);
     setError(null);
+    flightTrackerDiag('results', 'load start', { query: query.slice(0, 64), len: query.length });
     try {
-      const res = await searchFlights(query);
+      const res = await searchFlights(query, searchDate);
+      flightTrackerDiag('results', 'load success', { count: res.flights.length, source: res.source });
       setRows(res.flights);
       if (res.flights.length === 0) {
         flightTrackerDevLog('results', 'no_flights', { source: res.source });
@@ -50,16 +60,26 @@ export default function FlightTrackerResultsScreen() {
         await saveFlightSearchHistory(userId, query, inferredType as 'flight' | 'route' | 'airport', res.flights[0]?.flight_key || null).catch(() => {});
       }
     } catch (e: any) {
-      flightTrackerDevLog('results', 'search_failed', { message: e?.message ?? String(e) });
-      setError(e?.message || 'Flight Tracker search failed.');
+      const msg = e?.message ?? String(e);
+      flightTrackerDiag('results', 'load error', { message: msg });
+      flightTrackerDevLog('results', 'search_failed', { message: msg });
+      setError(msg || 'Flight Tracker search failed.');
     } finally {
       setLoading(false);
     }
-  }, [query, userId]);
+  }, [query, userId, searchDate]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    flightTrackerDiag('results', 'screen params', {
+      hasQ: !!query,
+      queryLen: query.length,
+      rawQ: typeof qParam === 'string' ? qParam.slice(0, 64) : Array.isArray(qParam) ? String(qParam[0]).slice(0, 64) : '',
+    });
+  }, [query, qParam]);
 
   const handleWatch = async (flight: NormalizedFlight) => {
     if (!userId) return;
@@ -79,18 +99,14 @@ export default function FlightTrackerResultsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={8}>
-          <Ionicons name="chevron-back" size={22} color="#fff" />
-        </Pressable>
-        <Text style={styles.headerTitle}>Search Results</Text>
-        <View style={{ width: 24 }} />
-      </View>
-
+    <FlightTrackerSubScreenShell title="Search Results">
       <View style={styles.subheader}>
         <Text style={styles.subheaderLabel}>Query</Text>
         <Text style={styles.subheaderValue}>{query || '—'}</Text>
+        <Text style={[styles.subheaderLabel, styles.subheaderSpaced]}>Flight date</Text>
+        <View style={styles.dateFieldWrap}>
+          <FlightTrackerDateField value={searchDate} onChange={setSearchDate} />
+        </View>
       </View>
 
       {loading ? (
@@ -146,24 +162,16 @@ export default function FlightTrackerResultsScreen() {
           }}
         />
       )}
-    </SafeAreaView>
+    </FlightTrackerSubScreenShell>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
-  header: {
-    backgroundColor: colors.headerRed,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerTitle: { color: '#fff', fontWeight: '800', fontSize: 16 },
   subheader: { paddingHorizontal: spacing.md, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: '#F8FAFC' },
   subheaderLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+  subheaderSpaced: { marginTop: 10 },
   subheaderValue: { color: colors.textPrimary, fontSize: 14, fontWeight: '800', marginTop: 2 },
+  dateFieldWrap: { marginTop: 4 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg },
   errorText: { color: colors.error, fontWeight: '700', textAlign: 'center' },
   retry: { marginTop: 8, borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 8 },

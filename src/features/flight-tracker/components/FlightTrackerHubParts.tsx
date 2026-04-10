@@ -8,12 +8,12 @@ import type { TrackedFlightItem } from '../../../lib/supabase/flightTracker';
 /** Flight Tracker hub — matches approved dashboard mockup */
 export const ftHub = {
   screenBg: '#F9FAFB',
-  /** Mockup: clear red outline on white tiles (brand red, not pale pink) */
-  quickTileBorder: colors.primary,
+  /** Tile outline — slightly lighter than icon red so the stroke isn’t heavy */
+  quickTileBorder: '#CC4A52',
   quickIcon: colors.primary,
   quickRadius: 10 as const,
-  /** Min height so each row lines up; interior is icon | text (mockup) */
-  quickTileMinHeight: 84,
+  /** Fixed tile size — every quick-action cell matches (width from grid, height here) */
+  quickTileHeight: 100,
   quickTileGap: 10,
   contentPaddingH: 16,
   sectionRadius: 14 as const,
@@ -55,8 +55,8 @@ function statusProgress(status: string | undefined): number {
 }
 
 /**
- * Single quick-action tile: white card, red outline. Mockup: icon upper-left, title to the
- * right of the icon, subtitle under the title.
+ * Single quick-action tile: white card, red outline. Mockup: icon + title on one row;
+ * subtitle on the next row, left-aligned with the card inset (under the icon column).
  */
 export function QuickActionTile(props: {
   title: string;
@@ -67,19 +67,21 @@ export function QuickActionTile(props: {
   return (
     <View style={styles.qaTileOuter}>
       <Pressable
-        style={({ pressed }) => [styles.qaTileInner, pressed && styles.qaTilePressed]}
+        style={({ pressed }) => [styles.qaTilePressable, pressed && styles.qaTilePressed]}
         onPress={props.onPress}
         accessibilityRole="button"
         accessibilityLabel={`${props.title}. ${props.subtitle}`}
       >
-        <View style={styles.qaInnerRow}>
-          <View style={styles.qaIconWrap}>
-            <Ionicons name={props.icon} size={19} color={ftHub.quickIcon} />
-          </View>
-          <View style={styles.qaTextCol}>
-            <Text style={styles.qaTitle} numberOfLines={2}>
-              {props.title}
-            </Text>
+        <View style={styles.qaTileInner}>
+          <View style={styles.qaTileBody}>
+            <View style={styles.qaTitleRow}>
+              <View style={styles.qaIconWrap}>
+                <Ionicons name={props.icon} size={18} color={ftHub.quickIcon} />
+              </View>
+              <Text style={styles.qaTitle} numberOfLines={2}>
+                {props.title}
+              </Text>
+            </View>
             <Text style={styles.qaSubtitle} numberOfLines={3}>
               {props.subtitle}
             </Text>
@@ -123,8 +125,10 @@ export function DashboardSection(props: { title: string; right?: React.ReactNode
 export function SectionHeaderLink(props: { label: string; onPress: () => void }) {
   return (
     <Pressable onPress={props.onPress} hitSlop={8} style={({ pressed }) => [styles.sectionLinkWrap, pressed && { opacity: 0.7 }]}>
-      <Text style={styles.sectionLink}>{props.label}</Text>
-      <Text style={styles.sectionLinkChevron}>›</Text>
+      <Text style={styles.sectionLinkInline} numberOfLines={1}>
+        {props.label}
+        <Text style={styles.sectionLinkChevron}> ›</Text>
+      </Text>
     </Pressable>
   );
 }
@@ -270,10 +274,10 @@ const styles = StyleSheet.create({
   /** Border on View — Pressable + elevation often hides strokes on Android */
   qaTileOuter: {
     width: '100%',
-    minHeight: ftHub.quickTileMinHeight,
+    height: ftHub.quickTileHeight,
     alignSelf: 'stretch',
     borderRadius: ftHub.quickRadius,
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: ftHub.quickTileBorder,
     backgroundColor: '#FFFFFF',
     overflow: 'hidden',
@@ -290,43 +294,57 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
-  qaTileInner: {
+  /** Padding on View — Pressable often ignores padding on native */
+  qaTilePressable: {
     width: '100%',
-    paddingHorizontal: 9,
-    paddingVertical: 9,
+    height: '100%',
+    flexGrow: 1,
     backgroundColor: '#FFFFFF',
   },
+  qaTileInner: {
+    width: '100%',
+    height: '100%',
+    paddingLeft: 10,
+    paddingRight: 10,
+    paddingTop: 12,
+    paddingBottom: 10,
+  },
   qaTilePressed: { opacity: 0.96, backgroundColor: '#FFF1F2' },
-  qaInnerRow: {
+  qaTileBody: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'flex-start',
+  },
+  qaTitleRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     width: '100%',
   },
   qaIconWrap: {
-    marginRight: 8,
-    paddingTop: 1,
+    marginRight: 6,
+    marginTop: 0,
     alignItems: 'center',
     justifyContent: 'flex-start',
-    width: 22,
-  },
-  qaTextCol: {
-    flex: 1,
-    flexShrink: 1,
-    minWidth: 0,
+    width: 20,
+    minHeight: 20,
   },
   qaTitle: {
+    flex: 1,
+    minWidth: 0,
     color: '#1A1A1A',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: -0.2,
-    lineHeight: 15,
+    lineHeight: 14,
+    paddingTop: 0,
   },
   qaSubtitle: {
     color: '#6B7280',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '500',
-    marginTop: 3,
-    lineHeight: 13,
+    marginTop: 4,
+    lineHeight: 12,
+    width: '100%',
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -382,9 +400,9 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 12,
   },
-  sectionLinkWrap: { flexDirection: 'row', alignItems: 'center' },
-  sectionLink: { color: colors.accentBlue, fontWeight: '700', fontSize: 11 },
-  sectionLinkChevron: { color: colors.accentBlue, fontWeight: '700', fontSize: 12, marginLeft: 2 },
+  sectionLinkWrap: { flexDirection: 'row', alignItems: 'center', flexShrink: 0, flexWrap: 'nowrap' },
+  sectionLinkInline: { color: colors.accentBlue, fontWeight: '700', fontSize: 11 },
+  sectionLinkChevron: { color: colors.accentBlue, fontWeight: '700', fontSize: 12 },
   activeCard: {
     backgroundColor: '#FAFAFA',
     borderRadius: 10,

@@ -40,7 +40,19 @@ serve(async (req: Request) => {
 
     const provider = getFlightTrackerProvider();
     const cacheKey = flightSearchCacheKey(provider.id, kind, q, date);
-    console.log('[flight-search]', 'request', { provider: provider.id, kind, date, qLen: q.length });
+    console.log('[flight-search]', 'request', {
+      provider: provider.id,
+      kind,
+      parsedKind: parsed.kind,
+      date,
+      qLen: q.length,
+      ident: parsed.kind === 'flight' ? (parsed as { ident: string }).ident : undefined,
+      route:
+        parsed.kind === 'route'
+          ? `${(parsed as { origin: string }).origin}-${(parsed as { destination: string }).destination}`
+          : undefined,
+      airport: parsed.kind === 'airport' ? (parsed as { airportCode: string }).airportCode : undefined,
+    });
     const cached = await readFlightStatusCache(supabase, cacheKey);
     if (cached?.payload_json && Array.isArray((cached.payload_json as Json).results)) {
       const n = ((cached.payload_json as Json).results as unknown[]).length;
@@ -62,6 +74,7 @@ serve(async (req: Request) => {
       const dest =
         kind === 'route' && body.destination ? String(body.destination) : (parsed as { destination: string }).destination;
       const flights = await provider.searchByRoute(origin, dest, date);
+      console.log('[flight-search]', 'route_branch', { origin, dest, flightsLen: flights.length });
       results = flights.map(searchFlightPayloadToItem);
     } else if (kind === 'airport' || parsed.kind === 'airport') {
       const code =
@@ -69,6 +82,7 @@ serve(async (req: Request) => {
           ? String(body.airportCode).toUpperCase()
           : (parsed as { airportCode: string }).airportCode;
       const flights = await provider.getAirportBoard(code, 'departures', date);
+      console.log('[flight-search]', 'airport_branch', { code, flightsLen: flights.length });
       results = flights.map(searchFlightPayloadToItem);
     } else {
       const ident = (parsed as { ident: string }).ident;
@@ -76,6 +90,7 @@ serve(async (req: Request) => {
         ident,
         serviceDate: date,
       });
+      console.log('[flight-search]', 'flight_ident_branch', { ident, found: !!flight });
       if (flight) results = [searchFlightPayloadToItem(flight)];
     }
 
@@ -121,7 +136,8 @@ serve(async (req: Request) => {
     return jsonResponse({ ok: true, data: { results, source: 'provider' } });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[flight-search]', msg);
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.error('[flight-search]', 'handler_error', msg, stack ? stack.slice(0, 500) : '');
     return jsonResponse({ ok: false, error: msg }, 500);
   }
 });

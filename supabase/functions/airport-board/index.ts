@@ -34,7 +34,13 @@ serve(async (req: Request) => {
     const provider = getFlightTrackerProvider();
     const ckey = airportBoardCacheKey(provider.id, airportCode, boardType, dateKey);
     console.log('[airport-board]', 'request', { provider: provider.id, airportCode, boardType, dateKey });
-    const cached = await readAirportBoardCache(supabase, ckey);
+    let cached: Json | null = null;
+    try {
+      cached = await readAirportBoardCache(supabase, ckey);
+    } catch (cacheErr: unknown) {
+      const m = cacheErr instanceof Error ? cacheErr.message : String(cacheErr);
+      console.warn('[airport-board]', 'cache_read_failed', m);
+    }
     if (cached && Array.isArray((cached as Json).rows)) {
       const n = ((cached as Json).rows as unknown[]).length;
       console.log('[airport-board]', 'cache_hit', { provider: provider.id, rows: n });
@@ -51,6 +57,7 @@ serve(async (req: Request) => {
     console.log('[airport-board]', 'cache_miss', { provider: provider.id });
 
     const flights = await provider.getAirportBoard(airportCode, boardType, serviceDate);
+    console.log('[airport-board]', 'provider_flights_raw', { provider: provider.id, flightsLen: flights.length });
     const rows = flights.map((f) => toBoardRow(f, boardType));
 
     if (rows.length === 0) {
@@ -61,15 +68,20 @@ serve(async (req: Request) => {
 
     if (rows.length > 0) {
       const exp = new Date(Date.now() + 3 * 60 * 1000).toISOString();
-      await writeAirportBoardCache(supabase, {
-        cacheKey: ckey,
-        airportCode,
-        boardType,
-        dateKey,
-        payload: { rows, airportCode, boardType } as unknown as Json,
-        expiresAt: exp,
-        provider: provider.id,
-      });
+      try {
+        await writeAirportBoardCache(supabase, {
+          cacheKey: ckey,
+          airportCode,
+          boardType,
+          dateKey,
+          payload: { rows, airportCode, boardType } as unknown as Json,
+          expiresAt: exp,
+          provider: provider.id,
+        });
+      } catch (writeErr: unknown) {
+        const m = writeErr instanceof Error ? writeErr.message : String(writeErr);
+        console.warn('[airport-board]', 'cache_write_failed', m);
+      }
     }
 
     return jsonResponse({
@@ -78,7 +90,8 @@ serve(async (req: Request) => {
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[airport-board]', msg);
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.error('[airport-board]', 'handler_error', msg, stack ? stack.slice(0, 500) : '');
     return jsonResponse({ ok: false, error: msg }, 500);
   }
 });

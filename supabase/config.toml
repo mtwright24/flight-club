@@ -2,3 +2,19 @@
 # Gateway JWT verification can return "Invalid JWT" for some token/signing setups.
 [functions.import-schedule-ocr]
 verify_jwt = false
+
+# Flight Tracker — invoked from the app with anon key; gateway JWT verify often yields non-2xx before the handler runs.
+[functions.airport-board]
+verify_jwt = false
+[functions.flight-search]
+verify_jwt = false
+[functions.flight-status]
+verify_jwt = false
+[functions.inbound-aircraft]
+verify_jwt = false
+[functions.sync-schedule-flight]
+verify_jwt = false
+
+# Validates JWT inside handler via getUser(); gateway verify can block signed-in clients on RN.
+[functions.save-tracked-flight]
+verify_jwt = false

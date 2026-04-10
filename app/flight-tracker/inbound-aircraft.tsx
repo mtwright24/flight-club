@@ -1,7 +1,7 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlightTrackerSubScreenShell } from '../../src/features/flight-tracker/components/FlightTrackerSubScreenShell';
 import { useAuth } from '../../src/hooks/useAuth';
 import { buildFlightKey } from '../../src/lib/supabase/flightTracker';
 import {
@@ -122,15 +122,7 @@ export default function InboundAircraftScreen() {
   }, [load]);
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={8}>
-          <Ionicons name="chevron-back" size={22} color="#fff" />
-        </Pressable>
-        <Text style={styles.headerTitle}>Inbound Aircraft</Text>
-        <View style={{ width: 24 }} />
-      </View>
-
+    <FlightTrackerSubScreenShell title="Inbound Aircraft">
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.primary} />
@@ -181,21 +173,11 @@ export default function InboundAircraftScreen() {
           )}
         />
       )}
-    </SafeAreaView>
+    </FlightTrackerSubScreenShell>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
-  header: {
-    backgroundColor: colors.headerRed,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerTitle: { color: '#fff', fontWeight: '800', fontSize: 16 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: spacing.lg },
   title: { color: colors.textPrimary, fontWeight: '800', fontSize: 16 },
   body: { color: colors.textSecondary, fontWeight: '600', fontSize: 13, marginTop: 6, textAlign: 'center' },

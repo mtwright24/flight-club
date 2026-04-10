@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, NativeModules, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { FlightTrackerSubScreenShell } from '../../../src/features/flight-tracker/components/FlightTrackerSubScreenShell';
 import { useAuth } from '../../../src/hooks/useAuth';
 import {
   buildTrackedFlightShareText,
@@ -74,8 +75,10 @@ export default function FlightTrackerDetailScreen() {
   }, [flight?.route_data]);
 
   const mapModule = useMemo(() => {
+    const nm = NativeModules as Record<string, unknown>;
+    const hasNative = Boolean(nm.RNMapsAirModule ?? nm.RNMapsManager ?? nm.AIRMap);
+    if (!hasNative) return null;
     try {
-      // Lazy load so screens still work when maps native module is absent in the current dev client.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       return require('react-native-maps');
     } catch {
@@ -121,17 +124,14 @@ export default function FlightTrackerDetailScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={8}>
-          <Ionicons name="chevron-back" size={22} color="#fff" />
+    <FlightTrackerSubScreenShell
+      title="Live Flight Detail"
+      headerRight={
+        <Pressable onPress={() => void load(true)} hitSlop={8} accessibilityLabel="Refresh flight">
+          <Ionicons name="refresh" size={22} color={colors.cardBg} />
         </Pressable>
-        <Text style={styles.headerTitle}>Live Flight Detail</Text>
-        <Pressable onPress={() => void load(true)} hitSlop={8}>
-          <Ionicons name="refresh" size={20} color="#fff" />
-        </Pressable>
-      </View>
-
+      }
+    >
       {loading ? (
         <View style={styles.center}><ActivityIndicator color={colors.primary} /></View>
       ) : error ? (
@@ -230,21 +230,11 @@ export default function FlightTrackerDetailScreen() {
           </View>
         </ScrollView>
       )}
-    </SafeAreaView>
+    </FlightTrackerSubScreenShell>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
-  header: {
-    backgroundColor: colors.headerRed,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  headerTitle: { color: '#fff', fontWeight: '800', fontSize: 16 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg },
   content: { padding: spacing.md, paddingBottom: spacing.xl },
   summaryCard: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, backgroundColor: '#fff', padding: 12 },

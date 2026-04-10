@@ -3,10 +3,12 @@ import {
   airportBoardFetch,
   flightSearch,
   flightStatus,
+  flightTrackerDiag,
   listTrackedFlightsFromDb,
   saveTrackedFlight as saveTrackedFlightEdge,
   syncScheduleFlight,
 } from '../../features/flight-tracker/api/flightTrackerService';
+import { localCalendarDate } from '../../features/flight-tracker/flightDateLocal';
 import {
   buildFlightKey as buildFlightKeyImpl,
   parseFlightKey as parseFlightKeyImpl,
@@ -127,10 +129,6 @@ function warnMissingTableOnce(table: string) {
   );
 }
 
-function toIsoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
 export function parseFlightSearchInput(rawInput: string): FlightSearchQuery {
   const raw = String(rawInput || '').trim().toUpperCase();
   const normalized = raw.replace(/\s+/g, ' ');
@@ -150,9 +148,12 @@ export function parseFlightSearchInput(rawInput: string): FlightSearchQuery {
 }
 
 export async function searchFlights(rawQuery: string, serviceDate?: string): Promise<FlightSearchResult> {
-  const date = serviceDate || toIsoDate(new Date());
+  const date = serviceDate || localCalendarDate();
+  const q = String(rawQuery || '').trim();
+  flightTrackerDiag('searchFlights', 'start', { queryPreview: q.slice(0, 48), date, len: q.length });
   const res = await flightSearch(rawQuery, date);
   const flights = res.results.map((r) => searchItemToLegacyFlight(r));
+  flightTrackerDiag('searchFlights', 'mapped', { flightsCount: flights.length, source: res.source });
   return { flights, source: res.source as FlightSearchResult['source'] };
 }
 
@@ -175,10 +176,14 @@ export async function getLiveFlightDetail(flightKey: string, _forceRefresh = fal
 export async function getAirportBoard(
   airportCode: string,
   boardType: 'arrivals' | 'departures',
+  serviceDate?: string,
 ): Promise<AirportBoardResult> {
-  const date = toIsoDate(new Date());
-  const res = await airportBoardFetch({ airportCode: airportCode.trim().toUpperCase(), boardType, date });
+  const date = serviceDate && /^\d{4}-\d{2}-\d{2}$/.test(serviceDate) ? serviceDate : localCalendarDate();
+  const code = airportCode.trim().toUpperCase();
+  flightTrackerDiag('getAirportBoard', 'start', { airportCode: code, boardType, date });
+  const res = await airportBoardFetch({ airportCode: code, boardType, date });
   const flights = res.rows.map((r) => boardRowToLegacyFlight(r, date));
+  flightTrackerDiag('getAirportBoard', 'mapped', { flightsCount: flights.length, source: res.source });
   return {
     airport_code: res.airportCode,
     board_type: res.boardType as 'arrivals' | 'departures',

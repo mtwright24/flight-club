@@ -5,7 +5,7 @@ import { flightawareProvider } from './flightawareProvider.ts';
 
 /**
  * Resolves the active flight data provider (FlightAware vs Aviationstack).
- * Controlled by env `FLIGHT_TRACKER_PROVIDER` (`flightaware` | `aviationstack`).
+ * See `getFlightTrackerProviderEnv` for defaults when secrets are set.
  */
 export function getFlightTrackerProvider(): FlightTrackerProvider {
   return getFlightTrackerProviderEnv() === 'aviationstack' ? aviationstackProvider : flightawareProvider;

@@ -18,6 +18,8 @@ import {
   inboundAircraftFetch,
 } from '../../src/features/flight-tracker/api/flightTrackerService';
 import type { NormalizedBoardRow } from '../../src/features/flight-tracker/types';
+import { FlightTrackerDateField } from '../../src/features/flight-tracker/components/FlightTrackerDateField';
+import { localCalendarDate } from '../../src/features/flight-tracker/flightDateLocal';
 import {
   ActiveTrackedCard,
   BoardPreviewRow,
@@ -41,23 +43,6 @@ import { colors, radius, spacing } from '../../src/styles/theme';
 
 const PREVIEW_AIRPORT = 'JFK';
 
-const QUICK_ACTIONS: {
-  title: string;
-  subtitle: string;
-  icon: React.ComponentProps<typeof Ionicons>['name'];
-  href: string;
-}[] = [
-  { title: 'Track a Flight', subtitle: 'Live status, gate, timing', icon: 'airplane-outline', href: '/flight-tracker/search' },
-  { title: 'My Saved Flights', subtitle: 'Quick access to saved flights', icon: 'bookmark-outline', href: '/flight-tracker/saved' },
-  { title: 'Delay Watcher', subtitle: 'Monitor late turns, swaps, changes', icon: 'timer-outline', href: '/flight-tracker/delay-watcher' },
-  { title: 'Airport Board', subtitle: 'Arrivals & departures at a glance', icon: 'business-outline', href: '/flight-tracker/airport-board' },
-  { title: 'Inbound Aircraft', subtitle: 'Track your inbound aircraft', icon: 'arrow-down-circle-outline', href: '/flight-tracker/inbound-aircraft' },
-  { title: 'Schedule Sync', subtitle: 'Import & sync your pairings', icon: 'sync-outline', href: '/flight-tracker/schedule-sync' },
-];
-
-/** Fixed 3×2 layout — avoids flexWrap + min-width bugs that collapse to one column */
-const QUICK_ACTION_ROWS = [QUICK_ACTIONS.slice(0, 2), QUICK_ACTIONS.slice(2, 4), QUICK_ACTIONS.slice(4, 6)];
-
 export default function FlightTrackerHubScreen() {
   const router = useRouter();
   const unread = useNotificationsBadge();
@@ -65,6 +50,7 @@ export default function FlightTrackerHubScreen() {
   const { session } = useAuth();
   const userId = session?.user?.id || null;
   const [query, setQuery] = useState('');
+  const [hubSearchDate, setHubSearchDate] = useState(() => localCalendarDate());
   const [recent, setRecent] = useState<{ query: string; query_type: string; flight_key: string | null }[]>([]);
   const [watched, setWatched] = useState<TrackedFlightItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -110,6 +96,7 @@ export default function FlightTrackerHubScreen() {
       const res = await airportBoardFetch({
         airportCode: PREVIEW_AIRPORT,
         boardType: 'departures',
+        date: hubSearchDate,
       });
       setBoardRows(res.rows.slice(0, 6));
       if (res.rows.length === 0) {
@@ -123,7 +110,7 @@ export default function FlightTrackerHubScreen() {
     } finally {
       setBoardLoading(false);
     }
-  }, []);
+  }, [hubSearchDate]);
 
   useEffect(() => {
     void loadBoardPreview();
@@ -161,6 +148,57 @@ export default function FlightTrackerHubScreen() {
     };
   }, [userId, watched]);
 
+  const quickActionRows = useMemo(() => {
+    const actions: {
+      title: string;
+      subtitle: string;
+      icon: React.ComponentProps<typeof Ionicons>['name'];
+      onPress: () => void;
+    }[] = [
+      {
+        title: 'Track a Flight',
+        subtitle: 'Live status, gate, timing',
+        icon: 'airplane-outline',
+        onPress: () => router.push({ pathname: '/flight-tracker/search', params: { date: hubSearchDate } }),
+      },
+      {
+        title: 'My Saved Flights',
+        subtitle: 'Quick access to saved flights',
+        icon: 'bookmark-outline',
+        onPress: () => router.push('/flight-tracker/saved'),
+      },
+      {
+        title: 'Delay Watcher',
+        subtitle: 'Monitor late turns, swaps, changes',
+        icon: 'timer-outline',
+        onPress: () => router.push('/flight-tracker/delay-watcher'),
+      },
+      {
+        title: 'Airport Board',
+        subtitle: 'Arrivals & departures at a glance',
+        icon: 'business-outline',
+        onPress: () =>
+          router.push({
+            pathname: '/flight-tracker/airport-board',
+            params: { code: PREVIEW_AIRPORT, date: hubSearchDate },
+          }),
+      },
+      {
+        title: 'Inbound Aircraft',
+        subtitle: 'Track your inbound aircraft',
+        icon: 'arrow-down-circle-outline',
+        onPress: () => router.push('/flight-tracker/inbound-aircraft'),
+      },
+      {
+        title: 'Schedule Sync',
+        subtitle: 'Import & sync your pairings',
+        icon: 'sync-outline',
+        onPress: () => router.push('/flight-tracker/schedule-sync'),
+      },
+    ];
+    return [actions.slice(0, 2), actions.slice(2, 4), actions.slice(4, 6)];
+  }, [router, hubSearchDate]);
+
   const delayRisks = useMemo(() => {
     const rows: { id: string; title: string; subtitle: string; flightKey?: string }[] = [];
     for (const w of watched) {
@@ -193,14 +231,14 @@ export default function FlightTrackerHubScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['left', 'right', 'bottom']}>
       <SafeAreaView edges={['top']} style={styles.headerSafe}>
-        <View style={styles.header}>
+        <View style={styles.headerWrap}>
           <View style={styles.titleWrap}>
             <Text
               style={styles.headerTitle}
               numberOfLines={1}
               ellipsizeMode="tail"
               {...(Platform.OS === 'ios'
-                ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.85 }
+                ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.82 }
                 : {})}
             >
               Flight Tracker
@@ -209,42 +247,42 @@ export default function FlightTrackerHubScreen() {
           <View style={styles.rightRow}>
             <Pressable
               onPress={() => router.push('/search')}
-              style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
               accessibilityLabel="Search"
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons name="search-outline" size={24} color={colors.cardBg} />
+              <Ionicons name="search-outline" size={26} color={colors.cardBg} />
             </Pressable>
             <Pressable
               onPress={() => router.push('/notifications')}
-              style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
               accessibilityLabel="Notifications"
             >
-              <Ionicons name="notifications-outline" size={24} color={colors.cardBg} />
+              <Ionicons name="notifications-outline" size={26} color={colors.cardBg} />
               {unread > 0 ? (
-                <View style={styles.badge}>
+                <View style={[styles.badge, { top: -4, right: -4 }]}>
                   <Text style={styles.badgeText}>{unread > 99 ? '99+' : unread}</Text>
                 </View>
               ) : null}
             </Pressable>
             <Pressable
               onPress={() => router.push('/messages-inbox')}
-              style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
               accessibilityLabel="Messages"
             >
-              <Ionicons name="chatbubble-ellipses-outline" size={24} color={colors.cardBg} />
+              <Ionicons name="chatbubble-ellipses-outline" size={26} color={colors.cardBg} />
               {dmUnread > 0 ? (
-                <View style={[styles.badge, { right: -2 }]}>
+                <View style={[styles.badge, { top: -4, right: -4 }]}>
                   <Text style={styles.badgeText}>{dmUnread > 99 ? '99+' : dmUnread}</Text>
                 </View>
               ) : null}
             </Pressable>
             <Pressable
               onPress={() => router.push('/menu')}
-              style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
               accessibilityLabel="Menu"
             >
-              <Ionicons name="menu" size={24} color={colors.cardBg} />
+              <Ionicons name="menu" size={26} color={colors.cardBg} />
             </Pressable>
           </View>
         </View>
@@ -255,7 +293,12 @@ export default function FlightTrackerHubScreen() {
 
         <Pressable
           style={styles.searchWrap}
-          onPress={() => router.push({ pathname: '/flight-tracker/results', params: { q: query.trim() } })}
+          onPress={() =>
+            router.push({
+              pathname: '/flight-tracker/results',
+              params: { q: query.trim(), date: hubSearchDate },
+            })
+          }
         >
           <Ionicons name="search" size={18} color={colors.textSecondary} />
           <TextInput
@@ -264,23 +307,26 @@ export default function FlightTrackerHubScreen() {
             placeholderTextColor={colors.textSecondary}
             value={query}
             onChangeText={setQuery}
-            onSubmitEditing={() => router.push({ pathname: '/flight-tracker/results', params: { q: query.trim() } })}
+            onSubmitEditing={() =>
+              router.push({
+                pathname: '/flight-tracker/results',
+                params: { q: query.trim(), date: hubSearchDate },
+              })
+            }
             autoCapitalize="characters"
             returnKeyType="search"
           />
         </Pressable>
+        <View style={styles.hubDateRow}>
+          <FlightTrackerDateField compact value={hubSearchDate} onChange={setHubSearchDate} />
+        </View>
 
         <View style={styles.quickGrid}>
-          {QUICK_ACTION_ROWS.map((row, rowIdx) => (
+          {quickActionRows.map((row, rowIdx) => (
             <View key={`row-${rowIdx}`} style={styles.quickRow}>
               {row.map((a, i) => (
-                <View key={a.href} style={[styles.quickTileCell, i > 0 && styles.quickTileCellGap]}>
-                  <QuickActionTile
-                    title={a.title}
-                    subtitle={a.subtitle}
-                    icon={a.icon}
-                    onPress={() => router.push(a.href as never)}
-                  />
+                <View key={a.title} style={[styles.quickTileCell, i > 0 && styles.quickTileCellGap]}>
+                  <QuickActionTile title={a.title} subtitle={a.subtitle} icon={a.icon} onPress={a.onPress} />
                 </View>
               ))}
             </View>
@@ -359,7 +405,12 @@ export default function FlightTrackerHubScreen() {
 
         <DashboardSection
           title="Recent searches"
-          right={<SectionHeaderLink label="View all" onPress={() => router.push('/flight-tracker/search')} />}
+          right={
+            <SectionHeaderLink
+              label="View all"
+              onPress={() => router.push({ pathname: '/flight-tracker/search', params: { date: hubSearchDate } })}
+            />
+          }
         >
           {recent.length === 0 ? (
             <Text style={styles.emptyMuted}>Search for a flight number, route, or airport.</Text>
@@ -370,7 +421,12 @@ export default function FlightTrackerHubScreen() {
                   key={`${r.query}-${idx}`}
                   label={r.query}
                   meta={r.query_type}
-                  onPress={() => router.push({ pathname: '/flight-tracker/results', params: { q: r.query } })}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/flight-tracker/results',
+                      params: { q: r.query, date: hubSearchDate },
+                    })
+                  }
                 />
               ))}
             </View>
@@ -378,8 +434,18 @@ export default function FlightTrackerHubScreen() {
         </DashboardSection>
 
         <DashboardSection
-          title={`${PREVIEW_AIRPORT} departures`}
-          right={<SectionHeaderLink label="View board" onPress={() => router.push('/flight-tracker/airport-board')} />}
+          title="Airport board"
+          right={
+            <SectionHeaderLink
+              label="Open board"
+              onPress={() =>
+                router.push({
+                  pathname: '/flight-tracker/airport-board',
+                  params: { code: PREVIEW_AIRPORT, date: hubSearchDate },
+                })
+              }
+            />
+          }
         >
           {boardLoading ? (
             <View style={styles.sectionLoading}>
@@ -394,7 +460,7 @@ export default function FlightTrackerHubScreen() {
             </View>
           ) : boardRows.length === 0 ? (
             <Text style={styles.emptyMuted}>
-              No departures returned for {PREVIEW_AIRPORT} today — the provider may have no matching flights for this date, or try again shortly.
+              No sample departures for {PREVIEW_AIRPORT} right now — open the full airport board to pick any airport and arrivals or departures.
             </Text>
           ) : (
             <>
@@ -423,38 +489,47 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ftHub.screenBg },
   headerSafe: { backgroundColor: colors.headerRed },
   scroll: { flex: 1 },
-  header: {
-    backgroundColor: colors.headerRed,
+  headerWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 56,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
+    justifyContent: 'space-between',
+    backgroundColor: colors.headerRed,
+    height: 60,
+    paddingVertical: 0,
+    paddingHorizontal: spacing.lg,
     borderBottomLeftRadius: radius.md,
     borderBottomRightRadius: radius.md,
   },
-  titleWrap: { flex: 1, minWidth: 0, paddingHorizontal: spacing.xs },
+  titleWrap: { flex: 1, minWidth: 0 },
   headerTitle: {
     color: colors.cardBg,
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '800',
-    letterSpacing: -0.2,
+    textAlignVertical: 'center',
   },
-  rightRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  rightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    marginLeft: spacing.md,
+  },
   iconButton: {
-    minWidth: 40,
-    minHeight: 40,
-    padding: 6,
-    borderRadius: 20,
+    minWidth: 44,
+    minHeight: 44,
+    padding: 8,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'transparent',
+    marginHorizontal: 2,
     position: 'relative',
   },
-  iconPressed: { backgroundColor: 'rgba(255,255,255,0.1)' },
+  iconButtonPressed: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 22,
+  },
   badge: {
     position: 'absolute',
-    top: 2,
-    right: 2,
     backgroundColor: colors.dangerRed,
     minWidth: 16,
     height: 16,
@@ -464,7 +539,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
     zIndex: 2,
   },
-  badgeText: { color: colors.cardBg, fontSize: 10, fontWeight: '800' },
+  badgeText: {
+    color: colors.cardBg,
+    fontSize: 10,
+    fontWeight: '800',
+    textAlign: 'center',
+    lineHeight: 16,
+  },
   content: { paddingHorizontal: spacing.md, paddingTop: 8, paddingBottom: spacing.xl * 2 },
   heroSubtitle: {
     color: '#6B7280',
@@ -498,6 +579,9 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 14,
     fontWeight: '500',
+  },
+  hubDateRow: {
+    marginBottom: 14,
   },
   quickGrid: {
     width: '100%',
