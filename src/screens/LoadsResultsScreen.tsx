@@ -174,17 +174,15 @@ export default function LoadsResultsScreen() {
           data={sorted}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
-            <Pressable onPress={() => router.push(`/load-details/${item.id}`)}>
-              <FlightCard
-                flightNumber={item.flight_number}
-                route={`${item.from_airport} → ${item.to_airport}`}
-                departTime={formatTime(item.depart_at)}
-                arriveTime={formatTime(item.arrive_at)}
-                duration={calculateDuration(item.depart_at, item.arrive_at)}
-                reportCount={0} // Will be populated from reports in full impl
-                onPress={() => router.push(`/load-details/${item.id}`)}
-              />
-            </Pressable>
+            <FlightCard
+              flightNumber={item.flight_number}
+              route={`${item.from_airport} → ${item.to_airport}`}
+              departTime={formatTime(item.depart_at)}
+              arriveTime={formatTime(item.arrive_at)}
+              duration={calculateDuration(item.depart_at, item.arrive_at)}
+              reportCount={0} // Will be populated from reports in full impl
+              onPress={() => router.push(`/load-details/${item.id}`)}
+            />
           )}
           contentContainerStyle={{ paddingVertical: 8 }}
           showsVerticalScrollIndicator={false}

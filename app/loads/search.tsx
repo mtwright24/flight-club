@@ -1,6 +1,7 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator, FlatList, Platform, RefreshControl } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +12,15 @@ import { AirportPickerModal } from '../../src/components/loads/AirportAirlinePic
 import { FlightCard } from '../../src/components/loads/FlightCard';
 import { useAuth } from '../../src/hooks/useAuth';
 import { colors } from '../../src/styles/theme';
+
+/** Display label for a staff-loads row (avoid duplicated airline + flight number). */
+function formatLoadsFlightLabel(item: NonRevLoadFlight): string {
+  const code = (item.airline_code || '').toUpperCase();
+  const num = (item.flight_number || '').trim();
+  if (!num) return code;
+  if (num.toUpperCase().startsWith(code)) return num;
+  return `${code} ${num}`.trim();
+}
 
 // Wrapper component to match previous usage
 function AirportAirlinePickers({ from, setFrom, to, setTo, date, setDate, onSearch, loading }: any) {
@@ -133,6 +143,7 @@ function AirportAirlinePickers({ from, setFrom, to, setTo, date, setDate, onSear
 }
 
 export default function LoadsSearchScreen() {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
   const userId = session?.user?.id ?? '';
@@ -208,21 +219,22 @@ export default function LoadsSearchScreen() {
       const durMs = Math.max(0, arrive.getTime() - depart.getTime());
       const durH = Math.floor(durMs / 3600000);
       const durM = Math.floor((durMs % 3600000) / 60000);
+      const label = formatLoadsFlightLabel(item);
       return (
         <View style={{ paddingHorizontal: 16 }}>
           <FlightCard
-            flightNumber={[item.airline_code, item.flight_number].filter(Boolean).join(' ')}
+            flightNumber={label}
             route={`${item.from_airport} → ${item.to_airport}`}
             departTime={depart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             arriveTime={arrive.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             duration={`${durH}h ${durM}m`}
             reportCount={0}
-            onPress={() => {}}
+            onPress={() => router.push(`/load-details/${encodeURIComponent(item.id)}`)}
           />
         </View>
       );
     },
-    []
+    [router]
   );
 
   return (

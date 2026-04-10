@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../../styles/theme';
 
 interface FlightCardProps {
@@ -22,7 +22,12 @@ export const FlightCard: React.FC<FlightCardProps & { onPress: () => void }> = (
   onPress,
 }) => {
   return (
-    <View style={styles.card}>
+    <Pressable
+      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Flight ${flightNumber}, ${route}`}
+    >
       <View style={styles.content}>
         <View style={styles.left}>
           <View style={styles.flightBadge}>
@@ -46,7 +51,7 @@ export const FlightCard: React.FC<FlightCardProps & { onPress: () => void }> = (
           </View>
         </View>
       </View>
-    </View>
+    </Pressable>
   );
 };
 
@@ -108,6 +113,10 @@ const styles = StyleSheet.create({
     padding: 12,
     borderWidth: 1,
     borderColor: '#eee',
+  },
+  cardPressed: {
+    opacity: 0.92,
+    backgroundColor: '#fafafa',
   },
   content: {
     flexDirection: 'row',
