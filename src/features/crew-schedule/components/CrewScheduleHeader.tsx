@@ -32,7 +32,7 @@ export default function CrewScheduleHeader({ title = 'Crew Schedule' }: Props) {
       <View style={styles.headerWrap}>
         <Pressable
           onPress={goBack}
-          style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
+          style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
           accessibilityLabel="Back"
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
@@ -44,7 +44,7 @@ export default function CrewScheduleHeader({ title = 'Crew Schedule' }: Props) {
             numberOfLines={1}
             ellipsizeMode="tail"
             {...(Platform.OS === 'ios'
-              ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.85 }
+              ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.82 }
               : {})}
           >
             {title}
@@ -53,18 +53,18 @@ export default function CrewScheduleHeader({ title = 'Crew Schedule' }: Props) {
         <View style={styles.rightRow}>
           <Pressable
             onPress={() => router.push('/search')}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
+            style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
             accessibilityLabel="Search"
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Ionicons name="search-outline" size={24} color={colors.cardBg} />
+            <Ionicons name="search-outline" size={26} color={colors.cardBg} />
           </Pressable>
           <Pressable
             onPress={() => router.push('/notifications')}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
+            style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
             accessibilityLabel="Notifications"
           >
-            <Ionicons name="notifications-outline" size={24} color={colors.cardBg} />
+            <Ionicons name="notifications-outline" size={26} color={colors.cardBg} />
             {unread > 0 ? (
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{unread > 99 ? '99+' : unread}</Text>
@@ -73,22 +73,22 @@ export default function CrewScheduleHeader({ title = 'Crew Schedule' }: Props) {
           </Pressable>
           <Pressable
             onPress={() => router.push('/messages-inbox')}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
+            style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
             accessibilityLabel="Messages"
           >
-            <Ionicons name="chatbubble-ellipses-outline" size={24} color={colors.cardBg} />
+            <Ionicons name="chatbubble-ellipses-outline" size={26} color={colors.cardBg} />
             {dmUnread > 0 ? (
-              <View style={[styles.badge, { right: -2 }]}>
+              <View style={styles.badge}>
                 <Text style={styles.badgeText}>{dmUnread > 99 ? '99+' : dmUnread}</Text>
               </View>
             ) : null}
           </Pressable>
           <Pressable
             onPress={() => router.push('/menu')}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed]}
+            style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
             accessibilityLabel="Menu"
           >
-            <Ionicons name="menu" size={24} color={colors.cardBg} />
+            <Ionicons name="menu" size={26} color={colors.cardBg} />
           </Pressable>
         </View>
       </View>
@@ -102,38 +102,50 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.headerRed,
-    minHeight: 56,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
+    height: 60,
+    paddingTop: 6,
+    paddingBottom: 2,
+    paddingHorizontal: spacing.lg,
     borderBottomLeftRadius: radius.md,
     borderBottomRightRadius: radius.md,
   },
-  titleWrap: { flex: 1, minWidth: 0, paddingHorizontal: spacing.xs },
+  titleWrap: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 8,
+    justifyContent: 'center',
+  },
   title: {
     color: colors.cardBg,
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '800',
-    letterSpacing: -0.2,
+    textAlignVertical: 'center',
   },
   rightRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 16,
+    marginLeft: spacing.md,
   },
   iconButton: {
-    minWidth: 40,
-    minHeight: 40,
-    padding: 6,
-    borderRadius: 20,
+    minWidth: 44,
+    minHeight: 44,
+    padding: 8,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'transparent',
+    marginHorizontal: 2,
     position: 'relative',
   },
-  iconPressed: { backgroundColor: 'rgba(255,255,255,0.1)' },
+  iconButtonPressed: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 22,
+  },
   badge: {
     position: 'absolute',
-    top: 2,
-    right: 2,
+    top: -4,
+    right: -4,
     backgroundColor: colors.dangerRed,
     minWidth: 16,
     height: 16,
@@ -143,5 +155,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
     zIndex: 2,
   },
-  badgeText: { color: colors.cardBg, fontSize: 10, fontWeight: '800' },
+  badgeText: {
+    color: colors.cardBg,
+    fontSize: 10,
+    fontWeight: '800',
+    textAlign: 'center',
+    lineHeight: 16,
+  },
 });

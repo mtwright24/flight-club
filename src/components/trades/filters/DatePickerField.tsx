@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../../../styles/theme';
 
 interface DatePickerFieldProps {
   label?: string;
@@ -116,7 +117,7 @@ const getStyles = () =>
       color: '#000000',
     },
     actionPrimary: {
-      color: '#DC3545',
+      color: colors.headerRed,
       fontWeight: '700',
     },
   });

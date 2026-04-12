@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { FlatList, Modal, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../../../styles/theme';
 
 const DEFAULT_AIRPORTS = [
   { code: 'JFK', name: 'New York (JFK)' },
@@ -131,7 +132,7 @@ export const AirportPickerField: React.FC<AirportPickerFieldProps> = ({
                   <Text style={styles.code}>{item.code}</Text>
                   <Text style={styles.name}>{item.name}</Text>
                   {multiSelect && multiValues.includes(item.code) && (
-                    <Ionicons name="checkmark-circle" size={16} color="#DC3545" />
+                    <Ionicons name="checkmark-circle" size={16} color="colors.headerRed" />
                   )}
                 </TouchableOpacity>
               )}
@@ -243,7 +244,7 @@ const getStyles = () =>
     code: {
       fontSize: 13,
       fontWeight: '700',
-      color: '#DC3545',
+      color: colors.headerRed,
       width: 50,
     },
     name: {
@@ -261,7 +262,7 @@ const getStyles = () =>
       color: '#000000',
     },
     actionPrimary: {
-      color: '#DC3545',
+      color: colors.headerRed,
       fontWeight: '700',
     },
   });

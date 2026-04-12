@@ -1,7 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useScheduleTripsForMonth } from '../hooks/useScheduleTripsForMonth';
 import {
   loadLastMonthCursor,
@@ -45,13 +45,13 @@ export default function ScheduleTabScreen() {
     });
   }, []);
 
-  const { trips, refresh } = useScheduleTripsForMonth(year, month);
+  const { trips, monthMetrics, refreshing, refresh, refreshSilent } = useScheduleTripsForMonth(year, month);
 
   useFocusEffect(
     useCallback(() => {
       void loadScheduleViewMode().then(setViewMode);
-      void refresh();
-    }, [refresh])
+      void refreshSilent();
+    }, [refreshSilent])
   );
 
   const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
@@ -119,6 +119,7 @@ export default function ScheduleTabScreen() {
       style={styles.scroll}
       contentContainerStyle={styles.scrollContent}
       keyboardShouldPersistTaps="handled"
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={T.accent} />}
     >
       <View style={styles.monthRow}>
         <Pressable onPress={goPrevMonth} style={styles.iconHit} accessibilityLabel="Previous month">
@@ -132,7 +133,12 @@ export default function ScheduleTabScreen() {
 
       <View style={styles.readingArea}>
         {viewMode === 'classic' && (
-          <ClassicListView trips={trips} onPressTrip={openTrip} onOpenManage={openManage} />
+          <ClassicListView
+            trips={trips}
+            monthMetrics={monthMetrics}
+            onPressTrip={openTrip}
+            onOpenManage={openManage}
+          />
         )}
         {viewMode === 'calendar' && (
           <CalendarMonthView
@@ -140,6 +146,7 @@ export default function ScheduleTabScreen() {
             month={month}
             trips={trips}
             onPressDay={onPressCalendarDay}
+            onOpenTrip={openTrip}
           />
         )}
         {viewMode === 'smart' && (

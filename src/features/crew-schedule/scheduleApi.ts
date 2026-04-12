@@ -1,4 +1,5 @@
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../lib/supabaseClient';
+import type { CrewScheduleTrip, ScheduleCrewMember, ScheduleMonthMetrics } from './types';
 
 export type ScheduleEntryRow = {
   id: string;
@@ -12,6 +13,10 @@ export type ScheduleEntryRow = {
   city: string | null;
   d_end_time: string | null;
   layover: string | null;
+  /** FLICA DEPL — departure local (HHMM). */
+  depart_local: string | null;
+  /** FLICA ARRL — arrival local (HHMM). */
+  arrive_local: string | null;
   wx: string | null;
   status_code: string | null;
   notes: string | null;
@@ -55,6 +60,8 @@ export type ScheduleImportCandidateRow = {
   city: string | null;
   d_end_time: string | null;
   layover: string | null;
+  depart_local: string | null;
+  arrive_local: string | null;
   wx: string | null;
   status_code: string | null;
   notes: string | null;
@@ -75,7 +82,7 @@ export async function fetchScheduleEntriesForMonth(
   const { data, error } = await supabase
     .from('schedule_entries')
     .select(
-      'id,user_id,trip_group_id,month_key,date,day_of_week,pairing_code,report_time,city,d_end_time,layover,wx,status_code,notes,source_type,source_batch_id,is_user_confirmed'
+      'id,user_id,trip_group_id,month_key,date,day_of_week,pairing_code,report_time,city,d_end_time,layover,depart_local,arrive_local,wx,status_code,notes,source_type,source_batch_id,is_user_confirmed'
     )
     .eq('month_key', monthKey)
     .order('date', { ascending: true });
@@ -88,7 +95,7 @@ export async function fetchTripGroupEntries(tripGroupId: string): Promise<Schedu
   const { data, error } = await supabase
     .from('schedule_entries')
     .select(
-      'id,user_id,trip_group_id,month_key,date,day_of_week,pairing_code,report_time,city,d_end_time,layover,wx,status_code,notes,source_type,source_batch_id,is_user_confirmed'
+      'id,user_id,trip_group_id,month_key,date,day_of_week,pairing_code,report_time,city,d_end_time,layover,depart_local,arrive_local,wx,status_code,notes,source_type,source_batch_id,is_user_confirmed'
     )
     .eq('trip_group_id', tripGroupId)
     .order('date', { ascending: true });
@@ -102,6 +109,8 @@ export async function createImportBatch(params: {
   sourceType: 'screenshot' | 'photo' | 'pdf';
   sourceFilePath: string;
   sourceFileUrl?: string | null;
+  /** JetBlue FLICA guided import session (optional). */
+  scheduleImportId?: string | null;
 }): Promise<string> {
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   if (userErr || !userData.user) throw new Error('Not signed in');
@@ -115,6 +124,7 @@ export async function createImportBatch(params: {
       source_file_path: params.sourceFilePath,
       source_file_url: params.sourceFileUrl ?? null,
       parse_status: 'uploaded',
+      ...(params.scheduleImportId ? { schedule_import_id: params.scheduleImportId } : {}),
     })
     .select('id')
     .single();
@@ -198,7 +208,8 @@ export async function fetchCandidatesForBatch(batchId: string): Promise<Schedule
     .from('schedule_import_candidates')
     .select('*')
     .eq('batch_id', batchId)
-    .order('date', { ascending: true, nullsFirst: false });
+    .order('date', { ascending: true, nullsFirst: false })
+    .order('id', { ascending: true });
 
   if (error) throw error;
   return (data ?? []) as ScheduleImportCandidateRow[];
@@ -216,14 +227,52 @@ export async function updateImportCandidate(
       | 'city'
       | 'd_end_time'
       | 'layover'
+      | 'depart_local'
+      | 'arrive_local'
       | 'wx'
       | 'status_code'
       | 'notes'
+      | 'confidence_score'
+      | 'warning_flag'
+      | 'ignored_flag'
     >
   >
 ): Promise<void> {
   const { error } = await supabase.from('schedule_import_candidates').update(patch).eq('id', id);
   if (error) throw error;
+}
+
+/** User-facing buckets for import review (no UNK/BLANK jargon in UI). */
+export type UserReviewCategory = 'looks_good' | 'needs_review' | 'skipped';
+
+function bucketForCandidate(c: ScheduleImportCandidateRow): 'junk' | 'unknown' | 'ready' | 'review' {
+  const st = (c.status_code ?? '').toUpperCase();
+  if (c.ignored_flag || st === 'BLANK') return 'junk';
+  if (st === 'UNK') return 'unknown';
+  if (!c.warning_flag && (c.confidence_score ?? 0) >= 0.65) return 'ready';
+  return 'review';
+}
+
+/**
+ * Maps parser state to review UI: Looks Good (high confidence), Needs Review, Skipped (noise/blank).
+ */
+export function reviewCategoryForCandidate(c: ScheduleImportCandidateRow): UserReviewCategory {
+  const st = (c.status_code ?? '').toUpperCase();
+  if (c.ignored_flag || st === 'BLANK') return 'skipped';
+  if (st === 'UNK') return 'needs_review';
+  if (c.warning_flag) return 'needs_review';
+  const conf = c.confidence_score ?? 0;
+  if (conf < 0.85) return 'needs_review';
+  const b = bucketForCandidate(c);
+  if (b === 'junk') return 'skipped';
+  if (b === 'unknown' || b === 'review') return 'needs_review';
+  if (b === 'ready' && conf >= 0.85) return 'looks_good';
+  return 'needs_review';
+}
+
+/** Rows eligible for “Save confirmed” — same apply rules, but only Looks Good category. */
+export function candidatesToConfirmedApplyRows(candidates: ScheduleImportCandidateRow[]): ApplyRow[] {
+  return candidatesToApplyRows(candidates.filter((c) => reviewCategoryForCandidate(c) === 'looks_good'));
 }
 
 export type ApplyRow = {
@@ -234,6 +283,8 @@ export type ApplyRow = {
   city?: string | null;
   d_end_time?: string | null;
   layover?: string | null;
+  depart_local?: string | null;
+  arrive_local?: string | null;
   wx?: string | null;
   status_code?: string | null;
   notes?: string | null;
@@ -263,6 +314,11 @@ export async function applyMergeMonth(monthKey: string, batchId: string, rows: A
 export function candidatesToApplyRows(candidates: ScheduleImportCandidateRow[]): ApplyRow[] {
   return candidates
     .filter((c) => c.date && !c.ignored_flag)
+    .filter((c) => {
+      const st = (c.status_code ?? '').toUpperCase();
+      if (st === 'UNK' || st === 'BLANK') return false;
+      return true;
+    })
     .map((c) => ({
       date: c.date as string,
       day_of_week: c.day_of_week,
@@ -271,6 +327,8 @@ export function candidatesToApplyRows(candidates: ScheduleImportCandidateRow[]):
       city: c.city,
       d_end_time: c.d_end_time,
       layover: c.layover,
+      depart_local: c.depart_local,
+      arrive_local: c.arrive_local,
       wx: c.wx,
       status_code: c.status_code,
       notes: c.notes,
@@ -324,4 +382,91 @@ export async function getSignedImportFileUrl(path: string, expiresSec = 3600): P
   const { data, error } = await supabase.storage.from('schedule-imports').createSignedUrl(path, expiresSec);
   if (error) return null;
   return data?.signedUrl ?? null;
+}
+
+export type ScheduleTripMetadataRow = {
+  trip_group_id: string;
+  user_id: string;
+  pairing_block_hours: number | null;
+  pairing_credit_hours: number | null;
+  pairing_tafb_hours: number | null;
+  layover_total_minutes: number | null;
+  crew: ScheduleCrewMember[] | null;
+  updated_at: string | null;
+};
+
+export async function fetchScheduleMonthMetrics(year: number, month: number): Promise<ScheduleMonthMetrics | null> {
+  const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+  const { data, error } = await supabase
+    .from('schedule_month_metrics')
+    .select('*')
+    .eq('month_key', monthKey)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    monthKey: data.month_key,
+    monthlyTafbHours: data.monthly_tafb_hours != null ? Number(data.monthly_tafb_hours) : null,
+    blockHours: data.block_hours != null ? Number(data.block_hours) : null,
+    creditHours: data.credit_hours != null ? Number(data.credit_hours) : null,
+    ytdCreditHours: data.ytd_credit_hours != null ? Number(data.ytd_credit_hours) : null,
+    daysOff: data.days_off != null ? Number(data.days_off) : null,
+    layoverTotalMinutes: data.layover_total_minutes != null ? Number(data.layover_total_minutes) : null,
+    updatedAt: data.updated_at ?? null,
+  };
+}
+
+export async function fetchTripMetadataForTripGroups(tripGroupIds: string[]): Promise<ScheduleTripMetadataRow[]> {
+  if (!tripGroupIds.length) return [];
+  const { data, error } = await supabase
+    .from('schedule_trip_metadata')
+    .select(
+      'trip_group_id,user_id,pairing_block_hours,pairing_credit_hours,pairing_tafb_hours,layover_total_minutes,crew,updated_at'
+    )
+    .in('trip_group_id', tripGroupIds);
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    ...row,
+    crew: Array.isArray(row.crew) ? (row.crew as ScheduleCrewMember[]) : [],
+  })) as ScheduleTripMetadataRow[];
+}
+
+export async function fetchTripMetadataForGroup(tripGroupId: string): Promise<ScheduleTripMetadataRow | null> {
+  const { data, error } = await supabase
+    .from('schedule_trip_metadata')
+    .select(
+      'trip_group_id,user_id,pairing_block_hours,pairing_credit_hours,pairing_tafb_hours,layover_total_minutes,crew,updated_at'
+    )
+    .eq('trip_group_id', tripGroupId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    ...data,
+    crew: Array.isArray(data.crew) ? (data.crew as ScheduleCrewMember[]) : [],
+  } as ScheduleTripMetadataRow;
+}
+
+export function mergeTripMetadataIntoTrips(
+  trips: CrewScheduleTrip[],
+  metaRows: ScheduleTripMetadataRow[]
+): CrewScheduleTrip[] {
+  const byId = new Map(metaRows.map((m) => [m.trip_group_id, m]));
+  return trips.map((t) => {
+    const m = byId.get(t.id);
+    if (!m) return t;
+    return mergeTripWithMetadataRow(t, m);
+  });
+}
+
+export function mergeTripWithMetadataRow(trip: CrewScheduleTrip, m: ScheduleTripMetadataRow | null): CrewScheduleTrip {
+  if (!m) return trip;
+  return {
+    ...trip,
+    pairingBlockHours: m.pairing_block_hours ?? trip.pairingBlockHours,
+    pairingCreditHours: m.pairing_credit_hours ?? trip.pairingCreditHours,
+    pairingTafbHours: m.pairing_tafb_hours ?? trip.pairingTafbHours,
+    tripLayoverTotalMinutes: m.layover_total_minutes ?? trip.tripLayoverTotalMinutes,
+    crewMembers: m.crew?.length ? m.crew : trip.crewMembers,
+  };
 }

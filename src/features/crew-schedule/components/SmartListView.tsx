@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
+import React, { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip } from '../types';
 import { scheduleTheme as T } from '../scheduleTheme';
+import TripPreviewModal from './TripPreviewModal';
 
 type Props = {
   trips: CrewScheduleTrip[];
@@ -23,13 +24,27 @@ function formatRange(trip: CrewScheduleTrip): string {
 }
 
 export default function SmartListView({ trips, onPressTrip, onPost, onChat, onManageSchedule, onAlert }: Props) {
+  const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
+  const closePreview = useCallback(() => setPreviewTrip(null), []);
+  const openFullFromPreview = useCallback(() => {
+    const t = previewTrip;
+    setPreviewTrip(null);
+    if (t) onPressTrip(t);
+  }, [previewTrip, onPressTrip]);
+
   return (
     <View style={styles.wrap}>
       {trips.map((trip) => {
         const leg = trip.legs[0];
         return (
           <View key={trip.id} style={styles.card}>
-            <Pressable onPress={() => onPressTrip(trip)} style={({ pressed }) => [pressed && { opacity: 0.92 }]}>
+            <Pressable
+              onPress={() => onPressTrip(trip)}
+              onLongPress={() => setPreviewTrip(trip)}
+              delayLongPress={420}
+              style={({ pressed }) => [pressed && { opacity: 0.92 }]}
+              accessibilityHint="Long press for a quick preview of trip details."
+            >
               <Text style={styles.range}>{formatRange(trip)}</Text>
               <Text style={styles.route}>{trip.routeSummary}</Text>
               {trip.layoverCity ? (
@@ -41,7 +56,12 @@ export default function SmartListView({ trips, onPressTrip, onPost, onChat, onMa
                 </Text>
               ) : null}
               <Text style={styles.meta}>
-                {trip.creditHours != null ? `${trip.creditHours} CR` : '— CR'} • {trip.pairingCode}
+                {trip.pairingCreditHours != null
+                  ? `${trip.pairingCreditHours.toFixed(2)} CR`
+                  : trip.creditHours != null
+                    ? `${trip.creditHours} CR`
+                    : '— CR'}{' '}
+                • {trip.pairingCode}
               </Text>
             </Pressable>
             <View style={styles.actions}>
@@ -53,6 +73,12 @@ export default function SmartListView({ trips, onPressTrip, onPost, onChat, onMa
           </View>
         );
       })}
+      <TripPreviewModal
+        visible={previewTrip != null}
+        trip={previewTrip}
+        onClose={closePreview}
+        onOpenFullDetail={openFullFromPreview}
+      />
     </View>
   );
 }

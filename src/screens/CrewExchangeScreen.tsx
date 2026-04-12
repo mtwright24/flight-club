@@ -24,6 +24,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 // Components
 import AppHeader from '../components/AppHeader';
+import { colors } from '../styles/theme';
 import { TradeRow } from '../components/trades/TradeRow';
 import { AdvancedFilterSheet } from '../components/trades/AdvancedFilterSheet';
 import { SortControl } from '../components/trades/SortControl';
@@ -192,7 +193,7 @@ export const CrewExchangeScreen: React.FC<CrewExchangeScreenProps> = ({ embedded
       <View style={styles.container}>
         {!embedded ? <AppHeader title="Crew Exchange" showLogo={false} /> : null}
         <View style={styles.centerContent}>
-          <ActivityIndicator size="large" color="#DC3545" />
+          <ActivityIndicator size="large" color={colors.headerRed} />
           <Text style={styles.loadingText}>Loading tradeboards...</Text>
         </View>
       </View>
@@ -297,7 +298,7 @@ export const CrewExchangeScreen: React.FC<CrewExchangeScreenProps> = ({ embedded
       <View style={styles.listContainer}>
         {postsLoading ? (
           <View style={styles.centerContent}>
-            <ActivityIndicator size="large" color="#DC3545" />
+            <ActivityIndicator size="large" color={colors.headerRed} />
             <Text style={styles.loadingText}>Loading trades...</Text>
           </View>
         ) : displayPosts.length === 0 ? (
@@ -416,7 +417,7 @@ function getStyles() {
       paddingHorizontal: 16,
       paddingVertical: 8,
       borderRadius: 6,
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
       marginTop: 12,
     },
 
@@ -501,7 +502,7 @@ function getStyles() {
       paddingHorizontal: 12,
       paddingVertical: 6,
       borderRadius: 6,
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
       alignItems: 'center',
     },
 
@@ -533,8 +534,8 @@ function getStyles() {
     },
 
     quickChipActive: {
-      backgroundColor: '#DC3545',
-      borderColor: '#DC3545',
+      backgroundColor: colors.headerRed,
+      borderColor: colors.headerRed,
     },
 
     quickChipText: {

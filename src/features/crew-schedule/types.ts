@@ -16,6 +16,8 @@ export interface CrewScheduleLeg {
   id: string;
   /** schedule_entries.id for Flight Tracker sync */
   scheduleEntryId?: string;
+  /** Calendar day this leg operates (matches schedule_entries.date). */
+  dutyDate?: string;
   departureAirport: string;
   arrivalAirport: string;
   reportLocal?: string;
@@ -33,6 +35,12 @@ export interface CrewScheduleHotelStub {
   shuttleNotes?: string;
   foodNearbyNote?: string;
   safetyNote?: string;
+}
+
+/** Crew line from pairing detail (FLICA-style position + name). */
+export interface ScheduleCrewMember {
+  position: string;
+  name: string;
 }
 
 export interface CrewScheduleTrip {
@@ -54,9 +62,32 @@ export interface CrewScheduleTrip {
   layoverCity?: string;
   legs: CrewScheduleLeg[];
   hotel?: CrewScheduleHotelStub;
+  /** From schedule_trip_metadata — pairing totals (hours) for detail + trade post prefill (whole trip or per-leg later). */
+  pairingBlockHours?: number;
+  pairingCreditHours?: number;
+  pairingTafbHours?: number;
+  /** Sum of layover time for this pairing (minutes), when sourced from schedule. */
+  tripLayoverTotalMinutes?: number;
+  /**
+   * Per calendar day: `schedule_entries.layover` from import (FLICA-style e.g. city + HHMM after each leg).
+   */
+  layoverByDate?: Record<string, string>;
+  crewMembers?: ScheduleCrewMember[];
   postedToTradeboardId?: string | null;
   tripChatThreadId?: string | null;
   alertIds?: string[];
+}
+
+/** Month header strip — values from import/DB only; not computed from trip rows in the app. */
+export interface ScheduleMonthMetrics {
+  monthKey: string;
+  monthlyTafbHours: number | null;
+  blockHours: number | null;
+  creditHours: number | null;
+  ytdCreditHours: number | null;
+  daysOff: number | null;
+  layoverTotalMinutes: number | null;
+  updatedAt?: string | null;
 }
 
 export interface CrewScheduleMonthState {

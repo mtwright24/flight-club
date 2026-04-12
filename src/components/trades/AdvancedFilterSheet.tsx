@@ -21,6 +21,7 @@ import { DatePickerField } from './filters/DatePickerField';
 import { TimePickerField } from './filters/TimePickerField';
 import { AirportPickerField } from './filters/AirportPickerField';
 import { StepperField } from './filters/StepperField';
+import { colors } from '../../styles/theme';
 
 interface AdvancedFilterSheetProps {
   filters: TradeFilter;
@@ -194,7 +195,7 @@ export const AdvancedFilterSheet: React.FC<AdvancedFilterSheetProps> = ({
               <Ionicons
                 name="bookmark"
                 size={18}
-                color={hasActiveFilters ? '#DC3545' : '#BBBBBB'}
+                color={hasActiveFilters ? colors.headerRed : '#BBBBBB'}
               />
             </TouchableOpacity>
           </View>
@@ -529,8 +530,8 @@ function getStyles() {
       backgroundColor: '#F0F0F0',
     },
     chipActive: {
-      backgroundColor: '#DC3545',
-      borderColor: '#DC3545',
+      backgroundColor: colors.headerRed,
+      borderColor: colors.headerRed,
     },
     chipText: {
       fontSize: 12,
@@ -587,7 +588,7 @@ function getStyles() {
       flex: 1,
       paddingVertical: 12,
       borderRadius: 10,
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
       alignItems: 'center',
     },
     applyButtonText: {
@@ -646,7 +647,7 @@ function getStyles() {
       flex: 1,
       paddingVertical: 10,
       borderRadius: 6,
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
     },
     alertButtonText: {
       textAlign: 'center',

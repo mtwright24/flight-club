@@ -11,13 +11,14 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   createImportBatch,
   invokeImportScheduleOcr,
 } from '../../src/features/crew-schedule/scheduleApi';
 import { scheduleTheme as T } from '../../src/features/crew-schedule/scheduleTheme';
-import { loadLastMonthCursor } from '../../src/features/crew-schedule/scheduleViewStorage';
+import { loadLastMonthCursor, saveLastMonthCursor } from '../../src/features/crew-schedule/scheduleViewStorage';
 import CrewScheduleHeader from '../../src/features/crew-schedule/components/CrewScheduleHeader';
 import { supabase } from '../../src/lib/supabaseClient';
 
@@ -27,6 +28,21 @@ const L = '[schedule-import]';
 
 /** Physical devices + tunnel often do not stream JS logs to the Metro terminal; we mirror to the screen in dev. */
 let appendImportScheduleScreenLog: ((line: string) => void) | null = null;
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
 
 function formatDbgArgs(args: unknown[]): string {
   return args
@@ -163,6 +179,34 @@ export default function ImportScheduleScreen() {
   }, []);
 
   const monthKey = `${year}-${pad2(month)}`;
+
+  const goPrevMonth = useCallback(() => {
+    if (month === 1) {
+      const ny = year - 1;
+      const nm = 12;
+      setYear(ny);
+      setMonth(nm);
+      void saveLastMonthCursor(ny, nm);
+    } else {
+      const nm = month - 1;
+      setMonth(nm);
+      void saveLastMonthCursor(year, nm);
+    }
+  }, [year, month]);
+
+  const goNextMonth = useCallback(() => {
+    if (month === 12) {
+      const ny = year + 1;
+      const nm = 1;
+      setYear(ny);
+      setMonth(nm);
+      void saveLastMonthCursor(ny, nm);
+    } else {
+      const nm = month + 1;
+      setMonth(nm);
+      void saveLastMonthCursor(year, nm);
+    }
+  }, [year, month]);
 
   const uploadAndProcess = useCallback(
     async (
@@ -329,17 +373,40 @@ export default function ImportScheduleScreen() {
     <View style={styles.shell}>
       <CrewScheduleHeader title="Import schedule" />
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
+        <View style={styles.monthRow}>
+          <Pressable onPress={goPrevMonth} style={styles.monthArrow} accessibilityLabel="Previous month">
+            <Ionicons name="chevron-back" size={22} color={T.accent} />
+          </Pressable>
+          <Text style={styles.monthLabel}>
+            {MONTH_NAMES[month - 1]} {year}
+          </Text>
+          <Pressable onPress={goNextMonth} style={styles.monthArrow} accessibilityLabel="Next month">
+            <Ionicons name="chevron-forward" size={22} color={T.accent} />
+          </Pressable>
+        </View>
         <Text style={styles.meta}>
-          Month: {monthKey} (from your last schedule view — change month on the Schedule tab first if needed)
+          Import bucket <Text style={styles.metaStrong}>{monthKey}</Text> — rows save under this month. OCR also detects the month from your image when possible.
         </Text>
         <Text style={styles.lead}>Upload a roster screenshot, photo, or PDF. Text is extracted server-side; you review before anything is saved.</Text>
 
-        <Text style={styles.h2}>Source</Text>
+        <Text style={styles.h2}>JetBlue FLICA (recommended)</Text>
+        <Pressable
+          style={styles.promo}
+          onPress={() => router.push('/crew-schedule/import-jetblue-source')}
+        >
+          <Text style={styles.promoTitle}>Flight Attendant · template import</Text>
+          <Text style={styles.promoSub}>
+            Monthly detailed list screenshots · detection, OCR, confidence, 1–4 images, review before save — not generic
+            OCR-only.
+          </Text>
+        </Pressable>
+
+        <Text style={styles.h2}>Other sources</Text>
         <View style={styles.options}>
           {(
             [
-              { id: 'photo' as const, label: 'Screenshot / Photo', sub: 'Library or camera' },
-              { id: 'pdf' as const, label: 'PDF', sub: 'Crew schedule PDF' },
+              { id: 'photo' as const, label: 'Screenshot / Photo', sub: 'Generic OCR + line review' },
+              { id: 'pdf' as const, label: 'PDF', sub: 'Text extract + review' },
             ] as const
           ).map((opt) => {
             const active = selected === opt.id;
@@ -354,6 +421,33 @@ export default function ImportScheduleScreen() {
               </Pressable>
             );
           })}
+        </View>
+
+        <View style={styles.options}>
+          <Pressable
+            style={styles.opt}
+            onPress={() =>
+              Alert.alert(
+                'Calendar sync',
+                'Connecting an external calendar is on the roadmap. Use JetBlue FLICA import or generic screenshot for now.'
+              )
+            }
+          >
+            <Text style={styles.optText}>Calendar</Text>
+            <Text style={styles.optSub}>Coming soon</Text>
+          </Pressable>
+          <Pressable
+            style={styles.opt}
+            onPress={() =>
+              Alert.alert(
+                'Manual entry',
+                'Full manual day-by-day entry is coming soon. Use Edit before save after a partial import, or Manage → Edit Day.'
+              )
+            }
+          >
+            <Text style={styles.optText}>Manual</Text>
+            <Text style={styles.optSub}>Coming soon</Text>
+          </Pressable>
         </View>
 
         {busy ? (
@@ -395,9 +489,30 @@ export default function ImportScheduleScreen() {
 const styles = StyleSheet.create({
   shell: { flex: 1, backgroundColor: T.bg },
   content: { padding: 16 },
+  monthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    marginBottom: 8,
+  },
+  monthArrow: { padding: 8 },
+  monthLabel: { fontSize: 17, fontWeight: '800', color: T.text, minWidth: 200, textAlign: 'center' },
   meta: { fontSize: 12, color: T.textSecondary, marginBottom: 10, lineHeight: 17 },
-  lead: { fontSize: 15, color: T.text, lineHeight: 22, marginBottom: 20 },
+  metaStrong: { fontWeight: '700', color: T.text },
+  lead: { fontSize: 15, color: T.text, lineHeight: 22, marginBottom: 16 },
+  promo: {
+    marginBottom: 20,
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: T.accent,
+    backgroundColor: '#FFF5F5',
+  },
+  promoTitle: { fontSize: 15, fontWeight: '800', color: T.text },
+  promoSub: { fontSize: 12, color: T.textSecondary, marginTop: 6, lineHeight: 17 },
   h2: { fontSize: 13, fontWeight: '800', color: T.textSecondary, marginBottom: 10, textTransform: 'uppercase' },
+  comingSoon: { fontSize: 12, color: T.textSecondary, marginTop: 12, fontStyle: 'italic' },
   options: { gap: 10 },
   opt: {
     padding: 14,

@@ -21,6 +21,91 @@ function formatTimeDisplay(t: string | null | undefined): string | undefined {
   return s;
 }
 
+/** e.g. notes "flt:B6 841" or "B6 841" → display for leg + tracker */
+function parseFlightFromNotes(notes: string | null | undefined): string | undefined {
+  if (!notes) return undefined;
+  const m = notes.match(/\bflt:\s*([^\s]+)/i) ?? notes.match(/\b(B6\s*\d+)\b/i);
+  if (!m) return undefined;
+  return m[1].replace(/\s+/g, ' ').trim();
+}
+
+/** Parse DEP→ARR, JFK-DUB, JFK → DUB */
+function parseRouteFromCity(city: string | null | undefined): { dep: string; arr: string } | null {
+  if (!city) return null;
+  const s = String(city).trim();
+  const arrow = s.split(/\s*→\s*|->|\u2192/i);
+  if (arrow.length >= 2) {
+    const dep = arrow[0]?.trim().toUpperCase();
+    const arr = arrow[1]?.trim().toUpperCase();
+    if (dep && arr && /^[A-Z]{3,4}$/.test(dep) && /^[A-Z]{3,4}$/.test(arr)) return { dep, arr };
+  }
+  const dash = s.match(/^([A-Z]{3,4})\s*[-–]\s*([A-Z]{3,4})$/i);
+  if (dash) return { dep: dash[1].toUpperCase(), arr: dash[2].toUpperCase() };
+  return null;
+}
+
+function calendarSpanDays(startIso: string, endIso: string): number {
+  const a = new Date(`${startIso}T12:00:00`);
+  const b = new Date(`${endIso}T12:00:00`);
+  return Math.round((b.getTime() - a.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+}
+
+function firstNonContPairing(days: ScheduleEntryRow[]): string {
+  for (const d of days) {
+    const p = String(d.pairing_code ?? '').trim();
+    if (!p) continue;
+    if (p.toUpperCase() === 'CONT') continue;
+    return p;
+  }
+  return days[0]?.pairing_code ?? '—';
+}
+
+function buildRouteSummary(legs: CrewScheduleLeg[], fallback: string): string {
+  if (!legs.length) return fallback;
+  const parts: string[] = [];
+  for (const leg of legs) {
+    if (!parts.length) {
+      parts.push(leg.departureAirport, leg.arrivalAirport);
+    } else if (parts[parts.length - 1] === leg.departureAirport) {
+      parts.push(leg.arrivalAirport);
+    } else {
+      parts.push(leg.departureAirport, leg.arrivalAirport);
+    }
+  }
+  return parts.filter(Boolean).join(' → ');
+}
+
+function legFromRow(day: ScheduleEntryRow): CrewScheduleLeg | null {
+  const st = statusFromCode(day.status_code);
+  /** Layover / dash days (FLICA CONT) never become flight legs — prevents extra “phantom” legs. */
+  if (st === 'continuation') return null;
+
+  const pairing = String(day.pairing_code ?? '').toUpperCase();
+  if (pairing === 'PTV' || st === 'off' || st === 'pto') return null;
+
+  const route = parseRouteFromCity(day.city);
+  if (!route) {
+    return null;
+  }
+
+  const flightNumber = parseFlightFromNotes(day.notes);
+  const isDh = st === 'deadhead';
+
+  return {
+    id: `${day.id}-leg`,
+    scheduleEntryId: day.id,
+    dutyDate: day.date,
+    departureAirport: route.dep,
+    arrivalAirport: route.arr,
+    reportLocal: formatTimeDisplay(day.report_time),
+    departLocal: formatTimeDisplay(day.depart_local),
+    arriveLocal: formatTimeDisplay(day.arrive_local),
+    releaseLocal: formatTimeDisplay(day.d_end_time),
+    isDeadhead: isDh,
+    flightNumber,
+  };
+}
+
 /** Map one trip_group's rows to a single CrewScheduleTrip. */
 export function entriesToSingleTrip(rows: ScheduleEntryRow[]): CrewScheduleTrip | undefined {
   if (!rows.length) return undefined;
@@ -54,29 +139,28 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
   const y = Number(first.month_key.slice(0, 4));
   const m = Number(first.month_key.slice(5, 7));
 
-  const status = statusFromCode(first.status_code);
-  const pairingCode = first.pairing_code ?? '—';
-
-  const origin = first.city?.includes('→') ? first.city.split('→')[0]?.trim() : first.city ?? undefined;
-  const destination = first.city?.includes('→')
-    ? first.city.split('→')[1]?.trim()
-    : days.find((d) => d.city?.includes('→'))?.city?.split('→')[1]?.trim();
-
-  const routeSummary =
-    first.city?.includes('→') ? `${origin ?? ''} → ${destination ?? ''}`.trim() : first.city ?? pairingCode;
+  const pairingCode = firstNonContPairing(days);
+  const tripStatus = statusFromCode(first.status_code);
 
   const legs: CrewScheduleLeg[] = [];
-  if (status === 'flying' || status === 'deadhead' || status === 'continuation') {
-    legs.push({
-      id: `${first.id}-leg`,
-      scheduleEntryId: first.id,
-      departureAirport: origin ?? '—',
-      arrivalAirport: destination ?? '—',
-      reportLocal: formatTimeDisplay(first.report_time),
-      releaseLocal: formatTimeDisplay(first.d_end_time),
-      isDeadhead: status === 'deadhead',
-      flightNumber: pairingCode !== '—' && pairingCode !== 'DH' ? pairingCode : undefined,
-    });
+  for (const d of days) {
+    const leg = legFromRow(d);
+    if (leg) legs.push(leg);
+  }
+
+  const firstLeg = legs[0];
+  const lastLeg = legs[legs.length - 1];
+  const origin = firstLeg?.departureAirport;
+  const destination = lastLeg?.arrivalAirport;
+
+  const routeSummary = buildRouteSummary(legs, first.city?.includes('→') ? String(first.city) : pairingCode);
+
+  const layoverCity = first.layover ?? undefined;
+
+  const layoverByDate: Record<string, string> = {};
+  for (const d of days) {
+    const v = d.layover?.trim();
+    if (v) layoverByDate[d.date] = v;
   }
 
   return {
@@ -86,12 +170,13 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
     year: y,
     startDate: first.date,
     endDate: last.date,
-    dutyDays: days.length,
-    status,
+    dutyDays: calendarSpanDays(first.date, last.date),
+    status: tripStatus,
     routeSummary: routeSummary || pairingCode,
     origin,
     destination,
-    layoverCity: first.layover ?? undefined,
+    layoverCity,
     legs,
+    ...(Object.keys(layoverByDate).length > 0 ? { layoverByDate } : {}),
   };
 }

@@ -1,15 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { fetchTripGroupEntries } from '../scheduleApi';
+import {
+  fetchTripGroupEntries,
+  fetchTripMetadataForGroup,
+  mergeTripWithMetadataRow,
+  type ScheduleTripMetadataRow,
+} from '../scheduleApi';
 import { entriesToSingleTrip } from '../tripMapper';
 import { getMockTripById } from '../mockScheduleData';
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
-import type { CrewScheduleTrip, ScheduleDutyStatus } from '../types';
+import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus } from '../types';
 import CrewScheduleHeader from '../components/CrewScheduleHeader';
 
 function statusLabel(s: ScheduleDutyStatus): string {
@@ -43,34 +48,54 @@ export default function TripDetailScreen() {
   const tripId = typeof tripIdParam === 'string' ? tripIdParam : tripIdParam?.[0];
 
   const [trip, setTrip] = useState<CrewScheduleTrip | undefined>(undefined);
+  const [tripMeta, setTripMeta] = useState<ScheduleTripMetadataRow | null>(null);
   const [loadingTrip, setLoadingTrip] = useState(true);
+  const [legStatuses, setLegStatuses] = useState<Record<string, string>>({});
+  const [trackingLegId, setTrackingLegId] = useState<string | null>(null);
+
+  const display = useMemo(
+    () => (trip ? mergeTripWithMetadataRow(trip, tripMeta) : undefined),
+    [trip, tripMeta]
+  );
 
   useEffect(() => {
     let cancelled = false;
     async function run() {
       if (!tripId) {
         setTrip(undefined);
+        setTripMeta(null);
         setLoadingTrip(false);
         return;
       }
       setLoadingTrip(true);
       if (tripId.startsWith('demo-')) {
         setTrip(getMockTripById(tripId));
+        setTripMeta(null);
         setLoadingTrip(false);
         return;
       }
       if (UUID_RE.test(tripId)) {
         try {
-          const rows = await fetchTripGroupEntries(tripId);
-          if (!cancelled) setTrip(entriesToSingleTrip(rows));
+          const [rows, meta] = await Promise.all([
+            fetchTripGroupEntries(tripId),
+            fetchTripMetadataForGroup(tripId).catch(() => null),
+          ]);
+          if (!cancelled) {
+            setTrip(entriesToSingleTrip(rows));
+            setTripMeta(meta);
+          }
         } catch {
-          if (!cancelled) setTrip(undefined);
+          if (!cancelled) {
+            setTrip(undefined);
+            setTripMeta(null);
+          }
         } finally {
           if (!cancelled) setLoadingTrip(false);
         }
         return;
       }
       setTrip(getMockTripById(tripId));
+      setTripMeta(null);
       setLoadingTrip(false);
     }
     void run();
@@ -78,6 +103,52 @@ export default function TripDetailScreen() {
       cancelled = true;
     };
   }, [tripId]);
+
+  useEffect(() => {
+    setLegStatuses({});
+  }, [tripId]);
+
+  const trackLeg = async (leg: CrewScheduleLeg) => {
+    if (!trip || !leg.flightNumber) return;
+    setTrackingLegId(leg.id);
+    const raw = leg.flightNumber.trim();
+    const b6 = raw.match(/B6\s*(\d+)/i);
+    const flight_number = b6 ? b6[1] : raw.replace(/\D/g, '');
+    const airline_code = b6 ? 'B6' : raw.match(/^([A-Z]{2})/i)?.[1]?.toUpperCase() ?? null;
+    if (!flight_number) {
+      setTrackingLegId(null);
+      return;
+    }
+    const dutyDate = leg.dutyDate && /^\d{4}-\d{2}-\d{2}$/.test(leg.dutyDate) ? leg.dutyDate : trip.startDate;
+    try {
+      const enriched = await enrichCrewScheduleSegment({
+        airline_code: airline_code || null,
+        flight_number,
+        departure_date: dutyDate,
+        origin_airport: leg.departureAirport,
+        destination_airport: leg.arrivalAirport,
+        schedule_entry_id: leg.scheduleEntryId ?? null,
+      });
+      if (enriched.matched && enriched.normalized_status) {
+        const line =
+          enriched.delay_minutes != null
+            ? `${enriched.normalized_status.replace(/_/g, ' ')} · ${enriched.delay_minutes}m delay`
+            : enriched.normalized_status.replace(/_/g, ' ');
+        setLegStatuses((s) => ({ ...s, [leg.id]: line }));
+      }
+    } catch {
+      /* cache / provider errors — still allow navigation */
+    } finally {
+      setTrackingLegId(null);
+    }
+    router.push({
+      pathname: '/flight-tracker/results',
+      params: {
+        q: leg.flightNumber,
+        date: /^\d{4}-\d{2}-\d{2}/.test(dutyDate) ? dutyDate.slice(0, 10) : localCalendarDate(),
+      },
+    });
+  };
 
   const openPost = (t: CrewScheduleTrip) => {
     router.push({
@@ -90,7 +161,12 @@ export default function TripDetailScreen() {
         prefillFrom: t.origin ?? '',
         prefillTo: t.destination ?? '',
         prefillBase: t.base ?? '',
-        prefillCredit: t.creditHours != null ? String(t.creditHours) : '',
+        prefillCredit:
+          t.pairingCreditHours != null
+            ? String(t.pairingCreditHours)
+            : t.creditHours != null
+              ? String(t.creditHours)
+              : '',
       },
     });
   };
@@ -137,45 +213,8 @@ export default function TripDetailScreen() {
     );
   }
 
-  const t = trip;
+  const t = display as CrewScheduleTrip;
   const hotel = t.hotel;
-  const [legStatuses, setLegStatuses] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    let mounted = true;
-    const run = async () => {
-      const statusMap: Record<string, string> = {};
-      for (const leg of t.legs) {
-        if (!leg.flightNumber) continue;
-        const ident = leg.flightNumber.trim().toUpperCase();
-        const airline = ident.replace(/\d+.*/, '');
-        const number = ident.replace(/^[A-Z]+/, '');
-        if (!number) continue;
-        try {
-          const enriched = await enrichCrewScheduleSegment({
-            airline_code: airline || null,
-            flight_number: number,
-            departure_date: t.startDate,
-            origin_airport: leg.departureAirport,
-            destination_airport: leg.arrivalAirport,
-            schedule_entry_id: leg.scheduleEntryId ?? null,
-          });
-          if (enriched.matched && enriched.normalized_status) {
-            statusMap[leg.id] = enriched.delay_minutes != null
-              ? `${enriched.normalized_status.replace(/_/g, ' ')} · ${enriched.delay_minutes}m delay`
-              : enriched.normalized_status.replace(/_/g, ' ');
-          }
-        } catch {
-          // noop: keep schedule detail resilient when external flight lookup fails
-        }
-      }
-      if (mounted) setLegStatuses(statusMap);
-    };
-    void run();
-    return () => {
-      mounted = false;
-    };
-  }, [t.legs, t.startDate]);
 
   return (
     <View style={styles.shell}>
@@ -203,9 +242,39 @@ export default function TripDetailScreen() {
           </Text>
           <Text style={styles.metaLine}>
             {t.dutyDays} duty day{t.dutyDays === 1 ? '' : 's'}
-            {t.creditHours != null ? ` · ${t.creditHours} CR` : ''}
+            {t.pairingCreditHours != null
+              ? ` · ${t.pairingCreditHours.toFixed(2)} CR`
+              : t.creditHours != null
+                ? ` · ${t.creditHours} CR`
+                : ''}
           </Text>
         </View>
+
+        {t.pairingBlockHours != null ||
+        t.pairingCreditHours != null ||
+        t.pairingTafbHours != null ||
+        t.tripLayoverTotalMinutes != null ? (
+          <>
+            <Text style={styles.h2}>Pairing totals</Text>
+            <View style={styles.legCard}>
+              <Text style={styles.metaLine}>
+                Block {t.pairingBlockHours != null ? `${t.pairingBlockHours.toFixed(2)}h` : '—'}
+              </Text>
+              <Text style={styles.metaLine}>
+                Credit {t.pairingCreditHours != null ? `${t.pairingCreditHours.toFixed(2)}h` : '—'}
+              </Text>
+              <Text style={styles.metaLine}>
+                TAFB {t.pairingTafbHours != null ? `${t.pairingTafbHours.toFixed(2)}h` : '—'}
+              </Text>
+              <Text style={styles.metaLine}>
+                Layover total{' '}
+                {t.tripLayoverTotalMinutes != null
+                  ? `${Math.floor(t.tripLayoverTotalMinutes / 60)}:${String(t.tripLayoverTotalMinutes % 60).padStart(2, '0')}`
+                  : '—'}
+              </Text>
+            </View>
+          </>
+        ) : null}
 
         <Text style={styles.h2}>Legs</Text>
         {t.legs.length === 0 ? (
@@ -225,25 +294,26 @@ export default function TripDetailScreen() {
               </View>
               {leg.flightNumber ? <Text style={styles.fn}>Flt {leg.flightNumber}</Text> : null}
               <Text style={styles.legTimes}>
-                Rpt {leg.reportLocal ?? '—'} · Dep {leg.departLocal ?? '—'} · Arr {leg.arriveLocal ?? '—'}
-                {leg.releaseLocal ? ` · Rel ${leg.releaseLocal}` : ''}
+                Report {leg.reportLocal ?? '—'} · D-END {leg.releaseLocal ?? '—'}
+              </Text>
+              <Text style={styles.legTimes}>
+                Dep {leg.departLocal ?? '—'} · Arr {leg.arriveLocal ?? '—'}
               </Text>
               {legStatuses[leg.id] ? <Text style={styles.liveStatus}>Live: {legStatuses[leg.id]}</Text> : null}
               {leg.flightNumber ? (
                 <Pressable
                   style={styles.trackBtn}
-                  onPress={() =>
-                    router.push({
-                      pathname: '/flight-tracker/results',
-                      params: {
-                        q: leg.flightNumber,
-                        date: /^\d{4}-\d{2}-\d{2}/.test(t.startDate) ? t.startDate.slice(0, 10) : localCalendarDate(),
-                      },
-                    })
-                  }
+                  onPress={() => void trackLeg(leg)}
+                  disabled={trackingLegId === leg.id}
                 >
-                  <Ionicons name="airplane-outline" size={14} color={T.accent} />
-                  <Text style={styles.trackBtnText}>Track this leg</Text>
+                  {trackingLegId === leg.id ? (
+                    <ActivityIndicator size="small" color={T.accent} />
+                  ) : (
+                    <Ionicons name="airplane-outline" size={14} color={T.accent} />
+                  )}
+                  <Text style={styles.trackBtnText}>
+                    {trackingLegId === leg.id ? 'Loading…' : 'Track this leg'}
+                  </Text>
                 </Pressable>
               ) : null}
             </View>
@@ -265,7 +335,15 @@ export default function TripDetailScreen() {
 
         <Text style={styles.h2}>Crew</Text>
         <View style={styles.legCard}>
-          <Text style={styles.muted}>Crew roster and trip participants will appear when available.</Text>
+          {t.crewMembers && t.crewMembers.length > 0 ? (
+            t.crewMembers.map((c, idx) => (
+              <Text key={`${c.position}-${idx}`} style={styles.crewLine}>
+                {c.position} · {c.name}
+              </Text>
+            ))
+          ) : (
+            <Text style={styles.muted}>Crew positions and names appear when your schedule source includes them.</Text>
+          )}
           {t.tripChatThreadId ? (
             <Text style={styles.mono}>Thread: {t.tripChatThreadId}</Text>
           ) : (
@@ -384,6 +462,7 @@ const styles = StyleSheet.create({
   note: { fontSize: 13, color: T.text, marginTop: 8 },
   placeholder: { fontSize: 12, color: T.textSecondary, marginTop: 6, fontStyle: 'italic' },
   muted: { fontSize: 14, color: T.textSecondary, paddingHorizontal: 16 },
+  crewLine: { fontSize: 14, fontWeight: '600', color: T.text, marginBottom: 6 },
   mono: { fontSize: 12, color: T.textSecondary, marginTop: 8 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingHorizontal: 16, paddingBottom: 8 },
   actionTile: {

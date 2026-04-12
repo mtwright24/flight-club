@@ -1,7 +1,8 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip } from '../types';
 import { scheduleTheme as T } from '../scheduleTheme';
+import TripPreviewModal from './TripPreviewModal';
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
@@ -10,13 +11,23 @@ type Props = {
   month: number; // 1-12
   trips: CrewScheduleTrip[];
   onPressDay: (isoDate: string) => void;
+  /** When set, long-press a day with a trip opens a quick preview before full detail. */
+  onOpenTrip?: (trip: CrewScheduleTrip) => void;
 };
 
 function tripsForDay(ymd: string, trips: CrewScheduleTrip[]): CrewScheduleTrip[] {
   return trips.filter((t) => ymd >= t.startDate && ymd <= t.endDate);
 }
 
-export default function CalendarMonthView({ year, month, trips, onPressDay }: Props) {
+export default function CalendarMonthView({ year, month, trips, onPressDay, onOpenTrip }: Props) {
+  const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
+  const closePreview = useCallback(() => setPreviewTrip(null), []);
+  const openFullFromPreview = useCallback(() => {
+    const t = previewTrip;
+    setPreviewTrip(null);
+    if (t && onOpenTrip) onOpenTrip(t);
+  }, [previewTrip, onOpenTrip]);
+
   const { cells, rowCount } = useMemo(() => {
     const first = new Date(year, month - 1, 1);
     const startPad = first.getDay();
@@ -58,7 +69,14 @@ export default function CalendarMonthView({ year, month, trips, onPressDay }: Pr
                   : primary.pairingCode
               : '';
             return (
-              <Pressable key={iso} onPress={() => onPressDay(iso)} style={styles.cell}>
+              <Pressable
+                key={iso}
+                onPress={() => onPressDay(iso)}
+                onLongPress={onOpenTrip && primary ? () => setPreviewTrip(primary) : undefined}
+                delayLongPress={420}
+                style={styles.cell}
+                accessibilityHint={onOpenTrip && primary ? 'Long press for trip preview.' : undefined}
+              >
                 <Text style={styles.dayNum}>{cell.day}</Text>
                 {label ? (
                   <Text style={styles.mini} numberOfLines={2}>
@@ -72,6 +90,14 @@ export default function CalendarMonthView({ year, month, trips, onPressDay }: Pr
           })}
         </View>
       ))}
+      {onOpenTrip ? (
+        <TripPreviewModal
+          visible={previewTrip != null}
+          trip={previewTrip}
+          onClose={closePreview}
+          onOpenFullDetail={openFullFromPreview}
+        />
+      ) : null}
     </View>
   );
 }

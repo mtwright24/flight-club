@@ -108,7 +108,9 @@ export default function ImportEditScreen() {
     <View style={styles.shell}>
       <CrewScheduleHeader title="Edit before save" />
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
-        <Text style={styles.lead}>Adjust fields, then go back to Parse review to replace or merge.</Text>
+        <Text style={styles.lead}>
+          Adjust fields, then return to Review Imported Schedule to save or merge with your calendar.
+        </Text>
         {rows.map((row) => (
           <View key={row.id} style={styles.card}>
             <Text style={styles.raw} numberOfLines={2}>

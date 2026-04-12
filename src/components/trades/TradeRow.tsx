@@ -14,6 +14,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import type { TradePost } from '../../types/trades';
+import { colors } from '../../styles/theme';
 
 interface TradeRowProps {
   trade: TradePost;
@@ -175,7 +176,7 @@ function getTypeBadgeStyle(type: string): any {
       backgroundColor: '#1D4ED8',
     },
     drop: {
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
     },
     pickup: {
       backgroundColor: '#16A34A',
@@ -284,7 +285,7 @@ function getStyles() {
     },
 
     interestButtonActive: {
-      backgroundColor: '#FFE8E8',
+      backgroundColor: colors.headerRedTint,
     },
 
     interestButtonText: {

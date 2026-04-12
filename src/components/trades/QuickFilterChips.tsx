@@ -13,6 +13,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import type { TradeFilter } from '../../types/trades';
+import { colors } from '../../styles/theme';
 
 interface QuickFilterChip {
   id: string;
@@ -188,8 +189,8 @@ function getStyles() {
     },
 
     chipActive: {
-      backgroundColor: '#DC3545',
-      borderColor: '#DC3545',
+      backgroundColor: colors.headerRed,
+      borderColor: colors.headerRed,
     },
 
     chipText: {

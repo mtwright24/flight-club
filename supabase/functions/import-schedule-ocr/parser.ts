@@ -12,6 +12,10 @@ export type ParsedCandidate = {
   city: string | null;
   d_end_time: string | null;
   layover: string | null;
+  /** FLICA DEPL — departure local (normalized HHMM). */
+  depart_local: string | null;
+  /** FLICA ARRL — arrival local (normalized HHMM). */
+  arrive_local: string | null;
   wx: string | null;
   status_code: string | null;
   notes: string | null;
@@ -24,6 +28,25 @@ const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
+}
+
+/**
+ * PostgreSQL `date` rejects impossible calendar days (e.g. 2026-04-31). OCR often mis-reads DD
+ * or pairs day-with-month incorrectly — clamp to last valid day of month so import always reaches
+ * review; users fix exact dates on the preview screen.
+ */
+export function sanitizeIsoDateForPostgres(iso: string | null | undefined): string | null {
+  if (iso == null || typeof iso !== 'string') return null;
+  const p = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!p) return null;
+  const y = Number(p[1]);
+  const mo = Number(p[2]);
+  if (mo < 1 || mo > 12 || y < 1900 || y > 2100) return null;
+  let d = Number(p[3]);
+  const maxDay = new Date(y, mo, 0).getDate();
+  if (d < 1) return null;
+  if (d > maxDay) d = maxDay;
+  return `${p[1]}-${p[2]}-${pad2(d)}`;
 }
 
 /** Reject date-only lines (e.g. screenshot header) when they disagree with import month. */
@@ -55,11 +78,11 @@ export function inferIsoDateFromLine(line: string, monthHint: string): string | 
     }
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
       const iso = `${y}-${pad2(month)}-${pad2(day)}`;
-      return alignIsoToMonthHintOrNull(iso, line, monthHint);
+      return sanitizeIsoDateForPostgres(alignIsoToMonthHintOrNull(iso, line, monthHint));
     }
   }
 
-  // Mar 24, MAR 24
+  // Mar 24, MAR 24, Apr 3
   const monNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   const monRe = new RegExp(`\\b(${monNames.join('|')})\\.?\\s+(\\d{1,2})\\b`, 'i');
   const mr = monRe.exec(line.toLowerCase());
@@ -68,7 +91,17 @@ export function inferIsoDateFromLine(line: string, monthHint: string): string | 
     const d = Number(mr[2]);
     if (mi >= 0 && d >= 1 && d <= 31) {
       const iso = `${y}-${pad2(mi + 1)}-${pad2(d)}`;
-      return alignIsoToMonthHintOrNull(iso, line, monthHint);
+      return sanitizeIsoDateForPostgres(alignIsoToMonthHintOrNull(iso, line, monthHint));
+    }
+  }
+
+  // FLICA Flight Crew View: DY + DD only (no month column) — e.g. "FR 03 ..." or "WE 15 ..."
+  const dowDd = /^(?:SU|MO|TU|WE|TH|FR|SA)\s+(\d{1,2})\b/i.exec(line.replace(/^\s+/, ''));
+  if (dowDd) {
+    const day = Number(dowDd[1]);
+    if (day >= 1 && day <= 31) {
+      const iso = `${y}-${pad2(m)}-${pad2(day)}`;
+      return sanitizeIsoDateForPostgres(alignIsoToMonthHintOrNull(iso, line, monthHint));
     }
   }
 
@@ -94,6 +127,29 @@ function normalizeTime(t: string): string {
   return s;
 }
 
+/**
+ * OCR emits one line per vision row — hundreds for a full FLICA page. Only persist rows that look
+ * like schedule data so review stays usable (headers, footers, chrome become UNK noise).
+ */
+export function shouldKeepParsedRow(row: ParsedCandidate): boolean {
+  const st = (row.status_code ?? '').toUpperCase();
+  const t = (row.raw_row_text ?? '').trim();
+  if (st === 'BLANK') return false;
+  if (st === 'UNK') {
+    if (t.length < 6) return false;
+    if (/^T\.?A\.?F\.?B\.?:/i.test(t)) return false;
+    if (/^total:\s*/i.test(t)) return false;
+    if (/^operates:\s*/i.test(t)) return false;
+    if (/jetblue|flica\.net|schedule\s*for|last\s+updated/i.test(t)) return false;
+    if (/^(SU|MO|TU|WE|TH|FR|SA)\s+\d{1,2}\b/i.test(t)) return true;
+    if (/\b(OFF|PTO|RSV|DH|CONT|UNA|LSB)\b/i.test(t)) return true;
+    if (/\b[A-Z]?\d{3,5}[A-Z]?\b/.test(t) && /\d{3,4}/.test(t)) return true;
+    if (/\b[A-Z]{3}\b/.test(t) && /\d{3,4}/.test(t)) return true;
+    return false;
+  }
+  return true;
+}
+
 /** Main parse: lines → candidates; uses month_hint for dates. */
 export function parseScheduleText(raw: string, monthHint: string): ParsedCandidate[] {
   const lines = raw
@@ -112,9 +168,10 @@ export function parseScheduleText(raw: string, monthHint: string): ParsedCandida
     if (iso) lastDate = iso;
 
     const row = classifyLine(line, monthHint, lastDate);
-    out.push(row);
-
     if (row.date) lastDate = row.date;
+
+    if (!shouldKeepParsedRow(row)) continue;
+    out.push(row);
   }
 
   return out;
@@ -122,7 +179,7 @@ export function parseScheduleText(raw: string, monthHint: string): ParsedCandida
 
 function classifyLine(line: string, monthHint: string, lastDate: string | null): ParsedCandidate {
   const upper = line.toUpperCase();
-  const iso = inferIsoDateFromLine(line, monthHint) ?? lastDate;
+  const iso = sanitizeIsoDateForPostgres(inferIsoDateFromLine(line, monthHint) ?? lastDate);
 
   const base = {
     date: iso,
@@ -132,6 +189,8 @@ function classifyLine(line: string, monthHint: string, lastDate: string | null):
     city: null as string | null,
     d_end_time: null as string | null,
     layover: null as string | null,
+    depart_local: null as string | null,
+    arrive_local: null as string | null,
     wx: null as string | null,
     status_code: null as string | null,
     notes: null as string | null,

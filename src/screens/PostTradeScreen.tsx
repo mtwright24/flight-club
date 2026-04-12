@@ -30,6 +30,7 @@ import type { PostTradeFormData, TradeType } from '../types/trades';
 import AppHeader from '../components/AppHeader';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { colors } from '../styles/theme';
 
 export const PostTradeScreen: React.FC = () => {
   const router = useRouter();
@@ -893,7 +894,7 @@ function getStyles() {
     backButton: {
       fontSize: 14,
       fontWeight: '600',
-      color: '#DC3545',
+      color: colors.headerRed,
     },
 
     headerTitle: {
@@ -906,7 +907,7 @@ function getStyles() {
       paddingHorizontal: 16,
       paddingVertical: 8,
       borderRadius: 6,
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
     },
 
     submitButtonDisabled: {
@@ -987,8 +988,8 @@ function getStyles() {
     },
 
     typeButtonActive: {
-      borderColor: '#DC3545',
-      backgroundColor: '#FFE8E8',
+      borderColor: colors.headerRed,
+      backgroundColor: colors.headerRedTint,
     },
 
     typeButtonText: {
@@ -998,7 +999,7 @@ function getStyles() {
     },
 
     typeButtonTextActive: {
-      color: '#DC3545',
+      color: colors.headerRed,
       fontWeight: '700',
     },
 
@@ -1096,7 +1097,7 @@ function getStyles() {
     },
 
     pickerActionPrimary: {
-      color: '#DC3545',
+      color: colors.headerRed,
       fontWeight: '700',
     },
 
@@ -1148,7 +1149,7 @@ function getStyles() {
     airportCode: {
       fontSize: 13,
       fontWeight: '700',
-      color: '#DC3545',
+      color: colors.headerRed,
       width: 50,
     },
 

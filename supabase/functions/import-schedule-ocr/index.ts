@@ -36,6 +36,7 @@ import {
   type TemplateRow,
   type UserScheduleProfileRow,
 } from './schedule-intelligence/mod.ts';
+import { sanitizeIsoDateForPostgres } from './parser.ts';
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -51,6 +52,18 @@ function extMime(path: string): 'image' | 'pdf' | 'unknown' {
     return 'image';
   }
   return 'unknown';
+}
+
+/** Parser requires strict YYYY-MM; bad values make every row date fail. */
+function normalizeMonthKeyHint(raw: string): string {
+  const t = raw.trim();
+  if (/^\d{4}-\d{2}$/.test(t)) return t;
+  const loose = /^(\d{4})-(\d{1,2})(?:-|$)/.exec(t);
+  if (loose) {
+    const mm = Number(loose[2]);
+    if (mm >= 1 && mm <= 12) return `${loose[1]}-${String(mm).padStart(2, '0')}`;
+  }
+  return new Date().toISOString().slice(0, 7);
 }
 
 serve(async (req) => {
@@ -240,9 +253,9 @@ serve(async (req) => {
     });
   }
 
-  const monthKey =
-    (batch.month_key as string | null) ||
-    new Date().toISOString().slice(0, 7);
+  const monthKey = normalizeMonthKeyHint(
+    (batch.month_key as string | null) || new Date().toISOString().slice(0, 7)
+  );
 
   let profile: UserScheduleProfileRow = null;
   let templates: TemplateRow[] = [];
@@ -262,12 +275,14 @@ serve(async (req) => {
   }
 
   const classification = classifyImport(rawText, monthKey, profile);
+  /** Prefer month read from the image (e.g. "April Schedule", "Apr 3") over the Schedule tab cursor. */
+  const effectiveMonthKey = normalizeMonthKeyHint(classification.detected_month_key ?? monthKey);
   const template = templates.length > 0 ? pickTemplate(templates, classification, profile?.last_successful_template_id ?? null) : null;
 
   const parserKey = template?.parser_key ?? 'generic_fallback_v1';
   const templateId = template?.id ?? '00000000-0000-4000-8000-000000000499';
 
-  let parsed = parseWithRegisteredModule(parserKey, rawText, monthKey);
+  let parsed = parseWithRegisteredModule(parserKey, rawText, effectiveMonthKey);
   parsed = enrichCandidatesWithDictionary(parsed, dictionaryRows, {
     airline_id: classification.airline_guess_id,
     role_id: classification.role_guess_id,
@@ -276,17 +291,21 @@ serve(async (req) => {
 
   await supabase.from('schedule_import_candidates').delete().eq('batch_id', batchId);
 
-  const rows = parsed.map((p, idx) => ({
+  /**
+   * Omit per-row month_key and sequence_index when possible — older DBs may lack Schedule Intelligence
+   * columns on schedule_import_candidates; month lives on the batch + each row's date.
+   */
+  const rows = parsed.map((p) => ({
     batch_id: batchId,
-    month_key: monthKey,
-    sequence_index: idx,
-    date: p.date,
+    date: sanitizeIsoDateForPostgres(p.date),
     day_of_week: p.day_of_week,
     pairing_code: p.pairing_code,
     report_time: p.report_time,
     city: p.city,
     d_end_time: p.d_end_time,
     layover: p.layover,
+    depart_local: p.depart_local,
+    arrive_local: p.arrive_local,
     wx: p.wx,
     status_code: p.status_code,
     notes: p.notes,
@@ -324,7 +343,7 @@ serve(async (req) => {
     warning_count: warningCount,
     parse_error: pdfWeak ? 'PDF text may be incomplete (scanned document).' : null,
     updated_at: new Date().toISOString(),
-    selected_month_key: monthKey,
+    selected_month_key: effectiveMonthKey,
     detected_month_key: classification.detected_month_key,
     airline_guess_id: classification.airline_guess_id,
     role_guess_id: classification.role_guess_id,
@@ -342,7 +361,7 @@ serve(async (req) => {
   await supabase.from('schedule_import_batches').update(batchPatch).eq('id', batchId);
 
   try {
-    await persistUserMemoryAfterSuccessfulImport(supabase, userId, classification, templateId, monthKey);
+    await persistUserMemoryAfterSuccessfulImport(supabase, userId, classification, templateId, effectiveMonthKey);
   } catch (e) {
     console.warn('[import-schedule-ocr] user_schedule_profiles upsert skipped', e);
   }

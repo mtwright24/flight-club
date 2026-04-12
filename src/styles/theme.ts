@@ -57,6 +57,8 @@ export const colors = {
   dangerRed: '#B5161E', // unified to headerRed
   primary: '#B5161E', // unified to headerRed
   error: '#B5161E', // unified to headerRed
+  /** ~10% header red — light buttons, selected surfaces (tradeboard, chips) */
+  headerRedTint: '#B5161E1A',
   inputBg: '#F9FAFB',
   background: '#F3F4F6',
 };

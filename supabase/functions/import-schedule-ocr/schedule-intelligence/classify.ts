@@ -7,6 +7,7 @@ import type { ClassificationResult, UserScheduleProfileRow } from './types.ts';
 import { SEED_IDS } from './seedIds.ts';
 
 function detectMonthFromScheduleBody(text: string, defaultYear: number): string | null {
+  /** Full month names (FLICA sidebar e.g. "April Schedule"). */
   const monNames = [
     'january',
     'february',
@@ -21,10 +22,18 @@ function detectMonthFromScheduleBody(text: string, defaultYear: number): string 
     'november',
     'december',
   ];
+  /** Abbreviations: "Apr 3", "Operates: Apr 3-Apr 13" — OCR rarely has full month on every line. */
+  const monAbbr = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   const lower = text.toLowerCase();
   let best: { m: number; score: number } | null = null;
   for (let i = 0; i < monNames.length; i++) {
     const re = new RegExp(`\\b${monNames[i]}\\b`, 'gi');
+    const m = lower.match(re);
+    const score = m ? m.length * 2 : 0;
+    if (score > 0 && (!best || score > best.score)) best = { m: i + 1, score };
+  }
+  for (let i = 0; i < monAbbr.length; i++) {
+    const re = new RegExp(`\\b${monAbbr[i]}\\.?\\b`, 'gi');
     const m = lower.match(re);
     const score = m ? m.length : 0;
     if (score > 0 && (!best || score > best.score)) best = { m: i + 1, score };

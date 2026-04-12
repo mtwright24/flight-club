@@ -1,7 +1,9 @@
-import React, { memo, useMemo, useRef } from 'react';
+import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import type { CrewScheduleTrip } from '../types';
+import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
+import { formatLayoverColumnDisplay, mergeLayoverOntoLegDates, parseScheduleTimeMinutes } from '../scheduleTime';
 import { scheduleTheme as T } from '../scheduleTheme';
+import TripPreviewModal from './TripPreviewModal';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 
@@ -69,7 +71,10 @@ function statusToKind(trip: CrewScheduleTrip): RowKind {
 function buildRowLabel(trip: CrewScheduleTrip): string {
   const kind = statusToKind(trip);
   if (kind === 'off') return '';
-  if (kind === 'pto') return 'PTO';
+  if (kind === 'pto') {
+    const pc = String(trip.pairingCode || '').trim().toUpperCase();
+    return pc === 'PTV' ? 'PTV' : 'PTO';
+  }
   if (kind === 'reserve') return trip.pairingCode && trip.pairingCode !== '—' ? trip.pairingCode : 'RSV';
   if (kind === 'unavailable') {
     const upperCode = String(trip.pairingCode || '').trim().toUpperCase();
@@ -85,14 +90,32 @@ function buildRowLabel(trip: CrewScheduleTrip): string {
 
 function toCompactTime(raw?: string): string {
   if (!raw) return '';
-  const match = raw.trim().match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
-  if (!match) return '';
-  let hour = Number(match[1]);
-  const minute = match[2];
-  const ampm = match[3].toUpperCase();
-  if (ampm === 'PM' && hour < 12) hour += 12;
-  if (ampm === 'AM' && hour === 12) hour = 0;
-  return `${String(hour).padStart(2, '0')}${minute}`;
+  const t = raw.trim();
+  const match = t.match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+  if (match) {
+    let hour = Number(match[1]);
+    const minute = match[2];
+    const ampm = match[3].toUpperCase();
+    if (ampm === 'PM' && hour < 12) hour += 12;
+    if (ampm === 'AM' && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, '0')}${minute}`;
+  }
+  const m24 = t.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) {
+    const hour = Number(m24[1]);
+    const minute = m24[2];
+    if (hour <= 23) return `${String(hour).padStart(2, '0')}${minute}`;
+  }
+  if (/^\d{4}$/.test(t)) return t;
+  return '';
+}
+
+/** Same line as pairing ID: 43:11 (from decimal TAFB hours). */
+function formatPairingTafbSameLine(hours: number): string {
+  const totalMins = Math.round(hours * 60);
+  const hh = Math.floor(totalMins / 60);
+  const mm = totalMins % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
 function compactToken(raw?: string): string {
@@ -104,12 +127,30 @@ function compactToken(raw?: string): string {
   return cleaned || v.slice(0, 3).toUpperCase();
 }
 
-function buildRowForTrip(dateIso: string, trip: CrewScheduleTrip, isProxyContinuation: boolean): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
+function buildRowForTrip(
+  dateIso: string,
+  trip: CrewScheduleTrip,
+  isProxyContinuation: boolean,
+  dayIndexInTrip: number
+): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
   const d = parseLocalNoon(dateIso);
   const dayIdx = d.getDay();
   const kind = isProxyContinuation ? 'continuation' : statusToKind(trip);
-  const leg = trip.legs[0];
-  const pairingText = kind === 'continuation' ? '' : buildRowLabel(trip);
+  const legForDay = trip.legs.find((l) => l.dutyDate === dateIso);
+  const leg = legForDay ?? (!isProxyContinuation && trip.legs.length ? trip.legs[0] : undefined);
+  let pairingText = kind === 'continuation' ? '' : buildRowLabel(trip);
+  if (
+    pairingText &&
+    !isProxyContinuation &&
+    dayIndexInTrip === 0 &&
+    trip.pairingTafbHours != null &&
+    kind !== 'off' &&
+    kind !== 'pto' &&
+    kind !== 'reserve' &&
+    kind !== 'unavailable'
+  ) {
+    pairingText = `${pairingText}  ${formatPairingTafbSameLine(trip.pairingTafbHours)}`;
+  }
   const reportText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
@@ -120,13 +161,16 @@ function buildRowForTrip(dateIso: string, trip: CrewScheduleTrip, isProxyContinu
       : kind === 'reserve'
         ? compactToken(trip.base)
         : kind === 'continuation'
-          ? compactToken(trip.origin) || compactToken(trip.layoverCity) || compactToken(trip.destination)
-        : compactToken(trip.origin) || compactToken(trip.routeSummary);
+          ? legForDay
+            ? compactToken(legForDay.arrivalAirport)
+            : ''
+        : compactToken(leg?.arrivalAirport) || compactToken(trip.origin) || compactToken(trip.routeSummary);
   const dEndText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
-      : toCompactTime(leg?.releaseLocal || leg?.arriveLocal);
-  const layoverText = '';
+      : toCompactTime(leg?.releaseLocal);
+  /** Layover column: time token only (city stripped for display; DB still stores full FLICA text). */
+  const layoverText = formatLayoverColumnDisplay(trip.layoverByDate?.[dateIso] ?? '');
   const wxText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special'
       ? ''
@@ -141,8 +185,8 @@ function buildRowForTrip(dateIso: string, trip: CrewScheduleTrip, isProxyContinu
           : kind === 'reserve'
             ? 'RSV'
             : '';
-  const reportMinutes = parseHourMinute(leg?.reportLocal || leg?.departLocal);
-  const releaseMinutes = parseHourMinute(leg?.releaseLocal || leg?.arriveLocal);
+  const reportMinutes = parseScheduleTimeMinutes(leg?.reportLocal || leg?.departLocal);
+  const releaseMinutes = parseScheduleTimeMinutes(leg?.releaseLocal);
 
   return {
     id: `${trip.id}:${dateIso}:${isProxyContinuation ? 'cont' : 'start'}`,
@@ -181,7 +225,12 @@ function isTripLikeKind(kind: RowKind): boolean {
 function rowsFromTrips(trips: CrewScheduleTrip[]): DayRow[] {
   if (!trips.length) return [];
 
-  const sorted = [...trips].sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const sorted = [...trips]
+    .map((t) => {
+      const merged = mergeLayoverOntoLegDates(t);
+      return merged ? { ...t, layoverByDate: merged } : t;
+    })
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
   const year = sorted[0].year;
   const month = sorted[0].month;
   const dateRows = new Map<string, Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'>[]>();
@@ -190,9 +239,11 @@ function rowsFromTrips(trips: CrewScheduleTrip[]): DayRow[] {
     const start = parseLocalNoon(trip.startDate);
     const end = parseLocalNoon(trip.endDate);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
+    const ptvEveryDay =
+      trip.status === 'pto' && String(trip.pairingCode || '').trim().toUpperCase() === 'PTV';
     for (let t = start.getTime(), i = 0; t <= end.getTime(); t += 24 * 60 * 60 * 1000, i += 1) {
       const dateIso = toIsoDate(new Date(t));
-      const row = buildRowForTrip(dateIso, trip, i > 0);
+      const row = buildRowForTrip(dateIso, trip, ptvEveryDay ? false : i > 0, i);
       if (!dateRows.has(dateIso)) dateRows.set(dateIso, []);
       dateRows.get(dateIso)!.push(row);
     }
@@ -259,87 +310,44 @@ function rowsFromTrips(trips: CrewScheduleTrip[]): DayRow[] {
       isTripLikeKind(cur.kind) &&
       isTripLikeKind(next.kind);
   }
-  for (let i = 0; i < rows.length - 1; i += 1) {
-    const cur = rows[i];
-    const next = rows[i + 1];
-    const curPair = cur.trip?.pairingCode || '';
-    const nextPair = next.trip?.pairingCode || '';
-    if (!curPair || curPair === '—' || curPair !== nextPair) continue;
-    if (!isTripLikeKind(cur.kind) || !isTripLikeKind(next.kind)) continue;
-    if (cur.releaseMinutes == null || next.reportMinutes == null) continue;
-    let delta = next.reportMinutes - cur.releaseMinutes;
-    if (delta < 0) delta += 24 * 60;
-    const hh = Math.floor(delta / 60);
-    const mm = delta % 60;
-    rows[i].layoverText = `${String(hh).padStart(2, '0')}${String(mm).padStart(2, '0')}`;
-  }
   return rows;
 }
 
-function formatHours(value: number | null): string {
-  if (value == null || Number.isNaN(value)) return '--';
-  return value.toFixed(2);
+function formatDec(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return '—';
+  return n.toFixed(2);
 }
 
-function parseHourMinute(raw?: string): number | null {
-  if (!raw) return null;
-  const match = raw.trim().match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
-  if (!match) return null;
-  let hour = Number(match[1]);
-  const minute = Number(match[2]);
-  const ampm = match[3].toUpperCase();
-  if (ampm === 'PM' && hour < 12) hour += 12;
-  if (ampm === 'AM' && hour === 12) hour = 0;
-  return hour * 60 + minute;
-}
+export type SummaryMetricItem = { id: string; label: string; value: string };
 
-function durationHours(start?: string, end?: string): number | null {
-  const s = parseHourMinute(start);
-  const e = parseHourMinute(end);
-  if (s == null || e == null) return null;
-  let delta = e - s;
-  if (delta < 0) delta += 24 * 60;
-  return delta / 60;
-}
-
-function buildSummaryMetrics(trips: CrewScheduleTrip[]) {
-  let credit = 0;
-  let block = 0;
-  let tafb = 0;
-  let hasBlock = false;
-  let hasTafb = false;
-  let daysOff = 0;
-
-  for (const trip of trips) {
-    const kind = statusToKind(trip);
-    if (kind === 'off' || kind === 'pto') daysOff += 1;
-    if (trip.creditHours != null) credit += trip.creditHours;
-    const leg = trip.legs[0];
-    const blockDur = durationHours(leg?.departLocal, leg?.arriveLocal);
-    if (blockDur != null) {
-      hasBlock = true;
-      block += blockDur;
-    }
-    const tafbDur = durationHours(leg?.reportLocal, leg?.releaseLocal);
-    if (tafbDur != null) {
-      hasTafb = true;
-      tafb += tafbDur;
-    }
+/** Header strip: only `schedule_month_metrics` (import/screenshot). No sums from trip rows. */
+function buildSummaryStrip(server: ScheduleMonthMetrics | null | undefined): SummaryMetricItem[] {
+  if (server) {
+    return [
+      { id: 'block', label: 'BLOCK', value: formatDec(server.blockHours) },
+      { id: 'tafb', label: 'TAFB', value: formatDec(server.monthlyTafbHours) },
+      { id: 'credit', label: 'CREDIT', value: formatDec(server.creditHours) },
+      { id: 'ytd', label: 'YTD', value: formatDec(server.ytdCreditHours) },
+      { id: 'off', label: 'DAYS OFF', value: server.daysOff != null ? String(server.daysOff) : '—' },
+    ];
   }
-
   return [
-    { key: 'BLOCK', value: hasBlock ? formatHours(block) : '--' },
-    { key: 'CREDIT', value: formatHours(credit) },
-    { key: 'TAFB', value: hasTafb ? formatHours(tafb) : '--' },
-    { key: 'YTD', value: '--' },
-    { key: 'DAYS OFF', value: String(daysOff) },
+    { id: 'block', label: 'BLOCK', value: '—' },
+    { id: 'tafb', label: 'TAFB', value: '—' },
+    { id: 'credit', label: 'CREDIT', value: '—' },
+    { id: 'ytd', label: 'YTD', value: '—' },
+    { id: 'off', label: 'DAYS OFF', value: '—' },
   ];
 }
 
 const ScheduleRow = memo(function ScheduleRow({
   row,
+  onPressTrip,
+  onLongPressTrip,
 }: {
   row: DayRow;
+  onPressTrip?: (trip: CrewScheduleTrip) => void;
+  onLongPressTrip?: (trip: CrewScheduleTrip) => void;
 }) {
   const debugLoggedRef = useRef(false);
   const isEmpty = row.kind === 'empty';
@@ -360,6 +368,8 @@ const ScheduleRow = memo(function ScheduleRow({
   ];
 
   if (!debugLoggedRef.current && row.dateIso.endsWith('-24')) debugLoggedRef.current = true;
+
+  const interactive = !!row.trip && !!onPressTrip;
 
   const content = (
     <>
@@ -407,7 +417,11 @@ const ScheduleRow = memo(function ScheduleRow({
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellLayover]}>
-        <Text style={[styles.cellText, styles.detailCellText, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
+        <Text
+          style={[styles.cellText, styles.detailCellText, isEmpty && styles.routePlaceholder]}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
           {layoverValue}
         </Text>
       </View>
@@ -418,6 +432,23 @@ const ScheduleRow = memo(function ScheduleRow({
       </View>
     </>
   );
+
+  if (interactive) {
+    return (
+      <Pressable
+        style={({ pressed }) => [styles.rowPressHost, pressed && styles.rowPressed]}
+        onPress={() => onPressTrip!(row.trip!)}
+        onLongPress={onLongPressTrip ? () => onLongPressTrip(row.trip!) : undefined}
+        delayLongPress={420}
+        accessibilityRole="button"
+        accessibilityHint="Opens trip detail. Long press for a quick preview."
+      >
+        {/* Inner row View: Pressable with multiple RN children can lose horizontal flex; one flex row child fixes layout. */}
+        <View style={rowStyle}>{content}</View>
+      </Pressable>
+    );
+  }
+
   return <View style={rowStyle}>{content}</View>;
 });
 
@@ -456,14 +487,25 @@ function EmptyMonth({ onOpenManage }: { onOpenManage?: () => void }) {
 
 type Props = {
   trips: CrewScheduleTrip[];
+  /** Month header strip: stored metrics only (import/screenshot), never derived in the client. */
+  monthMetrics?: ScheduleMonthMetrics | null;
   onPressTrip: (trip: CrewScheduleTrip) => void;
   /** Opens Crew Schedule → Manage (import + view mode). */
   onOpenManage?: () => void;
 };
 
-export default function ClassicListView({ trips, onPressTrip: _onPressTrip, onOpenManage }: Props) {
+export default function ClassicListView({ trips, monthMetrics, onPressTrip, onOpenManage }: Props) {
+  const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
+  const onLongPressTrip = useCallback((t: CrewScheduleTrip) => setPreviewTrip(t), []);
+  const closePreview = useCallback(() => setPreviewTrip(null), []);
+  const openFullFromPreview = useCallback(() => {
+    const t = previewTrip;
+    setPreviewTrip(null);
+    if (t) onPressTrip(t);
+  }, [previewTrip, onPressTrip]);
+
   const rows = useMemo(() => rowsFromTrips(trips), [trips]);
-  const summary = useMemo(() => buildSummaryMetrics(trips), [trips]);
+  const summary = useMemo(() => buildSummaryStrip(monthMetrics ?? null), [monthMetrics]);
 
   if (!trips.length) {
     return <EmptyMonth onOpenManage={onOpenManage} />;
@@ -471,10 +513,12 @@ export default function ClassicListView({ trips, onPressTrip: _onPressTrip, onOp
 
   return (
     <View style={styles.tableWrap}>
-      <View style={styles.summaryStrip}>
+      <View style={styles.summaryStripRow}>
         {summary.map((item) => (
-          <View key={item.key} style={styles.summaryInlineItem}>
-            <Text style={styles.summaryKey}>{item.key}</Text>
+          <View key={item.id} style={styles.summaryMetricCell}>
+            <Text style={styles.summaryKey} numberOfLines={2}>
+              {item.label}
+            </Text>
             <Text style={styles.summaryValue}>{item.value}</Text>
           </View>
         ))}
@@ -507,13 +551,26 @@ export default function ClassicListView({ trips, onPressTrip: _onPressTrip, onOp
       <FlatList
         data={rows}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <ScheduleRow row={item} />}
+        renderItem={({ item }) => (
+          <ScheduleRow
+            row={item}
+            onPressTrip={item.trip ? onPressTrip : undefined}
+            onLongPressTrip={item.trip ? onLongPressTrip : undefined}
+          />
+        )}
         contentContainerStyle={styles.wrap}
         initialNumToRender={22}
         maxToRenderPerBatch={24}
         windowSize={9}
         removeClippedSubviews
         scrollEnabled={false}
+      />
+
+      <TripPreviewModal
+        visible={previewTrip != null}
+        trip={previewTrip}
+        onClose={closePreview}
+        onOpenFullDetail={openFullFromPreview}
       />
     </View>
   );
@@ -527,33 +584,34 @@ const styles = StyleSheet.create({
     paddingRight: 2,
   },
   wrap: { paddingBottom: 0 },
-  summaryStrip: {
+  summaryStripRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    justifyContent: 'space-between',
+    width: '100%',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#B8BEC6',
     backgroundColor: '#D4D7DD',
-    paddingHorizontal: 4,
-    paddingVertical: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 10,
   },
-  summaryInlineItem: {
+  summaryMetricCell: {
     flex: 1,
+    minWidth: 0,
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 2,
   },
   summaryKey: {
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '700',
     color: '#64748B',
-    letterSpacing: 0.3,
+    letterSpacing: 0.15,
     marginBottom: 4,
     textAlign: 'center',
   },
   summaryValue: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
     color: '#0F172A',
     textAlign: 'center',
@@ -594,7 +652,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   rowCell: {
-    height: 22,
+    minHeight: 22,
     paddingHorizontal: 0,
     justifyContent: 'center',
     alignItems: 'center',
@@ -606,23 +664,40 @@ const styles = StyleSheet.create({
     flexWrap: 'nowrap',
     alignItems: 'center',
     gap: 4,
-    height: 22,
+    minHeight: 22,
     paddingVertical: 0,
     paddingHorizontal: 0,
     borderBottomWidth: DIV,
     borderBottomColor: '#E8EAED',
     overflow: 'hidden',
   },
+  /** Wraps the flex row so Pressable stays full-width without breaking column layout. */
+  rowPressHost: {
+    width: '100%',
+    alignSelf: 'stretch',
+  },
   /** Default body fill: no status-based row tints (PTO/RSV/DH/OFF/etc. use text color only). */
   bodyRow: {
     backgroundColor: '#FFFFFF',
+  },
+  rowPressed: {
+    backgroundColor: '#F1F5F9',
   },
   /**
    * CITY is usually 3 letters; D-END is times. Equal flex (1/1) left a wide empty band in CITY vs D-END.
    * Narrow CITY / widen D-END (0.82 + 1.18 = 2) so the gap between labels matches other columns optically.
    */
   cellDate: { flex: 0.9, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingLeft: 2, paddingRight: 2 },
-  cellPairing: { flex: 1, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingHorizontal: 2 },
+  cellPairing: {
+    flex: 1,
+    minWidth: 0,
+    borderRightWidth: DIV,
+    borderRightColor: '#ECEEF1',
+    alignItems: 'flex-start',
+    alignSelf: 'stretch',
+    paddingHorizontal: 2,
+    justifyContent: 'center',
+  },
   cellReport: { flex: 1, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingHorizontal: 2 },
   cellRoute: { flex: 0.82, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingHorizontal: 2 },
   cellDetail: { flex: 1.18, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingLeft: 2, paddingRight: 0 },

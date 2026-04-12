@@ -337,7 +337,7 @@ function getStyles() {
       paddingHorizontal: 8,
       paddingVertical: 8,
       borderRadius: 6,
-      backgroundColor: '#FFE8E8',
+      backgroundColor: colors.headerRedTint,
     },
 
     clearButtonText: {

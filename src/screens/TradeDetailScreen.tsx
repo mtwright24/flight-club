@@ -25,6 +25,7 @@ import type { TradePost } from '../types/trades';
 import AppHeader from '../components/AppHeader';
 import { checkDuplicateRoom, createRoomWithTemplate, joinRoom } from '../lib/supabase/rooms';
 import { createNotification } from '../../lib/notifications';
+import { colors } from '../styles/theme';
 
 export const TradeDetailScreen: React.FC = () => {
   const router = useRouter();
@@ -203,7 +204,7 @@ export const TradeDetailScreen: React.FC = () => {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.centerContent}>
-          <ActivityIndicator size="large" color="#DC3545" />
+          <ActivityIndicator size="large" color={colors.headerRed} />
         </View>
       </SafeAreaView>
     );
@@ -589,7 +590,7 @@ function formatRelativeTime(dateStr: string): string {
 function getTypeIndicatorStyle(type: string): any {
   const styles: Record<string, any> = {
     swap: { backgroundColor: '#1D4ED8' },
-    drop: { backgroundColor: '#DC3545' },
+    drop: { backgroundColor: colors.headerRed },
     pickup: { backgroundColor: '#16A34A' },
   };
   return styles[type] || styles.swap;
@@ -619,7 +620,7 @@ function getStyles() {
     backButton: {
       fontSize: 14,
       fontWeight: '600',
-      color: '#DC3545',
+      color: colors.headerRed,
     },
 
     headerTitle: {
@@ -821,7 +822,7 @@ function getStyles() {
       width: 40,
       height: 40,
       borderRadius: 20,
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
       justifyContent: 'center',
       alignItems: 'center',
     },
@@ -840,7 +841,7 @@ function getStyles() {
       paddingHorizontal: 10,
       paddingVertical: 6,
       borderRadius: 6,
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
     },
 
     messageInlineButtonDisabled: {
@@ -892,8 +893,8 @@ function getStyles() {
     },
 
     buttonActive: {
-      borderColor: '#DC3545',
-      backgroundColor: '#FFE8E8',
+      borderColor: colors.headerRed,
+      backgroundColor: colors.headerRedTint,
     },
 
     buttonText: {
@@ -903,14 +904,14 @@ function getStyles() {
     },
 
     buttonTextActive: {
-      color: '#DC3545',
+      color: colors.headerRed,
     },
 
     buttonPrimary: {
       flex: 1,
       paddingVertical: 12,
       borderRadius: 6,
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
       justifyContent: 'center',
       alignItems: 'center',
     },
@@ -925,9 +926,9 @@ function getStyles() {
       flex: 1,
       paddingVertical: 12,
       borderRadius: 6,
-      backgroundColor: '#FFE8E8',
+      backgroundColor: colors.headerRedTint,
       borderWidth: 1,
-      borderColor: '#DC3545',
+      borderColor: colors.headerRed,
       justifyContent: 'center',
       alignItems: 'center',
     },
@@ -935,7 +936,7 @@ function getStyles() {
     buttonDangerText: {
       fontSize: 13,
       fontWeight: '600',
-      color: '#DC3545',
+      color: colors.headerRed,
     },
 
     messageOverlay: {
@@ -1002,7 +1003,7 @@ function getStyles() {
       flex: 1,
       paddingVertical: 10,
       borderRadius: 6,
-      backgroundColor: '#DC3545',
+      backgroundColor: colors.headerRed,
       justifyContent: 'center',
       alignItems: 'center',
     },
