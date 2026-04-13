@@ -163,7 +163,7 @@ export default function ImportJetBlueReviewScreen() {
 
         {firstBatchId ? (
           <Pressable
-            style={styles.btn}
+            style={styles.ghost}
             onPress={() =>
               router.push({
                 pathname: '/crew-schedule/import-review/[batchId]',
@@ -171,7 +171,7 @@ export default function ImportJetBlueReviewScreen() {
               })
             }
           >
-            <Text style={styles.btnText}>Review OCR rows (line-by-line)</Text>
+            <Text style={styles.debugLink}>Raw OCR line review (debug)</Text>
           </Pressable>
         ) : (
           <Text style={styles.muted}>No OCR batch linked yet — upload screenshots from the previous step.</Text>
@@ -286,7 +286,8 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 11, fontWeight: '800', color: '#0F172A' },
   cardLine: { fontSize: 13, color: T.text, marginTop: 4 },
   cardMeta: { fontSize: 12, color: T.textSecondary, marginTop: 6 },
-  ghost: { marginTop: 20, paddingVertical: 12, alignItems: 'center' },
+  ghost: { marginTop: 12, paddingVertical: 8, alignItems: 'center' },
   ghostText: { color: T.textSecondary, fontWeight: '700', fontSize: 15 },
+  debugLink: { color: T.textSecondary, fontSize: 13, textDecorationLine: 'underline' },
   err: { padding: 24, color: T.accent },
 });

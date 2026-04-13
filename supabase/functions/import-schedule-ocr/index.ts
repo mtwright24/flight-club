@@ -24,7 +24,8 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 // @ts-expect-error Deno esm
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { extractPdfText, visionDocumentTextFromImage } from './extract.ts';
+import { extractPdfText, visionDocumentTextFromImage, type VisionImageExtractionDebug } from './extract.ts';
+import { flicaOcrHasScheduleEvidence, pickOcrIssueCodes } from './flicaOcrSalvage.ts';
 import {
   classifyImport,
   enrichCandidatesWithDictionary,
@@ -37,6 +38,9 @@ import {
   type UserScheduleProfileRow,
 } from './schedule-intelligence/mod.ts';
 import { sanitizeIsoDateForPostgres } from './parser.ts';
+import { ocrLooksLikeJetBlueFlicaMonthly } from './jetblueDetect.ts';
+import { OcrTraceReason } from './ocrTraceCodes.ts';
+import { updateScheduleImportBatchRow } from './scheduleBatchUpdate.ts';
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -137,17 +141,34 @@ serve(async (req) => {
     });
   }
 
+  /** Do not list optional columns (e.g. schedule_import_id) — older DBs without the migration break the whole query. */
   const { data: batch, error: batchErr } = await supabase
     .from('schedule_import_batches')
     .select('id,user_id,month_key,source_type,source_file_path')
     .eq('id', batchId)
     .maybeSingle();
 
-  if (batchErr || !batch || batch.user_id !== userId) {
+  if (batchErr) {
+    console.error('[import-schedule-ocr] batch lookup', batchErr);
+    return new Response(
+      JSON.stringify({
+        error: 'Batch lookup failed',
+        detail: batchErr.message,
+      }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+  if (!batch) {
     return new Response(JSON.stringify({ error: 'Batch not found' }), {
       status: 404,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
+  }
+  if (batch.user_id !== userId) {
+    return new Response(
+      JSON.stringify({ error: 'Forbidden', detail: 'Batch does not belong to the signed-in user' }),
+      { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 
   const filePath = batch.source_file_path as string | null;
@@ -171,34 +192,71 @@ serve(async (req) => {
     .update({ parse_status: 'extracting', parse_error: null, updated_at: new Date().toISOString() })
     .eq('id', batchId);
 
+  console.log('[import-schedule-ocr] ocr_stage_storage_fetch_start', {
+    batch_id: batchId,
+    bucket: 'schedule-imports',
+    storage_path: filePath,
+  });
+
   const { data: fileBlob, error: dlErr } = await supabase.storage.from('schedule-imports').download(filePath);
+  const storageFetchOk = !dlErr && !!fileBlob;
+  console.log('[import-schedule-ocr] ocr_stage_storage_fetch_result', {
+    batch_id: batchId,
+    storage_path: filePath,
+    fetch_succeeded: storageFetchOk,
+    storage_error_message: dlErr?.message ?? null,
+    /** Supabase JS client does not expose HTTP status; use error presence + blob presence */
+    has_blob: !!fileBlob,
+  });
+
   if (dlErr || !fileBlob) {
+    const reason = !fileBlob ? OcrTraceReason.STORAGE_FETCH_NO_BLOB : OcrTraceReason.STORAGE_FETCH_FAILED;
+    console.error('[import-schedule-ocr] ocr_storage_failed', { reason_code: reason, detail: dlErr?.message });
     await supabase
       .from('schedule_import_batches')
       .update({
         parse_status: 'failed',
         parse_error: dlErr?.message ?? 'Download failed',
+        classification_json: {
+          ocr_instrumentation: {
+            reason_codes: [reason],
+            storage_path: filePath,
+            storage_download_bytes: 0,
+            storage_fetch_ok: false,
+            handoff_reason_code: reason,
+          },
+        },
         updated_at: new Date().toISOString(),
       })
       .eq('id', batchId);
-    return new Response(JSON.stringify({ error: 'Could not download file', details: dlErr?.message }), {
+    return new Response(JSON.stringify({ error: 'Could not download file', details: dlErr?.message, ocr_reason_code: reason }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
   const buf = new Uint8Array(await fileBlob.arrayBuffer());
-  console.log('[import-schedule-ocr] storage download', {
-    batchId,
-    pathSuffix: filePath.split('/').slice(-2).join('/'),
-    bytes: buf.length,
+  console.log('[import-schedule-ocr] ocr_stage_storage_download_bytes', {
+    batch_id: batchId,
+    storage_path: filePath,
+    downloaded_byte_length: buf.length,
   });
   if (buf.length === 0) {
+    console.error('[import-schedule-ocr] ocr_storage_empty', { reason_code: OcrTraceReason.STORAGE_FETCH_EMPTY });
     await supabase
       .from('schedule_import_batches')
       .update({
         parse_status: 'failed',
         parse_error: 'Storage file is empty (0 bytes). Re-upload from the app; if it persists, the image may not have been read on device.',
+        classification_json: {
+          ocr_instrumentation: {
+            reason_codes: [OcrTraceReason.STORAGE_FETCH_EMPTY],
+            storage_path: filePath,
+            storage_download_bytes: 0,
+            storage_fetch_ok: true,
+            handoff_reason_code: OcrTraceReason.STORAGE_FETCH_EMPTY,
+          },
+        },
         updated_at: new Date().toISOString(),
       })
       .eq('id', batchId);
@@ -206,25 +264,54 @@ serve(async (req) => {
       JSON.stringify({
         error: 'Empty file',
         details: 'Downloaded file has 0 bytes. Re-upload the schedule image.',
+        ocr_reason_code: OcrTraceReason.STORAGE_FETCH_EMPTY,
       }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 
   const kind = extMime(filePath);
+  const mimeFromExtension = (filePath.split('.').pop() ?? '').toLowerCase();
 
   let rawText = '';
   let pdfWeak = false;
+  let imageOcrDebug: VisionImageExtractionDebug | null = null;
+  let ocrFailureReasonCode: string | null = null;
 
   try {
     if (kind === 'image' || kind === 'unknown') {
-      rawText = await visionDocumentTextFromImage(buf, filePath);
+      console.log('[import-schedule-ocr] ocr_stage_invoke_image', {
+        file_kind: kind,
+        mime_from_extension: mimeFromExtension,
+        storage_bytes: buf.length,
+      });
+      const vis = await visionDocumentTextFromImage(buf, filePath);
+      const beforeTrim = vis.text;
+      rawText = vis.text.replace(/\n\n\[FLICA_WEAK_OCR\]\s*$/i, '').trim();
+      imageOcrDebug = vis.debug;
+      console.log('[import-schedule-ocr] ocr_stage_text_cleanup', {
+        len_before_weak_marker_strip: beforeTrim.length,
+        len_after_trim_for_db: rawText.length,
+        discarded_empty_by_final_trim: rawText.length === 0 && beforeTrim.length > 0,
+      });
+      console.log('[import-schedule-ocr] ocr_stage_handoff_parser_entry', {
+        parser_entry_raw_text_len: rawText.length,
+        handoff_reason_code:
+          rawText.length === 0 ? OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT : null,
+        compare_storage_vs_client: `server_downloaded_bytes=${buf.length} (compare to client jpegBase64DecodedBytes)`,
+      });
+      if (rawText.length === 0) {
+        console.error('[import-schedule-ocr] ocr_handoff_empty_raw_text', {
+          reason_code: OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT,
+          note: 'If Vision succeeded, text was wiped by cleanup — check weak-OCR marker handling',
+        });
+      }
       if (kind === 'unknown' && rawText.trim().length < 20) {
-        // Try PDF extraction if extensionless file is actually PDF
         const pdfTry = await extractPdfText(buf);
         if (pdfTry.text.trim().length > rawText.trim().length) {
           rawText = pdfTry.text;
           pdfWeak = pdfTry.usedOcrFallback;
+          imageOcrDebug = null;
         }
       }
     } else if (kind === 'pdf') {
@@ -235,22 +322,53 @@ serve(async (req) => {
         rawText += '\n\n[import: PDF text extraction was weak; scanned PDFs may need a photo/screenshot import.]';
       }
     } else {
-      rawText = await visionDocumentTextFromImage(buf, filePath);
+      const vis = await visionDocumentTextFromImage(buf, filePath);
+      rawText = vis.text.replace(/\n\n\[FLICA_WEAK_OCR\]\s*$/i, '').trim();
+      imageOcrDebug = vis.debug;
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (/Vision returned no text|no text for this image/i.test(msg)) ocrFailureReasonCode = OcrTraceReason.OCR_RETURNED_EMPTY;
+    else if (/almost no usable text/i.test(msg)) ocrFailureReasonCode = OcrTraceReason.OCR_TEXT_DISCARDED_BY_THRESHOLD;
+    else if (/empty after download/i.test(msg)) ocrFailureReasonCode = OcrTraceReason.STORAGE_FETCH_EMPTY;
+    else ocrFailureReasonCode = OcrTraceReason.OCR_ENGINE_ERROR;
+
+    console.error('[import-schedule-ocr] ocr_stage_extraction_caught', {
+      ocr_failure_reason_code: ocrFailureReasonCode,
+      message: msg,
+      storage_download_bytes: buf.length,
+    });
+
     await supabase
       .from('schedule_import_batches')
       .update({
         parse_status: 'failed',
         parse_error: msg,
+        classification_json: {
+          ocr_instrumentation: {
+            reason_codes: [ocrFailureReasonCode],
+            storage_path: filePath,
+            storage_download_bytes: buf.length,
+            storage_fetch_ok: true,
+            handoff_reason_code: ocrFailureReasonCode,
+            extraction_error_message: msg.slice(0, 2000),
+          },
+        },
         updated_at: new Date().toISOString(),
       })
       .eq('id', batchId);
-    return new Response(JSON.stringify({ error: 'Extraction failed', details: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({
+        error: 'Extraction failed',
+        details: msg,
+        ocr_reason_code: ocrFailureReasonCode,
+        storage_download_bytes: buf.length,
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    );
   }
 
   const monthKey = normalizeMonthKeyHint(
@@ -277,6 +395,123 @@ serve(async (req) => {
   const classification = classifyImport(rawText, monthKey, profile);
   /** Prefer month read from the image (e.g. "April Schedule", "Apr 3") over the Schedule tab cursor. */
   const effectiveMonthKey = normalizeMonthKeyHint(classification.detected_month_key ?? monthKey);
+
+  /** Guided uploads use `/jetblue/` in path; generic Schedule tab uploads use `uid/YYYY-MM/...` but same FLICA screenshots. */
+  const isJetBlueFlicaGuided = typeof filePath === 'string' && filePath.includes('/jetblue/');
+  const isJetBlueFlicaMonthlyOcr = ocrLooksLikeJetBlueFlicaMonthly(rawText);
+
+  if (imageOcrDebug) {
+    const monthFound = Boolean(classification.detected_month_key ?? effectiveMonthKey);
+    console.log('[import-schedule-ocr] jetblue_flica_ocr_trace', {
+      jetblue_flica_guided: isJetBlueFlicaGuided,
+      jetblue_flica_monthly_ocr: isJetBlueFlicaMonthlyOcr,
+      month_found: monthFound,
+      merged_len: imageOcrDebug.mergedLen,
+      weak_ocr: imageOcrDebug.weakOcrFlag,
+      variant_char_counts: imageOcrDebug.variantCharCounts,
+      evidence_tokens: flicaOcrHasScheduleEvidence(rawText),
+    });
+  }
+
+  if (isJetBlueFlicaGuided || isJetBlueFlicaMonthlyOcr) {
+    await supabase.from('schedule_import_candidates').delete().eq('batch_id', batchId);
+
+    const handoffEmpty = rawText.length === 0;
+    const handoffCode = handoffEmpty ? OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT : null;
+
+    console.log('[import-schedule-ocr] ocr_stage_jetblue_structured_handoff', {
+      batch_id: batchId,
+      raw_text_len_written_to_batch: rawText.length,
+      storage_download_bytes: buf.length,
+      ocr_handoff_reason_code: handoffCode,
+    });
+
+    const batchPatch: Record<string, unknown> = {
+      raw_extracted_text: rawText.slice(0, 50000),
+      parse_status: 'parsed',
+      row_count: 0,
+      warning_count: 0,
+      parse_error: handoffEmpty
+        ? `OCR produced no usable text (${OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT}). See classification_json.ocr_instrumentation.`
+        : pdfWeak
+          ? 'PDF text may be incomplete (scanned document).'
+          : null,
+      updated_at: new Date().toISOString(),
+      selected_month_key: effectiveMonthKey,
+      detected_month_key: classification.detected_month_key,
+      airline_guess_id: classification.airline_guess_id,
+      role_guess_id: classification.role_guess_id,
+      software_guess_id: classification.software_guess_id,
+      view_guess_id: classification.view_guess_id,
+      classification_confidence: classification.confidence,
+      classification_json: {
+        parser_key: 'jetblue_flica_structured_v1',
+        template_id: '00000000-0000-4000-8000-000000000499',
+        jetblue_flica_skip_generic_candidates: true,
+        jetblue_flica_ocr_detect: isJetBlueFlicaMonthlyOcr,
+        jetblue_flica_path_detect: isJetBlueFlicaGuided,
+        signals: classification.signals,
+        ocr_instrumentation: {
+          storage_path: filePath,
+          storage_download_bytes: buf.length,
+          mime_from_extension: mimeFromExtension,
+          file_kind: kind,
+          raw_text_len_for_db: rawText.length,
+          handoff_reason_code: handoffCode,
+          reason_codes: handoffEmpty ? [OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT] : [],
+          vision_ocr: imageOcrDebug?.ocrInstrument ?? null,
+        },
+        ocr_pipeline: imageOcrDebug
+          ? {
+              merged_len: imageOcrDebug.mergedLen,
+              weak_ocr: imageOcrDebug.weakOcrFlag,
+              logs: imageOcrDebug.pipelineLogs,
+              variant_char_counts: imageOcrDebug.variantCharCounts,
+              ocr_issues: pickOcrIssueCodes({
+                mergedLen: imageOcrDebug.mergedLen,
+                monthDetected: Boolean(classification.detected_month_key ?? effectiveMonthKey),
+                evidenceFound: flicaOcrHasScheduleEvidence(rawText),
+                multiPass: Object.keys(imageOcrDebug.variantCharCounts).length > 1,
+                salvageParserUsed: false,
+              }),
+            }
+          : undefined,
+      },
+      applied_template_id: '00000000-0000-4000-8000-000000000499',
+    };
+
+    const jbUpd = await updateScheduleImportBatchRow(supabase, batchId, batchPatch);
+    if (jbUpd.error) {
+      console.error('[import-schedule-ocr] ocr_stage_batch_update_failed', {
+        reason_code: OcrTraceReason.BATCH_UPDATE_FAILED,
+        message: jbUpd.error.message,
+        batch_id: batchId,
+      });
+    }
+
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        batch_id: batchId,
+        row_count: 0,
+        warning_count: 0,
+        pdf_weak: pdfWeak,
+        parser_key: 'jetblue_flica_structured_v1',
+        template_id: '00000000-0000-4000-8000-000000000499',
+        classification_confidence: classification.confidence,
+        jetblue_flica_skip_generic_candidates: true,
+        jetblue_flica_ocr_detect: isJetBlueFlicaMonthlyOcr,
+        raw_extracted_text_len: rawText.length,
+        storage_download_bytes: buf.length,
+        ocr_handoff_reason_code: handoffCode,
+        batch_update_error: jbUpd.error?.message ?? null,
+        batch_update_used_core_fallback: jbUpd.used_core_fallback,
+        batch_update_extended_skipped: jbUpd.extended_error != null,
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
   const template = templates.length > 0 ? pickTemplate(templates, classification, profile?.last_successful_template_id ?? null) : null;
 
   const parserKey = template?.parser_key ?? 'generic_fallback_v1';
@@ -354,11 +589,27 @@ serve(async (req) => {
       parser_key: parserKey,
       template_id: templateId,
       signals: classification.signals,
+      ocr_instrumentation: {
+        storage_path: filePath,
+        storage_download_bytes: buf.length,
+        mime_from_extension: mimeFromExtension,
+        file_kind: kind,
+        raw_text_len_for_db: rawText.length,
+        handoff_reason_code: rawText.length === 0 ? OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT : null,
+        vision_ocr: imageOcrDebug?.ocrInstrument ?? null,
+      },
     },
     applied_template_id: templateId,
   };
 
-  await supabase.from('schedule_import_batches').update(batchPatch).eq('id', batchId);
+  const genUpd = await updateScheduleImportBatchRow(supabase, batchId, batchPatch);
+  if (genUpd.error) {
+    console.error('[import-schedule-ocr] ocr_stage_batch_update_failed', {
+      reason_code: OcrTraceReason.BATCH_UPDATE_FAILED,
+      message: genUpd.error.message,
+      batch_id: batchId,
+    });
+  }
 
   try {
     await persistUserMemoryAfterSuccessfulImport(supabase, userId, classification, templateId, effectiveMonthKey);
@@ -376,6 +627,12 @@ serve(async (req) => {
       parser_key: parserKey,
       template_id: templateId,
       classification_confidence: classification.confidence,
+      raw_extracted_text_len: rawText.length,
+      storage_download_bytes: buf.length,
+      ocr_handoff_reason_code: rawText.length === 0 ? OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT : null,
+      batch_update_error: genUpd.error?.message ?? null,
+      batch_update_used_core_fallback: genUpd.used_core_fallback,
+      batch_update_extended_skipped: genUpd.extended_error != null,
     }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );

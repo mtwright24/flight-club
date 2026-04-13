@@ -1,8 +1,13 @@
 /**
  * JetBlue FLICA guided import sessions — schedule_imports / images / issues.
+ * Semantic source type for JetBlue monthly screenshots: `JETBLUE_FLICA_MONTHLY_SOURCE_TYPE` (see `jetblueFlicaUnderstanding.ts`).
  */
 
 import { supabase } from '../../lib/supabaseClient';
+import { JETBLUE_FLICA_MONTHLY_SOURCE_TYPE } from './jetblueFlicaUnderstanding';
+import { JETBLUE_FLICA_TEMPLATE_KEY } from './jetblueFlicaTemplate';
+
+export { JETBLUE_FLICA_MONTHLY_SOURCE_TYPE };
 
 export type ScheduleImportStatus = 'draft' | 'processing' | 'review' | 'partial' | 'saved' | 'failed';
 
@@ -23,6 +28,20 @@ export type ScheduleImportRow = {
   created_at: string;
   updated_at: string;
 };
+
+/** When true, row is a JetBlue FLICA monthly line-view import; use semantic source type for analytics / downstream. */
+export function isJetBlueFlicaMonthlyScheduleImport(
+  row: Pick<ScheduleImportRow, 'template_key' | 'schedule_system'>
+): boolean {
+  return row.schedule_system === 'FLICA' && row.template_key === JETBLUE_FLICA_TEMPLATE_KEY;
+}
+
+/** Stable string for JetBlue FLICA monthly screenshot imports (`raw_source_type` in specs; DB may still store `source_type` = screenshot). */
+export function semanticScheduleSourceType(
+  row: Pick<ScheduleImportRow, 'template_key' | 'schedule_system'>
+): typeof JETBLUE_FLICA_MONTHLY_SOURCE_TYPE | 'screenshot' {
+  return isJetBlueFlicaMonthlyScheduleImport(row) ? JETBLUE_FLICA_MONTHLY_SOURCE_TYPE : 'screenshot';
+}
 
 export type ScheduleImportImageRow = {
   id: string;
@@ -170,6 +189,7 @@ export type SchedulePairingRow = {
   needs_review: boolean | null;
   pairing_requires_review: boolean;
   raw_text: string | null;
+  normalized_json?: Record<string, unknown> | null;
 };
 
 /** View `schedule_pairing_duties` — leg rows under a pairing (pairing_row_id = schedule_pairings.id). */
@@ -177,13 +197,17 @@ export type SchedulePairingDutyRow = {
   id: string;
   pairing_row_id: string;
   duty_date: string | null;
+  flight_number: string | null;
   from_airport: string | null;
   to_airport: string | null;
   departure_time_local: string | null;
   arrival_time_local: string | null;
+  /** Block duration display (HH:MM), from `normalized_json` or derived from `block_time`. */
+  block_time_local: string | null;
   layover_city: string | null;
   hotel_name: string | null;
   release_time_local: string | null;
+  is_deadhead?: boolean | null;
   row_confidence: number | null;
   requires_review: boolean;
   raw_text: string | null;
@@ -217,6 +241,14 @@ export async function fetchPairingsForScheduleImport(importId: string): Promise<
   return (data ?? []) as SchedulePairingRow[];
 }
 
+/** Pairings stored against a generic `schedule_import_batches` row (no guided session). */
+export async function fetchPairingsForBatch(batchId: string): Promise<SchedulePairingRow[]> {
+  const { data, error } = await supabase.from('schedule_pairings').select('*').eq('import_id', batchId);
+
+  if (error) throw error;
+  return (data ?? []) as SchedulePairingRow[];
+}
+
 export async function fetchPairingById(pairingUuid: string): Promise<SchedulePairingRow | null> {
   const { data, error } = await supabase.from('schedule_pairings').select('*').eq('id', pairingUuid).maybeSingle();
   if (error) throw error;
@@ -224,18 +256,29 @@ export async function fetchPairingById(pairingUuid: string): Promise<SchedulePai
 }
 
 function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
+  const nj = l.normalized_json as { segment_confidence?: number; block_time_local?: string } | null | undefined;
+  const blockNum = l.block_time as number | null | undefined;
+  let blockLocal = nj?.block_time_local ?? null;
+  if (!blockLocal && blockNum != null && Number.isFinite(blockNum)) {
+    const h = Math.floor(blockNum);
+    const m = Math.round((blockNum - h) * 60);
+    blockLocal = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
   return {
     id: l.id as string,
     pairing_row_id: l.pairing_id as string,
     duty_date: (l.duty_date as string) ?? null,
+    flight_number: (l.flight_number as string) ?? null,
     from_airport: (l.departure_station as string) ?? null,
     to_airport: (l.arrival_station as string) ?? null,
     departure_time_local: (l.scheduled_departure_local as string) ?? null,
     arrival_time_local: (l.scheduled_arrival_local as string) ?? null,
+    block_time_local: blockLocal,
     layover_city: (l.layover_city as string) ?? null,
     hotel_name: (l.hotel_name as string) ?? null,
     release_time_local: ((l.release_time_local ?? l.release_time) as string) ?? null,
-    row_confidence: (l.row_confidence as number) ?? null,
+    is_deadhead: (l.is_deadhead as boolean | null | undefined) ?? null,
+    row_confidence: (l.row_confidence as number) ?? nj?.segment_confidence ?? null,
     requires_review: Boolean(l.requires_review),
     raw_text: (l.raw_text as string) ?? null,
   };
@@ -273,6 +316,46 @@ export async function updateSchedulePairing(
     .from('schedule_pairings')
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq('id', pairingUuid);
+  if (error) throw error;
+}
+
+export async function updateSchedulePairingLeg(
+  legId: string,
+  patch: Partial<{
+    duty_date: string | null;
+    flight_number: string | null;
+    departure_station: string | null;
+    arrival_station: string | null;
+    scheduled_departure_local: string | null;
+    scheduled_arrival_local: string | null;
+    block_time: number | null;
+    layover_city: string | null;
+    release_time_local: string | null;
+    is_deadhead: boolean;
+    raw_text: string | null;
+    requires_review: boolean;
+    normalized_json: Record<string, unknown>;
+  }>
+): Promise<void> {
+  const { normalized_json: njIn, ...rest } = patch;
+  let mergedNj: Record<string, unknown> | undefined;
+  if (njIn !== undefined) {
+    const { data: row } = await supabase
+      .from('schedule_pairing_legs')
+      .select('normalized_json')
+      .eq('id', legId)
+      .maybeSingle();
+    const prev = (row?.normalized_json as Record<string, unknown> | null) ?? {};
+    mergedNj = { ...prev, ...njIn };
+  }
+  const { error } = await supabase
+    .from('schedule_pairing_legs')
+    .update({
+      ...rest,
+      ...(mergedNj !== undefined ? { normalized_json: mergedNj } : {}),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', legId);
   if (error) throw error;
 }
 

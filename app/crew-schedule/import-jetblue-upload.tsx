@@ -23,6 +23,10 @@ import {
   insertScheduleImportImage,
   updateScheduleImport,
 } from '../../src/features/crew-schedule/jetblueFlicaImport';
+import {
+  clearJetBlueCandidateRowsForImport,
+  persistJetBlueFlicaStructuredParse,
+} from '../../src/features/crew-schedule/persistJetBlueFlicaPairings';
 import { scoreJetBlueFlicaTemplateMatch } from '../../src/features/crew-schedule/jetblueFlicaTemplate';
 import { loadLastMonthCursor, saveLastMonthCursor } from '../../src/features/crew-schedule/scheduleViewStorage';
 import { scheduleTheme as T } from '../../src/features/crew-schedule/scheduleTheme';
@@ -113,7 +117,7 @@ export default function ImportJetBlueUploadScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
       selectionLimit: 4,
-      quality: 0.92,
+      quality: 1,
       base64: true,
       preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
     });
@@ -130,6 +134,7 @@ export default function ImportJetBlueUploadScreen() {
     setBusy(true);
     const rawChunks: string[] = [];
     const scores: number[] = [];
+    let firstBatchId: string | null = null;
     let sid = importId;
     try {
       if (!sid) {
@@ -224,6 +229,25 @@ export default function ImportJetBlueUploadScreen() {
       const avg =
         scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100 : null;
       const low = scores.some((s) => s < 0.6);
+
+      if (rawChunks.length > 0 && sid && firstBatchId) {
+        try {
+          await persistJetBlueFlicaStructuredParse({
+            importId: sid,
+            monthKey,
+            ocrText: combined,
+            primaryBatchId: firstBatchId,
+          });
+          await clearJetBlueCandidateRowsForImport(sid);
+        } catch (e) {
+          await createScheduleImportIssue({
+            importId: sid,
+            issueType: 'parse_error',
+            message: e instanceof Error ? e.message : String(e),
+            severity: 'high',
+          });
+        }
+      }
 
       await updateScheduleImport(sid, {
         status: rawChunks.length > 0 ? 'review' : 'partial',

@@ -2,7 +2,10 @@
  * JetBlue IFC pairing credit — RIG components (contract-grounded formulas for tooling).
  * Final payable credit = max of applicable rig vs raw shown credit where required by agreement.
  * Values are hours unless noted.
+ * Screenshot parser must not invent pay rules; this layer applies CBA-backed math when inputs exist.
  */
+
+import { JETBLUE_MINIMUM_CREDIT_HOURS_PER_DAY } from './jetblueFlicaUnderstanding';
 
 export type RigInputs = {
   /** Raw credit from FLICA / pairing footer (TCRD or equivalent). */
@@ -19,7 +22,7 @@ const TAFB_RIG_DIVISOR = 3.5;
 const TAFB_RIG_CREDIT_PER_BLOCK = 1;
 const DUTY_RIG_DIVISOR = 2;
 const DUTY_RIG_CREDIT_PER_BLOCK = 1;
-const MDPC_AVG_FLOOR_HOURS = 5;
+const MDPC_AVG_FLOOR_HOURS = JETBLUE_MINIMUM_CREDIT_HOURS_PER_DAY;
 
 /**
  * TAFB rig: minimum 1 hour credit per 3.5 hours away from base (IFC CBA — verify article in uploaded CBA PDF).

@@ -8,32 +8,80 @@ type ProfileLite = {
   avatar_url: string | null;
 };
 
+const PROFILE_IN_CHUNK = 100;
+const PROFILE_FETCH_RETRIES = 4;
+const PROFILE_FETCH_BASE_DELAY_MS = 350;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** PostgREST / Cloudflare sometimes returns HTML 502 pages; avoid logging multi‑KB bodies. */
+function summarizeSupabaseError(err: unknown): string {
+  const raw =
+    err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'
+      ? (err as { message: string }).message
+      : String(err);
+  if (/<!DOCTYPE|<html[\s>]/i.test(raw)) {
+    return 'Upstream returned an HTML error page (often 502/503 from the API gateway).';
+  }
+  return raw.length > 280 ? `${raw.slice(0, 277)}…` : raw;
+}
+
+function isTransientProfileFetchFailure(err: unknown): boolean {
+  const raw =
+    err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'
+      ? (err as { message: string }).message
+      : String(err);
+  if (/<!DOCTYPE|<html[\s>]/i.test(raw)) return true;
+  return /\b502\b|\b503\b|\b504\b|\b429\b|timeout|bad gateway|service unavailable|ECONNRESET|network|fetch failed/i.test(
+    raw
+  );
+}
+
 async function fetchProfilesByUserIds(userIds: string[]): Promise<Map<string, ProfileLite>> {
   const unique = [...new Set(userIds.filter(Boolean))];
   const map = new Map<string, ProfileLite>();
   if (!unique.length) return map;
 
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('id, display_name, full_name, avatar_url')
-    .in('id', unique);
+  for (let offset = 0; offset < unique.length; offset += PROFILE_IN_CHUNK) {
+    const chunk = unique.slice(offset, offset + PROFILE_IN_CHUNK);
 
-  if (error) {
-    console.warn('[DM] fetchProfilesByUserIds:', error.message);
-    return map;
+    for (let attempt = 0; attempt < PROFILE_FETCH_RETRIES; attempt++) {
+      if (attempt > 0) {
+        await sleep(PROFILE_FETCH_BASE_DELAY_MS * Math.pow(2, attempt - 1));
+      }
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, display_name, full_name, avatar_url')
+        .in('id', chunk);
+
+      if (!error) {
+        for (const p of data || []) {
+          const resolvedDisplayName =
+            (typeof p.display_name === 'string' && p.display_name.trim()) ||
+            (typeof (p as any).full_name === 'string' && String((p as any).full_name).trim()) ||
+            null;
+          map.set(p.id, {
+            id: p.id,
+            display_name: resolvedDisplayName,
+            avatar_url: p.avatar_url ?? null,
+          });
+        }
+        break;
+      }
+
+      const transient = isTransientProfileFetchFailure(error);
+      const willRetry = transient && attempt < PROFILE_FETCH_RETRIES - 1;
+      if (!willRetry) {
+        console.warn('[DM] fetchProfilesByUserIds:', summarizeSupabaseError(error));
+        break;
+      }
+    }
+
   }
 
-  for (const p of data || []) {
-    const resolvedDisplayName =
-      (typeof p.display_name === 'string' && p.display_name.trim()) ||
-      (typeof (p as any).full_name === 'string' && String((p as any).full_name).trim()) ||
-      null;
-    map.set(p.id, {
-      id: p.id,
-      display_name: resolvedDisplayName,
-      avatar_url: p.avatar_url ?? null,
-    });
-  }
   return map;
 }
 

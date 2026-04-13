@@ -1,9 +1,21 @@
 /**
  * JetBlue FA FLICA monthly detailed list — template detection + confidence (v1).
  * Pairing = Base-to-Base sequence per IFC CBA; footprints / OSP / RIG stored separately in DB.
+ *
+ * OCR anchors below (including DHC in column-header patterns) exist only to recognize FLICA-shaped
+ * screenshots. Do not use obsolete JetBlue fields (TACLAG, GRNT, DHC) for operational logic — see
+ * `jetblueFlicaUnderstanding.ts`. OAEQP / OEQP are equipment metadata signals.
  */
 
+import {
+  JETBLUE_FLICA_EQUIPMENT_FIELD_CODES,
+  JETBLUE_FLICA_OBSOLETE_FIELD_CODES,
+} from './jetblueFlicaUnderstanding';
+
 export const JETBLUE_FLICA_TEMPLATE_KEY = 'jetblue_fa_flica_month_detail' as const;
+
+/** Re-export for callers that classify OCR without importing the full understanding module. */
+export { JETBLUE_FLICA_OBSOLETE_FIELD_CODES, JETBLUE_FLICA_EQUIPMENT_FIELD_CODES };
 
 export type ConfidenceBand = 'high' | 'medium' | 'low';
 

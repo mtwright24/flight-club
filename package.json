@@ -13,7 +13,10 @@
     "ios": "expo run:ios",
     "ios:open": "open ios/flightclub.xcworkspace",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "supabase:deploy-functions": "bash scripts/supabase-deploy-all-functions.sh",
+    "supabase:migration-list": "npx supabase migration list",
+    "supabase:db-query": "npx supabase db query --linked"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

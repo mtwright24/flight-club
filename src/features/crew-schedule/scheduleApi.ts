@@ -46,6 +46,8 @@ export type ScheduleImportBatchRow = {
   applied_template_id?: string | null;
   classification_json?: Record<string, unknown> | null;
   classification_confidence?: number | null;
+  /** JetBlue FLICA guided import session (optional). */
+  schedule_import_id?: string | null;
   created_at: string;
 };
 
@@ -137,6 +139,16 @@ export async function invokeImportScheduleOcr(batchId: string): Promise<{
   row_count: number;
   warning_count: number;
   pdf_weak?: boolean;
+  jetblue_flica_skip_generic_candidates?: boolean;
+  parser_key?: string;
+  /** From Edge OCR pipeline — compare to client upload bytes and to `fetchImportBatch().raw_extracted_text` length */
+  raw_extracted_text_len?: number;
+  storage_download_bytes?: number;
+  ocr_handoff_reason_code?: string | null;
+  batch_update_error?: string | null;
+  ocr_reason_code?: string;
+  batch_update_used_core_fallback?: boolean;
+  batch_update_extended_skipped?: boolean;
 }> {
   // Use explicit fetch + apikey + user JWT. supabase.functions.invoke uses the client fetch wrapper;
   // in some RN setups the user Bearer token may not reach the Edge Function (401 before your code runs).
@@ -188,12 +200,36 @@ export async function invokeImportScheduleOcr(batchId: string): Promise<{
     throw new Error(`Edge Function HTTP ${res.status}${body ? `\n${body}` : ''}`);
   }
 
-  const d = parsed as { ok?: boolean; error?: string; row_count?: number; warning_count?: number; pdf_weak?: boolean };
+  const d = parsed as {
+    ok?: boolean;
+    error?: string;
+    row_count?: number;
+    warning_count?: number;
+    pdf_weak?: boolean;
+    jetblue_flica_skip_generic_candidates?: boolean;
+    parser_key?: string;
+    raw_extracted_text_len?: number;
+    storage_download_bytes?: number;
+    ocr_handoff_reason_code?: string | null;
+    batch_update_error?: string | null;
+    ocr_reason_code?: string;
+    batch_update_used_core_fallback?: boolean;
+    batch_update_extended_skipped?: boolean;
+  };
   if (d?.error) throw new Error(d.error);
   return {
     row_count: d.row_count ?? 0,
     warning_count: d.warning_count ?? 0,
     pdf_weak: d.pdf_weak,
+    jetblue_flica_skip_generic_candidates: d.jetblue_flica_skip_generic_candidates,
+    parser_key: d.parser_key,
+    raw_extracted_text_len: d.raw_extracted_text_len,
+    storage_download_bytes: d.storage_download_bytes,
+    ocr_handoff_reason_code: d.ocr_handoff_reason_code,
+    batch_update_error: d.batch_update_error,
+    ocr_reason_code: d.ocr_reason_code,
+    batch_update_used_core_fallback: d.batch_update_used_core_fallback,
+    batch_update_extended_skipped: d.batch_update_extended_skipped,
   };
 }
 

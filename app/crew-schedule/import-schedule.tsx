@@ -15,8 +15,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   createImportBatch,
+  fetchImportBatch,
   invokeImportScheduleOcr,
 } from '../../src/features/crew-schedule/scheduleApi';
+import { looksLikeFlicaRawText, ocrLooksLikeJetBlueFlicaMonthly } from '../../src/features/schedule-import/parser/jetblueFlicaOcrDetect';
+import { persistJetBlueFlicaStructuredParseForGenericBatch } from '../../src/features/crew-schedule/persistJetBlueFlicaPairings';
 import { scheduleTheme as T } from '../../src/features/crew-schedule/scheduleTheme';
 import { loadLastMonthCursor, saveLastMonthCursor } from '../../src/features/crew-schedule/scheduleViewStorage';
 import CrewScheduleHeader from '../../src/features/crew-schedule/components/CrewScheduleHeader';
@@ -25,9 +28,6 @@ import { supabase } from '../../src/lib/supabaseClient';
 type Source = 'photo' | 'pdf' | null;
 
 const L = '[schedule-import]';
-
-/** Physical devices + tunnel often do not stream JS logs to the Metro terminal; we mirror to the screen in dev. */
-let appendImportScheduleScreenLog: ((line: string) => void) | null = null;
 
 const MONTH_NAMES = [
   'January',
@@ -60,12 +60,11 @@ function formatDbgArgs(args: unknown[]): string {
     .join(' ');
 }
 
-/** Log to Metro (both levels — some setups only show log or only warn) + optional on-screen buffer. */
+/** Log to Metro (both levels — some setups only show log or only warn). */
 function dbg(...args: unknown[]) {
   const line = `${L} ${formatDbgArgs(args)}`;
   console.log(line);
   console.warn(line);
-  appendImportScheduleScreenLog?.(line);
 }
 
 function pad2(n: number) {
@@ -156,19 +155,6 @@ export default function ImportScheduleScreen() {
   const [busy, setBusy] = useState(false);
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth() + 1);
-  const [importDebugLines, setImportDebugLines] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (!__DEV__) return;
-    appendImportScheduleScreenLog = (line) => {
-      const stamp = new Date().toISOString().slice(11, 23);
-      setImportDebugLines((prev) => [...prev.slice(-48), `${stamp} ${line}`]);
-    };
-    return () => {
-      appendImportScheduleScreenLog = null;
-    };
-  }, []);
-
   useEffect(() => {
     void loadLastMonthCursor().then((c) => {
       if (c) {
@@ -207,6 +193,80 @@ export default function ImportScheduleScreen() {
       void saveLastMonthCursor(year, nm);
     }
   }, [year, month]);
+
+  const handlePostOcr = useCallback(
+    async (
+      batchId: string,
+      raw: string,
+      ocrMeta: Awaited<ReturnType<typeof invokeImportScheduleOcr>>,
+      batchRow: Awaited<ReturnType<typeof fetchImportBatch>>
+    ) => {
+      dbg('ocr_handoff_compare', {
+        edge_raw_extracted_text_len: ocrMeta.raw_extracted_text_len,
+        edge_storage_download_bytes: ocrMeta.storage_download_bytes,
+        edge_ocr_handoff_reason_code: ocrMeta.ocr_handoff_reason_code,
+        edge_batch_update_error: ocrMeta.batch_update_error,
+        batch_update_used_core_fallback: ocrMeta.batch_update_used_core_fallback,
+        batch_update_extended_skipped: ocrMeta.batch_update_extended_skipped,
+        db_raw_extracted_text_len: raw.length,
+        mismatch_edge_vs_db:
+          ocrMeta.raw_extracted_text_len != null && raw.length !== ocrMeta.raw_extracted_text_len
+            ? 'Edge reported raw length differs from fetchImportBatch — check RLS, replication lag, or batch id'
+            : null,
+      });
+      const cls = batchRow?.classification_json as {
+        jetblue_flica_skip_generic_candidates?: boolean;
+        parser_key?: string;
+        ocr_pipeline?: { weak_ocr?: boolean; merged_len?: number; ocr_issues?: string[] };
+      } | undefined;
+      const edgeSaysJetBlueFlica =
+        ocrMeta.jetblue_flica_skip_generic_candidates === true ||
+        ocrMeta.parser_key === 'jetblue_flica_structured_v1';
+      const localSaysFlica =
+        ocrLooksLikeJetBlueFlicaMonthly(raw) ||
+        looksLikeFlicaRawText(raw) ||
+        cls?.jetblue_flica_skip_generic_candidates === true ||
+        cls?.parser_key === 'jetblue_flica_structured_v1';
+      const fallbackStructuredParse =
+        raw.length >= 200 &&
+        /\bJ[A-Z0-9]{3,6}\s*[:/.]?\s*\d/i.test(raw) &&
+        /\b(BSE\s*REPT|DPS[- ]?ARS|DEPL|FLTNO|D-END|Base\/Equip|Operates)\b/i.test(raw);
+      const shouldPersistPairings = edgeSaysJetBlueFlica || localSaysFlica || fallbackStructuredParse;
+      if (shouldPersistPairings) {
+        try {
+          const pr = await persistJetBlueFlicaStructuredParseForGenericBatch({
+            batchId,
+            monthKey,
+            ocrText: raw,
+          });
+          dbg('JetBlue FLICA structured parse', { result: pr, rawLen: raw.length });
+          if (pr === 'skipped_no_text') {
+            Alert.alert(
+              'No text from scan',
+              'The OCR step returned almost no usable text from your full-resolution upload (the small preview on the next screen is not what gets scanned). The server converts HEIC, trims margins, crops the schedule body, upscales, and runs several Vision passes. If this still appears, take a brighter, tighter photo of just the pairing blocks with larger text on screen.'
+            );
+          } else if (pr === 'skipped_no_pairings') {
+            const weakOcr = cls?.ocr_pipeline?.weak_ocr === true;
+            Alert.alert(
+              weakOcr ? 'Pairings not extracted' : 'Could not find pairings',
+              weakOcr
+                ? 'We detected a JetBlue FLICA schedule, but the screenshot text was too small or fragmented to match pairing headers reliably. Try a tighter crop of the pairing list with larger text, then import again.'
+                : 'We saw FLICA-style text but could not match pairing headers (e.g. J1016 : 30MAR or J1016 04APR). If this keeps happening, use a sharper, more zoomed screenshot with less browser chrome.'
+            );
+          }
+        } catch (pe) {
+          dbg('persistJetBlueFlicaStructuredParseForGenericBatch failed', pe);
+          Alert.alert('Could not save pairings', pe instanceof Error ? pe.message : String(pe));
+        }
+      }
+
+      router.replace({
+        pathname: '/crew-schedule/import-review/[batchId]',
+        params: { batchId },
+      });
+    },
+    [monthKey, router]
+  );
 
   const uploadAndProcess = useCallback(
     async (
@@ -259,13 +319,12 @@ export default function ImportScheduleScreen() {
         });
 
         dbg('calling invokeImportScheduleOcr', { batchId });
-        await invokeImportScheduleOcr(batchId);
-        dbg('invokeImportScheduleOcr done');
+        const ocrMeta = await invokeImportScheduleOcr(batchId);
+        dbg('invokeImportScheduleOcr done', ocrMeta);
 
-        router.replace({
-          pathname: '/crew-schedule/import-review/[batchId]',
-          params: { batchId },
-        });
+        const batchRow = await fetchImportBatch(batchId);
+        const raw = batchRow?.raw_extracted_text ?? '';
+        await handlePostOcr(batchId, raw, ocrMeta, batchRow);
       } catch (e) {
         dbg('uploadAndProcess FAILED', e);
         let msg = e instanceof Error ? e.message : String(e);
@@ -282,7 +341,87 @@ export default function ImportScheduleScreen() {
         setBusy(false);
       }
     },
-    [monthKey, router]
+    [handlePostOcr, monthKey]
+  );
+
+  const uploadAndProcessManyImages = useCallback(
+    async (assets: ImagePicker.ImagePickerAsset[]) => {
+      if (!assets.length) return;
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (userErr || !userData.user) {
+        Alert.alert('Sign in required', 'Please sign in to import your schedule.');
+        return;
+      }
+      const uid = userData.user.id;
+      setBusy(true);
+      try {
+        const rawChunks: string[] = [];
+        let firstBatchId: string | null = null;
+        let lastOcrMeta: Awaited<ReturnType<typeof invokeImportScheduleOcr>> | null = null;
+        for (let i = 0; i < assets.length; i++) {
+          const asset = assets[i];
+          const order = i + 1;
+          dbg('uploadAndProcessManyImages', { order, total: assets.length });
+          const baseName = asset.fileName ?? `photo-${order}.jpg`;
+          const safe = safeFileName(baseName);
+          const path = `${uid}/${monthKey}/${Date.now()}-${order}-${safe}`;
+          const bytes = await buildUploadBytes(asset.uri, asset.mimeType ?? 'image/jpeg', asset.base64);
+          if (bytes.length === 0) {
+            dbg('skip empty asset', { order });
+            continue;
+          }
+          const { error: upErr } = await supabase.storage.from('schedule-imports').upload(path, bytes, {
+            contentType: asset.mimeType ?? 'image/jpeg',
+            upsert: false,
+          });
+          if (upErr) {
+            dbg('storage upload error multi', upErr);
+            const em = (upErr as { message?: string }).message ?? String(upErr);
+            if (/bucket|not found|404/i.test(em)) {
+              throw new Error(
+                'Storage bucket "schedule-imports" is missing. In Supabase: run SQL from supabase/schedule-import-bucket.sql (or apply migrations), then retry.'
+              );
+            }
+            throw upErr;
+          }
+          const batchId = await createImportBatch({
+            monthKey,
+            sourceType: 'screenshot',
+            sourceFilePath: path,
+          });
+          lastOcrMeta = await invokeImportScheduleOcr(batchId);
+          const br = await fetchImportBatch(batchId);
+          rawChunks.push((br?.raw_extracted_text ?? '').trim());
+          if (!firstBatchId) firstBatchId = batchId;
+        }
+        if (!firstBatchId || !lastOcrMeta) {
+          throw new Error('No images could be processed.');
+        }
+        const combined = rawChunks.filter(Boolean).join('\n\n---\n\n');
+        const { error: mergeErr } = await supabase
+          .from('schedule_import_batches')
+          .update({ raw_extracted_text: combined, updated_at: new Date().toISOString() })
+          .eq('id', firstBatchId);
+        if (mergeErr) dbg('merge batch raw_extracted_text failed', mergeErr);
+        const batchRow = await fetchImportBatch(firstBatchId);
+        await handlePostOcr(firstBatchId, combined, lastOcrMeta, batchRow);
+      } catch (e) {
+        dbg('uploadAndProcessManyImages FAILED', e);
+        let msg = e instanceof Error ? e.message : String(e);
+        const isInvalidJwt = /Invalid JWT/i.test(msg);
+        if (isInvalidJwt) {
+          msg +=
+            '\n\nThis is a Supabase session token issue (not your Google Vision keys). Try: sign out and sign in again, or confirm EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY match this Supabase project.';
+        } else if (/Edge Function|FunctionsHttpError|Failed to send|non-2xx/i.test(msg)) {
+          msg +=
+            '\n\nIf the error mentions Vision/OCR extraction (not 401 JWT), check Edge secrets: GOOGLE_CLOUD_API_KEY or GOOGLE_CLOUD_CLIENT_EMAIL + GOOGLE_CLOUD_PRIVATE_KEY.';
+        }
+        Alert.alert('Import failed', msg);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handlePostOcr, monthKey]
   );
 
   const pickPhotoLibrary = useCallback(async () => {
@@ -293,13 +432,22 @@ export default function ImportScheduleScreen() {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.92,
+      allowsMultipleSelection: true,
+      selectionLimit: 8,
+      /** Full resolution for server OCR — the review screen thumbnail is display-only. */
+      quality: 1,
       base64: true,
       // iOS: prefer JPEG-compatible export instead of HEIC when possible (Vision API does not support HEIC).
       preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
     });
     if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
+    const assets = result.assets;
+    dbg('pickPhotoLibrary assets', { count: assets.length });
+    if (assets.length > 1) {
+      await uploadAndProcessManyImages(assets);
+      return;
+    }
+    const asset = assets[0];
     dbg('pickPhotoLibrary asset', {
       uriPrefix: asset.uri.slice(0, 32),
       mimeType: asset.mimeType,
@@ -313,7 +461,7 @@ export default function ImportScheduleScreen() {
     await uploadAndProcess(asset.uri, asset.mimeType ?? 'image/jpeg', asset.fileName ?? 'photo.jpg', 'screenshot', {
       jpegBase64: asset.base64,
     });
-  }, [uploadAndProcess]);
+  }, [uploadAndProcess, uploadAndProcessManyImages]);
 
   const pickCamera = useCallback(async () => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -322,7 +470,7 @@ export default function ImportScheduleScreen() {
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
-      quality: 0.92,
+      quality: 1,
       base64: true,
       preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
     });
@@ -387,7 +535,11 @@ export default function ImportScheduleScreen() {
         <Text style={styles.meta}>
           Import bucket <Text style={styles.metaStrong}>{monthKey}</Text> — rows save under this month. OCR also detects the month from your image when possible.
         </Text>
-        <Text style={styles.lead}>Upload a roster screenshot, photo, or PDF. Text is extracted server-side; you review before anything is saved.</Text>
+        <Text style={styles.lead}>
+          Upload one or more roster screenshots, a photo, or a PDF. Text is extracted server-side; you review before
+          anything is saved. From the photo library you can select multiple images — OCR runs on each, then results are
+          merged for one review.
+        </Text>
 
         <Text style={styles.h2}>JetBlue FLICA (recommended)</Text>
         <Pressable
@@ -405,7 +557,7 @@ export default function ImportScheduleScreen() {
         <View style={styles.options}>
           {(
             [
-              { id: 'photo' as const, label: 'Screenshot / Photo', sub: 'Generic OCR + line review' },
+              { id: 'photo' as const, label: 'Screenshot / Photo', sub: 'Multi-select from library; OCR merged into one review' },
               { id: 'pdf' as const, label: 'PDF', sub: 'Text extract + review' },
             ] as const
           ).map((opt) => {
@@ -464,23 +616,6 @@ export default function ImportScheduleScreen() {
             <Text style={styles.continueText}>Continue</Text>
           </Pressable>
         )}
-
-        {__DEV__ ? (
-          <View style={styles.debugPanel}>
-            <Text style={styles.debugTitle}>Import debug (on-device — scroll here if Metro shows nothing)</Text>
-            <ScrollView style={styles.debugScroll} nestedScrollEnabled>
-              {importDebugLines.length === 0 ? (
-                <Text style={styles.debugLineMuted}>Pick a photo; lines appear here with byte lengths.</Text>
-              ) : (
-                importDebugLines.map((line, i) => (
-                  <Text key={`${i}-${line.slice(0, 24)}`} style={styles.debugLine} selectable>
-                    {line}
-                  </Text>
-                ))
-              )}
-            </ScrollView>
-          </View>
-        ) : null}
       </ScrollView>
     </View>
   );
@@ -535,23 +670,4 @@ const styles = StyleSheet.create({
   },
   continueDisabled: { opacity: 0.45 },
   continueText: { color: '#fff', fontWeight: '800', fontSize: 16 },
-  debugPanel: {
-    marginTop: 20,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: T.line,
-    backgroundColor: '#1a1a1a',
-    overflow: 'hidden',
-  },
-  debugTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#a3e635',
-    paddingHorizontal: 10,
-    paddingTop: 10,
-    paddingBottom: 6,
-  },
-  debugScroll: { maxHeight: 220, paddingHorizontal: 10, paddingBottom: 10 },
-  debugLine: { fontSize: 10, fontFamily: 'monospace', color: '#e5e5e5', marginBottom: 6 },
-  debugLineMuted: { fontSize: 10, color: '#737373', fontStyle: 'italic' },
 });

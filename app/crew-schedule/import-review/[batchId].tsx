@@ -26,6 +26,11 @@ import {
   updateImportCandidate,
   type ScheduleImportCandidateRow,
 } from '../../../src/features/crew-schedule/scheduleApi';
+import {
+  fetchPairingsForBatch,
+  type SchedulePairingRow,
+} from '../../../src/features/crew-schedule/jetblueFlicaImport';
+import { looksLikeFlicaRawText } from '../../../src/features/schedule-import/parser/jetblueFlicaOcrDetect';
 import { scheduleTheme as T } from '../../../src/features/crew-schedule/scheduleTheme';
 import CrewScheduleHeader from '../../../src/features/crew-schedule/components/CrewScheduleHeader';
 import ZoomableImportImage from '../../../src/features/crew-schedule/components/ZoomableImportImage';
@@ -239,12 +244,15 @@ export default function ImportReviewScreen() {
 
   const [batch, setBatch] = useState<Awaited<ReturnType<typeof fetchImportBatch>>>(null);
   const [candidates, setCandidates] = useState<ScheduleImportCandidateRow[]>([]);
+  const [pairings, setPairings] = useState<SchedulePairingRow[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [detailCandidate, setDetailCandidate] = useState<ScheduleImportCandidateRow | null>(null);
   const [rawExpanded, setRawExpanded] = useState(false);
+  /** When pairing-only import, keep the screenshot secondary (collapsed by default). */
+  const [screenshotOpen, setScreenshotOpen] = useState(true);
 
   const load = useCallback(async () => {
     if (!batchId) return;
@@ -258,8 +266,12 @@ export default function ImportReviewScreen() {
       } else {
         setPreviewUrl(null);
       }
-      const c = await fetchCandidatesForBatch(batchId);
+      const [c, pr] = await Promise.all([
+        fetchCandidatesForBatch(batchId),
+        fetchPairingsForBatch(batchId).catch(() => [] as SchedulePairingRow[]),
+      ]);
       setCandidates(c);
+      setPairings(pr);
       await supabase.from('schedule_import_batches').update({ parse_status: 'reviewed' }).eq('id', batchId);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -272,6 +284,13 @@ export default function ImportReviewScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /** Collapse screenshot preview by default for pairing-only imports (must run before any early return — Rules of Hooks). */
+  useEffect(() => {
+    if (pairings.length > 0 && candidates.length === 0) {
+      setScreenshotOpen(false);
+    }
+  }, [pairings, candidates]);
 
   const monthKey =
     batch?.detected_month_key ?? batch?.selected_month_key ?? batch?.month_key ?? '';
@@ -289,12 +308,32 @@ export default function ImportReviewScreen() {
     return { looksGood: lg, needsReview: nr, skipped: sk };
   }, [candidates]);
 
+  /** Line-based pills are empty when JetBlue skips generic OCR rows; use pairing confidence instead. */
+  const pairingPillStats = useMemo(() => {
+    let ok = 0;
+    let review = 0;
+    for (const p of pairings) {
+      const needs =
+        p.needs_review || p.pairing_requires_review || (p.pairing_confidence ?? 1) < 0.85;
+      if (needs) review += 1;
+      else ok += 1;
+    }
+    return { ok, review };
+  }, [pairings]);
+
   const confirmedApplyRows = useMemo(() => candidatesToConfirmedApplyRows(candidates), [candidates]);
   const confirmedCount = confirmedApplyRows.length;
 
   const openSaveDialog = useCallback(() => {
     if (!batchId || !monthKey) return;
     if (confirmedCount === 0) {
+      if (pairings.length > 0) {
+        Alert.alert(
+          'Pairing-based import',
+          'This screenshot was parsed into pairings, not one line per OCR row. Open a pairing card to review legs and details. Calendar save from this screen only applies when you have rows under Looks Good from line-based imports.'
+        );
+        return;
+      }
       Alert.alert(
         'Nothing to save yet',
         'Confirm items under Looks Good, or open the editor to fix rows that need review.'
@@ -337,7 +376,7 @@ export default function ImportReviewScreen() {
         },
       ]
     );
-  }, [batchId, confirmedApplyRows, confirmedCount, monthKey, router]);
+  }, [batchId, confirmedApplyRows, confirmedCount, monthKey, pairings.length, router]);
 
   const scrollToNeedsReview = useCallback(() => {
     if (needsReview.length === 0) return;
@@ -421,8 +460,31 @@ export default function ImportReviewScreen() {
   }
 
   const isPdf = batch?.source_file_path?.toLowerCase().endsWith('.pdf');
-  const cls = batch?.classification_json as { parser_key?: string } | null | undefined;
+  const cls = batch?.classification_json as {
+    parser_key?: string;
+    jetblue_flica_skip_generic_candidates?: boolean;
+    ocr_pipeline?: {
+      weak_ocr?: boolean;
+      merged_len?: number;
+      ocr_issues?: string[];
+    };
+  } | null | undefined;
   const parserKey = cls?.parser_key;
+  const rawBlob = (batch?.raw_extracted_text ?? '').slice(0, 120_000);
+  const rawLooksLikeFlica = looksLikeFlicaRawText(rawBlob);
+  const isJetBlueFlicaPairingImport =
+    pairings.length > 0 ||
+    cls?.parser_key === 'jetblue_flica_structured_v1' ||
+    cls?.jetblue_flica_skip_generic_candidates === true ||
+    Boolean(batch?.schedule_import_id) ||
+    Boolean(batch?.source_file_path?.includes('/jetblue/')) ||
+    rawLooksLikeFlica;
+  const jetblueImportId = batch?.schedule_import_id ?? null;
+  const pairingOnlyReview = pairings.length > 0 && candidates.length === 0;
+
+  const summaryLooksGood = pairingOnlyReview ? pairingPillStats.ok : looksGood.length;
+  const summaryNeedsReview = pairingOnlyReview ? pairingPillStats.review : needsReview.length;
+  const summarySkipped = pairingOnlyReview ? 0 : skipped.length;
 
   const renderSection = (
     title: string,
@@ -484,24 +546,100 @@ export default function ImportReviewScreen() {
               : 'We scanned your screenshot and grouped the results below.'}
           </Text>
           <Text style={styles.summaryHint}>
-            Review anything marked Needs Review, then save your schedule.
+            {pairingOnlyReview
+              ? 'This JetBlue FLICA import is grouped by pairing. Open a card to review legs and details — not line-by-line OCR rows.'
+              : 'Review anything marked Needs Review, then save your schedule.'}
           </Text>
 
           <View style={styles.pillRow}>
             <View style={[styles.pill, styles.pillGood, { backgroundColor: C.goodBg }]}>
-              <Text style={[styles.pillCount, { color: C.good }]}>{looksGood.length}</Text>
-              <Text style={[styles.pillLabel, { color: C.good }]}>Looks Good</Text>
+              <Text style={[styles.pillCount, { color: C.good }]}>{summaryLooksGood}</Text>
+              <Text style={[styles.pillLabel, { color: C.good }]}>
+                {pairingOnlyReview ? 'Pairings OK' : 'Looks Good'}
+              </Text>
             </View>
             <View style={[styles.pill, styles.pillReview, { backgroundColor: C.reviewBg }]}>
-              <Text style={[styles.pillCount, { color: C.review }]}>{needsReview.length}</Text>
-              <Text style={[styles.pillLabel, { color: C.review }]}>Needs Review</Text>
+              <Text style={[styles.pillCount, { color: C.review }]}>{summaryNeedsReview}</Text>
+              <Text style={[styles.pillLabel, { color: C.review }]}>
+                {pairingOnlyReview ? 'Pairings — review' : 'Needs Review'}
+              </Text>
             </View>
             <View style={[styles.pill, styles.pillSkip, { backgroundColor: C.skipBg }]}>
-              <Text style={[styles.pillCount, { color: C.skip }]}>{skipped.length}</Text>
-              <Text style={[styles.pillLabel, { color: C.skip }]}>Skipped</Text>
+              <Text style={[styles.pillCount, { color: C.skip }]}>{summarySkipped}</Text>
+              <Text style={[styles.pillLabel, { color: C.skip }]}>
+                {pairingOnlyReview ? 'Line rows' : 'Skipped'}
+              </Text>
             </View>
           </View>
         </View>
+
+        {isJetBlueFlicaPairingImport ? (
+          <View style={styles.jetblueBanner}>
+            <Text style={styles.jetblueBannerTitle}>JetBlue FLICA pairing import</Text>
+            <Text style={styles.jetblueBannerBody}>
+              {pairingOnlyReview
+                ? 'Line-by-line OCR review is skipped for this format. Use the pairing list below.'
+                : 'Pairing rows are available below. Generic OCR lines may still appear if the screenshot mixed formats.'}
+            </Text>
+            {jetblueImportId ? (
+              <Pressable
+                style={styles.jetblueBannerBtn}
+                onPress={() =>
+                  router.push({
+                    pathname: '/crew-schedule/import-jetblue-review/[importId]',
+                    params: { importId: jetblueImportId },
+                  })
+                }
+              >
+                <Text style={styles.jetblueBannerBtnText}>Open guided JetBlue review</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+
+        {pairings.length > 0 ? (
+          <View style={styles.pairingSection}>
+            <Text style={styles.blockHeading}>Pairings ({pairings.length})</Text>
+            <Text style={styles.blockHelper}>Tap a pairing to edit legs, times, and flags.</Text>
+            {pairings.map((p) => {
+              const needs =
+                p.needs_review || p.pairing_requires_review || (p.pairing_confidence ?? 1) < 0.85;
+              const nj = p.normalized_json as { routeSummary?: string } | null | undefined;
+              const routeOneLine =
+                typeof nj?.routeSummary === 'string'
+                  ? nj.routeSummary.replace(/\s*→\s*/g, '-').replace(/→/g, '-')
+                  : null;
+              return (
+                <Pressable
+                  key={p.id}
+                  style={[styles.pairingCard, needs && styles.pairingCardWarn]}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/crew-schedule/import-jetblue-pairing/[pairingId]',
+                      params: { pairingId: p.id, batchId: batchId! },
+                    })
+                  }
+                >
+                  <View style={styles.pairingCardHeader}>
+                    <Text style={styles.pairingCardTitle}>{p.pairing_id}</Text>
+                    <View style={[styles.badgeSm, needs ? styles.badgeSmWarn : styles.badgeSmOk]}>
+                      <Text style={styles.badgeSmText}>{needs ? 'Needs review' : 'Looks good'}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.pairingCardLine}>
+                    {p.operate_start_date ?? '—'} → {p.operate_end_date ?? '—'} · Report {p.report_time_local ?? '—'} · Base{' '}
+                    {p.base_code ?? '—'}
+                  </Text>
+                  {routeOneLine ? (
+                    <Text style={styles.pairingCardRoute} numberOfLines={2}>
+                      Route {routeOneLine}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
 
         {batch?.detected_month_key && batch.detected_month_key !== monthKey ? (
           <Text style={styles.infoLine}>
@@ -524,66 +662,41 @@ export default function ImportReviewScreen() {
           </View>
         ) : null}
 
-        <View style={styles.screenshotSection}>
-          <Text style={styles.blockHeading}>Original Screenshot</Text>
-          <Text style={styles.blockHelper}>Tap to zoom in if you want to compare details.</Text>
-          {previewUrl && !isPdf ? (
-            <Pressable onPress={() => setImageModalVisible(true)} style={styles.previewWrap}>
-              <Image source={{ uri: previewUrl }} style={styles.preview} resizeMode="contain" />
-            </Pressable>
-          ) : (
-            <View style={styles.fileBox}>
-              <Text style={styles.fileMuted}>
-                {isPdf
-                  ? 'PDF import — preview isn’t shown here. Your parsed lines are listed below.'
-                  : 'No image on file.'}
-              </Text>
-              {batch?.source_file_path ? (
-                <Text style={styles.fileMono} numberOfLines={2}>
-                  {batch.source_file_path}
-                </Text>
-              ) : null}
-            </View>
-          )}
-        </View>
-
-        <ZoomableImportImage
-          visible={imageModalVisible}
-          uri={previewUrl}
-          onClose={() => setImageModalVisible(false)}
-        />
-
-        {needsReview.length === 0 && candidates.length > 0 ? (
+        {needsReview.length === 0 && candidates.length > 0 && !pairingOnlyReview ? (
           <View style={styles.positiveBanner}>
             <Ionicons name="checkmark-circle" size={22} color={C.good} />
             <Text style={styles.positiveBannerText}>Everything looks good. You’re ready to save.</Text>
           </View>
         ) : null}
 
-        {needsReview.length > 0 ? (
+        {!pairingOnlyReview && needsReview.length > 0 ? (
           <Text style={styles.actionHint}>Start with items that need a quick look.</Text>
         ) : null}
 
-        {renderSection(
-          'Needs Review',
-          'These lines need a quick look — tap to review or open the full editor.',
-          needsReview,
-          'needs_review',
-          'needs_review'
-        )}
+        {!pairingOnlyReview
+          ? renderSection(
+              'Needs Review',
+              'These lines need a quick look — tap to review or open the full editor.',
+              needsReview,
+              'needs_review',
+              'needs_review'
+            )
+          : null}
 
-        {looksGood.length === 0 && candidates.length > 0 && needsReview.length > 0 ? (
+        {!pairingOnlyReview && looksGood.length === 0 && candidates.length > 0 && needsReview.length > 0 ? (
           <Text style={styles.calmEmpty}>No rows are confirmed yet — that’s OK. Fix “Needs Review” first.</Text>
         ) : null}
 
-        {renderSection(
-          'Looks Good',
-          'Ready to add when you save.',
-          looksGood,
-          'looks_good'
-        )}
+        {!pairingOnlyReview
+          ? renderSection(
+              'Looks Good',
+              'Ready to add when you save.',
+              looksGood,
+              'looks_good'
+            )
+          : null}
 
-        {skipped.length > 0
+        {!pairingOnlyReview && skipped.length > 0
           ? renderSection(
               'Skipped',
               'Skipped items weren’t imported because they looked blank or not useful.',
@@ -592,9 +705,17 @@ export default function ImportReviewScreen() {
             )
           : null}
 
-        {candidates.length === 0 ? (
+        {candidates.length === 0 && pairings.length === 0 ? (
           <Text style={styles.calmEmpty}>
-            We didn’t find schedule lines in this file. Try a clearer image or open the editor to add rows by hand.
+            {isJetBlueFlicaPairingImport
+              ? cls?.ocr_pipeline?.weak_ocr === true
+                ? 'We detected a JetBlue FLICA schedule, but OCR was weak on this screenshot — pairings were not saved. Try a tighter, more zoomed crop of the pairing blocks, then re-import.'
+                : monthKey && rawLooksLikeFlica
+                  ? 'We found month and FLICA-style text in the scan, but no pairings were saved. Some details may need another pass — try a sharper screenshot of the pairing list or open guided JetBlue review after re-import.'
+                  : 'No pairings were saved for this import. Confirm the Edge function saved OCR text (batch has raw text), then try again with a sharper FLICA screenshot. Pairing headers look like J1012 : 04MAY, J1012 04APR, or J1012/04APR — include the pairing blocks if possible.'
+              : monthKey && rawLooksLikeFlica
+                ? 'We found possible schedule content in this file, but not as line-by-line rows. Try re-importing with a clearer image or add rows in the editor.'
+                : 'We didn’t find schedule lines in this file. Try a clearer image or open the editor to add rows by hand.'}
           </Text>
         ) : null}
 
@@ -649,6 +770,52 @@ export default function ImportReviewScreen() {
             </View>
           </View>
         </Modal>
+
+        <View style={styles.screenshotSection}>
+          <Pressable
+            onPress={() => setScreenshotOpen((o) => !o)}
+            style={styles.screenshotToggle}
+            accessibilityRole="button"
+            accessibilityLabel={screenshotOpen ? 'Hide original screenshot' : 'Show original screenshot'}
+          >
+            <Text style={styles.blockHeading}>Original screenshot</Text>
+            <Ionicons name={screenshotOpen ? 'chevron-up' : 'chevron-down'} size={20} color={T.textSecondary} />
+          </Pressable>
+          {screenshotOpen ? (
+            <>
+              <Text style={styles.blockHelper}>
+                The import uses the full-resolution file from your upload — this preview is only shrunk to fit the
+                screen. Tap to zoom and compare details.
+              </Text>
+              {previewUrl && !isPdf ? (
+                <Pressable onPress={() => setImageModalVisible(true)} style={styles.previewWrap}>
+                  <Image source={{ uri: previewUrl }} style={styles.preview} resizeMode="contain" />
+                </Pressable>
+              ) : (
+                <View style={styles.fileBox}>
+                  <Text style={styles.fileMuted}>
+                    {isPdf
+                      ? 'PDF import — preview isn’t shown here. Your parsed lines are listed above.'
+                      : 'No image on file.'}
+                  </Text>
+                  {batch?.source_file_path ? (
+                    <Text style={styles.fileMono} numberOfLines={2}>
+                      {batch.source_file_path}
+                    </Text>
+                  ) : null}
+                </View>
+              )}
+            </>
+          ) : (
+            <Text style={styles.collapsedHint}>Collapsed — tap the header to compare with the scan.</Text>
+          )}
+        </View>
+
+        <ZoomableImportImage
+          visible={imageModalVisible}
+          uri={previewUrl}
+          onClose={() => setImageModalVisible(false)}
+        />
 
         {saving ? (
           <View style={styles.saving}>
@@ -756,7 +923,15 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(21, 128, 61, 0.12)',
   },
   positiveBannerText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.good, lineHeight: 20 },
-  screenshotSection: { marginBottom: 8, marginTop: 4 },
+  screenshotSection: { marginBottom: 8, marginTop: 16 },
+  screenshotToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    marginBottom: 4,
+  },
+  collapsedHint: { fontSize: 12, color: T.textSecondary, marginBottom: 8, fontStyle: 'italic' },
   blockHeading: { fontSize: 13, fontWeight: '800', color: T.textSecondary, letterSpacing: 0.6, marginBottom: 4 },
   blockHelper: { fontSize: 13, color: T.textSecondary, marginBottom: 12, lineHeight: 18 },
   sectionBlock: { marginBottom: 22 },
@@ -883,6 +1058,43 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: T.line,
   },
+  jetblueBanner: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+    gap: 8,
+  },
+  jetblueBannerTitle: { fontSize: 14, fontWeight: '800', color: '#1E3A8A' },
+  jetblueBannerBody: { fontSize: 13, color: '#1E40AF', lineHeight: 20 },
+  jetblueBannerBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    backgroundColor: '#2563EB',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+  },
+  jetblueBannerBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  pairingSection: { marginBottom: 16, gap: 8 },
+  pairingCard: {
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: T.line,
+    backgroundColor: T.surface,
+  },
+  pairingCardWarn: { borderColor: '#F59E0B', backgroundColor: '#FFFBEB' },
+  pairingCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  pairingCardTitle: { fontSize: 16, fontWeight: '800', color: T.text, flex: 1 },
+  pairingCardLine: { fontSize: 13, color: T.text, marginTop: 4 },
+  pairingCardRoute: { fontSize: 12, color: T.textSecondary, marginTop: 6, lineHeight: 17 },
+  badgeSm: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  badgeSmOk: { backgroundColor: '#DCFCE7' },
+  badgeSmWarn: { backgroundColor: '#FEF3C7' },
+  badgeSmText: { fontSize: 11, fontWeight: '800', color: '#0F172A' },
   noticeText: { fontSize: 13, color: T.textSecondary, lineHeight: 20 },
   muted: { fontSize: 14, color: T.textSecondary },
   err: { padding: 24, color: T.accent },

@@ -1,5 +1,5 @@
--- Duty-row confidence for JetBlue FLICA review; extends schedule_pairing_duties view.
--- Drop + create view: Postgres rejects CREATE OR REPLACE when column set/order changes (42P16).
+-- Idempotent: safe to run on remote when view predates row_confidence column.
+-- (create or replace view fails with 42P16 if column set/order changed.)
 
 alter table public.schedule_pairing_legs
   add column if not exists row_confidence numeric;

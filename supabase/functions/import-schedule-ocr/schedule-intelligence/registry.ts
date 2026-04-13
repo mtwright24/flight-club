@@ -25,6 +25,7 @@ register({
   parse: (text, monthHint) => parseScheduleText(text, monthHint),
 });
 
+/** JetBlue FA monthly FLICA — preprocess strips table chrome; parse uses generic line heuristics until a dedicated JetBlue segment pairing parser ships. Field semantics: `jetblueFlicaUnderstanding.ts` in app. */
 register({
   parser_key: 'flica_jetblue_fa_monthly_v1',
   preprocess: preprocessFlicaMonthly,
