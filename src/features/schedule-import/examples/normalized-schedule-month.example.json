@@ -1,0 +1,56 @@
+{
+  "scheduleMonth": {
+    "crewMemberName": "MARCUS WRIGHT",
+    "employeeId": "50982",
+    "scheduleMonthLabel": "April",
+    "scheduleYear": 2026,
+    "lastUpdatedAtSource": "2026-04-10T14:38:46.000Z",
+    "monthlyTotals": {
+      "blockMinutes": 7093,
+      "creditMinutes": 7580,
+      "ytdMinutes": 29800,
+      "daysOff": 8
+    },
+    "pairings": [
+      {
+        "pairingCode": "J1007",
+        "pairingStartDate": "2026-04-03",
+        "baseCode": "JFK",
+        "baseReportTimeLocal": "19:30",
+        "operatePatternText": "ONLY ON SUN TUE WED / EXCEPT ON Apr 6",
+        "equipmentSummary": "JFK/ALL",
+        "totals": {
+          "blockMinutes": 1200,
+          "deadheadMinutes": 45,
+          "creditMinutes": 1250,
+          "dutyMinutes": 1400,
+          "tafbMinutes": 7200,
+          "tripRigMinutes": null
+        },
+        "dutyDays": [
+          {
+            "date": "2026-04-03",
+            "dayOfWeek": "FR",
+            "segments": [
+              {
+                "segmentType": "operating_flight",
+                "flightNumber": "B61234",
+                "departureStation": "JFK",
+                "arrivalStation": "LHR",
+                "departureTimeLocal": "19:30",
+                "arrivalTimeLocal": "07:30",
+                "blockMinutes": 420,
+                "isDeadhead": false
+              }
+            ],
+            "layover": {
+              "stationCode": "LHR",
+              "hotelName": "Hilton London Kensington"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "_comment": "Illustrative only — parser must use null where uncertain; do not fabricate numbers in production."
+}
