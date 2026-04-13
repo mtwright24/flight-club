@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -160,6 +160,17 @@ export default function ImportJetBluePairingScreen() {
     load,
   ]);
 
+  const dutyGroups = useMemo(() => {
+    const m = new Map<string, SchedulePairingDutyRow[]>();
+    for (const row of duties) {
+      const k = row.duty_date ?? '—';
+      const arr = m.get(k) ?? [];
+      arr.push(row);
+      m.set(k, arr);
+    }
+    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [duties]);
+
   const onSave = useCallback(async () => {
     if (!pairingId) return;
     setSaving(true);
@@ -254,21 +265,50 @@ export default function ImportJetBluePairingScreen() {
         </Text>
         <Text style={styles.summary}>Route: {routeSummary}</Text>
         <Text style={styles.summary}>Layovers: {laySummary}</Text>
-        <Text style={styles.h2}>Duty rows ({duties.length})</Text>
-        <Text style={styles.muted}>Tap a row to edit flight, times, stations, block, and layover. Parsed OCR is shown for reference.</Text>
+        <Text style={styles.h2}>Duty days & legs ({duties.length})</Text>
+        <Text style={styles.muted}>
+          Each flight is tappable. D-END / layover / rest apply to the duty day (shown on the last leg of that day). Raw OCR
+          is for reference — no new screenshot is required to edit.
+        </Text>
 
-        {duties.map((d) => (
-          <Pressable key={d.id} style={styles.legCard} onPress={() => openLeg(d)}>
-            <Text style={styles.legLine}>
-              {d.duty_date ?? '—'} · Flt {d.flight_number ?? '—'} · {d.from_airport ?? '?'}→{d.to_airport ?? '?'}
-            </Text>
-            <Text style={styles.legSub}>
-              {d.departure_time_local ?? '—'} / {d.arrival_time_local ?? '—'}
-              {d.block_time_local ? ` · BLK ${d.block_time_local}` : ''}
-            </Text>
-            {d.layover_city ? <Text style={styles.legSub}>Layover {d.layover_city}</Text> : null}
-          </Pressable>
-        ))}
+        {dutyGroups.map(([dateKey, rows]) => {
+          const last = rows[rows.length - 1];
+          const ddmeta = last?.duty_day;
+          const dEnd = last?.release_time_local ?? (ddmeta?.d_end_local as string | undefined) ?? null;
+          const rept = (ddmeta?.next_report_local as string | undefined) ?? null;
+          const layCity = last?.layover_city ?? (ddmeta?.layover_city_code as string | undefined) ?? null;
+          const layRest = last?.layover_rest_display ?? (ddmeta?.layover_rest_display as string | undefined) ?? null;
+          return (
+            <View key={dateKey} style={styles.dutyBundle}>
+              <Text style={styles.dutyDayLabel}>Duty day · {dateKey}</Text>
+              {dEnd || rept ? (
+                <Text style={styles.dutyDayMeta}>
+                  {[dEnd ? `D-END ${dEnd}` : null, rept ? `REPT ${rept}` : null].filter(Boolean).join(' · ')}
+                </Text>
+              ) : null}
+              {layCity || layRest ? (
+                <Text style={styles.dutyDayMeta}>
+                  Layover {layCity ?? '—'}
+                  {layRest ? ` · Rest ${layRest}` : ''}
+                </Text>
+              ) : null}
+              {rows.map((d) => (
+                <Pressable key={d.id} style={styles.legCard} onPress={() => openLeg(d)}>
+                  <Text style={styles.legLine}>
+                    Flt {d.flight_number ?? '—'} · {d.from_airport ?? '?'}→{d.to_airport ?? '?'}
+                  </Text>
+                  <Text style={styles.legSub}>
+                    {d.departure_time_local ?? '—'} / {d.arrival_time_local ?? '—'}
+                    {d.block_time_local ? ` · BLK ${d.block_time_local}` : ''}
+                    {d.equipment_code ? ` · Eqp ${d.equipment_code}` : ''}
+                  </Text>
+                  {d.layover_city ? <Text style={styles.legSub}>Layover city {d.layover_city}</Text> : null}
+                  {d.is_deadhead ? <Text style={styles.legSubDh}>Deadhead</Text> : null}
+                </Pressable>
+              ))}
+            </View>
+          );
+        })}
 
         <Text style={styles.h2}>Pairing fields</Text>
         <Text style={styles.label}>Pairing ID</Text>
@@ -402,6 +442,10 @@ const styles = StyleSheet.create({
   },
   legLine: { fontSize: 14, fontWeight: '700', color: T.text },
   legSub: { fontSize: 12, color: T.textSecondary, marginTop: 4 },
+  legSubDh: { fontSize: 11, fontWeight: '700', color: '#92400E', marginTop: 4 },
+  dutyBundle: { marginBottom: 16 },
+  dutyDayLabel: { fontSize: 13, fontWeight: '800', color: T.text, marginBottom: 6 },
+  dutyDayMeta: { fontSize: 12, color: T.textSecondary, marginBottom: 8, lineHeight: 17 },
   btn: {
     marginTop: 20,
     backgroundColor: T.accent,

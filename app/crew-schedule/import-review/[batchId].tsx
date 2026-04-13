@@ -321,6 +321,19 @@ export default function ImportReviewScreen() {
     return { ok, review };
   }, [pairings]);
 
+  const avgPairingConfidence = useMemo(() => {
+    if (!pairings.length) return null;
+    let n = 0;
+    let s = 0;
+    for (const p of pairings) {
+      if (p.pairing_confidence != null) {
+        s += p.pairing_confidence;
+        n += 1;
+      }
+    }
+    return n ? s / n : null;
+  }, [pairings]);
+
   const confirmedApplyRows = useMemo(() => candidatesToConfirmedApplyRows(candidates), [candidates]);
   const confirmedCount = confirmedApplyRows.length;
 
@@ -550,6 +563,15 @@ export default function ImportReviewScreen() {
               ? 'This JetBlue FLICA import is grouped by pairing. Open a card to review legs and details — not line-by-line OCR rows.'
               : 'Review anything marked Needs Review, then save your schedule.'}
           </Text>
+          {pairings.length > 0 ? (
+            <Text style={styles.summarySubMeta}>
+              Pairings: {pairings.length}
+              {avgPairingConfidence != null ? ` · Avg parser confidence ${Math.round(avgPairingConfidence * 100)}%` : ''}
+              {batch?.classification_confidence != null
+                ? ` · Classifier ${Math.round(batch.classification_confidence * 100)}%`
+                : ''}
+            </Text>
+          ) : null}
 
           <View style={styles.pillRow}>
             <View style={[styles.pill, styles.pillGood, { backgroundColor: C.goodBg }]}>
@@ -876,7 +898,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   summaryLead: { fontSize: 17, fontWeight: '600', color: T.text, lineHeight: 24, letterSpacing: -0.2, marginBottom: 6 },
-  summaryHint: { fontSize: 13, color: T.textSecondary, lineHeight: 19, marginBottom: 18 },
+  summaryHint: { fontSize: 13, color: T.textSecondary, lineHeight: 19, marginBottom: 8 },
+  summarySubMeta: { fontSize: 12, color: T.textSecondary, lineHeight: 17, marginBottom: 14 },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   pill: {
     flex: 1,

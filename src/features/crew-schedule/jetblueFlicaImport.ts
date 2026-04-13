@@ -208,6 +208,12 @@ export type SchedulePairingDutyRow = {
   hotel_name: string | null;
   release_time_local: string | null;
   is_deadhead?: boolean | null;
+  /** Equipment / aircraft position from parser (E190, 32N, …). */
+  equipment_code?: string | null;
+  /** Layover rest duration display (duty-day metadata on last leg). */
+  layover_rest_display?: string | null;
+  /** Parsed duty-day bundle (JSON) for D-END / layover context. */
+  duty_day?: Record<string, unknown> | null;
   row_confidence: number | null;
   requires_review: boolean;
   raw_text: string | null;
@@ -217,13 +223,20 @@ export function buildRouteSummaryFromDuties(
   legs: Pick<SchedulePairingDutyRow, 'from_airport' | 'to_airport'>[]
 ): string {
   if (!legs.length) return '—';
-  const segs: string[] = [];
+  const seq: string[] = [];
   for (const l of legs) {
-    const a = (l.from_airport ?? '').trim();
-    const b = (l.to_airport ?? '').trim();
-    if (a && b) segs.push(`${a}→${b}`);
+    const a = (l.from_airport ?? '').trim().toUpperCase();
+    const b = (l.to_airport ?? '').trim().toUpperCase();
+    if (a && b) {
+      seq.push(a, b);
+    }
   }
-  return segs.length ? segs.join(' · ') : '—';
+  if (seq.length < 2) return '—';
+  const collapsed: string[] = [];
+  for (const s of seq) {
+    if (collapsed.length === 0 || collapsed[collapsed.length - 1] !== s) collapsed.push(s);
+  }
+  return collapsed.join('-');
 }
 
 export function buildLayoverSummaryFromDuties(legs: Pick<SchedulePairingDutyRow, 'layover_city'>[]): string {
@@ -256,7 +269,12 @@ export async function fetchPairingById(pairingUuid: string): Promise<SchedulePai
 }
 
 function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
-  const nj = l.normalized_json as { segment_confidence?: number; block_time_local?: string } | null | undefined;
+  const nj = l.normalized_json as {
+    segment_confidence?: number;
+    block_time_local?: string;
+    duty_day?: Record<string, unknown>;
+  } | null | undefined;
+  const dd = nj?.duty_day;
   const blockNum = l.block_time as number | null | undefined;
   let blockLocal = nj?.block_time_local ?? null;
   if (!blockLocal && blockNum != null && Number.isFinite(blockNum)) {
@@ -264,6 +282,9 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
     const m = Math.round((blockNum - h) * 60);
     blockLocal = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
+  const equip = (l.aircraft_position_code as string) ?? null;
+  const layRest =
+    typeof dd?.layover_rest_display === 'string' ? (dd.layover_rest_display as string) : null;
   return {
     id: l.id as string,
     pairing_row_id: l.pairing_id as string,
@@ -278,6 +299,9 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
     hotel_name: (l.hotel_name as string) ?? null,
     release_time_local: ((l.release_time_local ?? l.release_time) as string) ?? null,
     is_deadhead: (l.is_deadhead as boolean | null | undefined) ?? null,
+    equipment_code: equip,
+    layover_rest_display: layRest ?? null,
+    duty_day: dd ?? null,
     row_confidence: (l.row_confidence as number) ?? nj?.segment_confidence ?? null,
     requires_review: Boolean(l.requires_review),
     raw_text: (l.raw_text as string) ?? null,
@@ -332,6 +356,7 @@ export async function updateSchedulePairingLeg(
     layover_city: string | null;
     release_time_local: string | null;
     is_deadhead: boolean;
+    aircraft_position_code: string | null;
     raw_text: string | null;
     requires_review: boolean;
     normalized_json: Record<string, unknown>;
