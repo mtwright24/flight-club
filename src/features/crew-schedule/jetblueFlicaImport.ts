@@ -192,6 +192,27 @@ export type SchedulePairingRow = {
   normalized_json?: Record<string, unknown> | null;
 };
 
+/** Parse YYYY-MM-DD start for chronological sort; missing/invalid dates sort last. */
+function operateStartSortKey(iso: string | null | undefined): number {
+  const s = (iso ?? '').trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) {
+    const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+/** Earliest trip start first — import review, JetBlue review, and batch helpers. */
+export function sortPairingsByOperateStartDate(pairings: SchedulePairingRow[]): SchedulePairingRow[] {
+  return [...pairings].sort((a, b) => {
+    const da = operateStartSortKey(a.operate_start_date);
+    const db = operateStartSortKey(b.operate_start_date);
+    if (da !== db) return da - db;
+    return (a.pairing_id ?? '').localeCompare(b.pairing_id ?? '', undefined, { sensitivity: 'base', numeric: true });
+  });
+}
+
 /** View `schedule_pairing_duties` — leg rows under a pairing (pairing_row_id = schedule_pairings.id). */
 export type SchedulePairingDutyRow = {
   id: string;
@@ -239,9 +260,18 @@ export function buildRouteSummaryFromDuties(
   return collapsed.join('-');
 }
 
-export function buildLayoverSummaryFromDuties(legs: Pick<SchedulePairingDutyRow, 'layover_city'>[]): string {
-  const cities = [...new Set(legs.map((l) => (l.layover_city ?? '').trim()).filter(Boolean))];
-  return cities.length ? cities.join(', ') : '—';
+/**
+ * Classic list / apply rows: `schedule_entries.layover` stores the FLICA layover **time** token only
+ * (4-digit), not station codes — city lives in `city`. Values from parser `layoverRestDisplay`.
+ */
+export function buildLayoverSummaryFromDuties(
+  legs: Pick<SchedulePairingDutyRow, 'layover_rest_display'>[]
+): string | null {
+  for (const l of legs) {
+    const r = (l.layover_rest_display ?? '').trim();
+    if (/^\d{4}$/.test(r)) return r;
+  }
+  return null;
 }
 
 export async function fetchPairingsForScheduleImport(importId: string): Promise<SchedulePairingRow[]> {
@@ -251,7 +281,7 @@ export async function fetchPairingsForScheduleImport(importId: string): Promise<
     .eq('schedule_import_id', importId);
 
   if (error) throw error;
-  return (data ?? []) as SchedulePairingRow[];
+  return sortPairingsByOperateStartDate((data ?? []) as SchedulePairingRow[]);
 }
 
 /** Pairings stored against a generic `schedule_import_batches` row (no guided session). */
@@ -259,7 +289,7 @@ export async function fetchPairingsForBatch(batchId: string): Promise<SchedulePa
   const { data, error } = await supabase.from('schedule_pairings').select('*').eq('import_id', batchId);
 
   if (error) throw error;
-  return (data ?? []) as SchedulePairingRow[];
+  return sortPairingsByOperateStartDate((data ?? []) as SchedulePairingRow[]);
 }
 
 export async function fetchPairingById(pairingUuid: string): Promise<SchedulePairingRow | null> {
@@ -318,6 +348,29 @@ export async function fetchDutiesForPairing(pairingUuid: string): Promise<Schedu
 
   if (error) throw error;
   return (data ?? []).map((row) => mapLegRowToDuty(row as Record<string, unknown>));
+}
+
+/** All legs for many pairings (e.g. batch validation). Grouped by `schedule_pairings.id`. */
+export async function fetchDutiesGroupedByPairingIds(
+  pairingUuids: string[]
+): Promise<Map<string, SchedulePairingDutyRow[]>> {
+  const out = new Map<string, SchedulePairingDutyRow[]>();
+  if (!pairingUuids.length) return out;
+  const { data, error } = await supabase
+    .from('schedule_pairing_legs')
+    .select('*')
+    .in('pairing_id', pairingUuids)
+    .order('duty_date', { ascending: true, nullsFirst: false });
+
+  if (error) throw error;
+  for (const row of data ?? []) {
+    const duty = mapLegRowToDuty(row as Record<string, unknown>);
+    const pid = duty.pairing_row_id;
+    const arr = out.get(pid) ?? [];
+    arr.push(duty);
+    out.set(pid, arr);
+  }
+  return out;
 }
 
 export async function updateSchedulePairing(

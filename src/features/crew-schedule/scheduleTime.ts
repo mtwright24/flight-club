@@ -66,6 +66,7 @@ export function parseScheduleTimeMinutes(raw?: string | null): number | null {
 /**
  * Classic list layover column: show the time/duration token only (strip FLICA city prefix).
  * e.g. `DUB 2430` → `2430`; `2430` unchanged.
+ * Plain station lists (`LAS`, `LAS, MCO`) have no rest token — show nothing (avoid duplicating the route city).
  */
 export function formatLayoverColumnDisplay(raw: string | undefined | null): string {
   const s = String(raw ?? '').trim();
@@ -75,5 +76,7 @@ export function formatLayoverColumnDisplay(raw: string | undefined | null): stri
   if (/^\d{4}$/.test(s)) return s;
   const tail = s.match(/(\d{4})\s*$/);
   if (tail && /[A-Za-z]/.test(s)) return tail[1];
+  const compact = s.replace(/\s+/g, ' ');
+  if (/^[A-Z]{3}(?:\s*,\s*[A-Z]{3})*$/i.test(compact)) return '';
   return s;
 }

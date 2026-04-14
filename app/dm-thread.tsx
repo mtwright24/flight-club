@@ -170,7 +170,8 @@ export default function DMThread() {
   const [messages, setMessages] = useState<any[]>([]);
   const [participants, setParticipants] = useState<any[]>([]);
   const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
+  /** Prevents double-submit before `setInput('')` runs; does not block the composer while a message is in flight. */
+  const textSendInFlightRef = useRef(false);
   const [uploading, setUploading] = useState(false);
   const [sharedPosts, setSharedPosts] = useState<Record<string, any>>({});
   const [mediaLoadFailed, setMediaLoadFailed] = useState<Record<string, boolean>>({});
@@ -335,6 +336,22 @@ export default function DMThread() {
     const unsubscribe = subscribeToConversationMessages(conversationId, (msg) => {
       setMessages((prev) => {
         if (prev.find((m: any) => m.id === msg.id)) return prev;
+        // Reconcile our optimistic row when Postgres insert arrives via realtime (same sender+body).
+        if (userId && msg.sender_id === userId) {
+          const optIdx = prev.findIndex(
+            (m: any) =>
+              m?.pending_status === 'sending' &&
+              m.sender_id === userId &&
+              String(m.body ?? '') === String(msg.body ?? '') &&
+              String(m.message_type || 'text').toLowerCase() ===
+                String(msg.message_type || 'text').toLowerCase()
+          );
+          if (optIdx >= 0) {
+            const next = [...prev];
+            next[optIdx] = { ...msg, pending_status: undefined };
+            return next;
+          }
+        }
         return [...prev, msg];
       });
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
@@ -349,37 +366,6 @@ export default function DMThread() {
       unsubscribe();
     };
   }, [conversationId, userId]);
-
-  const handleSend = async () => {
-    if (!composerEnabled) return;
-    if (sending) return;
-    if (!input.trim() || !conversationId || !userId) return;
-    setSending(true);
-    try {
-      const body = input.trim();
-      const sent = await sendMessage(conversationId, userId, body);
-      setInput('');
-
-      // Optimistically append so text appears even if realtime delivery is delayed.
-      setMessages((prev) => {
-        if (prev.find((m: any) => m.id === sent.id)) return prev;
-        return [...prev, sent];
-      });
-
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
-    } catch (e: any) {
-      console.log('[DM] sendMessage error:', e);
-      const msg =
-        typeof e?.message === 'string'
-          ? e.message
-          : typeof e?.error_description === 'string'
-            ? e.error_description
-            : 'Could not send. Please try again.';
-      Alert.alert('Message not sent', msg);
-    } finally {
-      setSending(false);
-    }
-  };
 
   const otherParticipant = useMemo(() => {
     return participants.find((p: any) => p.user_id !== userId) || participants[0] || null;
@@ -442,6 +428,95 @@ export default function DMThread() {
     requestGateStatus === 'pending' &&
     isRequester &&
     messages.length === 0;
+
+  const retryFailedMessage = useCallback(
+    async (failed: any) => {
+      if (!composerEnabled || failed?.pending_status !== 'failed' || !conversationId || !userId) return;
+      const body = typeof failed.body === 'string' ? failed.body.trim() : '';
+      if (!body) return;
+      const localId = failed.id;
+      setMessages((prev) =>
+        prev.map((m: any) => (m.id === localId ? { ...m, pending_status: 'sending' } : m))
+      );
+      try {
+        const sent = await sendMessage(conversationId, userId, body);
+        setMessages((prev) => {
+          if (prev.find((m: any) => m.id === sent.id)) {
+            return prev.filter((m: any) => m.id !== localId);
+          }
+          return prev.map((m: any) => (m.id === localId ? { ...sent, pending_status: undefined } : m));
+        });
+      } catch (e: any) {
+        console.log('[DM] retry sendMessage error:', e);
+        setMessages((prev) =>
+          prev.map((m: any) => (m.id === localId ? { ...m, pending_status: 'failed' } : m))
+        );
+        const errText =
+          typeof e?.message === 'string'
+            ? e.message
+            : typeof e?.error_description === 'string'
+              ? e.error_description
+              : 'Could not send. Please try again.';
+        Alert.alert('Message not sent', errText);
+      }
+    },
+    [composerEnabled, conversationId, userId]
+  );
+
+  const handleSend = async () => {
+    if (!composerEnabled) return;
+    if (textSendInFlightRef.current) return;
+    if (!input.trim() || !conversationId || !userId) return;
+
+    const body = input.trim();
+    const clientMsgId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+
+    const optimistic = {
+      id: clientMsgId,
+      conversation_id: conversationId,
+      sender_id: userId,
+      body,
+      created_at: new Date().toISOString(),
+      is_read: false,
+      message_type: 'text',
+      media_url: null,
+      post_id: null,
+      pending_status: 'sending' as const,
+    };
+
+    setInput('');
+    setMessages((prev) => [...prev, optimistic]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+
+    textSendInFlightRef.current = true;
+    try {
+      const sent = await sendMessage(conversationId, userId, body);
+      setMessages((prev) => {
+        if (prev.find((m: any) => m.id === sent.id)) {
+          return prev.filter((m: any) => m.id !== clientMsgId);
+        }
+        return prev.map((m: any) =>
+          m.id === clientMsgId ? { ...sent, pending_status: undefined } : m
+        );
+      });
+    } catch (e: any) {
+      console.log('[DM] sendMessage error:', e);
+      setMessages((prev) =>
+        prev.map((m: any) =>
+          m.id === clientMsgId ? { ...m, pending_status: 'failed' as const } : m
+        )
+      );
+      const msg =
+        typeof e?.message === 'string'
+          ? e.message
+          : typeof e?.error_description === 'string'
+            ? e.error_description
+            : 'Could not send. Please try again.';
+      Alert.alert('Message not sent', msg);
+    } finally {
+      textSendInFlightRef.current = false;
+    }
+  };
 
   const refreshRequestGate = useCallback(async () => {
     if (!conversationId || !userId) return null;
@@ -734,7 +809,22 @@ export default function DMThread() {
             {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </Text>
           {isMe ? (
-            <Text style={[styles.deliveryStatus, styles.bubbleTimeMe]}>{item.is_read ? 'Read' : 'Sent'}</Text>
+            item.pending_status === 'sending' ? (
+              <Text style={[styles.deliveryStatus, styles.deliveryPending]}>Sending…</Text>
+            ) : item.pending_status === 'failed' ? (
+              <Pressable
+                onPress={() => void retryFailedMessage(item)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                accessibilityRole="button"
+                accessibilityLabel="Retry sending message"
+              >
+                <Text style={[styles.deliveryStatus, styles.deliveryFailed]}>Not sent · Tap to retry</Text>
+              </Pressable>
+            ) : (
+              <Text style={[styles.deliveryStatus, styles.bubbleTimeMe]}>
+                {item.is_read ? 'Read' : 'Sent'}
+              </Text>
+            )
           ) : null}
         </View>
       </View>
@@ -880,7 +970,7 @@ export default function DMThread() {
             placeholderTextColor="#94a3b8"
             value={input}
             onChangeText={setInput}
-            editable={composerEnabled && !sending}
+            editable={composerEnabled}
             multiline={false}
             blurOnSubmit
             returnKeyType="send"
@@ -937,7 +1027,7 @@ export default function DMThread() {
             onPress={() => {
               void handleSend();
             }}
-            disabled={sending || !input.trim() || !userId || !conversationId || !composerEnabled || requestActionBusy}
+            disabled={!input.trim() || !userId || !conversationId || !composerEnabled || requestActionBusy}
           >
             <Ionicons name="send" size={20} color="#B5161E" />
           </Pressable>
@@ -1023,6 +1113,8 @@ const styles = StyleSheet.create({
   bubbleTime: { color: '#64748b', fontSize: 11, marginTop: 4, textAlign: 'right' },
   bubbleTimeMe: { color: '#cbd5e1' },
   deliveryStatus: { fontSize: 10, marginTop: 2, textAlign: 'right', fontWeight: '600' },
+  deliveryPending: { color: '#94a3b8' },
+  deliveryFailed: { color: '#b91c1c' },
   composerRow: {
     flexDirection: 'row',
     alignItems: 'center',

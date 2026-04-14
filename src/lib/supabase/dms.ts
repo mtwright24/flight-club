@@ -802,62 +802,7 @@ export async function sendMessage(
     console.warn('[DM] sendMessage: update conversation timestamp failed:', updErr.message);
   }
 
-  // Notify all other participants in the conversation about the new DM
-  try {
-    const { data: participants, error: pError } = await supabase
-      .from('dm_conversation_participants')
-      .select('user_id')
-      .eq('conversation_id', convId);
-
-    if (!pError && participants) {
-      const targets = participants
-        .map((p: any) => p.user_id)
-        .filter((id: string) => id && id !== senderId);
-
-      let dmActorPayload: Record<string, string> = {};
-      try {
-        const { data: sp } = await supabase
-          .from('profiles')
-          .select('display_name, full_name, avatar_url')
-          .eq('id', senderId)
-          .maybeSingle();
-        if (sp) {
-          const label = [sp.display_name, sp.full_name].find((x) => typeof x === 'string' && String(x).trim());
-          if (label) dmActorPayload.actor_display_name = String(label).trim();
-          if (sp.avatar_url && String(sp.avatar_url).trim()) {
-            dmActorPayload.actor_avatar_url = String(sp.avatar_url).trim();
-          }
-        }
-      } catch {
-        dmActorPayload = {};
-      }
-
-      await Promise.all(
-        targets.map((targetId: string) =>
-          createNotification({
-            user_id: targetId,
-            actor_id: senderId,
-            type: 'message',
-            entity_type: 'conversation',
-            entity_id: convId,
-            secondary_id: data.id,
-            title: 'New message',
-            body: notifyBody || 'You have a new message',
-            data: {
-              route: `/dm-thread?conversationId=${convId}`,
-              ...dmActorPayload,
-            },
-          })
-        )
-      );
-    } else if (pError) {
-      console.warn('[DM] sendMessage: notify participant query failed:', pError.message);
-    }
-  } catch (notifyError) {
-    console.log('[Notifications] Failed to create DM notification:', notifyError);
-  }
-
-  return {
+  const out: DMMessage = {
     id: data.id,
     conversation_id: data.conversation_id,
     sender_id: data.sender_id,
@@ -867,7 +812,80 @@ export async function sendMessage(
     message_type: data.message_type || 'text',
     media_url: data.media_url || null,
     post_id: data.post_id || null,
-  } as DMMessage;
+  };
+
+  // Push notifications must not block the caller (UI / optimistic send latency).
+  void notifyDmParticipantsOfNewMessage({
+    convId,
+    senderId,
+    messageId: data.id,
+    notifyBody: notifyBody || 'You have a new message',
+  }).catch((notifyError) => {
+    console.warn('[Notifications] Failed to create DM notification:', notifyError);
+  });
+
+  return out;
+}
+
+/** Background work after a DM row exists — keeps `sendMessage` return fast for clients. */
+async function notifyDmParticipantsOfNewMessage(params: {
+  convId: string;
+  senderId: string;
+  messageId: string;
+  notifyBody: string;
+}) {
+  const { convId, senderId, messageId, notifyBody } = params;
+  const { data: participants, error: pError } = await supabase
+    .from('dm_conversation_participants')
+    .select('user_id')
+    .eq('conversation_id', convId);
+
+  if (pError) {
+    console.warn('[DM] sendMessage: notify participant query failed:', pError.message);
+    return;
+  }
+  if (!participants?.length) return;
+
+  const targets = participants
+    .map((p: any) => p.user_id)
+    .filter((id: string) => id && id !== senderId);
+
+  let dmActorPayload: Record<string, string> = {};
+  try {
+    const { data: sp } = await supabase
+      .from('profiles')
+      .select('display_name, full_name, avatar_url')
+      .eq('id', senderId)
+      .maybeSingle();
+    if (sp) {
+      const label = [sp.display_name, sp.full_name].find((x) => typeof x === 'string' && String(x).trim());
+      if (label) dmActorPayload.actor_display_name = String(label).trim();
+      if (sp.avatar_url && String(sp.avatar_url).trim()) {
+        dmActorPayload.actor_avatar_url = String(sp.avatar_url).trim();
+      }
+    }
+  } catch {
+    dmActorPayload = {};
+  }
+
+  await Promise.all(
+    targets.map((targetId: string) =>
+      createNotification({
+        user_id: targetId,
+        actor_id: senderId,
+        type: 'message',
+        entity_type: 'conversation',
+        entity_id: convId,
+        secondary_id: messageId,
+        title: 'New message',
+        body: notifyBody || 'You have a new message',
+        data: {
+          route: `/dm-thread?conversationId=${convId}`,
+          ...dmActorPayload,
+        },
+      })
+    )
+  );
 }
 
 /**

@@ -1,8 +1,20 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { useScheduleTripsForMonth } from '../hooks/useScheduleTripsForMonth';
+import { removeMonthScheduleAndImports } from '../scheduleApi';
 import {
   loadLastMonthCursor,
   loadScheduleViewMode,
@@ -10,6 +22,7 @@ import {
 } from '../scheduleViewStorage';
 import { scheduleTheme as T } from '../scheduleTheme';
 import type { CrewScheduleTrip, ScheduleViewMode } from '../types';
+import { tradePostPrefillParams } from '../tradePostPrefillParams';
 import ClassicListView from '../components/ClassicListView';
 import CalendarMonthView from '../components/CalendarMonthView';
 import SmartListView from '../components/SmartListView';
@@ -35,6 +48,12 @@ export default function ScheduleTabScreen() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [viewMode, setViewMode] = useState<ScheduleViewMode>('classic');
+  const [removingMonth, setRemovingMonth] = useState(false);
+
+  const monthKey = useMemo(
+    () => `${year}-${String(month).padStart(2, '0')}`,
+    [year, month]
+  );
 
   React.useEffect(() => {
     void loadLastMonthCursor().then((c) => {
@@ -84,16 +103,7 @@ export default function ScheduleTabScreen() {
       if (trip) {
         router.push({
           pathname: '/crew-exchange/create-post',
-          params: {
-            prefillPairing: trip.pairingCode,
-            prefillRoute: trip.routeSummary,
-            prefillStart: trip.startDate,
-            prefillEnd: trip.endDate,
-            prefillFrom: trip.origin ?? '',
-            prefillTo: trip.destination ?? '',
-            prefillBase: trip.base ?? '',
-            prefillCredit: trip.creditHours != null ? String(trip.creditHours) : '',
-          },
+          params: tradePostPrefillParams(trip),
         });
       } else {
         router.push('/crew-exchange/create-post');
@@ -114,61 +124,142 @@ export default function ScheduleTabScreen() {
     router.push('/crew-schedule/manage');
   }, [router]);
 
+  const runRemoveMonthConfirmed = useCallback(async () => {
+    setRemovingMonth(true);
+    try {
+      const r = await removeMonthScheduleAndImports(monthKey);
+      await refresh();
+      const doneMsg =
+        r.entriesRemoved > 0 || r.batchesRemoved > 0
+          ? `Removed ${r.entriesRemoved} calendar day${r.entriesRemoved === 1 ? '' : 's'} and ${r.batchesRemoved} import batch${r.batchesRemoved === 1 ? '' : 'es'}.`
+          : 'Nothing was stored for this month.';
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(`Done\n\n${doneMsg}`);
+      } else {
+        Alert.alert('Done', doneMsg);
+      }
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e);
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(`Could not remove\n\n${err}`);
+      } else {
+        Alert.alert('Could not remove', err);
+      }
+    } finally {
+      setRemovingMonth(false);
+    }
+  }, [monthKey, refresh]);
+
+  const onRemoveMonthFromSchedule = useCallback(() => {
+    const title = `Delete imported schedule for ${monthLabel}?`;
+    const message =
+      'This deletes all days on your calendar for this month, saved month totals, and import batches stored for this month (including FLICA pairing reviews tied to those imports). This cannot be undone.';
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (window.confirm(`${title}\n\n${message}`)) void runRemoveMonthConfirmed();
+      return;
+    }
+
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => void runRemoveMonthConfirmed(),
+      },
+    ]);
+  }, [monthLabel, runRemoveMonthConfirmed]);
+
   return (
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={styles.scrollContent}
-      keyboardShouldPersistTaps="handled"
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={T.accent} />}
-    >
+    <View style={styles.screenRoot}>
       <View style={styles.monthRow}>
-        <Pressable onPress={goPrevMonth} style={styles.iconHit} accessibilityLabel="Previous month">
+        <Pressable
+          onPress={goPrevMonth}
+          style={styles.iconHit}
+          disabled={removingMonth}
+          accessibilityLabel="Previous month"
+        >
           <Ionicons name="chevron-back" size={22} color={T.text} />
         </Pressable>
         <Text style={styles.monthText}>{monthLabel}</Text>
-        <Pressable onPress={goNextMonth} style={styles.iconHit} accessibilityLabel="Next month">
+        <Pressable
+          onPress={goNextMonth}
+          style={styles.iconHit}
+          disabled={removingMonth}
+          accessibilityLabel="Next month"
+        >
           <Ionicons name="chevron-forward" size={22} color={T.text} />
         </Pressable>
       </View>
 
-      <View style={styles.readingArea}>
-        {viewMode === 'classic' && (
-          <ClassicListView
-            trips={trips}
-            monthMetrics={monthMetrics}
-            onPressTrip={openTrip}
-            onOpenManage={openManage}
-          />
-        )}
-        {viewMode === 'calendar' && (
-          <CalendarMonthView
-            year={year}
-            month={month}
-            trips={trips}
-            onPressDay={onPressCalendarDay}
-            onOpenTrip={openTrip}
-          />
-        )}
-        {viewMode === 'smart' && (
-          <SmartListView
-            trips={trips}
-            onPressTrip={openTrip}
-            onPost={(trip) => openTradePost(trip)}
-            onChat={(trip) =>
-              router.push({ pathname: '/crew-schedule/trip-chat', params: { tripId: trip.id } })
-            }
-            onManageSchedule={() => router.push('/crew-schedule/manage')}
-            onAlert={(trip) =>
-              router.push({ pathname: '/crew-schedule/alerts', params: { tripId: trip.id } })
-            }
-          />
-        )}
+      <View style={styles.monthToolsRow} collapsable={false}>
+        <TouchableOpacity
+          activeOpacity={0.75}
+          onPress={onRemoveMonthFromSchedule}
+          disabled={removingMonth}
+          style={[styles.deleteImportBtn, removingMonth && styles.deleteImportBtnDisabled]}
+          accessibilityRole="button"
+          accessibilityLabel={`Delete imported schedule for ${monthLabel}`}
+          hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
+        >
+          {removingMonth ? (
+            <ActivityIndicator size="small" color={T.importReview.bad} />
+          ) : (
+            <Ionicons name="trash-outline" size={18} color={T.importReview.bad} />
+          )}
+          <Text style={styles.deleteImportLabel}>
+            {removingMonth ? 'Removing…' : 'Delete imported schedule'}
+          </Text>
+        </TouchableOpacity>
       </View>
-    </ScrollView>
+
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={T.accent} />}
+      >
+        <View style={styles.readingArea}>
+          {viewMode === 'classic' && (
+            <ClassicListView
+              trips={trips}
+              monthMetrics={monthMetrics}
+              onPressTrip={openTrip}
+              onOpenManage={openManage}
+            />
+          )}
+          {viewMode === 'calendar' && (
+            <CalendarMonthView
+              year={year}
+              month={month}
+              trips={trips}
+              onPressDay={onPressCalendarDay}
+              onOpenTrip={openTrip}
+            />
+          )}
+          {viewMode === 'smart' && (
+            <SmartListView
+              trips={trips}
+              onPressTrip={openTrip}
+              onPost={(trip) => openTradePost(trip)}
+              onChat={(trip) =>
+                router.push({ pathname: '/crew-schedule/trip-chat', params: { tripId: trip.id } })
+              }
+              onManageSchedule={() => router.push('/crew-schedule/manage')}
+              onAlert={(trip) =>
+                router.push({ pathname: '/crew-schedule/alerts', params: { tripId: trip.id } })
+              }
+            />
+          )}
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenRoot: { flex: 1, backgroundColor: T.bg },
   scroll: { flex: 1, backgroundColor: T.bg },
   scrollContent: { flexGrow: 1, paddingBottom: 8 },
   monthRow: {
@@ -180,8 +271,38 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: T.line,
+    gap: 4,
   },
   monthText: { fontSize: 16, fontWeight: '800', color: T.text },
+  monthRowCenter: { flex: 1, textAlign: 'center', marginHorizontal: 4 },
+  monthSide: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   iconHit: { paddingHorizontal: 6, paddingVertical: 4 },
+  monthToolsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: T.line,
+  },
+  deleteImportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: T.importReview.badBg,
+    backgroundColor: T.importReview.badBg,
+  },
+  deleteImportBtnDisabled: { opacity: 0.65 },
+  deleteImportLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: T.importReview.bad,
+    marginLeft: 8,
+  },
   readingArea: { paddingHorizontal: 0, paddingTop: 0 },
 });

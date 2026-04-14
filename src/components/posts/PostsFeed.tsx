@@ -1,7 +1,19 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useIsFocused } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  AppState,
+  type AppStateStatus,
+  FlatList,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type ViewToken,
+} from 'react-native';
 import { useAuth } from '../../hooks/useAuth';
 import {
     PostCommentSummary,
@@ -21,7 +33,15 @@ import EditPostModal from './EditPostModal';
 import QuickCommentInput from './QuickCommentInput';
 import ShareModal from './ShareModal';
 import { FeedVideoPreview } from '../media/FeedVideoPreview';
+import { useFeedVideoAutoplayPolicy } from '../../hooks/useFeedVideoAutoplayPolicy';
 import { isFeedVideoMedia } from '../../lib/media/videoDetection';
+
+/** Full-width single attachment must be video — only those cells participate in feed autoplay. */
+function postIsSingleHeroVideo(post: RoomPost): boolean {
+  const urls = Array.isArray(post.media_urls) ? post.media_urls : [];
+  if (urls.length !== 1) return false;
+  return isFeedVideoMedia(post as { media_type?: string | null }, urls[0]);
+}
 
 interface PostsFeedProps {
   posts: RoomPost[];
@@ -74,6 +94,18 @@ export default function PostsFeed({
   const { session } = useAuth();
   const userId = session?.user?.id;
   const router = useRouter();
+  const screenFocused = useIsFocused();
+  const { feedAutoplayEnabled } = useFeedVideoAutoplayPolicy();
+
+  /** Which post’s single-hero video may autoplay (at most one id). Set from FlatList viewability. */
+  const [activeVideoPostId, setActiveVideoPostId] = useState<string | null>(null);
+  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+  const appForeground = appState === 'active';
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => setAppState(next));
+    return () => sub.remove();
+  }, []);
 
   const [commentsSummary, setCommentsSummary] = useState<PostCommentSummary>({});
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
@@ -244,6 +276,34 @@ export default function PostsFeed({
     </View>
   ), [emptyTitle]);
 
+  // --- Feed video autoplay (single full-width video only): one `activeVideoPostId`, ~70% visible, muted ---
+  const viewabilityConfig = useMemo(
+    () => ({
+      itemVisiblePercentThreshold: 70,
+      /** Reduces “everyone tries to play” while scrolling quickly */
+      minimumViewTime: 120,
+    }),
+    []
+  );
+
+  const onViewableItemsChanged = useCallback(
+    ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+      const visible = viewableItems.filter((t) => t.isViewable && t.item != null);
+      if (visible.length === 0) {
+        setActiveVideoPostId(null);
+        return;
+      }
+      const sorted = [...visible].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+      const top = sorted[0]?.item as RoomPost | undefined;
+      if (top && postIsSingleHeroVideo(top)) {
+        setActiveVideoPostId(top.id);
+      } else {
+        setActiveVideoPostId(null);
+      }
+    },
+    []
+  );
+
   const renderItem = useCallback(({ item }: { item: RoomPost }) => {
     const mediaUrls = Array.isArray(item.media_urls) ? item.media_urls : [];
     const commentData = commentsSummary[item.id] || { total: 0, preview: [] };
@@ -313,36 +373,42 @@ export default function PostsFeed({
                 const isVideo = isFeedVideoMedia(item as { media_type?: string | null }, url0);
                 const poster =
                   (item as { thumbnail_url?: string | null }).thumbnail_url || undefined;
+                const openDetail = () =>
+                  router.push({
+                    pathname: '/post-media-viewer',
+                    params: {
+                      postId: item.id,
+                      roomId: item.room_id ?? '',
+                      mediaIndex: 0,
+                    },
+                  });
+
                 return (
-                  <Pressable
-                    onPress={() =>
-                      router.push({
-                        pathname: '/post-media-viewer',
-                        params: {
-                          postId: item.id,
-                          roomId: item.room_id ?? '',
-                          mediaIndex: 0,
-                        },
-                      })
-                    }
-                  >
-                    <View style={styles.singleImageWrapper}>
-                      {isVideo ? (
-                        <FeedVideoPreview
-                          uri={url0}
-                          posterUri={poster}
-                          height={400}
-                          style={styles.mediaImageCover}
-                        />
-                      ) : (
+                  <View style={styles.singleImageWrapper}>
+                    {isVideo ? (
+                      <FeedVideoPreview
+                        uri={url0}
+                        posterUri={poster}
+                        height={400}
+                        style={styles.mediaImageCover}
+                        feedHero={{
+                          isActive: activeVideoPostId === item.id,
+                          feedAutoplayEnabled,
+                          screenFocused,
+                          appForeground,
+                          onOpenDetail: openDetail,
+                        }}
+                      />
+                    ) : (
+                      <Pressable onPress={openDetail}>
                         <Image
                           source={{ uri: url0 }}
                           style={styles.mediaImageCover}
                           resizeMode="cover"
                         />
-                      )}
-                    </View>
-                  </Pressable>
+                      </Pressable>
+                    )}
+                  </View>
                 );
               })()
             ) : (
@@ -500,12 +566,16 @@ export default function PostsFeed({
       </View>
     );
   }, [
+    activeVideoPostId,
+    appForeground,
     commentsSummary,
-    reactionsSummary,
+    feedAutoplayEnabled,
     onPostPress,
     onOpenReactionTray,
     onToggleLike,
+    reactionsSummary,
     router,
+    screenFocused,
     userId,
   ]);
 
@@ -528,6 +598,8 @@ export default function PostsFeed({
         updateCellsBatchingPeriod={50}
         windowSize={7}
         removeClippedSubviews
+        viewabilityConfig={viewabilityConfig}
+        onViewableItemsChanged={onViewableItemsChanged} // → `activeVideoPostId` + `FeedVideoPreview` `feedHero.isActive`
         refreshControl={
           onRefresh ? (
             <FlightClubRefreshControl refreshing={!!refreshing} onRefresh={onRefresh} />

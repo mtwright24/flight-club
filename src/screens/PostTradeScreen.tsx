@@ -25,6 +25,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
+import { useTradeBoards } from '../hooks/useTradeBoard';
 import * as ImagePicker from 'expo-image-picker';
 import type { PostTradeFormData, TradeType } from '../types/trades';
 import AppHeader from '../components/AppHeader';
@@ -40,6 +41,7 @@ export const PostTradeScreen: React.FC = () => {
   const tradeIdParam = params?.tradeId;
   const tradeId = Array.isArray(tradeIdParam) ? tradeIdParam[0] : tradeIdParam;
   const { session } = useAuth();
+  const { boards } = useTradeBoards();
   const styles = getStyles();
 
   const [form, setForm] = useState<PostTradeFormData>({
@@ -202,6 +204,15 @@ export const PostTradeScreen: React.FC = () => {
     setShowAirportPicker(false);
   };
 
+  /** Opening from Crew Schedule often omits `boardId` — bind the user’s default tradeboard when available. */
+  React.useEffect(() => {
+    if (tradeId || boardId) return;
+    if (resolvedBoardId) return;
+    if (boards.length > 0) {
+      setResolvedBoardId(boards[0].id);
+    }
+  }, [tradeId, boardId, boards, resolvedBoardId]);
+
   React.useEffect(() => {
     const loadTrade = async () => {
       if (!tradeId) return;
@@ -247,7 +258,7 @@ export const PostTradeScreen: React.FC = () => {
     loadTrade();
   }, [tradeId]);
 
-  /** Schedule module prefill (Crew Schedule → Post trip). */
+  /** Schedule module prefill (Crew Schedule → Post trip): dates, route, pairing, credit/block/TAFB, report time, notes. */
   React.useEffect(() => {
     if (tradeId) {
       lastSchedulePrefillKey.current = null;
@@ -258,6 +269,11 @@ export const PostTradeScreen: React.FC = () => {
       const v = p[k];
       const raw = Array.isArray(v) ? v[0] : v;
       return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
+    };
+    const hoursToMinutes = (s?: string) => {
+      const x = parseFloat(String(s || ''));
+      if (Number.isNaN(x)) return undefined;
+      return Math.round(x * 60);
     };
     const start = str('prefillStart');
     if (!start) return;
@@ -270,6 +286,12 @@ export const PostTradeScreen: React.FC = () => {
       str('prefillFrom') || '',
       str('prefillTo') || '',
       str('prefillBase') || '',
+      str('prefillCreditHours') || '',
+      str('prefillBlockHours') || '',
+      str('prefillTafbHours') || '',
+      str('prefillReportTime') || '',
+      str('prefillLayoverMinutes') || '',
+      str('prefillTripId') || '',
     ].join('\u001e');
 
     if (lastSchedulePrefillKey.current === prefillKey) return;
@@ -277,6 +299,24 @@ export const PostTradeScreen: React.FC = () => {
 
     const end = str('prefillEnd') || start;
     const routeNote = str('prefillRoute');
+    const layMin = str('prefillLayoverMinutes');
+    const layoverLine =
+      layMin && !Number.isNaN(Number(layMin))
+        ? `Layover total ${Math.floor(Number(layMin) / 60)}h ${String(Number(layMin) % 60).padStart(2, '0')}m`
+        : '';
+
+    const noteParts = [
+      routeNote && `Trip line: ${routeNote}`,
+      str('prefillPairing') && `Pairing ${str('prefillPairing')}`,
+      str('prefillBase') && `Base ${str('prefillBase')}`,
+      layoverLine || null,
+      str('prefillTripId') && `Schedule trip ${str('prefillTripId')}`,
+    ].filter(Boolean) as string[];
+
+    const creditM = hoursToMinutes(str('prefillCreditHours'));
+    const blockM = hoursToMinutes(str('prefillBlockHours'));
+    const tafbM = hoursToMinutes(str('prefillTafbHours'));
+
     setForm((prev) => ({
       ...prev,
       pairing_date: start,
@@ -284,11 +324,11 @@ export const PostTradeScreen: React.FC = () => {
       trip_number: str('prefillPairing') || prev.trip_number,
       route_from: str('prefillFrom') || prev.route_from,
       route_to: str('prefillTo') || prev.route_to,
-      notes:
-        prev.notes ||
-        [routeNote && `Schedule: ${routeNote}`, str('prefillBase') && `Base ${str('prefillBase')}`]
-          .filter(Boolean)
-          .join(' · '),
+      report_time: str('prefillReportTime') || prev.report_time,
+      credit_minutes: creditM ?? prev.credit_minutes,
+      block_minutes: blockM ?? prev.block_minutes,
+      tafb_minutes: tafbM ?? prev.tafb_minutes,
+      notes: noteParts.length ? noteParts.join(' · ') : prev.notes,
     }));
   }, [tradeId, params]);
 

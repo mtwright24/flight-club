@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   fetchTripGroupEntries,
@@ -11,32 +11,17 @@ import {
 } from '../scheduleApi';
 import { entriesToSingleTrip } from '../tripMapper';
 import { getMockTripById } from '../mockScheduleData';
+import { tradePostPrefillParams } from '../tradePostPrefillParams';
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
-import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus } from '../types';
+import { buildTripDetailViewModel, formatLayoverTotalMinutes } from '../tripDetailViewModel';
+import type { CrewScheduleLeg, CrewScheduleTrip } from '../types';
 import CrewScheduleHeader from '../components/CrewScheduleHeader';
-
-function statusLabel(s: ScheduleDutyStatus): string {
-  switch (s) {
-    case 'off':
-      return 'OFF';
-    case 'rsv':
-      return 'RSV';
-    case 'pto':
-      return 'PTO';
-    case 'deadhead':
-      return 'DH';
-    case 'continuation':
-      return 'Continuation';
-    case 'flying':
-      return 'Flying';
-    case 'training':
-      return 'Training';
-    default:
-      return 'Duty';
-  }
-}
+import TripCrewList from '../components/TripCrewList';
+import TripDayDetailPanel from '../components/TripDayDetailPanel';
+import TripDayTimelineNav from '../components/TripDayTimelineNav';
+import TripSummaryCard from '../components/TripSummaryCard';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -52,11 +37,23 @@ export default function TripDetailScreen() {
   const [loadingTrip, setLoadingTrip] = useState(true);
   const [legStatuses, setLegStatuses] = useState<Record<string, string>>({});
   const [trackingLegId, setTrackingLegId] = useState<string | null>(null);
+  const [selectedDayIndex, setSelectedDayIndex] = useState(0);
 
   const display = useMemo(
     () => (trip ? mergeTripWithMetadataRow(trip, tripMeta) : undefined),
     [trip, tripMeta]
   );
+
+  const vm = useMemo(() => (display ? buildTripDetailViewModel(display) : null), [display]);
+
+  useEffect(() => {
+    setSelectedDayIndex(0);
+  }, [tripId]);
+
+  useEffect(() => {
+    if (!vm?.days.length) return;
+    setSelectedDayIndex((i) => Math.max(0, Math.min(i, vm.days.length - 1)));
+  }, [vm?.days.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,68 +105,60 @@ export default function TripDetailScreen() {
     setLegStatuses({});
   }, [tripId]);
 
-  const trackLeg = async (leg: CrewScheduleLeg) => {
-    if (!trip || !leg.flightNumber) return;
-    setTrackingLegId(leg.id);
-    const raw = leg.flightNumber.trim();
-    const b6 = raw.match(/B6\s*(\d+)/i);
-    const flight_number = b6 ? b6[1] : raw.replace(/\D/g, '');
-    const airline_code = b6 ? 'B6' : raw.match(/^([A-Z]{2})/i)?.[1]?.toUpperCase() ?? null;
-    if (!flight_number) {
-      setTrackingLegId(null);
-      return;
-    }
-    const dutyDate = leg.dutyDate && /^\d{4}-\d{2}-\d{2}$/.test(leg.dutyDate) ? leg.dutyDate : trip.startDate;
-    try {
-      const enriched = await enrichCrewScheduleSegment({
-        airline_code: airline_code || null,
-        flight_number,
-        departure_date: dutyDate,
-        origin_airport: leg.departureAirport,
-        destination_airport: leg.arrivalAirport,
-        schedule_entry_id: leg.scheduleEntryId ?? null,
-      });
-      if (enriched.matched && enriched.normalized_status) {
-        const line =
-          enriched.delay_minutes != null
-            ? `${enriched.normalized_status.replace(/_/g, ' ')} · ${enriched.delay_minutes}m delay`
-            : enriched.normalized_status.replace(/_/g, ' ');
-        setLegStatuses((s) => ({ ...s, [leg.id]: line }));
+  const trackLeg = useCallback(
+    async (leg: CrewScheduleLeg, t: CrewScheduleTrip) => {
+      if (!leg.flightNumber) return;
+      setTrackingLegId(leg.id);
+      const raw = leg.flightNumber.trim();
+      const b6 = raw.match(/B6\s*(\d+)/i);
+      const flight_number = b6 ? b6[1] : raw.replace(/\D/g, '');
+      const airline_code = b6 ? 'B6' : raw.match(/^([A-Z]{2})/i)?.[1]?.toUpperCase() ?? null;
+      if (!flight_number) {
+        setTrackingLegId(null);
+        return;
       }
-    } catch {
-      /* cache / provider errors — still allow navigation */
-    } finally {
-      setTrackingLegId(null);
-    }
-    router.push({
-      pathname: '/flight-tracker/results',
-      params: {
-        q: leg.flightNumber,
-        date: /^\d{4}-\d{2}-\d{2}/.test(dutyDate) ? dutyDate.slice(0, 10) : localCalendarDate(),
-      },
-    });
-  };
+      const dutyDate = leg.dutyDate && /^\d{4}-\d{2}-\d{2}$/.test(leg.dutyDate) ? leg.dutyDate : t.startDate;
+      try {
+        const enriched = await enrichCrewScheduleSegment({
+          airline_code: airline_code || null,
+          flight_number,
+          departure_date: dutyDate,
+          origin_airport: leg.departureAirport,
+          destination_airport: leg.arrivalAirport,
+          schedule_entry_id: leg.scheduleEntryId ?? null,
+        });
+        if (enriched.matched && enriched.normalized_status) {
+          const line =
+            enriched.delay_minutes != null
+              ? `${enriched.normalized_status.replace(/_/g, ' ')} · ${enriched.delay_minutes}m delay`
+              : enriched.normalized_status.replace(/_/g, ' ');
+          setLegStatuses((s) => ({ ...s, [leg.id]: line }));
+        }
+      } catch {
+        /* cache / provider errors */
+      } finally {
+        setTrackingLegId(null);
+      }
+      router.push({
+        pathname: '/flight-tracker/results',
+        params: {
+          q: leg.flightNumber,
+          date: /^\d{4}-\d{2}-\d{2}/.test(dutyDate) ? dutyDate.slice(0, 10) : localCalendarDate(),
+        },
+      });
+    },
+    [router]
+  );
 
-  const openPost = (t: CrewScheduleTrip) => {
-    router.push({
-      pathname: '/crew-exchange/create-post',
-      params: {
-        prefillPairing: t.pairingCode,
-        prefillRoute: t.routeSummary,
-        prefillStart: t.startDate,
-        prefillEnd: t.endDate,
-        prefillFrom: t.origin ?? '',
-        prefillTo: t.destination ?? '',
-        prefillBase: t.base ?? '',
-        prefillCredit:
-          t.pairingCreditHours != null
-            ? String(t.pairingCreditHours)
-            : t.creditHours != null
-              ? String(t.creditHours)
-              : '',
-      },
-    });
-  };
+  const openPost = useCallback(
+    (t: CrewScheduleTrip) => {
+      router.push({
+        pathname: '/crew-exchange/create-post',
+        params: tradePostPrefillParams(t),
+      });
+    },
+    [router]
+  );
 
   if (!tripId) {
     return (
@@ -198,7 +187,7 @@ export default function TripDetailScreen() {
     );
   }
 
-  if (!trip) {
+  if (!trip || !vm) {
     return (
       <View style={styles.shell}>
         <CrewScheduleHeader title="Trip detail" />
@@ -215,140 +204,74 @@ export default function TripDetailScreen() {
 
   const t = display as CrewScheduleTrip;
   const hotel = t.hotel;
+  const selectedDay = vm.days[selectedDayIndex] ?? vm.days[0];
+  const headerTitle = vm.pairingCode.length > 18 ? `${vm.pairingCode.slice(0, 17)}…` : vm.pairingCode;
 
   return (
     <View style={styles.shell}>
-      <CrewScheduleHeader title="Trip detail" />
+      <CrewScheduleHeader title={headerTitle} />
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.section}>
-          <Text style={styles.route}>{t.routeSummary}</Text>
-          <Text style={styles.pair}>{t.pairingCode}</Text>
-          <View style={styles.badgeRow}>
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{statusLabel(t.status)}</Text>
-            </View>
-            {t.base ? (
-              <View style={[styles.badge, styles.badgeMuted]}>
-                <Text style={styles.badgeTextMuted}>Base {t.base}</Text>
-              </View>
-            ) : null}
-          </View>
-          <Text style={styles.metaLine}>
-            {t.startDate === t.endDate ? t.startDate : `${t.startDate} → ${t.endDate}`}
-          </Text>
-          <Text style={styles.metaLine}>
-            {t.dutyDays} duty day{t.dutyDays === 1 ? '' : 's'}
-            {t.pairingCreditHours != null
-              ? ` · ${t.pairingCreditHours.toFixed(2)} CR`
-              : t.creditHours != null
-                ? ` · ${t.creditHours} CR`
-                : ''}
-          </Text>
-        </View>
+        <TripSummaryCard vm={vm} showStats />
 
-        {t.pairingBlockHours != null ||
-        t.pairingCreditHours != null ||
-        t.pairingTafbHours != null ||
-        t.tripLayoverTotalMinutes != null ? (
-          <>
-            <Text style={styles.h2}>Pairing totals</Text>
-            <View style={styles.legCard}>
-              <Text style={styles.metaLine}>
-                Block {t.pairingBlockHours != null ? `${t.pairingBlockHours.toFixed(2)}h` : '—'}
-              </Text>
-              <Text style={styles.metaLine}>
-                Credit {t.pairingCreditHours != null ? `${t.pairingCreditHours.toFixed(2)}h` : '—'}
-              </Text>
-              <Text style={styles.metaLine}>
-                TAFB {t.pairingTafbHours != null ? `${t.pairingTafbHours.toFixed(2)}h` : '—'}
-              </Text>
-              <Text style={styles.metaLine}>
-                Layover total{' '}
-                {t.tripLayoverTotalMinutes != null
-                  ? `${Math.floor(t.tripLayoverTotalMinutes / 60)}:${String(t.tripLayoverTotalMinutes % 60).padStart(2, '0')}`
-                  : '—'}
-              </Text>
-            </View>
-          </>
+        <Text style={styles.h2}>Operating days</Text>
+        <TripDayTimelineNav
+          days={vm.days}
+          selectedDayIndex={selectedDayIndex}
+          onSelectDay={setSelectedDayIndex}
+        />
+
+        {selectedDay ? (
+          <TripDayDetailPanel
+            day={selectedDay}
+            legStatuses={legStatuses}
+            trackingLegId={trackingLegId}
+            onTrackLeg={(leg) => void trackLeg(leg, t)}
+          />
         ) : null}
 
-        <Text style={styles.h2}>Legs</Text>
-        {t.legs.length === 0 ? (
-          <Text style={styles.muted}>No legs for this duty line.</Text>
-        ) : (
-          t.legs.map((leg) => (
-            <View key={leg.id} style={styles.legCard}>
-              <View style={styles.legTop}>
-                <Text style={styles.legPair}>
-                  {leg.departureAirport} → {leg.arrivalAirport}
-                </Text>
-                {leg.isDeadhead ? (
-                  <View style={styles.dh}>
-                    <Text style={styles.dhText}>DH</Text>
-                  </View>
-                ) : null}
-              </View>
-              {leg.flightNumber ? <Text style={styles.fn}>Flt {leg.flightNumber}</Text> : null}
-              <Text style={styles.legTimes}>
-                Report {leg.reportLocal ?? '—'} · D-END {leg.releaseLocal ?? '—'}
-              </Text>
-              <Text style={styles.legTimes}>
-                Dep {leg.departLocal ?? '—'} · Arr {leg.arriveLocal ?? '—'}
-              </Text>
-              {legStatuses[leg.id] ? <Text style={styles.liveStatus}>Live: {legStatuses[leg.id]}</Text> : null}
-              {leg.flightNumber ? (
-                <Pressable
-                  style={styles.trackBtn}
-                  onPress={() => void trackLeg(leg)}
-                  disabled={trackingLegId === leg.id}
-                >
-                  {trackingLegId === leg.id ? (
-                    <ActivityIndicator size="small" color={T.accent} />
-                  ) : (
-                    <Ionicons name="airplane-outline" size={14} color={T.accent} />
-                  )}
-                  <Text style={styles.trackBtnText}>
-                    {trackingLegId === leg.id ? 'Loading…' : 'Track this leg'}
-                  </Text>
-                </Pressable>
-              ) : null}
+        <Text style={styles.h2}>Layover & hotel</Text>
+        <View style={styles.card}>
+          {t.layoverCity ? (
+            <View style={styles.kv}>
+              <Text style={styles.k}>Layover city</Text>
+              <Text style={styles.v}>{t.layoverCity}</Text>
             </View>
-          ))
-        )}
-
-        <Text style={styles.h2}>Layover / hotel</Text>
-        {hotel ? (
-          <View style={styles.legCard}>
-            <Text style={styles.hotelName}>{hotel.name ?? 'Hotel'}</Text>
-            <Text style={styles.metaLine}>{[hotel.city, hotel.address].filter(Boolean).join(' · ')}</Text>
-            {hotel.shuttleNotes ? <Text style={styles.note}>Van / shuttle: {hotel.shuttleNotes}</Text> : null}
-            <Text style={styles.placeholder}>Food nearby — add notes when supported</Text>
-            <Text style={styles.placeholder}>Safety notes — add when supported</Text>
+          ) : null}
+          <View style={styles.kv}>
+            <Text style={styles.k}>Layover total</Text>
+            <Text style={styles.v}>
+              {t.tripLayoverTotalMinutes != null
+                ? formatLayoverTotalMinutes(t.tripLayoverTotalMinutes)
+                : '—'}
+            </Text>
           </View>
-        ) : (
-          <Text style={styles.muted}>No hotel on file for this line.</Text>
-        )}
+          {hotel?.name ? (
+            <>
+              <Text style={styles.hotelName}>{hotel.name}</Text>
+              <Text style={styles.meta}>{[hotel.city, hotel.address].filter(Boolean).join(' · ')}</Text>
+              {hotel.shuttleNotes ? <Text style={styles.note}>Shuttle · {hotel.shuttleNotes}</Text> : null}
+            </>
+          ) : (
+            <Text style={styles.muted}>No hotel on file for this pairing.</Text>
+          )}
+        </View>
 
-        <Text style={styles.h2}>Crew</Text>
-        <View style={styles.legCard}>
-          {t.crewMembers && t.crewMembers.length > 0 ? (
-            t.crewMembers.map((c, idx) => (
-              <Text key={`${c.position}-${idx}`} style={styles.crewLine}>
-                {c.position} · {c.name}
-              </Text>
-            ))
-          ) : (
-            <Text style={styles.muted}>Crew positions and names appear when your schedule source includes them.</Text>
-          )}
-          {t.tripChatThreadId ? (
-            <Text style={styles.mono}>Thread: {t.tripChatThreadId}</Text>
-          ) : (
-            <Text style={styles.placeholder}>Link to Trip Chat when assigned.</Text>
-          )}
+        <View style={styles.crewSection}>
+          <Text style={styles.h2}>Crew</Text>
+          <View style={styles.card}>
+            {vm.crewMembers.length > 0 ? (
+              <TripCrewList members={vm.crewMembers} showTitle={false} />
+            ) : (
+              <Text style={styles.muted}>Crew appears when your schedule source includes positions and names.</Text>
+            )}
+            {t.tripChatThreadId ? (
+              <Text style={styles.mono}>Trip chat: {t.tripChatThreadId}</Text>
+            ) : null}
+          </View>
         </View>
 
         <Text style={styles.h2}>Actions</Text>
@@ -356,7 +279,7 @@ export default function TripDetailScreen() {
           <ActionTile icon="swap-horizontal" label="Post trip" onPress={() => openPost(t)} />
           <ActionTile
             icon="chatbubbles-outline"
-            label="Open trip chat"
+            label="Trip chat"
             onPress={() =>
               router.push({ pathname: '/crew-schedule/trip-chat', params: { tripId: t.id } })
             }
@@ -387,99 +310,92 @@ function ActionTile({
   onPress: () => void;
 }) {
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.actionTile, pressed && { opacity: 0.92 }]}>
-      <Ionicons name={icon} size={22} color={T.accent} />
-      <Text style={styles.actionLabel}>{label}</Text>
-    </Pressable>
+    <View style={styles.actionTileOuter}>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        style={({ pressed }) => [styles.actionTilePressable, pressed && styles.actionTilePressed]}
+      >
+        <View style={styles.actionTileInner}>
+          <Ionicons name={icon} size={22} color={T.accent} />
+          <Text style={styles.actionLabel}>{label}</Text>
+        </View>
+      </Pressable>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   shell: { flex: 1, backgroundColor: T.bg },
   scroll: { flex: 1 },
-  section: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
-  route: { fontSize: 20, fontWeight: '800', color: T.text },
-  pair: { fontSize: 15, fontWeight: '700', color: T.textSecondary, marginTop: 4 },
-  badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: '#FEF2F2',
-    borderWidth: 1,
-    borderColor: '#FECACA',
-  },
-  badgeMuted: { backgroundColor: T.surfaceMuted, borderColor: T.line },
-  badgeText: { fontSize: 12, fontWeight: '800', color: T.accent },
-  badgeTextMuted: { fontSize: 12, fontWeight: '700', color: T.text },
-  metaLine: { fontSize: 14, color: T.text, marginTop: 6 },
   h2: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
     color: T.textSecondary,
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.55,
     paddingHorizontal: 16,
-    marginTop: 16,
+    marginTop: 18,
     marginBottom: 8,
   },
-  legCard: {
+  card: {
     marginHorizontal: 16,
-    marginBottom: 10,
-    padding: 12,
-    borderRadius: 10,
+    marginBottom: 4,
+    padding: 14,
+    borderRadius: 14,
     backgroundColor: T.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
   },
-  legTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  legPair: { fontSize: 16, fontWeight: '800', color: T.text },
-  dh: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: '#E0E7FF',
-  },
-  dhText: { fontSize: 11, fontWeight: '800', color: '#3730A3' },
-  fn: { fontSize: 13, color: T.textSecondary, marginTop: 4 },
-  legTimes: { fontSize: 13, color: T.text, marginTop: 8, lineHeight: 18 },
-  trackBtn: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
-    borderColor: T.line,
-    backgroundColor: T.surfaceMuted,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  trackBtnText: { fontSize: 12, fontWeight: '700', color: T.accent },
-  liveStatus: { marginTop: 6, fontSize: 12, fontWeight: '700', color: '#1D4ED8' },
-  hotelName: { fontSize: 16, fontWeight: '800', color: T.text },
+  kv: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
+  k: { fontSize: 13, color: T.textSecondary, fontWeight: '600', width: '40%' },
+  v: { fontSize: 14, color: T.text, fontWeight: '800', flex: 1, textAlign: 'right' },
+  hotelName: { fontSize: 17, fontWeight: '800', color: T.text, marginTop: 8 },
+  meta: { fontSize: 14, color: T.text, marginTop: 6, lineHeight: 20 },
   note: { fontSize: 13, color: T.text, marginTop: 8 },
-  placeholder: { fontSize: 12, color: T.textSecondary, marginTop: 6, fontStyle: 'italic' },
-  muted: { fontSize: 14, color: T.textSecondary, paddingHorizontal: 16 },
-  crewLine: { fontSize: 14, fontWeight: '600', color: T.text, marginBottom: 6 },
-  mono: { fontSize: 12, color: T.textSecondary, marginTop: 8 },
+  muted: { fontSize: 14, color: T.textSecondary },
+  mono: { fontSize: 11, color: T.textSecondary, marginTop: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  crewSection: { marginTop: 4 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingHorizontal: 16, paddingBottom: 8 },
-  actionTile: {
+  actionTileOuter: {
     width: '47%',
     minWidth: 140,
     flexGrow: 1,
+    alignSelf: 'stretch',
+    minHeight: 52,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: T.actionTileBorder,
+    backgroundColor: T.surface,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOpacity: 0.08,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+      },
+      android: { elevation: 0 },
+      default: {},
+    }),
+  },
+  actionTilePressable: {
+    width: '100%',
+    minHeight: 52,
+    flexGrow: 1,
+    backgroundColor: T.surface,
+  },
+  actionTilePressed: { opacity: 0.96, backgroundColor: '#FFF1F2' },
+  actionTileInner: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     paddingVertical: 12,
     paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: T.line,
-    backgroundColor: T.surface,
   },
-  actionLabel: { fontSize: 14, fontWeight: '800', color: T.text },
+  actionLabel: { flex: 1, minWidth: 0, fontSize: 14, fontWeight: '800', color: T.text },
   empty: { flex: 1, padding: 24, justifyContent: 'center' },
   emptyTitle: { fontSize: 18, fontWeight: '800', color: T.text },
   emptySub: { fontSize: 14, color: T.textSecondary, marginTop: 8, marginBottom: 20 },
