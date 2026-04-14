@@ -24,7 +24,12 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 // @ts-expect-error Deno esm
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { extractPdfText, visionDocumentTextFromImage, type VisionImageExtractionDebug } from './extract.ts';
+import {
+  extractPdfText,
+  visionDocumentTextFromImage,
+  type PdfExtractionDebug,
+  type VisionImageExtractionDebug,
+} from './extract.ts';
 import { flicaOcrHasScheduleEvidence, pickOcrIssueCodes } from './flicaOcrSalvage.ts';
 import {
   classifyImport,
@@ -275,6 +280,7 @@ serve(async (req) => {
 
   let rawText = '';
   let pdfWeak = false;
+  let pdfExtractionDebug: PdfExtractionDebug | null = null;
   let imageOcrDebug: VisionImageExtractionDebug | null = null;
   let ocrFailureReasonCode: string | null = null;
 
@@ -311,6 +317,7 @@ serve(async (req) => {
         if (pdfTry.text.trim().length > rawText.trim().length) {
           rawText = pdfTry.text;
           pdfWeak = pdfTry.usedOcrFallback;
+          pdfExtractionDebug = pdfTry.debug;
           imageOcrDebug = null;
         }
       }
@@ -318,9 +325,16 @@ serve(async (req) => {
       const pdfTry = await extractPdfText(buf);
       rawText = pdfTry.text;
       pdfWeak = pdfTry.usedOcrFallback;
-      if (pdfWeak) {
-        rawText += '\n\n[import: PDF text extraction was weak; scanned PDFs may need a photo/screenshot import.]';
-      }
+      pdfExtractionDebug = pdfTry.debug;
+      console.log('[import-schedule-ocr] pdf_stage_handoff_parser_entry', {
+        file_kind: 'pdf',
+        pdf_byte_length: buf.length,
+        parser_handoff_text_len: rawText.length,
+        merged_text_length: pdfExtractionDebug.merged_text_length,
+        page_count: pdfExtractionDebug.page_count,
+        pdf_weak: pdfWeak,
+        used_ocr_fallback_any_page: pdfExtractionDebug.used_ocr_fallback,
+      });
     } else {
       const vis = await visionDocumentTextFromImage(buf, filePath);
       rawText = vis.text.replace(/\n\n\[FLICA_WEAK_OCR\]\s*$/i, '').trim();
@@ -331,19 +345,27 @@ serve(async (req) => {
     if (/Vision returned no text|no text for this image/i.test(msg)) ocrFailureReasonCode = OcrTraceReason.OCR_RETURNED_EMPTY;
     else if (/almost no usable text/i.test(msg)) ocrFailureReasonCode = OcrTraceReason.OCR_TEXT_DISCARDED_BY_THRESHOLD;
     else if (/empty after download/i.test(msg)) ocrFailureReasonCode = OcrTraceReason.STORAGE_FETCH_EMPTY;
+    else if (/PDF_EXTRACTION_ENGINE:/i.test(msg)) ocrFailureReasonCode = OcrTraceReason.PDF_EXTRACTION_ENGINE_ERROR;
+    else if (/PDF_EMPTY_FILE:/i.test(msg)) ocrFailureReasonCode = OcrTraceReason.STORAGE_FETCH_EMPTY;
     else ocrFailureReasonCode = OcrTraceReason.OCR_ENGINE_ERROR;
+
+    const userFacingDetail =
+      ocrFailureReasonCode === OcrTraceReason.PDF_EXTRACTION_ENGINE_ERROR
+        ? 'PDF text could not be read on the server (extraction engine). Screenshot import still works.'
+        : msg;
 
     console.error('[import-schedule-ocr] ocr_stage_extraction_caught', {
       ocr_failure_reason_code: ocrFailureReasonCode,
       message: msg,
       storage_download_bytes: buf.length,
+      file_kind: extMime(filePath),
     });
 
     await supabase
       .from('schedule_import_batches')
       .update({
         parse_status: 'failed',
-        parse_error: msg,
+        parse_error: userFacingDetail,
         classification_json: {
           ocr_instrumentation: {
             reason_codes: [ocrFailureReasonCode],
@@ -352,6 +374,7 @@ serve(async (req) => {
             storage_fetch_ok: true,
             handoff_reason_code: ocrFailureReasonCode,
             extraction_error_message: msg.slice(0, 2000),
+            file_kind: extMime(filePath),
           },
         },
         updated_at: new Date().toISOString(),
@@ -360,7 +383,8 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         error: 'Extraction failed',
-        details: msg,
+        details: userFacingDetail,
+        details_technical: msg,
         ocr_reason_code: ocrFailureReasonCode,
         storage_download_bytes: buf.length,
       }),
@@ -422,8 +446,13 @@ serve(async (req) => {
     console.log('[import-schedule-ocr] ocr_stage_jetblue_structured_handoff', {
       batch_id: batchId,
       raw_text_len_written_to_batch: rawText.length,
+      parser_handoff_text_len: rawText.length,
       storage_download_bytes: buf.length,
       ocr_handoff_reason_code: handoffCode,
+      file_kind: kind,
+      pdf_page_count: pdfExtractionDebug?.page_count ?? null,
+      pdf_merged_len: pdfExtractionDebug?.merged_text_length ?? null,
+      pairing_count_note: 'pairings parsed on client from raw_extracted_text',
     });
 
     const batchPatch: Record<string, unknown> = {
@@ -433,9 +462,11 @@ serve(async (req) => {
       warning_count: 0,
       parse_error: handoffEmpty
         ? `OCR produced no usable text (${OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT}). See classification_json.ocr_instrumentation.`
-        : pdfWeak
-          ? 'PDF text may be incomplete (scanned document).'
-          : null,
+        : pdfWeak && pdfExtractionDebug
+          ? `PDF had very little selectable text (${OcrTraceReason.PDF_EXTRACTED_NO_USABLE_TEXT}). May be scanned; try screenshots.`
+          : pdfWeak
+            ? 'PDF text may be incomplete (scanned document).'
+            : null,
       updated_at: new Date().toISOString(),
       selected_month_key: effectiveMonthKey,
       detected_month_key: classification.detected_month_key,
@@ -458,9 +489,20 @@ serve(async (req) => {
           file_kind: kind,
           raw_text_len_for_db: rawText.length,
           handoff_reason_code: handoffCode,
-          reason_codes: handoffEmpty ? [OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT] : [],
+          reason_codes: handoffEmpty
+            ? [OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT]
+            : pdfWeak && pdfExtractionDebug
+              ? [OcrTraceReason.PDF_EXTRACTED_NO_USABLE_TEXT]
+              : [],
           vision_ocr: imageOcrDebug?.ocrInstrument ?? null,
         },
+        pdf_pipeline: pdfExtractionDebug
+          ? {
+              ...pdfExtractionDebug,
+              parser_handoff_text_len: rawText.length,
+              source_file_kind: kind,
+            }
+          : undefined,
         ocr_pipeline: imageOcrDebug
           ? {
               merged_len: imageOcrDebug.mergedLen,
@@ -598,6 +640,13 @@ serve(async (req) => {
         handoff_reason_code: rawText.length === 0 ? OcrTraceReason.PARSER_RECEIVED_EMPTY_RAW_TEXT : null,
         vision_ocr: imageOcrDebug?.ocrInstrument ?? null,
       },
+      pdf_pipeline: pdfExtractionDebug
+        ? {
+            ...pdfExtractionDebug,
+            parser_handoff_text_len: rawText.length,
+            source_file_kind: kind,
+          }
+        : undefined,
     },
     applied_template_id: templateId,
   };
@@ -616,6 +665,14 @@ serve(async (req) => {
   } catch (e) {
     console.warn('[import-schedule-ocr] user_schedule_profiles upsert skipped', e);
   }
+
+  console.log('[import-schedule-ocr] parser_stage_result', {
+    file_kind: kind,
+    pairing_candidate_row_count: rows.length,
+    parser_handoff_text_len: rawText.length,
+    parser_key: parserKey,
+    pdf_pipeline_present: pdfExtractionDebug != null,
+  });
 
   return new Response(
     JSON.stringify({

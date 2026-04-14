@@ -155,7 +155,10 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
 
   const routeSummary = buildRouteSummary(legs, first.city?.includes('→') ? String(first.city) : pairingCode);
 
-  const layoverCity = first.layover ?? undefined;
+  /** `schedule_entries.layover` is FLICA layover *time* (4-digit); do not treat as station name. */
+  const layoverMeta = first.layover?.trim();
+  const layoverCity =
+    layoverMeta && !/^\d{4}$/.test(layoverMeta) ? layoverMeta : undefined;
 
   const layoverByDate: Record<string, string> = {};
   for (const d of days) {

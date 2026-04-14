@@ -1,5 +1,10 @@
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../lib/supabaseClient';
 import type { CrewScheduleTrip, ScheduleCrewMember, ScheduleMonthMetrics } from './types';
+import {
+  buildLayoverSummaryFromDuties,
+  fetchDutiesForPairing,
+  fetchPairingsForBatch,
+} from './jetblueFlicaImport';
 
 export type ScheduleEntryRow = {
   id: string;
@@ -108,7 +113,7 @@ export async function fetchTripGroupEntries(tripGroupId: string): Promise<Schedu
 
 export async function createImportBatch(params: {
   monthKey: string;
-  sourceType: 'screenshot' | 'photo' | 'pdf';
+  sourceType: 'screenshot' | 'photo' | 'pdf' | 'document_scan';
   sourceFilePath: string;
   sourceFileUrl?: string | null;
   /** JetBlue FLICA guided import session (optional). */
@@ -345,6 +350,157 @@ export async function applyMergeMonth(monthKey: string, batchId: string, rows: A
   });
   if (error) throw error;
   return typeof data === 'number' ? data : 0;
+}
+
+/**
+ * Removes all calendar data for a month, import-derived month totals, orphaned pairing metadata,
+ * and deletes import batches tagged with that month (pairing data and OCR rows cascade with batches).
+ */
+export async function removeMonthScheduleAndImports(monthKey: string): Promise<{
+  entriesRemoved: number;
+  batchesRemoved: number;
+}> {
+  const mk = monthKey.trim();
+  if (!/^\d{4}-\d{2}$/.test(mk)) {
+    throw new Error('Invalid month key (expected YYYY-MM).');
+  }
+
+  const { data: beforeRows, error: eBefore } = await supabase
+    .from('schedule_entries')
+    .select('trip_group_id')
+    .eq('month_key', mk);
+  if (eBefore) throw eBefore;
+  const tripGroups = [...new Set((beforeRows ?? []).map((r) => r.trip_group_id as string))];
+
+  const { data: deletedEntries, error: eDel } = await supabase
+    .from('schedule_entries')
+    .delete()
+    .eq('month_key', mk)
+    .select('id');
+  if (eDel) throw eDel;
+  const entriesRemoved = deletedEntries?.length ?? 0;
+
+  for (const tg of tripGroups) {
+    const { count, error: ec } = await supabase
+      .from('schedule_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('trip_group_id', tg);
+    if (ec) throw ec;
+    if ((count ?? 0) === 0) {
+      const { error: emd } = await supabase.from('schedule_trip_metadata').delete().eq('trip_group_id', tg);
+      if (emd) throw emd;
+    }
+  }
+
+  const { error: eMm } = await supabase.from('schedule_month_metrics').delete().eq('month_key', mk);
+  if (eMm) throw eMm;
+
+  const { data: batchRows, error: eB } = await supabase
+    .from('schedule_import_batches')
+    .select('id')
+    .eq('month_key', mk);
+  if (eB) throw eB;
+  const batchIds = (batchRows ?? []).map((b) => b.id as string);
+
+  if (batchIds.length) {
+    const { error: eBatchDel } = await supabase.from('schedule_import_batches').delete().in('id', batchIds);
+    if (eBatchDel) throw eBatchDel;
+  }
+
+  return { entriesRemoved, batchesRemoved: batchIds.length };
+}
+
+const DOW3 = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+
+function isoToDowThreeLetter(iso: string): string {
+  const d = new Date(`${iso}T12:00:00`);
+  return DOW3[d.getDay()];
+}
+
+function digitsTime(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const digits = String(raw).replace(/\D/g, '');
+  return digits.length >= 3 ? digits.slice(0, 4) : null;
+}
+
+/**
+ * Builds calendar apply rows from stored pairings + legs (schedule_pairings / schedule_pairing_legs).
+ * One row per duty date per pairing so merge/replace can assign trip_group_id for consecutive trip days.
+ */
+export async function buildApplyRowsFromPairingBatch(
+  batchId: string,
+  monthKey: string | null | undefined
+): Promise<ApplyRow[]> {
+  const pairings = await fetchPairingsForBatch(batchId);
+  const out: ApplyRow[] = [];
+
+  for (const p of pairings) {
+    const pairingCode = (p.pairing_id ?? '').trim() || 'UNKNOWN';
+    const startIso = (p.operate_start_date ?? '').trim();
+    const legs = await fetchDutiesForPairing(p.id);
+
+    if (legs.length === 0) {
+      if (startIso) {
+        out.push({
+          date: startIso,
+          day_of_week: isoToDowThreeLetter(startIso),
+          pairing_code: pairingCode,
+          report_time: digitsTime(p.report_time_local),
+          d_end_time: null,
+          depart_local: null,
+          arrive_local: null,
+          status_code: 'TRIP',
+          source_type: 'import',
+        });
+      }
+      continue;
+    }
+
+    const byDate = new Map<string, typeof legs>();
+    for (const l of legs) {
+      const ds = (l.duty_date ?? '').trim();
+      if (!ds) continue;
+      const arr = byDate.get(ds) ?? [];
+      arr.push(l);
+      byDate.set(ds, arr);
+    }
+
+    const sortedDates = [...byDate.keys()].sort((a, b) => a.localeCompare(b));
+    for (const dateStr of sortedDates) {
+      const dayLegs = byDate.get(dateStr)!;
+      const segs = dayLegs.map((l) => {
+        const a = (l.from_airport ?? '?').trim() || '?';
+        const b = (l.to_airport ?? '?').trim() || '?';
+        return `${a}-${b}`;
+      });
+      const city = segs.length ? segs.join(', ') : null;
+      const firstDay = Boolean(startIso && dateStr === startIso);
+      const lastLeg = dayLegs[dayLegs.length - 1];
+      const departFirst = dayLegs[0]?.departure_time_local ?? null;
+      out.push({
+        date: dateStr,
+        day_of_week: isoToDowThreeLetter(dateStr),
+        pairing_code: pairingCode,
+        report_time: firstDay ? digitsTime(p.report_time_local) : null,
+        city,
+        d_end_time: lastLeg ? digitsTime(lastLeg.release_time_local) : null,
+        layover: buildLayoverSummaryFromDuties(dayLegs),
+        depart_local: departFirst,
+        arrive_local: lastLeg?.arrival_time_local ?? null,
+        status_code: 'TRIP',
+        source_type: 'import',
+      });
+    }
+  }
+
+  out.sort((a, b) => a.date.localeCompare(b.date));
+
+  const mk = monthKey?.trim();
+  const monthPrefix = mk && mk.length >= 7 ? mk.slice(0, 7) : mk;
+  if (monthPrefix) {
+    return out.filter((r) => r.date.slice(0, 7) === monthPrefix);
+  }
+  return out;
 }
 
 export function candidatesToApplyRows(candidates: ScheduleImportCandidateRow[]): ApplyRow[] {

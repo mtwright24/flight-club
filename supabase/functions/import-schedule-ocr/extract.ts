@@ -1,8 +1,9 @@
 /**
- * Text extraction: Google Vision (images) + pdf.js (PDF text only).
+ * Text extraction: Google Vision (images); PDFs use **unpdf** text, then optional **embedded XObject image** OCR.
  *
  * JetBlue FLICA: preprocess (upscale/strips), multi-pass OCR merge, weak-OCR salvage hints.
- * Do not statically import pdfjs-dist at module load: Edge crashes (DOMMatrix) before Vision runs.
+ * Rasterizing arbitrary PDF pages still needs Node+canvas (unsupported in Edge); many scanned PDFs embed
+ * full-page JPEG/PNG per page — `extractImages` + sharp + Vision covers those without canvas.
  */
 
 import { encode as encodeBase64 } from 'https://deno.land/std@0.168.0/encoding/base64.ts';
@@ -421,45 +422,261 @@ async function visionAnnotate(
   return out;
 }
 
+/** Minimum total characters before we treat PDF text extraction as usable (FLICA PDFs are dense). */
 const MIN_PDF_TEXT_CHARS = 80;
+/** Per-page threshold: below this, page may be image-only — try embedded-image Vision OCR. */
+const MIN_PDF_PAGE_TEXT_CHARS = 45;
+/** Cap Vision calls for oversized schedules (pages × images). */
+const MAX_PDF_PAGES_FOR_EMBEDDED_OCR = 28;
+const MAX_EMBEDDED_IMAGES_PER_PDF_PAGE = 8;
 
-/** Pin pdf.js + worker to the same release — unversioned `npm:pdfjs-dist` can drift and break workers. */
-const PDFJS_DIST_VERSION = '4.10.38';
-
-type PdfJsModule = typeof import('npm:pdfjs-dist@4.10.38/legacy/build/pdf.mjs');
-let cachedPdfJs: PdfJsModule | null = null;
-
-async function loadPdfJs(): Promise<PdfJsModule> {
-  if (cachedPdfJs) return cachedPdfJs;
-  await import('./pdf-polyfills.ts');
-  const spec = `npm:pdfjs-dist@${PDFJS_DIST_VERSION}/legacy/build/pdf.mjs`;
-  const mod = (await import(spec)) as PdfJsModule;
-  // pdf.js 4.x: empty workerSrc throws "No GlobalWorkerOptions.workerSrc specified" when setting up the fake worker.
-  // Use a public HTTPS URL matching the pinned package (Edge/Deno cannot rely on empty string).
-  mod.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_DIST_VERSION}/legacy/build/pdf.worker.mjs`;
-  cachedPdfJs = mod;
-  return mod;
+function visionEnvAvailable(): boolean {
+  const k = Deno.env.get('GOOGLE_CLOUD_API_KEY')?.trim();
+  const pem = Deno.env.get('GOOGLE_CLOUD_PRIVATE_KEY')?.trim();
+  return Boolean(k || pem);
 }
 
-export async function extractPdfText(bytes: Uint8Array): Promise<{ text: string; usedOcrFallback: boolean }> {
-  const { getDocument } = await loadPdfJs();
-  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  const loadingTask = getDocument({
-    data: buf,
-    disableWorker: true,
-    useSystemFonts: true,
-  });
-  const pdf = await loadingTask.promise;
-  const parts: string[] = [];
-  for (let p = 1; p <= pdf.numPages; p++) {
-    const page = await pdf.getPage(p);
-    const content = await page.getTextContent();
-    const line = content.items
-      .map((it: { str?: string }) => (typeof it.str === 'string' ? it.str : ''))
-      .join(' ');
-    if (line.trim()) parts.push(line);
+/** Encode embedded PDF image bitmap as JPEG for Vision (resize if very wide). */
+async function embeddedPdfImageToJpeg(
+  sharpDefault: typeof import('npm:sharp').default,
+  img: { data: Uint8Array; width: number; height: number; channels: 1 | 3 | 4 }
+): Promise<Uint8Array> {
+  const { Buffer } = await import('node:buffer');
+  let pipe = sharpDefault(Buffer.from(img.data), {
+    raw: { width: img.width, height: img.height, channels: img.channels },
+  }).rotate();
+  if (img.width > 3600) {
+    pipe = pipe.resize({ width: 3600 });
   }
-  const text = parts.join('\n');
-  const weak = text.trim().length < MIN_PDF_TEXT_CHARS;
-  return { text, usedOcrFallback: weak };
+  const buf = await pipe.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  return new Uint8Array(buf);
+}
+
+/**
+ * For weak PDF text pages, pull embedded paintImageXObject bitmaps and run Vision (FLICA-style merge).
+ * No canvas — works on Supabase Edge when Vision credentials exist.
+ */
+async function ocrPdfWeakPagesViaEmbeddedImages(
+  pdfBytes: Uint8Array,
+  pageNums: number[],
+  apiKey: string | undefined
+): Promise<{
+  ocrByPage: Map<number, string>;
+  embedded_images_per_page: Record<number, number>;
+  ocr_log_lines: string[];
+}> {
+  const ocrByPage = new Map<number, string>();
+  const embedded_images_per_page: Record<number, number> = {};
+  const ocr_log_lines: string[] = [];
+  const sharpDefault = (await import('npm:sharp')).default;
+  const { extractImages } = await import('npm:unpdf@1.6.0');
+
+  const unique = [...new Set(pageNums)].filter((n) => n >= 1).slice(0, MAX_PDF_PAGES_FOR_EMBEDDED_OCR);
+  for (const pageNum of unique) {
+    try {
+      const imgs = await extractImages(pdfBytes, pageNum);
+      embedded_images_per_page[pageNum] = imgs.length;
+      let combined = '';
+      const slice = imgs.slice(0, MAX_EMBEDDED_IMAGES_PER_PDF_PAGE);
+      for (let ii = 0; ii < slice.length; ii++) {
+        const img = slice[ii];
+        const data = img?.data;
+        if (!data || img.width < 6 || img.height < 6) continue;
+        const ch = img.channels;
+        if (ch !== 1 && ch !== 3 && ch !== 4) continue;
+        const u8 = data instanceof Uint8Array ? data : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        const jpeg = await embeddedPdfImageToJpeg(sharpDefault, {
+          data: u8,
+          width: img.width,
+          height: img.height,
+          channels: ch,
+        });
+        if (jpeg.length < 64) continue;
+        const [docT, txtT] = await Promise.all([
+          visionAnnotate(jpeg, apiKey, 'DOCUMENT_TEXT_DETECTION'),
+          visionAnnotate(jpeg, apiKey, 'TEXT_DETECTION'),
+        ]);
+        const piece = mergeFlicaVisionOcr(docT, txtT).trim();
+        if (piece.length > 4) combined += (combined ? '\n' : '') + piece;
+      }
+      if (combined.trim()) ocrByPage.set(pageNum, combined.trim());
+    } catch (e) {
+      ocr_log_lines.push(`page_${pageNum}:${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return { ocrByPage, embedded_images_per_page, ocr_log_lines };
+}
+
+export type PdfExtractionDebug = {
+  engine: 'unpdf';
+  pdf_byte_length: number;
+  page_count: number;
+  page_text_lengths: number[];
+  merged_text_length: number;
+  pages_below_min_chars: number[];
+  used_ocr_fallback: boolean;
+  ocr_fallback_page_numbers: number[];
+  /** Pages where embedded-image OCR ran and returned text */
+  embedded_image_ocr_pages: number[];
+  embedded_images_per_page: Record<number, number>;
+  /** True when weak pages had no extractable bitmaps (vector-only or canvas-only scan) */
+  embedded_image_ocr_unavailable_for_weak_pages: boolean;
+  vision_configured: boolean;
+  ocr_fallback_log?: string[];
+};
+
+/**
+ * Extract text from a PDF using unpdf (bundles pdf.js without browser worker/CDN setup).
+ * Avoids pdfjs-dist + GlobalWorkerOptions which break on Supabase Edge package resolution.
+ */
+export async function extractPdfText(bytes: Uint8Array): Promise<{
+  text: string;
+  usedOcrFallback: boolean;
+  debug: PdfExtractionDebug;
+}> {
+  await import('./pdf-polyfills.ts');
+
+  console.log('[import-schedule-ocr] pdf_stage_start', {
+    file_kind: 'pdf',
+    pdf_byte_length: bytes.byteLength,
+  });
+
+  if (bytes.byteLength === 0) {
+    throw new Error('PDF_EMPTY_FILE: The uploaded PDF is empty (0 bytes).');
+  }
+
+  try {
+    const { extractText } = await import('npm:unpdf@1.6.0');
+    const result = await extractText(bytes, { mergePages: false });
+    const totalPages = result.totalPages ?? 0;
+    const pageArr = result.text;
+    const page_text_lengths = pageArr.map((t) => String(t ?? '').trim().length);
+    const pages_below_min_chars = page_text_lengths
+      .map((len, i) => (len < MIN_PDF_PAGE_TEXT_CHARS ? i + 1 : 0))
+      .filter((n) => n > 0);
+
+    let merged = pageArr
+      .map((t) => String(t ?? '').trim())
+      .filter((s) => s.length > 0)
+      .join('\n\n');
+    let merged_text_length = merged.length;
+
+    console.log('[import-schedule-ocr] pdf_stage_unpdf_pages', {
+      file_kind: 'pdf',
+      pdf_byte_length: bytes.byteLength,
+      page_count: totalPages,
+      page_text_lengths,
+      merged_text_length,
+      pages_below_min_chars,
+    });
+
+    let weakTotal = merged.trim().length < MIN_PDF_TEXT_CHARS;
+
+    /** Prefer OCR for pages below text threshold; if whole doc is weak but no page flagged, sample all pages. */
+    let pagesNeedingOcr = [...pages_below_min_chars];
+    if (weakTotal && pagesNeedingOcr.length === 0 && totalPages > 0) {
+      pagesNeedingOcr = Array.from({ length: Math.min(totalPages, MAX_PDF_PAGES_FOR_EMBEDDED_OCR) }, (_, i) => i + 1);
+    }
+
+    const apiKey = Deno.env.get('GOOGLE_CLOUD_API_KEY')?.trim();
+    const visionOk = visionEnvAvailable();
+
+    let ocrByPage = new Map<number, string>();
+    let embedded_images_per_page: Record<number, number> = {};
+    let ocr_log_lines: string[] = [];
+
+    if (visionOk && pagesNeedingOcr.length > 0) {
+      console.log('[import-schedule-ocr] pdf_stage_embedded_image_ocr_start', {
+        file_kind: 'pdf',
+        pages: pagesNeedingOcr.length,
+        page_list_head: pagesNeedingOcr.slice(0, 12),
+      });
+      const emb = await ocrPdfWeakPagesViaEmbeddedImages(bytes, pagesNeedingOcr, apiKey);
+      ocrByPage = emb.ocrByPage;
+      embedded_images_per_page = emb.embedded_images_per_page;
+      ocr_log_lines = emb.ocr_log_lines;
+
+      const patched: string[] = [];
+      for (let i = 0; i < pageArr.length; i++) {
+        const pageNum = i + 1;
+        const base = String(pageArr[i] ?? '').trim();
+        const ocr = ocrByPage.get(pageNum)?.trim() ?? '';
+        if (ocr) {
+          if (base.length < MIN_PDF_PAGE_TEXT_CHARS) {
+            patched.push(ocr);
+          } else {
+            patched.push(mergeFlicaVisionOcr(base, ocr));
+          }
+        } else {
+          patched.push(base);
+        }
+      }
+      merged = patched
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+        .join('\n\n');
+      merged_text_length = merged.length;
+      weakTotal = merged.trim().length < MIN_PDF_TEXT_CHARS;
+
+      const perPageLensAfter = patched.map((s) => s.trim().length);
+      console.log('[import-schedule-ocr] pdf_stage_embedded_image_ocr_done', {
+        file_kind: 'pdf',
+        ocr_pages_with_text: [...ocrByPage.keys()],
+        ocr_chars_total: [...ocrByPage.values()].reduce((a, s) => a + s.length, 0),
+        merged_text_length_after: merged_text_length,
+        page_text_lengths_after_embedded_ocr: perPageLensAfter,
+      });
+    } else if (!visionOk && pagesNeedingOcr.length > 0) {
+      console.warn('[import-schedule-ocr] pdf_stage_embedded_image_ocr_skipped', {
+        file_kind: 'pdf',
+        reason: 'no_google_vision_credentials',
+      });
+    }
+
+    const ranEmbeddedImageOcr = ocrByPage.size > 0;
+    const ocrFallbackPageNums = [...ocrByPage.keys()].sort((a, b) => a - b);
+    const embedded_no_yield =
+      visionOk &&
+      pagesNeedingOcr.length > 0 &&
+      ocrByPage.size === 0 &&
+      pagesNeedingOcr.every((p) => (embedded_images_per_page[p] ?? 0) === 0);
+
+    const debug: PdfExtractionDebug = {
+      engine: 'unpdf',
+      pdf_byte_length: bytes.byteLength,
+      page_count: totalPages,
+      page_text_lengths,
+      merged_text_length,
+      pages_below_min_chars,
+      used_ocr_fallback: ranEmbeddedImageOcr,
+      ocr_fallback_page_numbers: ocrFallbackPageNums,
+      embedded_image_ocr_pages: ocrFallbackPageNums,
+      embedded_images_per_page,
+      embedded_image_ocr_unavailable_for_weak_pages: embedded_no_yield,
+      vision_configured: visionOk,
+      ocr_fallback_log: ocr_log_lines.length > 0 ? ocr_log_lines : undefined,
+    };
+
+    let textOut = merged;
+    if (weakTotal) {
+      textOut = `${merged}\n\n[import: PDF had very little selectable text after extraction (may be scanned or image-only). Try screenshot import if pairings are missing.]`;
+    }
+
+    return {
+      text: textOut,
+      /** True when merged text is still below threshold (warn in UI / batch). Distinct from `debug.used_ocr_fallback`. */
+      usedOcrFallback: weakTotal,
+      debug,
+    };
+  } catch (err) {
+    const inner = err instanceof Error ? err.message : String(err);
+    console.error('[import-schedule-ocr] pdf_stage_engine_failed', {
+      file_kind: 'pdf',
+      pdf_byte_length: bytes.byteLength,
+      message: inner,
+    });
+    throw new Error(
+      `PDF_EXTRACTION_ENGINE: ${inner}. The server could not read this PDF (extraction engine or unsupported format).`
+    );
+  }
 }

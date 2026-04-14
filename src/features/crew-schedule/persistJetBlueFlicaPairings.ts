@@ -4,8 +4,11 @@
  */
 
 import { supabase } from '../../lib/supabaseClient';
-import { parseJetBlueFlicaMonthlyScreenshot } from '../schedule-import/parser/jetblueFlicaStructuredParser';
-import type { JetBluePairingParsed } from '../schedule-import/parser/jetblueFlicaStructuredParser';
+import {
+  buildStoredImportReviewIssues,
+  parseJetBlueFlicaMonthlyScreenshot,
+  type JetBluePairingParsed,
+} from '../schedule-import/parser/jetblueFlicaStructuredParser';
 import { fetchBatchesForScheduleImport } from './jetblueFlicaImport';
 
 function hhmmToBlockNumeric(hhmm: string | null | undefined): number | null {
@@ -217,6 +220,7 @@ export async function persistJetBlueFlicaStructuredParse(params: {
             layoverRestDisplay: d.layoverRestDisplay,
             legCount: d.segments.length,
           })),
+          import_review_issues: buildStoredImportReviewIssues(p),
           parseDebug: parsed.debug,
         },
       })

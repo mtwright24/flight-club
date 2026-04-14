@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   applyMergeMonth,
   applyReplaceMonth,
+  buildApplyRowsFromPairingBatch,
   candidatesToConfirmedApplyRows,
   fetchCandidatesForBatch,
   fetchImportBatch,
@@ -27,9 +28,23 @@ import {
   type ScheduleImportCandidateRow,
 } from '../../../src/features/crew-schedule/scheduleApi';
 import {
+  fetchDutiesGroupedByPairingIds,
   fetchPairingsForBatch,
+  type SchedulePairingDutyRow,
   type SchedulePairingRow,
 } from '../../../src/features/crew-schedule/jetblueFlicaImport';
+import {
+  evaluateBatchPairingSave,
+  snapshotFromPairingRow,
+  validateJetBluePairingImport,
+} from '../../../src/features/crew-schedule/jetblueFlicaImportValidation';
+import {
+  FC,
+  formatDateRangeDisplay,
+  formatTripRouteArrows,
+  pairingCardAttentionSubtext,
+  pairingCardPrimaryLabel,
+} from '../../../src/features/crew-schedule/jetblueFlicaImportUi';
 import { looksLikeFlicaRawText } from '../../../src/features/schedule-import/parser/jetblueFlicaOcrDetect';
 import { scheduleTheme as T } from '../../../src/features/crew-schedule/scheduleTheme';
 import CrewScheduleHeader from '../../../src/features/crew-schedule/components/CrewScheduleHeader';
@@ -245,14 +260,13 @@ export default function ImportReviewScreen() {
   const [batch, setBatch] = useState<Awaited<ReturnType<typeof fetchImportBatch>>>(null);
   const [candidates, setCandidates] = useState<ScheduleImportCandidateRow[]>([]);
   const [pairings, setPairings] = useState<SchedulePairingRow[]>([]);
+  const [legsByPairing, setLegsByPairing] = useState<Map<string, SchedulePairingDutyRow[]>>(new Map());
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [detailCandidate, setDetailCandidate] = useState<ScheduleImportCandidateRow | null>(null);
   const [rawExpanded, setRawExpanded] = useState(false);
-  /** When pairing-only import, keep the screenshot secondary (collapsed by default). */
-  const [screenshotOpen, setScreenshotOpen] = useState(true);
 
   const load = useCallback(async () => {
     if (!batchId) return;
@@ -285,12 +299,24 @@ export default function ImportReviewScreen() {
     void load();
   }, [load]);
 
-  /** Collapse screenshot preview by default for pairing-only imports (must run before any early return — Rules of Hooks). */
   useEffect(() => {
-    if (pairings.length > 0 && candidates.length === 0) {
-      setScreenshotOpen(false);
+    if (pairings.length === 0) {
+      setLegsByPairing(new Map());
+      return;
     }
-  }, [pairings, candidates]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const map = await fetchDutiesGroupedByPairingIds(pairings.map((p) => p.id));
+        if (!cancelled) setLegsByPairing(map);
+      } catch {
+        if (!cancelled) setLegsByPairing(new Map());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pairings]);
 
   const monthKey =
     batch?.detected_month_key ?? batch?.selected_month_key ?? batch?.month_key ?? '';
@@ -308,18 +334,49 @@ export default function ImportReviewScreen() {
     return { looksGood: lg, needsReview: nr, skipped: sk };
   }, [candidates]);
 
-  /** Line-based pills are empty when JetBlue skips generic OCR rows; use pairing confidence instead. */
+  /** Pairing import validation (requires legs map — matches pairing detail + save gate). */
   const pairingPillStats = useMemo(() => {
-    let ok = 0;
-    let review = 0;
+    let looksGood = 0;
+    let needsAttention = 0;
     for (const p of pairings) {
-      const needs =
-        p.needs_review || p.pairing_requires_review || (p.pairing_confidence ?? 1) < 0.85;
-      if (needs) review += 1;
-      else ok += 1;
+      const legs = legsByPairing.get(p.id) ?? [];
+      const v = validateJetBluePairingImport(snapshotFromPairingRow(p), legs, p);
+      if (v.badge === 'good') looksGood += 1;
+      else needsAttention += 1;
     }
-    return { ok, review };
-  }, [pairings]);
+    return { looksGood, needsAttention };
+  }, [pairings, legsByPairing]);
+
+  /** Total count of required missing fields across all pairings (save gate messaging). */
+  const totalMissingFieldCount = useMemo(() => {
+    let n = 0;
+    for (const p of pairings) {
+      const legs = legsByPairing.get(p.id) ?? [];
+      const v = validateJetBluePairingImport(snapshotFromPairingRow(p), legs, p);
+      n += v.counts.missing;
+    }
+    return n;
+  }, [pairings, legsByPairing]);
+
+  /** Pairing codes that still have required fields missing (for save / alert messaging). */
+  const pairingsMissingRequiredCodes = useMemo(() => {
+    const codes: string[] = [];
+    for (const p of pairings) {
+      const legs = legsByPairing.get(p.id) ?? [];
+      const v = validateJetBluePairingImport(snapshotFromPairingRow(p), legs, p);
+      if (v.counts.missing > 0) codes.push((p.pairing_id ?? '').trim() || p.id);
+    }
+    return [...new Set(codes)];
+  }, [pairings, legsByPairing]);
+
+  const hasPairingReviewOrMissing = pairingPillStats.needsAttention > 0;
+
+  const pairingListY = useRef(0);
+  const [uploadExpanded, setUploadExpanded] = useState(true);
+
+  useEffect(() => {
+    if (pairings.length > 0) setUploadExpanded(false);
+  }, [pairings.length]);
 
   const avgPairingConfidence = useMemo(() => {
     if (!pairings.length) return null;
@@ -337,16 +394,95 @@ export default function ImportReviewScreen() {
   const confirmedApplyRows = useMemo(() => candidatesToConfirmedApplyRows(candidates), [candidates]);
   const confirmedCount = confirmedApplyRows.length;
 
-  const openSaveDialog = useCallback(() => {
-    if (!batchId || !monthKey) return;
-    if (confirmedCount === 0) {
-      if (pairings.length > 0) {
+  const openPairingSaveDialog = useCallback(async () => {
+    if (!batchId) return;
+    if (!monthKey) {
+      Alert.alert(
+        'Month not set',
+        'This import does not have a target calendar month yet. Go back and pick a month, then try again.'
+      );
+      return;
+    }
+    try {
+      let map = legsByPairing;
+      if (pairings.length && map.size === 0) {
+        map = await fetchDutiesGroupedByPairingIds(pairings.map((p) => p.id));
+      }
+      const gate = evaluateBatchPairingSave(pairings, map);
+      if (!gate.ok) {
+        Alert.alert('Required fields incomplete', gate.message);
+        return;
+      }
+
+      const pairingRows = await buildApplyRowsFromPairingBatch(batchId, monthKey);
+      if (pairingRows.length === 0) {
         Alert.alert(
-          'Pairing-based import',
-          'This screenshot was parsed into pairings, not one line per OCR row. Open a pairing card to review legs and details. Calendar save from this screen only applies when you have rows under Looks Good from line-based imports.'
+          'Nothing to save',
+          'No duty days were found in your pairings for this month. Open a pairing card and confirm dates and legs, then try again.'
         );
         return;
       }
+
+      const showMergeReplace = () => {
+        Alert.alert(
+          'Save to calendar',
+          `Save ${pairingRows.length} schedule day${pairingRows.length === 1 ? '' : 's'} from your pairings for ${formatMonthSentence(monthKey)}.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Merge with existing',
+              onPress: async () => {
+                setSaving(true);
+                try {
+                  await applyMergeMonth(monthKey, batchId, pairingRows);
+                  router.replace('/crew-schedule/(tabs)');
+                } catch (e) {
+                  Alert.alert('Save failed', e instanceof Error ? e.message : String(e));
+                } finally {
+                  setSaving(false);
+                }
+              },
+            },
+            {
+              text: 'Replace this month',
+              style: 'destructive',
+              onPress: async () => {
+                setSaving(true);
+                try {
+                  await applyReplaceMonth(monthKey, batchId, pairingRows);
+                  router.replace('/crew-schedule/(tabs)');
+                } catch (e) {
+                  Alert.alert('Save failed', e instanceof Error ? e.message : String(e));
+                } finally {
+                  setSaving(false);
+                }
+              },
+            },
+          ]
+        );
+      };
+
+      if (gate.needsReviewConfirm) {
+        Alert.alert(
+          'Save with open review items?',
+          `${gate.reviewCount} item${gate.reviewCount === 1 ? '' : 's'} are still flagged for review. You can save now or go back and double-check.`,
+          [
+            { text: 'Go back', style: 'cancel' },
+            { text: 'Save to schedule', onPress: showMergeReplace },
+          ]
+        );
+        return;
+      }
+
+      showMergeReplace();
+    } catch (e) {
+      Alert.alert('Could not prepare save', e instanceof Error ? e.message : String(e));
+    }
+  }, [batchId, legsByPairing, monthKey, pairings, router]);
+
+  const openLineBasedSaveDialog = useCallback(() => {
+    if (!batchId || !monthKey) return;
+    if (confirmedCount === 0) {
       Alert.alert(
         'Nothing to save yet',
         'Confirm items under Looks Good, or open the editor to fix rows that need review.'
@@ -389,13 +525,26 @@ export default function ImportReviewScreen() {
         },
       ]
     );
-  }, [batchId, confirmedApplyRows, confirmedCount, monthKey, pairings.length, router]);
+  }, [batchId, confirmedApplyRows, confirmedCount, monthKey, router]);
+
+  const openSaveDialog = useCallback(() => {
+    if (pairings.length > 0) {
+      void openPairingSaveDialog();
+      return;
+    }
+    openLineBasedSaveDialog();
+  }, [openLineBasedSaveDialog, openPairingSaveDialog, pairings.length]);
 
   const scrollToNeedsReview = useCallback(() => {
     if (needsReview.length === 0) return;
     const y = Math.max(0, needsReviewSectionY.current - 12);
     scrollRef.current?.scrollTo({ y, animated: true });
   }, [needsReview.length]);
+
+  const scrollToPairingList = useCallback(() => {
+    const y = Math.max(0, pairingListY.current - 8);
+    scrollRef.current?.scrollTo({ y, animated: true });
+  }, []);
 
   const onEdit = useCallback(() => {
     if (!batchId) return;
@@ -493,11 +642,12 @@ export default function ImportReviewScreen() {
     Boolean(batch?.source_file_path?.includes('/jetblue/')) ||
     rawLooksLikeFlica;
   const jetblueImportId = batch?.schedule_import_id ?? null;
-  const pairingOnlyReview = pairings.length > 0 && candidates.length === 0;
+  /** Pairing list is primary: hide line-based review sections and use pairing save flow. */
+  const pairingPrimaryMode = pairings.length > 0;
 
-  const summaryLooksGood = pairingOnlyReview ? pairingPillStats.ok : looksGood.length;
-  const summaryNeedsReview = pairingOnlyReview ? pairingPillStats.review : needsReview.length;
-  const summarySkipped = pairingOnlyReview ? 0 : skipped.length;
+  const summaryLooksGood = pairingPrimaryMode ? pairingPillStats.looksGood : looksGood.length;
+  const summaryNeedsAttention = pairingPrimaryMode ? pairingPillStats.needsAttention : needsReview.length;
+  const summarySkipped = pairingPrimaryMode ? 0 : skipped.length;
 
   const renderSection = (
     title: string,
@@ -545,63 +695,133 @@ export default function ImportReviewScreen() {
   };
 
   return (
-    <View style={styles.shell}>
-      <CrewScheduleHeader title="Review Imported Schedule" />
+    <View style={[styles.shell, pairingPrimaryMode && { backgroundColor: FC.pageBg }]}>
+      <CrewScheduleHeader title={pairingPrimaryMode ? 'Import review' : 'Review Imported Schedule'} />
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 28 }]}
+        style={pairingPrimaryMode ? styles.scrollFlex : undefined}
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingBottom: pairingPrimaryMode ? 16 : insets.bottom + 28,
+          },
+        ]}
       >
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryEyebrow}>Import summary</Text>
-          <Text style={styles.summaryLead}>
-            {monthKey
-              ? `We found your schedule for ${formatMonthSentence(monthKey)}.`
-              : 'We scanned your screenshot and grouped the results below.'}
-          </Text>
-          <Text style={styles.summaryHint}>
-            {pairingOnlyReview
-              ? 'This JetBlue FLICA import is grouped by pairing. Open a card to review legs and details — not line-by-line OCR rows.'
-              : 'Review anything marked Needs Review, then save your schedule.'}
-          </Text>
-          {pairings.length > 0 ? (
-            <Text style={styles.summarySubMeta}>
-              Pairings: {pairings.length}
-              {avgPairingConfidence != null ? ` · Avg parser confidence ${Math.round(avgPairingConfidence * 100)}%` : ''}
-              {batch?.classification_confidence != null
-                ? ` · Classifier ${Math.round(batch.classification_confidence * 100)}%`
-                : ''}
+        {pairingPrimaryMode ? (
+          <View style={styles.summaryCardPremium}>
+            <Text style={styles.premiumSummaryTitle}>Imported pairings</Text>
+            <Text style={styles.premiumSummaryMonth}>{monthKey ? formatMonthSentence(monthKey) : '—'}</Text>
+            <Text style={styles.premiumSummaryMeta}>
+              {pairings.length} total · {summaryLooksGood} look good · {summaryNeedsAttention} need attention
             </Text>
-          ) : null}
-
-          <View style={styles.pillRow}>
-            <View style={[styles.pill, styles.pillGood, { backgroundColor: C.goodBg }]}>
-              <Text style={[styles.pillCount, { color: C.good }]}>{summaryLooksGood}</Text>
-              <Text style={[styles.pillLabel, { color: C.good }]}>
-                {pairingOnlyReview ? 'Pairings OK' : 'Looks Good'}
+            {totalMissingFieldCount > 0 ? (
+              <Text style={styles.premiumSummaryMeta}>
+                {totalMissingFieldCount} required field{totalMissingFieldCount === 1 ? '' : 's'} to fix across trips
               </Text>
-            </View>
-            <View style={[styles.pill, styles.pillReview, { backgroundColor: C.reviewBg }]}>
-              <Text style={[styles.pillCount, { color: C.review }]}>{summaryNeedsReview}</Text>
-              <Text style={[styles.pillLabel, { color: C.review }]}>
-                {pairingOnlyReview ? 'Pairings — review' : 'Needs Review'}
-              </Text>
-            </View>
-            <View style={[styles.pill, styles.pillSkip, { backgroundColor: C.skipBg }]}>
-              <Text style={[styles.pillCount, { color: C.skip }]}>{summarySkipped}</Text>
-              <Text style={[styles.pillLabel, { color: C.skip }]}>
-                {pairingOnlyReview ? 'Line rows' : 'Skipped'}
-              </Text>
+            ) : null}
+            <Text style={styles.premiumSummaryHint}>Tap any card to review the trip or fix details.</Text>
+            <View style={styles.pillRow}>
+              <View style={[styles.pill, styles.pillGood, { backgroundColor: C.goodBg }]}>
+                <Text style={[styles.pillCount, { color: C.good }]}>{summaryLooksGood}</Text>
+                <Text style={[styles.pillLabel, { color: C.good }]}>Looks good</Text>
+              </View>
+              <View style={[styles.pill, styles.pillReview, { backgroundColor: C.reviewBg }]}>
+                <Text style={[styles.pillCount, { color: C.review }]}>{summaryNeedsAttention}</Text>
+                <Text style={[styles.pillLabel, { color: C.review }]}>Needs attention</Text>
+              </View>
             </View>
           </View>
-        </View>
+        ) : (
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryEyebrow}>Import summary</Text>
+            <Text style={styles.summaryLead}>
+              {monthKey
+                ? `We found your schedule for ${formatMonthSentence(monthKey)}.`
+                : 'We scanned your screenshot and grouped the results below.'}
+            </Text>
+            <Text style={styles.summaryHint}>Review anything marked Needs Review, then save your schedule.</Text>
+            {pairings.length > 0 ? (
+              <Text style={styles.summarySubMeta}>
+                Pairings: {pairings.length}
+                {avgPairingConfidence != null ? ` · Avg parser confidence ${Math.round(avgPairingConfidence * 100)}%` : ''}
+                {batch?.classification_confidence != null
+                  ? ` · Classifier ${Math.round(batch.classification_confidence * 100)}%`
+                  : ''}
+              </Text>
+            ) : null}
 
-        {isJetBlueFlicaPairingImport ? (
+            <View style={styles.pillRow}>
+              <View style={[styles.pill, styles.pillGood, { backgroundColor: C.goodBg }]}>
+                <Text style={[styles.pillCount, { color: C.good }]}>{summaryLooksGood}</Text>
+                <Text style={[styles.pillLabel, { color: C.good }]}>Looks Good</Text>
+              </View>
+              <View style={[styles.pill, styles.pillReview, { backgroundColor: C.reviewBg }]}>
+                <Text style={[styles.pillCount, { color: C.review }]}>{summaryNeedsAttention}</Text>
+                <Text style={[styles.pillLabel, { color: C.review }]}>Needs Review</Text>
+              </View>
+              <View style={[styles.pill, styles.pillSkip, { backgroundColor: C.skipBg }]}>
+                <Text style={[styles.pillCount, { color: C.skip }]}>{summarySkipped}</Text>
+                <Text style={[styles.pillLabel, { color: C.skip }]}>Skipped</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {pairingPrimaryMode ? (
+          <Pressable
+            style={styles.uploadCollapsibleHeader}
+            onPress={() => setUploadExpanded((v) => !v)}
+            accessibilityRole="button"
+            accessibilityLabel={uploadExpanded ? 'Hide original upload' : 'Show original upload'}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.uploadCollapsibleTitle}>Original upload</Text>
+              <Text style={styles.uploadCollapsibleSub}>Pinch-zoom to compare</Text>
+            </View>
+            <Ionicons name={uploadExpanded ? 'chevron-up' : 'chevron-down'} size={22} color={FC.textMuted} />
+          </Pressable>
+        ) : (
+          <View style={styles.screenshotPreviewTop}>
+            <Text style={styles.blockHeading}>Original upload</Text>
+            <Text style={styles.blockHelper}>
+              Full-resolution file is scanned for OCR — this thumbnail is for comparison. Tap for pinch-zoom.
+            </Text>
+          </View>
+        )}
+        {(!pairingPrimaryMode || uploadExpanded) &&
+          (previewUrl && !isPdf ? (
+            <Pressable
+              onPress={() => setImageModalVisible(true)}
+              style={[styles.previewWrap, pairingPrimaryMode && styles.previewWrapCompact]}
+              accessibilityRole="button"
+              accessibilityLabel="Open screenshot with pinch zoom"
+            >
+              <Image
+                source={{ uri: previewUrl }}
+                style={pairingPrimaryMode ? styles.previewMedium : styles.previewTall}
+                resizeMode="contain"
+              />
+            </Pressable>
+          ) : (
+            <View style={[styles.fileBox, pairingPrimaryMode && { marginBottom: 12 }]}>
+              <Text style={styles.fileMuted}>
+                {isPdf
+                  ? 'PDF import — no image preview. Parsed rows are listed below.'
+                  : 'No image on file for this batch.'}
+              </Text>
+              {batch?.source_file_path ? (
+                <Text style={styles.fileMono} numberOfLines={2}>
+                  {batch.source_file_path}
+                </Text>
+              ) : null}
+            </View>
+          ))}
+
+        {isJetBlueFlicaPairingImport && !pairingPrimaryMode ? (
           <View style={styles.jetblueBanner}>
             <Text style={styles.jetblueBannerTitle}>JetBlue FLICA pairing import</Text>
             <Text style={styles.jetblueBannerBody}>
-              {pairingOnlyReview
-                ? 'Line-by-line OCR review is skipped for this format. Use the pairing list below.'
-                : 'Pairing rows are available below. Generic OCR lines may still appear if the screenshot mixed formats.'}
+              Pairing rows are available below. Generic OCR lines may still appear if the screenshot mixed formats.
             </Text>
             {jetblueImportId ? (
               <Pressable
@@ -620,21 +840,73 @@ export default function ImportReviewScreen() {
         ) : null}
 
         {pairings.length > 0 ? (
-          <View style={styles.pairingSection}>
-            <Text style={styles.blockHeading}>Pairings ({pairings.length})</Text>
-            <Text style={styles.blockHelper}>Tap a pairing to edit legs, times, and flags.</Text>
+          <View
+            style={styles.pairingSection}
+            onLayout={(e) => {
+              pairingListY.current = e.nativeEvent.layout.y;
+            }}
+          >
+            {!pairingPrimaryMode ? (
+              <>
+                <Text style={styles.blockHeading}>Pairings ({pairings.length})</Text>
+                <Text style={styles.blockHelper}>Tap a pairing to edit legs, times, and flags.</Text>
+              </>
+            ) : null}
             {pairings.map((p) => {
-              const needs =
-                p.needs_review || p.pairing_requires_review || (p.pairing_confidence ?? 1) < 0.85;
-              const nj = p.normalized_json as { routeSummary?: string } | null | undefined;
-              const routeOneLine =
-                typeof nj?.routeSummary === 'string'
-                  ? nj.routeSummary.replace(/\s*→\s*/g, '-').replace(/→/g, '-')
-                  : null;
-              return (
+              const legs = legsByPairing.get(p.id) ?? [];
+              const pv = validateJetBluePairingImport(snapshotFromPairingRow(p), legs, p);
+              const primary = pairingCardPrimaryLabel(pv);
+              const badgeLabel = primary.label;
+              const badgeStyle =
+                primary.severity === 'missing'
+                  ? styles.badgeSmMiss
+                  : primary.severity === 'review'
+                    ? styles.badgeSmWarn
+                    : styles.badgeSmOk;
+              const routeDisplay = formatTripRouteArrows(legs);
+              const attentionSub = pairingCardAttentionSubtext(pv);
+              return pairingPrimaryMode ? (
                 <Pressable
                   key={p.id}
-                  style={[styles.pairingCard, needs && styles.pairingCardWarn]}
+                  style={[
+                    styles.pairingCardPremium,
+                    primary.severity === 'review' && styles.pairingCardPremiumWarn,
+                    primary.severity === 'missing' && styles.pairingCardPremiumMiss,
+                  ]}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/crew-schedule/import-jetblue-pairing/[pairingId]',
+                      params: { pairingId: p.id, batchId: batchId! },
+                    })
+                  }
+                >
+                  <View style={styles.pairingCardHeader}>
+                    <Text style={styles.pairingCardTitlePremium}>{p.pairing_id}</Text>
+                    <View style={[styles.badgeSm, badgeStyle]}>
+                      <Text style={styles.badgeSmText}>{badgeLabel}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.pairingCardDateRow}>{formatDateRangeDisplay(p.operate_start_date, p.operate_end_date)}</Text>
+                  <Text style={styles.pairingCardRoutePremium} numberOfLines={3}>
+                    {routeDisplay}
+                  </Text>
+                  <Text style={styles.pairingCardMetaLine}>
+                    Report {p.report_time_local ?? '—'} · Base {p.base_code ?? '—'}
+                  </Text>
+                  {attentionSub ? (
+                    <Text style={styles.pairingCardIssueLine} numberOfLines={3}>
+                      {attentionSub}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              ) : (
+                <Pressable
+                  key={p.id}
+                  style={[
+                    styles.pairingCard,
+                    primary.severity === 'review' && styles.pairingCardWarn,
+                    primary.severity === 'missing' && styles.pairingCardMiss,
+                  ]}
                   onPress={() =>
                     router.push({
                       pathname: '/crew-schedule/import-jetblue-pairing/[pairingId]',
@@ -644,17 +916,22 @@ export default function ImportReviewScreen() {
                 >
                   <View style={styles.pairingCardHeader}>
                     <Text style={styles.pairingCardTitle}>{p.pairing_id}</Text>
-                    <View style={[styles.badgeSm, needs ? styles.badgeSmWarn : styles.badgeSmOk]}>
-                      <Text style={styles.badgeSmText}>{needs ? 'Needs review' : 'Looks good'}</Text>
+                    <View style={[styles.badgeSm, badgeStyle]}>
+                      <Text style={styles.badgeSmText}>{badgeLabel}</Text>
                     </View>
                   </View>
                   <Text style={styles.pairingCardLine}>
                     {p.operate_start_date ?? '—'} → {p.operate_end_date ?? '—'} · Report {p.report_time_local ?? '—'} · Base{' '}
                     {p.base_code ?? '—'}
                   </Text>
-                  {routeOneLine ? (
+                  {routeDisplay !== '—' ? (
                     <Text style={styles.pairingCardRoute} numberOfLines={2}>
-                      Route {routeOneLine}
+                      Route {routeDisplay.replace(/ → /g, '-')}
+                    </Text>
+                  ) : null}
+                  {attentionSub ? (
+                    <Text style={styles.pairingCardIssueLine} numberOfLines={3}>
+                      {attentionSub}
                     </Text>
                   ) : null}
                 </Pressable>
@@ -684,18 +961,18 @@ export default function ImportReviewScreen() {
           </View>
         ) : null}
 
-        {needsReview.length === 0 && candidates.length > 0 && !pairingOnlyReview ? (
+        {needsReview.length === 0 && candidates.length > 0 && !pairingPrimaryMode ? (
           <View style={styles.positiveBanner}>
             <Ionicons name="checkmark-circle" size={22} color={C.good} />
             <Text style={styles.positiveBannerText}>Everything looks good. You’re ready to save.</Text>
           </View>
         ) : null}
 
-        {!pairingOnlyReview && needsReview.length > 0 ? (
+        {!pairingPrimaryMode && needsReview.length > 0 ? (
           <Text style={styles.actionHint}>Start with items that need a quick look.</Text>
         ) : null}
 
-        {!pairingOnlyReview
+        {!pairingPrimaryMode
           ? renderSection(
               'Needs Review',
               'These lines need a quick look — tap to review or open the full editor.',
@@ -705,11 +982,11 @@ export default function ImportReviewScreen() {
             )
           : null}
 
-        {!pairingOnlyReview && looksGood.length === 0 && candidates.length > 0 && needsReview.length > 0 ? (
+        {!pairingPrimaryMode && looksGood.length === 0 && candidates.length > 0 && needsReview.length > 0 ? (
           <Text style={styles.calmEmpty}>No rows are confirmed yet — that’s OK. Fix “Needs Review” first.</Text>
         ) : null}
 
-        {!pairingOnlyReview
+        {!pairingPrimaryMode
           ? renderSection(
               'Looks Good',
               'Ready to add when you save.',
@@ -718,7 +995,7 @@ export default function ImportReviewScreen() {
             )
           : null}
 
-        {!pairingOnlyReview && skipped.length > 0
+        {!pairingPrimaryMode && skipped.length > 0
           ? renderSection(
               'Skipped',
               'Skipped items weren’t imported because they looked blank or not useful.',
@@ -793,58 +1070,12 @@ export default function ImportReviewScreen() {
           </View>
         </Modal>
 
-        <View style={styles.screenshotSection}>
-          <Pressable
-            onPress={() => setScreenshotOpen((o) => !o)}
-            style={styles.screenshotToggle}
-            accessibilityRole="button"
-            accessibilityLabel={screenshotOpen ? 'Hide original screenshot' : 'Show original screenshot'}
-          >
-            <Text style={styles.blockHeading}>Original screenshot</Text>
-            <Ionicons name={screenshotOpen ? 'chevron-up' : 'chevron-down'} size={20} color={T.textSecondary} />
-          </Pressable>
-          {screenshotOpen ? (
-            <>
-              <Text style={styles.blockHelper}>
-                The import uses the full-resolution file from your upload — this preview is only shrunk to fit the
-                screen. Tap to zoom and compare details.
-              </Text>
-              {previewUrl && !isPdf ? (
-                <Pressable onPress={() => setImageModalVisible(true)} style={styles.previewWrap}>
-                  <Image source={{ uri: previewUrl }} style={styles.preview} resizeMode="contain" />
-                </Pressable>
-              ) : (
-                <View style={styles.fileBox}>
-                  <Text style={styles.fileMuted}>
-                    {isPdf
-                      ? 'PDF import — preview isn’t shown here. Your parsed lines are listed above.'
-                      : 'No image on file.'}
-                  </Text>
-                  {batch?.source_file_path ? (
-                    <Text style={styles.fileMono} numberOfLines={2}>
-                      {batch.source_file_path}
-                    </Text>
-                  ) : null}
-                </View>
-              )}
-            </>
-          ) : (
-            <Text style={styles.collapsedHint}>Collapsed — tap the header to compare with the scan.</Text>
-          )}
-        </View>
-
-        <ZoomableImportImage
-          visible={imageModalVisible}
-          uri={previewUrl}
-          onClose={() => setImageModalVisible(false)}
-        />
-
-        {saving ? (
+        {!pairingPrimaryMode && saving ? (
           <View style={styles.saving}>
             <ActivityIndicator color={T.accent} />
             <Text style={styles.muted}>Saving…</Text>
           </View>
-        ) : (
+        ) : !pairingPrimaryMode ? (
           <View style={styles.actions}>
             <Pressable style={styles.btnPrimary} onPress={openSaveDialog}>
               <Text style={styles.btnPrimaryText}>Save confirmed items</Text>
@@ -861,14 +1092,70 @@ export default function ImportReviewScreen() {
               <Text style={styles.btnGhostText}>Start over</Text>
             </Pressable>
           </View>
-        )}
+        ) : null}
       </ScrollView>
+      {pairingPrimaryMode ? (
+        <View
+          style={[styles.ctaDock, { paddingBottom: Math.max(insets.bottom, 14), borderTopColor: FC.border }]}
+          pointerEvents="box-none"
+        >
+          {saving ? (
+            <View style={styles.ctaSavingRow}>
+              <ActivityIndicator color={FC.accent} />
+              <Text style={styles.ctaSavingText}>Saving…</Text>
+            </View>
+          ) : (
+            <>
+              {totalMissingFieldCount > 0 ? (
+                <Text style={styles.ctaGateCopy}>
+                  {totalMissingFieldCount} required field{totalMissingFieldCount === 1 ? '' : 's'} must be fixed before saving
+                </Text>
+              ) : null}
+              <Pressable
+                style={[styles.btnPrimary, totalMissingFieldCount > 0 && styles.btnPrimaryDisabled]}
+                onPress={() => {
+                  if (totalMissingFieldCount > 0) {
+                    const shown = pairingsMissingRequiredCodes.slice(0, 14).join(', ');
+                    const more =
+                      pairingsMissingRequiredCodes.length > 14
+                        ? ` (+${pairingsMissingRequiredCodes.length - 14} more)`
+                        : '';
+                    Alert.alert(
+                      'Fix required fields',
+                      `Complete highlighted required fields, then try again.\n\nTrips still missing required data: ${shown}${more}.`
+                    );
+                    scrollToPairingList();
+                    return;
+                  }
+                  void openSaveDialog();
+                }}
+              >
+                <Text style={styles.btnPrimaryText}>Save pairings to schedule</Text>
+              </Pressable>
+              {hasPairingReviewOrMissing ? (
+                <Pressable style={styles.btnSecondary} onPress={scrollToPairingList}>
+                  <Text style={styles.btnSecondaryText}>Review all issues</Text>
+                </Pressable>
+              ) : null}
+              <Pressable style={styles.btnGhost} onPress={() => router.back()}>
+                <Text style={styles.btnGhostText}>Start over</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
+      ) : null}
+      <ZoomableImportImage
+        visible={imageModalVisible}
+        uri={previewUrl}
+        onClose={() => setImageModalVisible(false)}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   shell: { flex: 1, backgroundColor: T.bg },
+  scrollFlex: { flex: 1 },
   content: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 0 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12, padding: 24 },
   summaryCard: {
@@ -900,6 +1187,110 @@ const styles = StyleSheet.create({
   summaryLead: { fontSize: 17, fontWeight: '600', color: T.text, lineHeight: 24, letterSpacing: -0.2, marginBottom: 6 },
   summaryHint: { fontSize: 13, color: T.textSecondary, lineHeight: 19, marginBottom: 8 },
   summarySubMeta: { fontSize: 12, color: T.textSecondary, lineHeight: 17, marginBottom: 14 },
+  summaryCardPremium: {
+    backgroundColor: FC.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: FC.border,
+    padding: 20,
+    marginBottom: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0f172a',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.06,
+        shadowRadius: 12,
+      },
+      android: { elevation: 3 },
+      default: {},
+    }),
+  },
+  premiumSummaryTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: FC.text,
+    letterSpacing: -0.3,
+    marginBottom: 4,
+  },
+  premiumSummaryMonth: { fontSize: 15, fontWeight: '600', color: FC.textMuted, marginBottom: 10 },
+  premiumSummaryMeta: { fontSize: 13, color: FC.text, lineHeight: 19, marginBottom: 8 },
+  premiumSummaryHint: { fontSize: 13, color: FC.textMuted, lineHeight: 18, marginBottom: 14 },
+  uploadCollapsibleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: FC.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: FC.border,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    gap: 12,
+  },
+  uploadCollapsibleTitle: { fontSize: 15, fontWeight: '700', color: FC.text },
+  uploadCollapsibleSub: { fontSize: 12, color: FC.textMuted, marginTop: 2 },
+  previewWrapCompact: { marginBottom: 12 },
+  previewMedium: { width: '100%', height: 200 },
+  pairingCardPremium: {
+    backgroundColor: FC.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: FC.border,
+    padding: 16,
+    marginBottom: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0f172a',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 8,
+      },
+      android: { elevation: 2 },
+      default: {},
+    }),
+  },
+  pairingCardPremiumWarn: {
+    borderColor: 'rgba(245, 158, 11, 0.5)',
+    backgroundColor: '#FFFCF5',
+  },
+  pairingCardPremiumMiss: {
+    borderColor: 'rgba(248, 113, 113, 0.55)',
+    backgroundColor: '#FFFBFB',
+  },
+  pairingCardTitlePremium: { fontSize: 22, fontWeight: '800', color: FC.text, flex: 1, letterSpacing: -0.4 },
+  pairingCardDateRow: { fontSize: 15, fontWeight: '600', color: FC.text, marginTop: 6 },
+  pairingCardRoutePremium: { fontSize: 15, fontWeight: '600', color: FC.text, marginTop: 10, lineHeight: 22 },
+  pairingCardMetaLine: { fontSize: 13, color: FC.textMuted, marginTop: 8 },
+  pairingCardIssueLine: { fontSize: 12, fontWeight: '600', color: FC.warn, marginTop: 10, lineHeight: 17 },
+  ctaDock: {
+    backgroundColor: FC.card,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 14,
+    gap: 10,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0f172a',
+        shadowOffset: { width: 0, height: -2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+      },
+      android: { elevation: 8 },
+      default: {},
+    }),
+  },
+  ctaSavingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 8 },
+  ctaSavingText: { fontSize: 15, fontWeight: '600', color: FC.textMuted },
+  ctaGateCopy: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: FC.bad,
+    textAlign: 'center',
+    marginBottom: 2,
+    lineHeight: 18,
+  },
+  btnPrimaryDisabled: { opacity: 0.45 },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   pill: {
     flex: 1,
@@ -946,15 +1337,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(21, 128, 61, 0.12)',
   },
   positiveBannerText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.good, lineHeight: 20 },
-  screenshotSection: { marginBottom: 8, marginTop: 16 },
-  screenshotToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-    marginBottom: 4,
-  },
-  collapsedHint: { fontSize: 12, color: T.textSecondary, marginBottom: 8, fontStyle: 'italic' },
+  screenshotPreviewTop: { marginBottom: 20, marginTop: 0 },
   blockHeading: { fontSize: 13, fontWeight: '800', color: T.textSecondary, letterSpacing: 0.6, marginBottom: 4 },
   blockHelper: { fontSize: 13, color: T.textSecondary, marginBottom: 12, lineHeight: 18 },
   sectionBlock: { marginBottom: 22 },
@@ -1020,7 +1403,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(15, 23, 42, 0.08)',
     backgroundColor: '#0f172a',
   },
-  preview: { width: '100%', height: 196 },
+  previewTall: { width: '100%', height: 280 },
   detailModalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.45)',
@@ -1110,6 +1493,7 @@ const styles = StyleSheet.create({
     backgroundColor: T.surface,
   },
   pairingCardWarn: { borderColor: '#F59E0B', backgroundColor: '#FFFBEB' },
+  pairingCardMiss: { borderColor: '#F87171', backgroundColor: '#FEF2F2' },
   pairingCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   pairingCardTitle: { fontSize: 16, fontWeight: '800', color: T.text, flex: 1 },
   pairingCardLine: { fontSize: 13, color: T.text, marginTop: 4 },
@@ -1117,6 +1501,7 @@ const styles = StyleSheet.create({
   badgeSm: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   badgeSmOk: { backgroundColor: '#DCFCE7' },
   badgeSmWarn: { backgroundColor: '#FEF3C7' },
+  badgeSmMiss: { backgroundColor: '#FECACA' },
   badgeSmText: { fontSize: 11, fontWeight: '800', color: '#0F172A' },
   noticeText: { fontSize: 13, color: T.textSecondary, lineHeight: 20 },
   muted: { fontSize: 14, color: T.textSecondary },

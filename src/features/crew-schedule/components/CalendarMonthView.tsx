@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip } from '../types';
 import { scheduleTheme as T } from '../scheduleTheme';
-import TripPreviewModal from './TripPreviewModal';
+import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
@@ -91,11 +91,11 @@ export default function CalendarMonthView({ year, month, trips, onPressDay, onOp
         </View>
       ))}
       {onOpenTrip ? (
-        <TripPreviewModal
+        <TripQuickPreviewSheet
           visible={previewTrip != null}
           trip={previewTrip}
           onClose={closePreview}
-          onOpenFullDetail={openFullFromPreview}
+          onOpenFullTrip={openFullFromPreview}
         />
       ) : null}
     </View>

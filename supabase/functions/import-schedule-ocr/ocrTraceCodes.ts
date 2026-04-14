@@ -12,6 +12,10 @@ export const OcrTraceReason = {
   OCR_NOT_INVOKED: 'OCR_NOT_INVOKED',
   /** Google Vision HTTP non-OK or thrown */
   OCR_ENGINE_ERROR: 'OCR_ENGINE_ERROR',
+  /** PDF text engine (unpdf/pdf.js) failed to load or threw — not user file quality */
+  PDF_EXTRACTION_ENGINE_ERROR: 'PDF_EXTRACTION_ENGINE_ERROR',
+  /** PDF parsed but extracted string below usable threshold (may be scanned/image-only) */
+  PDF_EXTRACTED_NO_USABLE_TEXT: 'PDF_EXTRACTED_NO_USABLE_TEXT',
   OCR_RETURNED_EMPTY: 'OCR_RETURNED_EMPTY',
   OCR_TEXT_DISCARDED_BY_THRESHOLD: 'OCR_TEXT_DISCARDED_BY_THRESHOLD',
   /** After trim / marker strip, string stored on batch is empty */

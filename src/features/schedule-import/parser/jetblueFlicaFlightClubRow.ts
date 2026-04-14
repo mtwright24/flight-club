@@ -14,7 +14,7 @@ export type JetBlueFlicaFlightClubRow = {
   /** schedule_entries.city: JFK-DUB so tripMapper builds legs (arrival = layover city column) */
   cityRoute: string | null;
   dEndDigits: string | null;
-  /** schedule_entries.layover: e.g. DUB 2430 for formatLayoverColumnDisplay */
+  /** Layover **time** token only (4-digit FLICA display), e.g. `2047` — city stays in `cityRoute`. */
   layoverDisplay: string | null;
   confidence: number;
   needsReview: boolean;
@@ -72,11 +72,12 @@ function firstRouteFromRaw(raw: string): { route: string; arrival: string } | nu
 }
 
 /**
- * FD/PLAYOVER-style "DUB 2430" — skip BSE REPT lines; prefer city matching first arrival.
+ * Layover **rest digits** only (same FLICA column as `AAA 2047` near overnight station).
+ * Skips BSE REPT lines; prefers station matching arrival hint; rejects 1900–1959 OCR noise band.
  */
-function extractLayoverPlayover(raw: string, arrivalHint: string | null): string | null {
+function extractLayoverRestDigitsFromRaw(raw: string, arrivalHint: string | null): string | null {
   const lines = raw.split(/\n/);
-  const candidates: { city: string; rest: string; score: number }[] = [];
+  const candidates: { rest: string; score: number }[] = [];
   for (const line of lines) {
     const t = line.trim();
     if (!t || /BSE\s*REPT/i.test(t)) continue;
@@ -86,12 +87,12 @@ function extractLayoverPlayover(raw: string, arrivalHint: string | null): string
       const city = m[1];
       const rest = m[2];
       const n = Number(rest);
+      if (n < 900 || n > 4000) continue;
+      if (n >= 1900 && n <= 1959) continue;
       let score = 0;
       if (arrivalHint && city === arrivalHint) score += 3;
-      if (rest === '2430' || rest === '2450' || rest === '2045' || rest === '1227') score += 2;
-      if (n >= 1200 && n <= 3059 && !(n >= 1900 && n <= 1959)) score += 1;
-      if (n >= 1900 && n <= 1959) score -= 2;
-      candidates.push({ city, rest, score });
+      if (n >= 1100 && n <= 3200) score += 2;
+      candidates.push({ rest, score });
     }
   }
   candidates.sort((a, b) => b.score - a.score);
@@ -100,11 +101,11 @@ function extractLayoverPlayover(raw: string, arrivalHint: string | null): string
     if (arrivalHint) {
       const rx = new RegExp(`\\b${arrivalHint}\\s+(\\d{4})\\b`, 'i');
       const m2 = rx.exec(raw);
-      if (m2) return `${arrivalHint} ${m2[1]}`;
+      if (m2) return m2[1];
     }
     return null;
   }
-  return `${best.city} ${best.rest}`;
+  return best.rest;
 }
 
 /**
@@ -122,17 +123,33 @@ export function deriveFlightClubRowFromParsedPairing(p: JetBluePairingParsed): J
 
   let dEndDigits: string | null = null;
   for (const dd of p.dutyDays) {
-    if (dd.dEndNotes) {
-      dEndDigits = extractDEndDigitsFromText(dd.dEndNotes);
-      if (dEndDigits) break;
+    if (dd.dEndLocal) {
+      dEndDigits = String(dd.dEndLocal).replace(/\D/g, '').slice(0, 4);
+      if (dEndDigits.length >= 3) break;
+    }
+  }
+  if (!dEndDigits || dEndDigits.length < 3) {
+    for (const dd of p.dutyDays) {
+      if (dd.dEndNotes) {
+        dEndDigits = extractDEndDigitsFromText(dd.dEndNotes);
+        if (dEndDigits) break;
+      }
     }
   }
   if (!dEndDigits) dEndDigits = extractDEndDigitsFromText(p.rawBlock);
 
   const arrival = route?.arrival ?? null;
-  const layoverDisplay =
-    extractLayoverPlayover(p.rawBlock, arrival) ??
-    (p.layoverStations.length > 0 ? p.layoverStations.join(' · ') : null);
+  let layoverDisplay: string | null = null;
+  for (let i = p.dutyDays.length - 1; i >= 0; i--) {
+    const r = p.dutyDays[i]?.layoverRestDisplay?.trim();
+    if (r && /^\d{4}$/.test(r)) {
+      layoverDisplay = r;
+      break;
+    }
+  }
+  if (!layoverDisplay) {
+    layoverDisplay = extractLayoverRestDigitsFromRaw(p.rawBlock, arrival);
+  }
 
   let filled = 0;
   if (rowDateIso) filled += 1;

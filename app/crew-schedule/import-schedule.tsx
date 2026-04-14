@@ -23,9 +23,10 @@ import { persistJetBlueFlicaStructuredParseForGenericBatch } from '../../src/fea
 import { scheduleTheme as T } from '../../src/features/crew-schedule/scheduleTheme';
 import { loadLastMonthCursor, saveLastMonthCursor } from '../../src/features/crew-schedule/scheduleViewStorage';
 import CrewScheduleHeader from '../../src/features/crew-schedule/components/CrewScheduleHeader';
+import { scanScheduleDocuments } from '../../src/features/crew-schedule/documentScanSchedule';
 import { supabase } from '../../src/lib/supabaseClient';
 
-type Source = 'photo' | 'pdf' | null;
+type Source = 'scan' | 'photo' | 'pdf' | null;
 
 const L = '[schedule-import]';
 
@@ -153,6 +154,7 @@ export default function ImportScheduleScreen() {
   const insets = useSafeAreaInsets();
   const [selected, setSelected] = useState<Source>(null);
   const [busy, setBusy] = useState(false);
+  const [busyHint, setBusyHint] = useState('Importing schedule…');
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth() + 1);
   useEffect(() => {
@@ -273,7 +275,7 @@ export default function ImportScheduleScreen() {
       uri: string,
       mime: string | undefined,
       baseName: string,
-      sourceType: 'screenshot' | 'photo' | 'pdf',
+      sourceType: 'screenshot' | 'photo' | 'pdf' | 'document_scan',
       opts?: { jpegBase64?: string | null }
     ) => {
       const { data: userData, error: userErr } = await supabase.auth.getUser();
@@ -286,6 +288,7 @@ export default function ImportScheduleScreen() {
       const safe = safeFileName(baseName);
       const path = `${uid}/${monthKey}/${ts}-${safe}`;
 
+      setBusyHint('Importing schedule…');
       setBusy(true);
       try {
         dbg('uploadAndProcess start', { sourceType, path, baseName });
@@ -345,7 +348,7 @@ export default function ImportScheduleScreen() {
   );
 
   const uploadAndProcessManyImages = useCallback(
-    async (assets: ImagePicker.ImagePickerAsset[]) => {
+    async (assets: ImagePicker.ImagePickerAsset[], batchSource: 'screenshot' | 'document_scan' = 'screenshot') => {
       if (!assets.length) return;
       const { data: userData, error: userErr } = await supabase.auth.getUser();
       if (userErr || !userData.user) {
@@ -353,6 +356,7 @@ export default function ImportScheduleScreen() {
         return;
       }
       const uid = userData.user.id;
+      setBusyHint('Importing schedule…');
       setBusy(true);
       try {
         const rawChunks: string[] = [];
@@ -386,7 +390,7 @@ export default function ImportScheduleScreen() {
           }
           const batchId = await createImportBatch({
             monthKey,
-            sourceType: 'screenshot',
+            sourceType: batchSource,
             sourceFilePath: path,
           });
           lastOcrMeta = await invokeImportScheduleOcr(batchId);
@@ -407,6 +411,88 @@ export default function ImportScheduleScreen() {
         await handlePostOcr(firstBatchId, combined, lastOcrMeta, batchRow);
       } catch (e) {
         dbg('uploadAndProcessManyImages FAILED', e);
+        let msg = e instanceof Error ? e.message : String(e);
+        const isInvalidJwt = /Invalid JWT/i.test(msg);
+        if (isInvalidJwt) {
+          msg +=
+            '\n\nThis is a Supabase session token issue (not your Google Vision keys). Try: sign out and sign in again, or confirm EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY match this Supabase project.';
+        } else if (/Edge Function|FunctionsHttpError|Failed to send|non-2xx/i.test(msg)) {
+          msg +=
+            '\n\nIf the error mentions Vision/OCR extraction (not 401 JWT), check Edge secrets: GOOGLE_CLOUD_API_KEY or GOOGLE_CLOUD_CLIENT_EMAIL + GOOGLE_CLOUD_PRIVATE_KEY.';
+        }
+        Alert.alert('Import failed', msg);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handlePostOcr, monthKey]
+  );
+
+  /** Multi-page document scan → one merged review batch (same pattern as multi-photo library). */
+  const uploadDocumentScanPages = useCallback(
+    async (filePaths: string[]) => {
+      if (!filePaths.length) return;
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (userErr || !userData.user) {
+        Alert.alert('Sign in required', 'Please sign in to import your schedule.');
+        return;
+      }
+      const uid = userData.user.id;
+      setBusyHint('Importing schedule…');
+      setBusy(true);
+      try {
+        const rawChunks: string[] = [];
+        let firstBatchId: string | null = null;
+        let lastOcrMeta: Awaited<ReturnType<typeof invokeImportScheduleOcr>> | null = null;
+        for (let i = 0; i < filePaths.length; i++) {
+          const uri = filePaths[i];
+          const order = i + 1;
+          dbg('uploadDocumentScanPages', { order, total: filePaths.length });
+          const baseName = `scan-page-${order}.jpg`;
+          const safe = safeFileName(baseName);
+          const path = `${uid}/${monthKey}/${Date.now()}-${order}-docscan-${safe}`;
+          const bytes = await readLocalUriAsBytesWithDiag(uri, 'image/jpeg');
+          if (bytes.length === 0) {
+            dbg('skip empty scan page', { order });
+            continue;
+          }
+          const { error: upErr } = await supabase.storage.from('schedule-imports').upload(path, bytes, {
+            contentType: 'image/jpeg',
+            upsert: false,
+          });
+          if (upErr) {
+            dbg('storage upload error doc scan', upErr);
+            const em = (upErr as { message?: string }).message ?? String(upErr);
+            if (/bucket|not found|404/i.test(em)) {
+              throw new Error(
+                'Storage bucket "schedule-imports" is missing. In Supabase: run SQL from supabase/schedule-import-bucket.sql (or apply migrations), then retry.'
+              );
+            }
+            throw upErr;
+          }
+          const batchId = await createImportBatch({
+            monthKey,
+            sourceType: 'document_scan',
+            sourceFilePath: path,
+          });
+          lastOcrMeta = await invokeImportScheduleOcr(batchId);
+          const br = await fetchImportBatch(batchId);
+          rawChunks.push((br?.raw_extracted_text ?? '').trim());
+          if (!firstBatchId) firstBatchId = batchId;
+        }
+        if (!firstBatchId || !lastOcrMeta) {
+          throw new Error('No scan pages could be processed.');
+        }
+        const combined = rawChunks.filter(Boolean).join('\n\n---\n\n');
+        const { error: mergeErr } = await supabase
+          .from('schedule_import_batches')
+          .update({ raw_extracted_text: combined, updated_at: new Date().toISOString() })
+          .eq('id', firstBatchId);
+        if (mergeErr) dbg('merge batch raw_extracted_text failed (doc scan)', mergeErr);
+        const batchRow = await fetchImportBatch(firstBatchId);
+        await handlePostOcr(firstBatchId, combined, lastOcrMeta, batchRow);
+      } catch (e) {
+        dbg('uploadDocumentScanPages FAILED', e);
         let msg = e instanceof Error ? e.message : String(e);
         const isInvalidJwt = /Invalid JWT/i.test(msg);
         if (isInvalidJwt) {
@@ -513,9 +599,30 @@ export default function ImportScheduleScreen() {
   }, [uploadAndProcess]);
 
   const continueFlow = useCallback(() => {
+    if (selected === 'scan') {
+      void (async () => {
+        const r = await scanScheduleDocuments();
+        if (r.kind === 'cancel') return;
+        if (r.kind === 'unavailable') {
+          Alert.alert(
+            'Document scan isn’t available',
+            r.reason === 'module'
+              ? 'This build doesn’t include the native document scanner (Expo Go can’t load it). Install a development build, or use Choose screenshot / Photo — same review flow.'
+              : 'Couldn’t open the scanner. Try again, or use Choose screenshot / Photo.',
+            [
+              { text: 'Choose photo', onPress: () => void pickPhotoLibrary() },
+              { text: 'OK', style: 'cancel' },
+            ]
+          );
+          return;
+        }
+        await uploadDocumentScanPages(r.filePaths);
+      })();
+      return;
+    }
     if (selected === 'photo') void onChoosePhoto();
     else if (selected === 'pdf') void pickPdf();
-  }, [onChoosePhoto, pickPdf, selected]);
+  }, [onChoosePhoto, pickPdf, pickPhotoLibrary, selected, uploadDocumentScanPages]);
 
   return (
     <View style={styles.shell}>
@@ -536,9 +643,9 @@ export default function ImportScheduleScreen() {
           Import bucket <Text style={styles.metaStrong}>{monthKey}</Text> — rows save under this month. OCR also detects the month from your image when possible.
         </Text>
         <Text style={styles.lead}>
-          Upload one or more roster screenshots, a photo, or a PDF. Text is extracted server-side; you review before
-          anything is saved. From the photo library you can select multiple images — OCR runs on each, then results are
-          merged for one review.
+          Scan documents for a straightened, cropped page like Apple Notes — or pick screenshots, photos, or a PDF. Text
+          is extracted server-side; you review before anything is saved. Multi-page scans and multi-photo picks merge into
+          one review.
         </Text>
 
         <Text style={styles.h2}>JetBlue FLICA (recommended)</Text>
@@ -557,8 +664,19 @@ export default function ImportScheduleScreen() {
         <View style={styles.options}>
           {(
             [
-              { id: 'photo' as const, label: 'Screenshot / Photo', sub: 'Multi-select from library; OCR merged into one review' },
-              { id: 'pdf' as const, label: 'PDF', sub: 'Text extract + review' },
+              {
+                id: 'scan' as const,
+                label: 'Scan Documents',
+                sub: 'Live edge detection & perspective — best for paper or a screen',
+                premium: true,
+              },
+              {
+                id: 'photo' as const,
+                label: 'Choose screenshot / photo',
+                sub: 'Library or camera; multi-select merges into one review',
+                premium: false,
+              },
+              { id: 'pdf' as const, label: 'Choose PDF', sub: 'Text extract + review', premium: false },
             ] as const
           ).map((opt) => {
             const active = selected === opt.id;
@@ -566,7 +684,7 @@ export default function ImportScheduleScreen() {
               <Pressable
                 key={opt.id}
                 onPress={() => setSelected(opt.id)}
-                style={[styles.opt, active && styles.optActive]}
+                style={[styles.opt, opt.premium && styles.optPremium, active && styles.optActive]}
               >
                 <Text style={styles.optText}>{opt.label}</Text>
                 <Text style={styles.optSub}>{opt.sub}</Text>
@@ -605,7 +723,7 @@ export default function ImportScheduleScreen() {
         {busy ? (
           <View style={styles.loading}>
             <ActivityIndicator color={T.accent} size="large" />
-            <Text style={styles.loadingText}>Uploading and extracting text…</Text>
+            <Text style={styles.loadingText}>{busyHint}</Text>
           </View>
         ) : (
           <Pressable
@@ -656,6 +774,7 @@ const styles = StyleSheet.create({
     borderColor: T.line,
     backgroundColor: T.surface,
   },
+  optPremium: { borderWidth: 2, borderColor: T.accent },
   optActive: { borderColor: T.accent, backgroundColor: '#FEF2F2' },
   optText: { fontSize: 15, fontWeight: '700', color: T.text },
   optSub: { fontSize: 12, color: T.textSecondary, marginTop: 4 },

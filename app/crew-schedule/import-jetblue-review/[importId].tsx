@@ -215,7 +215,7 @@ export default function ImportJetBlueReviewScreen() {
                 Route: {route}
               </Text>
               <Text style={styles.cardLine} numberOfLines={1}>
-                Layovers: {lays}
+                Layovers: {lays ?? '—'}
               </Text>
               <Text style={styles.cardMeta}>
                 {p.pairing_confidence != null ? `${Math.round(p.pairing_confidence * 100)}% · ${band}` : '—'} ·{' '}

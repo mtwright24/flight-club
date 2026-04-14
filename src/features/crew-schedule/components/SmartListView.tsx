@@ -3,7 +3,7 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip } from '../types';
 import { scheduleTheme as T } from '../scheduleTheme';
-import TripPreviewModal from './TripPreviewModal';
+import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
 type Props = {
   trips: CrewScheduleTrip[];
@@ -73,11 +73,11 @@ export default function SmartListView({ trips, onPressTrip, onPost, onChat, onMa
           </View>
         );
       })}
-      <TripPreviewModal
+      <TripQuickPreviewSheet
         visible={previewTrip != null}
         trip={previewTrip}
         onClose={closePreview}
-        onOpenFullDetail={openFullFromPreview}
+        onOpenFullTrip={openFullFromPreview}
       />
     </View>
   );

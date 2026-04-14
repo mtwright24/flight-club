@@ -57,7 +57,13 @@
           "enableBackgroundRemoteNotifications": true
         }
       ],
-      "expo-video"
+      "expo-video",
+      [
+        "react-native-document-scanner-plugin",
+        {
+          "cameraPermission": "Flight Club uses the camera to scan schedule pages — cropped and straightened like Notes, then text is read securely on our servers."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

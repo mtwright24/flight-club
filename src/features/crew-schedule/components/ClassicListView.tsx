@@ -3,7 +3,7 @@ import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-nat
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 import { formatLayoverColumnDisplay, mergeLayoverOntoLegDates, parseScheduleTimeMinutes } from '../scheduleTime';
 import { scheduleTheme as T } from '../scheduleTheme';
-import TripPreviewModal from './TripPreviewModal';
+import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 
@@ -412,7 +412,11 @@ const ScheduleRow = memo(function ScheduleRow({
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellDetail]}>
-        <Text style={[styles.cellText, styles.detailCellText, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
+        <Text
+          style={[styles.cellText, styles.detailCellText, isEmpty && styles.routePlaceholder]}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
           {dEndValue}
         </Text>
       </View>
@@ -452,7 +456,6 @@ const ScheduleRow = memo(function ScheduleRow({
   return <View style={rowStyle}>{content}</View>;
 });
 
-/** Band B: fixed size (no per-cell auto-shrink) so short labels like CITY don’t sit in oversized columns vs D-END. */
 function BandBHeaderLabel({ children, align }: { children: string; align: 'left' | 'center' }) {
   return (
     <Text
@@ -543,7 +546,7 @@ export default function ClassicListView({ trips, monthMetrics, onPressTrip, onOp
         <View style={[styles.headerBandCell, styles.cellLayover]}>
           <BandBHeaderLabel align="left">LAYOVER</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerBandCell, styles.cellWx]}>
+        <View style={[styles.headerBandCell, styles.headerBandWx]}>
           <BandBHeaderLabel align="center">WX</BandBHeaderLabel>
         </View>
       </View>
@@ -566,11 +569,11 @@ export default function ClassicListView({ trips, monthMetrics, onPressTrip, onOp
         scrollEnabled={false}
       />
 
-      <TripPreviewModal
+      <TripQuickPreviewSheet
         visible={previewTrip != null}
         trip={previewTrip}
         onClose={closePreview}
-        onOpenFullDetail={openFullFromPreview}
+        onOpenFullTrip={openFullFromPreview}
       />
     </View>
   );
@@ -620,7 +623,7 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    gap: 4,
+    gap: 3,
     backgroundColor: '#F5F6F8',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#D8DCE2',
@@ -631,6 +634,15 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 0,
     overflow: 'visible',
+  },
+  /** Same width as `cellWx` so “WX” sits centered above the ☀︎ column. */
+  headerBandWx: {
+    width: 28,
+    minWidth: 28,
+    maxWidth: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 0,
   },
   headerText: {
     fontSize: 7.2,
@@ -663,7 +675,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'nowrap',
     alignItems: 'center',
-    gap: 4,
+    gap: 3,
     minHeight: 22,
     paddingVertical: 0,
     paddingHorizontal: 0,
@@ -684,13 +696,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F5F9',
   },
   /**
-   * CITY is usually 3 letters; D-END is times. Equal flex (1/1) left a wide empty band in CITY vs D-END.
-   * Narrow CITY / widen D-END (0.82 + 1.18 = 2) so the gap between labels matches other columns optically.
+   * Flex weights share the row evenly except D-END (narrow) and WX (fixed, icon-centered).
+   * All flexible cells use minWidth: 0 + overflow hidden so text clips in-column (no bleed into neighbors).
    */
-  cellDate: { flex: 0.9, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingLeft: 2, paddingRight: 2 },
-  cellPairing: {
-    flex: 1,
+  cellDate: {
+    flex: 0.92,
     minWidth: 0,
+    overflow: 'hidden',
+    borderRightWidth: DIV,
+    borderRightColor: '#ECEEF1',
+    alignItems: 'flex-start',
+    paddingLeft: 2,
+    paddingRight: 2,
+  },
+  cellPairing: {
+    flex: 1.05,
+    minWidth: 0,
+    overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
@@ -698,21 +720,55 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
     justifyContent: 'center',
   },
-  cellReport: { flex: 1, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingHorizontal: 2 },
-  cellRoute: { flex: 0.82, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingHorizontal: 2 },
-  cellDetail: { flex: 1.18, minWidth: 0, borderRightWidth: DIV, borderRightColor: '#ECEEF1', alignItems: 'flex-start', paddingLeft: 2, paddingRight: 0 },
-  /** Pull toward D-END: no pl + negative ml eats row gap so LAYOVER/WX clip less on the right. */
-  cellLayover: {
+  cellReport: {
     flex: 1,
     minWidth: 0,
-    marginLeft: -4,
+    overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
-    paddingLeft: 0,
+    paddingHorizontal: 2,
+  },
+  cellRoute: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    borderRightWidth: DIV,
+    borderRightColor: '#ECEEF1',
+    alignItems: 'flex-start',
+    paddingHorizontal: 2,
+  },
+  /** D-END / release — slightly wider than before so HH:MM does not clip against LAYOVER */
+  cellDetail: {
+    flex: 0.64,
+    minWidth: 34,
+    overflow: 'hidden',
+    borderRightWidth: DIV,
+    borderRightColor: '#ECEEF1',
+    alignItems: 'flex-start',
+    paddingLeft: 2,
     paddingRight: 2,
   },
-  cellWx: { width: 24, minWidth: 24, maxWidth: 24, alignItems: 'flex-start', paddingHorizontal: 0 },
+  cellLayover: {
+    flex: 1.1,
+    minWidth: 0,
+    overflow: 'hidden',
+    borderRightWidth: DIV,
+    borderRightColor: '#ECEEF1',
+    alignItems: 'flex-start',
+    paddingLeft: 2,
+    paddingRight: 2,
+  },
+  /** Fixed rail; header uses `headerBandWx` with the same width so ☀︎ stays under “WX”. */
+  cellWx: {
+    width: 28,
+    minWidth: 28,
+    maxWidth: 28,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 0,
+  },
   /** Only weekend + today override bodyRow; cool neutral, not beige/pink. */
   weekendRow: {
     backgroundColor: '#F8F9FA',
@@ -757,7 +813,14 @@ const styles = StyleSheet.create({
   assignmentCode: { fontSize: 8.2, fontWeight: '700', color: T.text, lineHeight: 10 },
   routeMain: { fontSize: 7.8, fontWeight: '600', color: '#B5161E', lineHeight: 10 },
   detailCellText: { fontSize: 7.8, color: '#607086', lineHeight: 10, fontWeight: '600' },
-  wxCellText: { fontSize: 8, color: '#EAB308', lineHeight: 10, fontWeight: '700', textAlign: 'left', marginLeft: -2 },
+  wxCellText: {
+    fontSize: 8,
+    color: '#EAB308',
+    lineHeight: 10,
+    fontWeight: '700',
+    textAlign: 'center',
+    width: '100%',
+  },
   continuationCode: { color: '#425972', fontWeight: '600' },
   routePlaceholder: { fontSize: 7.8, color: '#C6D1DE', lineHeight: 10 },
   offCode: { color: '#475569' },

@@ -9,6 +9,7 @@
  * pairing blocks are found by header lines anywhere in the blob.
  */
 
+import type { StoredImportReviewIssue } from '../../crew-schedule/jetblueFlicaImportReviewIssues';
 import { maxIsoDates, parseOperateWindowEndIso } from './jetblueFlicaOperateDates';
 import { normalizePairingSegments } from './jetblueFlicaStationNormalize';
 
@@ -572,28 +573,74 @@ function parseDEndLine(line: string): { dEndLocal: string | null; nextReportLoca
  * Layover CITY + rest from duty-section lines (FLICA right column: `LAS 1236`).
  * Skips times that look like HHMM flight times when line also has station pair.
  */
+/** Substring after the first D-END time clause — layover city + rest usually follow on the same OCR line. */
+function textAfterDEndClause(line: string): string | null {
+  const dm = /\bD-END\s*:?\s*\d{3,4}L?\b/i.exec(line);
+  if (!dm) return null;
+  const tail = line.slice(dm.index + dm[0].length).trim();
+  return tail.length ? tail : null;
+}
+
+/** Departure + arrival HHMM on a segment row — never treat those as layover “rest”. */
+function segmentDepArrDigitSet(line: string): Set<string> {
+  const s = new Set<string>();
+  const fourFour = line.match(/\b(\d{4})\s+(\d{4})\b/);
+  if (fourFour) {
+    s.add(fourFour[1]);
+    s.add(fourFour[2]);
+  }
+  return s;
+}
+
 function extractLayoverCityRestFromSection(
   sectionLines: string[],
-  lastArrivalHint: string | null
+  lastArrivalHint: string | null,
+  monthCtx?: JetBluePairingMonthContext
 ): { city: string | null; rest: string | null } {
   let best: { city: string; rest: string; score: number } | null = null;
   for (const line of sectionLines) {
     const t = line.trim();
-    if (/BSE\s*REPT|D-END|^FLTNO|^DEPL/i.test(t)) continue;
-    const re = /\b([A-Z]{3})\s+(\d{4})\b/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(t)) !== null) {
-      const city = m[1];
-      const rest = m[2];
-      const n = Number(rest);
-      if (!Number.isFinite(n)) continue;
-      if (n < 900 || n > 4000) continue;
-      if (n >= 1900 && n <= 1959) continue;
-      let score = 0;
-      if (lastArrivalHint && city === lastArrivalHint) score += 3;
-      if (n >= 1100 && n <= 3200) score += 2;
-      const cand = { city, rest, score };
-      if (!best || cand.score > best.score) best = cand;
+    if (/^FLTNO|^DEPL/i.test(t)) continue;
+    if (!/\bD-END\b/i.test(t) && /BSE\s*REPT/i.test(t)) continue;
+
+    const dEndParsed = /\bD-END\b/i.test(t) ? parseDEndLine(t) : { dEndLocal: null, nextReportLocal: null };
+    const dEndDigits = dEndParsed.dEndLocal?.replace(/\D/g, '').slice(-4) ?? null;
+    const reptDigits = dEndParsed.nextReportLocal?.replace(/\D/g, '').slice(-4) ?? null;
+    const flightTimes = segmentDepArrDigitSet(t);
+    const isSeg = lineLooksLikeSegmentRow(t, monthCtx);
+
+    const scanZones: { text: string; postDEnd: boolean }[] = [];
+    if (/\bD-END\b/i.test(t)) {
+      const tail = textAfterDEndClause(t);
+      if (tail) scanZones.push({ text: tail, postDEnd: true });
+    } else {
+      scanZones.push({ text: t, postDEnd: false });
+    }
+
+    for (const z of scanZones) {
+      const re = /\b([A-Z]{3})\s+(\d{4})\b/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(z.text)) !== null) {
+        const city = m[1];
+        const rest = m[2];
+        const n = Number(rest);
+        if (!Number.isFinite(n)) continue;
+        if (dEndDigits && rest === dEndDigits) continue;
+        if (reptDigits && rest === reptDigits) continue;
+        if (flightTimes.has(rest)) continue;
+        /** Layover rest display (clock-style); skip narrow band that is usually OCR noise, not layover length. */
+        if (n < 900 || n > 4000) continue;
+        if (n >= 1900 && n <= 1959) continue;
+        /** Segment rows: require layover-like band so we do not pick 0948-style dep times as “rest”. */
+        if (isSeg && n < 1000) continue;
+
+        let score = 0;
+        if (lastArrivalHint && city === lastArrivalHint) score += 3;
+        if (n >= 1100 && n <= 3200) score += 2;
+        if (z.postDEnd) score += 5;
+        const cand = { city, rest, score };
+        if (!best || cand.score > best.score) best = cand;
+      }
     }
   }
   if (!best || best.score < 1) return { city: null, rest: null };
@@ -698,7 +745,8 @@ function parsePairingBlock(
       segments.length > 0 ? (segments[segments.length - 1]?.arrivalStation ?? null) : null;
     const layEx = extractLayoverCityRestFromSection(
       sec.filter((l) => !HOTEL_HINT.test(l)),
-      lastArr
+      lastArr,
+      { year: scheduleYear, month: scheduleMonth }
     );
     const dc = segments.length > 0 ? 0.78 : 0.42;
     dutyDays.push({
@@ -782,22 +830,74 @@ function extractPageMeta(lines: string[]): JetBluePageMeta {
   };
 }
 
-function extractMonthlyTotals(lines: string[]): JetBlueMonthlyTotalsParsed {
-  const text = lines.join('\n');
+/**
+ * FLICA screenshot: month totals live in the bottom-left summary list, not in pairing bodies.
+ * Scan the tail of the OCR line list (last ~120 lines), drop lines that look like trip detail,
+ * then take the **last** Block / Credit / YTD / Days Off hits so we do not pick trip-level noise.
+ * TAFB is intentionally not parsed here.
+ */
+function lineLooksLikeTripBodyForTotalsFilter(line: string, monthCtx: JetBluePairingMonthContext): boolean {
+  const t = line.trim();
+  if (!t) return true;
+  if (extractPairingHeaderFromLine(t, monthCtx)) return true;
+  if (/\bJ[A-Z0-9]{3,6}\s*[:/.]\s*\d{1,2}\s*[A-Za-z]{3}\b/i.test(t)) return true;
+  if (lineLooksLikeTableHeader(t)) return true;
+  if (lineLooksLikeSegmentRow(t, monthCtx)) return true;
+  if (/\b(BSE\s*REPT|BASE\/EQUIP|OPERATES|FLTNO|DEPL\/|DHC\b)/i.test(t)) return true;
+  if (/\b(SU|MO|TU|WE|TH|FR|SA)\s+\d{1,2}\b.*\b[A-Z]{3}\s*[-–]\s*[A-Z]{3}\b/i.test(t)) return true;
+  return false;
+}
+
+function parseDecimalHoursToken(raw: string): number | null {
+  const n = Number(raw.replace(',', '.'));
+  return Number.isFinite(n) && n >= 0 && n < 500 ? n : null;
+}
+
+function extractMonthlyTotals(lines: string[], monthCtx: JetBluePairingMonthContext): JetBlueMonthlyTotalsParsed {
   const rawLines: string[] = [];
   let blockHours: number | null = null;
   let creditHours: number | null = null;
   let ytdHours: number | null = null;
   let daysOff: number | null = null;
 
-  const blockM = /\bBlock\s+(\d+\.\d{2})/i.exec(text);
-  if (blockM) blockHours = Number(blockM[1]);
-  const credM = /\bCredit\s+(\d+\.\d{2})/i.exec(text);
-  if (credM) creditHours = Number(credM[1]);
-  const ytdM = /\bYTD\s+(\d+\.\d{2})/i.exec(text);
-  if (ytdM) ytdHours = Number(ytdM[1]);
-  const doM = /\bDays?\s*Off\s+(\d+)/i.exec(text);
-  if (doM) daysOff = Number(doM[1]);
+  const tailN = Math.min(120, lines.length);
+  const tail = lines.slice(-tailN);
+  const filtered = tail.filter((ln) => !lineLooksLikeTripBodyForTotalsFilter(ln, monthCtx));
+  const scanLines = filtered.length >= 2 ? filtered : tail;
+
+  const dec = '(\\d{1,3}(?:[.,]\\d{2}))';
+  for (let i = scanLines.length - 1; i >= 0; i--) {
+    const ln = scanLines[i] ?? '';
+    if (blockHours == null) {
+      const m = new RegExp(`\\bBlock\\s*[:#\\s]+${dec}`, 'i').exec(ln);
+      if (m) {
+        const v = parseDecimalHoursToken(m[1]);
+        if (v != null) blockHours = v;
+      }
+    }
+    if (creditHours == null) {
+      const m = new RegExp(`\\bCredit\\s*[:#\\s]+${dec}`, 'i').exec(ln);
+      if (m) {
+        const v = parseDecimalHoursToken(m[1]);
+        if (v != null) creditHours = v;
+      }
+    }
+    if (ytdHours == null) {
+      const m = new RegExp(`\\bYTD\\s*[:#\\s]+${dec}`, 'i').exec(ln);
+      if (m) {
+        const v = parseDecimalHoursToken(m[1]);
+        if (v != null) ytdHours = v;
+      }
+    }
+    if (daysOff == null) {
+      const m = /\bDays?\s*Off\s*[:#]?\s*(\d{1,3})\b/i.exec(ln);
+      if (m) {
+        const v = Number(m[1]);
+        if (Number.isFinite(v) && v >= 0 && v <= 366) daysOff = v;
+      }
+    }
+    if (blockHours != null && creditHours != null && ytdHours != null && daysOff != null) break;
+  }
 
   for (const ln of lines) {
     if (/\bTACLAG\b/i.test(ln)) rawLines.push(`[obsolete_field_raw] ${ln}`);
@@ -945,7 +1045,7 @@ export function parseJetBlueFlicaMonthlyScreenshot(
     .filter(Boolean);
 
   const meta = extractPageMeta(lines);
-  const monthlyTotals = extractMonthlyTotals(lines);
+  const monthlyTotals = extractMonthlyTotals(lines, monthCtx);
 
   const blocks: { header: string; body: string[] }[] = [];
   let current: { header: string; body: string[] } | null = null;
@@ -1016,7 +1116,98 @@ export function parseJetBlueFlicaMonthlyScreenshot(
     meta,
     monthlyTotals,
     pairings,
-    parserVersion: 'jetblue_flica_structured_v9_duty_hierarchy',
+    parserVersion: 'jetblue_flica_structured_v10_summary_tail_layover_split',
     debug,
   };
+}
+
+/**
+ * Concrete review issues for DB (`normalized_json.import_review_issues`) so PDF/OCR imports
+ * always have explainable, field-targeted rows in the pairing editor — not just a global flag.
+ */
+export function buildStoredImportReviewIssues(p: JetBluePairingParsed): StoredImportReviewIssue[] {
+  const issues: StoredImportReviewIssue[] = [];
+  const totalSegs = p.dutyDays.reduce((n, d) => n + d.segments.length, 0);
+  const hasLegs = totalSegs > 0;
+
+  if (!hasLegs) {
+    issues.push({
+      field_key: 'operate_end_date',
+      validation_state: 'needs_review',
+      reason_code: 'conflicting_context',
+      duty_date_iso: null,
+      reason_display:
+        'No flight legs were parsed in this pairing block (PDF/OCR may have dropped duty lines). Add legs from the pairing detail or re-import a clearer page.',
+    });
+  }
+
+  if (p.pairingStartIso && p.confidence < 0.75) {
+    issues.push({
+      field_key: 'operate_start_date',
+      validation_state: 'needs_review',
+      reason_code: 'low_confidence_match',
+      duty_date_iso: null,
+      reason_display:
+        `Overall pairing confidence is ${Math.round(p.confidence * 100)}% — confirm trip start / operate dates against your schedule.`,
+    });
+  }
+
+  const lastDuty = p.lastDutyDateIso;
+  const end = p.operateEndIso;
+  if (lastDuty && end && lastDuty.localeCompare(end) > 0) {
+    issues.push({
+      field_key: 'operate_end_date',
+      validation_state: 'needs_review',
+      reason_code: 'conflicting_context',
+      duty_date_iso: null,
+      reason_display:
+        'The last parsed duty day is after the operate end date — adjust end date or verify duty lines.',
+    });
+  }
+
+  const seenFlightDay = new Set<string>();
+  for (const d of p.dutyDays) {
+    const iso = d.dutyDateIso;
+    const isoKey = iso ?? '';
+    let lowSeg = d.segments.find((s) => s.confidence < 0.5);
+    if (lowSeg && iso && !seenFlightDay.has(isoKey)) {
+      seenFlightDay.add(isoKey);
+      issues.push({
+        field_key: 'leg:flight_number',
+        validation_state: 'needs_review',
+        reason_code: 'unreadable',
+        duty_date_iso: iso,
+        reason_display:
+          'One flight line on this day had low OCR confidence — verify flight number, route, and times on that line.',
+        candidates: lowSeg.flightNumber
+          ? [{ value: lowSeg.flightNumber, label: `Use ${lowSeg.flightNumber}` }]
+          : undefined,
+      });
+    }
+
+    if (d.layoverRestDisplay && (!d.layoverCityCode || d.confidence < 0.55)) {
+      issues.push({
+        field_key: 'leg:layover_city',
+        validation_state: 'needs_review',
+        reason_code: d.layoverCityCode ? 'suspicious_code' : 'inferred_value',
+        duty_date_iso: iso,
+        reason_display: d.layoverCityCode
+          ? `Layover station “${d.layoverCityCode}” may need confirmation against your pairing line.`
+          : 'Layover city did not parse clearly even though rest or hotel timing appeared — enter the station if shown.',
+      });
+    }
+  }
+
+  if (p.needsReview && issues.length === 0) {
+    issues.push({
+      field_key: 'report_time_local',
+      validation_state: 'needs_review',
+      reason_code: 'low_confidence_match',
+      duty_date_iso: null,
+      reason_display:
+        'This pairing was flagged for review — confirm report time, base, and every leg against the PDF or original roster.',
+    });
+  }
+
+  return issues;
 }
