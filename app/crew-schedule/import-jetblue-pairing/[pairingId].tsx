@@ -83,6 +83,14 @@ function hhmmToBlockNumeric(hhmm: string): number | null {
   return h + m / 60;
 }
 
+/** FLICA OCR slips (matches schedule parser / station normalizer). */
+function displayOcrAirportCode(s: string | null | undefined): string {
+  const t = (s ?? '').trim().toUpperCase();
+  if (!t) return '';
+  if (t === 'JAS') return 'LAS';
+  return t;
+}
+
 function shellColors(state: FieldReviewState | undefined): { border: string; bg: string } {
   if (state === 'missing_required') return { border: '#DC2626', bg: '#FEF2F2' };
   if (state === 'needs_review') return { border: '#F59E0B', bg: '#FFFBEB' };
@@ -419,7 +427,7 @@ export default function ImportJetBluePairingScreen() {
     setLegArr(d.arrival_time_local ?? '');
     setLegBlock(d.block_time_local ?? '');
     setLegDh(Boolean(d.is_deadhead));
-    setLegLayover(d.layover_city ?? '');
+    setLegLayover(displayOcrAirportCode(d.layover_city) || (d.layover_city ?? ''));
     setLegRelease(d.release_time_local ?? '');
     setLegRaw(d.raw_text ?? '');
     setLegScanExpanded(false);
@@ -823,7 +831,8 @@ export default function ImportJetBluePairingScreen() {
           const ddmeta = last?.duty_day;
           const dEnd = last?.release_time_local ?? (ddmeta?.d_end_local as string | undefined) ?? null;
           const rept = (ddmeta?.next_report_local as string | undefined) ?? null;
-          const layCity = last?.layover_city ?? (ddmeta?.layover_city_code as string | undefined) ?? null;
+          const layCityRaw = last?.layover_city ?? (ddmeta?.layover_city_code as string | undefined) ?? null;
+          const layCity = layCityRaw ? displayOcrAirportCode(layCityRaw) : null;
           const layRest = last?.layover_rest_display ?? (ddmeta?.layover_rest_display as string | undefined) ?? null;
           const s = dutyOpen[dateKey];
           const expanded =
@@ -992,7 +1001,12 @@ export default function ImportJetBluePairingScreen() {
                 pairingFieldScrollY.current.report_time_local = pairingSectionTop.current + ry;
               }}
             >
-              <TextInput value={report} onChangeText={setReport} style={styles.inputBare} placeholder="0930" />
+              <TextInput
+                value={report}
+                onChangeText={setReport}
+                style={styles.inputBare}
+                placeholder="1930 or 1930L"
+              />
             </PairingFieldShell>
             <ImportFieldReviewAssist
               assistKey={`${pairingId}-report`}
@@ -1017,7 +1031,7 @@ export default function ImportJetBluePairingScreen() {
                 pairingFieldScrollY.current.base_code = pairingSectionTop.current + ry;
               }}
             >
-              <TextInput value={base} onChangeText={setBase} style={styles.inputBare} placeholder="JFK" />
+              <TextInput value={base} onChangeText={setBase} style={styles.inputBare} placeholder="3-letter base" />
             </PairingFieldShell>
             <ImportFieldReviewAssist
               assistKey={`${pairingId}-base`}
@@ -1124,7 +1138,7 @@ export default function ImportJetBluePairingScreen() {
                   state={legModalFields?.from_airport?.state}
                   helper={legModalFields?.from_airport?.helper}
                 >
-                  <TextInput value={legFrom} onChangeText={setLegFrom} style={styles.inputBare} placeholder="JFK" />
+                  <TextInput value={legFrom} onChangeText={setLegFrom} style={styles.inputBare} placeholder="From (3 letters)" />
                 </LegFieldShell>
                 {legModal ? (
                   <ImportFieldReviewAssist
@@ -1150,7 +1164,7 @@ export default function ImportJetBluePairingScreen() {
                   state={legModalFields?.to_airport?.state}
                   helper={legModalFields?.to_airport?.helper}
                 >
-                  <TextInput value={legTo} onChangeText={setLegTo} style={styles.inputBare} placeholder="LAX" />
+                  <TextInput value={legTo} onChangeText={setLegTo} style={styles.inputBare} placeholder="To (3 letters)" />
                 </LegFieldShell>
                 {legModal ? (
                   <ImportFieldReviewAssist
@@ -1235,7 +1249,7 @@ export default function ImportJetBluePairingScreen() {
               state={legModalFields?.layover_city?.state}
               helper={legModalFields?.layover_city?.helper}
             >
-              <TextInput value={legLayover} onChangeText={setLegLayover} style={styles.inputBare} placeholder="LAS" />
+              <TextInput value={legLayover} onChangeText={setLegLayover} style={styles.inputBare} placeholder="Layover (3 letters)" />
             </LegFieldShell>
             {legModal ? (
               <ImportFieldReviewAssist

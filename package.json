@@ -13,6 +13,7 @@
     "ios": "expo run:ios",
     "ios:open": "open ios/flightclub.xcworkspace",
     "web": "expo start --web",
+    "postinstall": "patch-package",
     "lint": "expo lint",
     "supabase:deploy-functions": "bash scripts/supabase-deploy-all-functions.sh",
     "supabase:migration-list": "npx supabase migration list",
@@ -76,6 +77,7 @@
     "eas-cli": "^18.4.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
+    "patch-package": "^8.0.1",
     "tailwindcss": "^3.4.19",
     "typescript": "~5.9.2"
   },

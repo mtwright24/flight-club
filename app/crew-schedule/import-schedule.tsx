@@ -5,6 +5,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -26,7 +28,7 @@ import CrewScheduleHeader from '../../src/features/crew-schedule/components/Crew
 import { scanScheduleDocuments } from '../../src/features/crew-schedule/documentScanSchedule';
 import { supabase } from '../../src/lib/supabaseClient';
 
-type Source = 'scan' | 'photo' | 'pdf' | null;
+type Source = 'photo' | 'scan' | 'pdf' | 'calendar' | 'manual' | null;
 
 const L = '[schedule-import]';
 
@@ -155,6 +157,7 @@ export default function ImportScheduleScreen() {
   const [selected, setSelected] = useState<Source>(null);
   const [busy, setBusy] = useState(false);
   const [busyHint, setBusyHint] = useState('Importing schedule…');
+  const [photoSourceModalVisible, setPhotoSourceModalVisible] = useState(false);
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth() + 1);
   useEffect(() => {
@@ -519,7 +522,7 @@ export default function ImportScheduleScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
-      selectionLimit: 8,
+      selectionLimit: 4,
       /** Full resolution for server OCR — the review screen thumbnail is display-only. */
       quality: 1,
       base64: true,
@@ -570,14 +573,6 @@ export default function ImportScheduleScreen() {
     await uploadAndProcess(asset.uri, asset.mimeType ?? 'image/jpeg', 'camera.jpg', 'photo', { jpegBase64: asset.base64 });
   }, [uploadAndProcess]);
 
-  const onChoosePhoto = useCallback(() => {
-    Alert.alert('Photo or screenshot', 'Choose a source', [
-      { text: 'Photo library', onPress: () => void pickPhotoLibrary() },
-      { text: 'Camera', onPress: () => void pickCamera() },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  }, [pickCamera, pickPhotoLibrary]);
-
   const pickPdf = useCallback(async () => {
     try {
       const DocumentPicker = await import('expo-document-picker');
@@ -599,6 +594,14 @@ export default function ImportScheduleScreen() {
   }, [uploadAndProcess]);
 
   const continueFlow = useCallback(() => {
+    if (selected === 'calendar') {
+      Alert.alert('Calendar', 'Coming soon.');
+      return;
+    }
+    if (selected === 'manual') {
+      Alert.alert('Manual entry', 'Coming soon.');
+      return;
+    }
     if (selected === 'scan') {
       void (async () => {
         const r = await scanScheduleDocuments();
@@ -620,63 +623,53 @@ export default function ImportScheduleScreen() {
       })();
       return;
     }
-    if (selected === 'photo') void onChoosePhoto();
-    else if (selected === 'pdf') void pickPdf();
-  }, [onChoosePhoto, pickPdf, pickPhotoLibrary, selected, uploadDocumentScanPages]);
+    if (selected === 'photo') {
+      setPhotoSourceModalVisible(true);
+      return;
+    }
+    if (selected === 'pdf') void pickPdf();
+  }, [pickPdf, pickPhotoLibrary, selected, uploadDocumentScanPages]);
 
   return (
     <View style={styles.shell}>
       <CrewScheduleHeader title="Import schedule" />
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
-        <View style={styles.monthRow}>
-          <Pressable onPress={goPrevMonth} style={styles.monthArrow} accessibilityLabel="Previous month">
-            <Ionicons name="chevron-back" size={22} color={T.accent} />
-          </Pressable>
-          <Text style={styles.monthLabel}>
-            {MONTH_NAMES[month - 1]} {year}
-          </Text>
-          <Pressable onPress={goNextMonth} style={styles.monthArrow} accessibilityLabel="Next month">
-            <Ionicons name="chevron-forward" size={22} color={T.accent} />
-          </Pressable>
+        <View style={styles.monthCard}>
+          <View style={styles.monthRow}>
+            <Pressable onPress={goPrevMonth} style={styles.monthArrow} accessibilityLabel="Previous month">
+              <Ionicons name="chevron-back" size={22} color={T.accent} />
+            </Pressable>
+            <Text style={styles.monthLabel}>
+              {MONTH_NAMES[month - 1]} {year}
+            </Text>
+            <Pressable onPress={goNextMonth} style={styles.monthArrow} accessibilityLabel="Next month">
+              <Ionicons name="chevron-forward" size={22} color={T.accent} />
+            </Pressable>
+          </View>
         </View>
-        <Text style={styles.meta}>
-          Import bucket <Text style={styles.metaStrong}>{monthKey}</Text> — rows save under this month. OCR also detects the month from your image when possible.
-        </Text>
-        <Text style={styles.lead}>
-          Scan documents for a straightened, cropped page like Apple Notes — or pick screenshots, photos, or a PDF. Text
-          is extracted server-side; you review before anything is saved. Multi-page scans and multi-photo picks merge into
-          one review.
-        </Text>
 
-        <Text style={styles.h2}>JetBlue FLICA (recommended)</Text>
-        <Pressable
-          style={styles.promo}
-          onPress={() => router.push('/crew-schedule/import-jetblue-source')}
-        >
-          <Text style={styles.promoTitle}>Flight Attendant · template import</Text>
-          <Text style={styles.promoSub}>
-            Monthly detailed list screenshots · detection, OCR, confidence, 1–4 images, review before save — not generic
-            OCR-only.
-          </Text>
-        </Pressable>
+        <Text style={styles.helper}>Choose how you want to import your schedule.</Text>
 
-        <Text style={styles.h2}>Other sources</Text>
         <View style={styles.options}>
           {(
             [
               {
-                id: 'scan' as const,
-                label: 'Scan Documents',
-                sub: 'Live edge detection & perspective — best for paper or a screen',
-                premium: true,
+                id: 'photo' as const,
+                label: 'Screenshot / photo',
+                sub: 'Upload 1–4 screenshots or photos',
               },
               {
-                id: 'photo' as const,
-                label: 'Choose screenshot / photo',
-                sub: 'Library or camera; multi-select merges into one review',
-                premium: false,
+                id: 'scan' as const,
+                label: 'Scan Documents',
+                sub: 'Live edge detection and cropped scan',
               },
-              { id: 'pdf' as const, label: 'Choose PDF', sub: 'Text extract + review', premium: false },
+              {
+                id: 'pdf' as const,
+                label: 'PDF',
+                sub: 'Upload a PDF for text extraction and review',
+              },
+              { id: 'calendar' as const, label: 'Calendar', sub: 'Coming soon' },
+              { id: 'manual' as const, label: 'Manual', sub: 'Coming soon' },
             ] as const
           ).map((opt) => {
             const active = selected === opt.id;
@@ -684,40 +677,19 @@ export default function ImportScheduleScreen() {
               <Pressable
                 key={opt.id}
                 onPress={() => setSelected(opt.id)}
-                style={[styles.opt, opt.premium && styles.optPremium, active && styles.optActive]}
+                style={[styles.opt, active && styles.optSelected]}
+                accessibilityState={{ selected: active }}
               >
-                <Text style={styles.optText}>{opt.label}</Text>
-                <Text style={styles.optSub}>{opt.sub}</Text>
+                <View style={styles.optRow}>
+                  <View style={styles.optTextCol}>
+                    <Text style={[styles.optText, opt.id === 'photo' && styles.optTextPrimary]}>{opt.label}</Text>
+                    <Text style={styles.optSub}>{opt.sub}</Text>
+                  </View>
+                  {active ? <Ionicons name="checkmark-circle" size={24} color={T.accent} style={styles.optCheck} /> : null}
+                </View>
               </Pressable>
             );
           })}
-        </View>
-
-        <View style={styles.options}>
-          <Pressable
-            style={styles.opt}
-            onPress={() =>
-              Alert.alert(
-                'Calendar sync',
-                'Connecting an external calendar is on the roadmap. Use JetBlue FLICA import or generic screenshot for now.'
-              )
-            }
-          >
-            <Text style={styles.optText}>Calendar</Text>
-            <Text style={styles.optSub}>Coming soon</Text>
-          </Pressable>
-          <Pressable
-            style={styles.opt}
-            onPress={() =>
-              Alert.alert(
-                'Manual entry',
-                'Full manual day-by-day entry is coming soon. Use Edit before save after a partial import, or Manage → Edit Day.'
-              )
-            }
-          >
-            <Text style={styles.optText}>Manual</Text>
-            <Text style={styles.optSub}>Coming soon</Text>
-          </Pressable>
         </View>
 
         {busy ? (
@@ -735,6 +707,43 @@ export default function ImportScheduleScreen() {
           </Pressable>
         )}
       </ScrollView>
+
+      <Modal
+        visible={photoSourceModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPhotoSourceModalVisible(false)}
+      >
+        <Pressable style={styles.photoModalBackdrop} onPress={() => setPhotoSourceModalVisible(false)}>
+          <Pressable style={styles.photoModalCard} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.photoModalTitle}>Add screenshots</Text>
+            <Text style={styles.photoModalSub}>Pick up to 4 images from your library{Platform.OS === 'web' ? '' : ', or use the camera'}.</Text>
+            <Pressable
+              style={styles.photoModalBtn}
+              onPress={() => {
+                setPhotoSourceModalVisible(false);
+                void pickPhotoLibrary();
+              }}
+            >
+              <Text style={styles.photoModalBtnTx}>Photo library</Text>
+            </Pressable>
+            {Platform.OS !== 'web' ? (
+              <Pressable
+                style={styles.photoModalBtn}
+                onPress={() => {
+                  setPhotoSourceModalVisible(false);
+                  void pickCamera();
+                }}
+              >
+                <Text style={styles.photoModalBtnTx}>Camera</Text>
+              </Pressable>
+            ) : null}
+            <Pressable style={styles.photoModalCancel} onPress={() => setPhotoSourceModalVisible(false)}>
+              <Text style={styles.photoModalCancelTx}>Cancel</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -742,42 +751,48 @@ export default function ImportScheduleScreen() {
 const styles = StyleSheet.create({
   shell: { flex: 1, backgroundColor: T.bg },
   content: { padding: 16 },
+  monthCard: {
+    backgroundColor: T.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.line,
+    paddingVertical: 4,
+    marginBottom: 4,
+  },
   monthRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
-    marginBottom: 8,
   },
   monthArrow: { padding: 8 },
-  monthLabel: { fontSize: 17, fontWeight: '800', color: T.text, minWidth: 200, textAlign: 'center' },
-  meta: { fontSize: 12, color: T.textSecondary, marginBottom: 10, lineHeight: 17 },
-  metaStrong: { fontWeight: '700', color: T.text },
-  lead: { fontSize: 15, color: T.text, lineHeight: 22, marginBottom: 16 },
-  promo: {
-    marginBottom: 20,
-    padding: 14,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: T.accent,
-    backgroundColor: '#FFF5F5',
+  monthLabel: { fontSize: 18, fontWeight: '800', color: T.text, minWidth: 200, textAlign: 'center' },
+  helper: {
+    fontSize: 15,
+    color: T.textSecondary,
+    marginBottom: 18,
+    marginTop: 12,
+    lineHeight: 22,
   },
-  promoTitle: { fontSize: 15, fontWeight: '800', color: T.text },
-  promoSub: { fontSize: 12, color: T.textSecondary, marginTop: 6, lineHeight: 17 },
-  h2: { fontSize: 13, fontWeight: '800', color: T.textSecondary, marginBottom: 10, textTransform: 'uppercase' },
-  comingSoon: { fontSize: 12, color: T.textSecondary, marginTop: 12, fontStyle: 'italic' },
   options: { gap: 10 },
   opt: {
     padding: 14,
-    borderRadius: 10,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: T.line,
     backgroundColor: T.surface,
   },
-  optPremium: { borderWidth: 2, borderColor: T.accent },
-  optActive: { borderColor: T.accent, backgroundColor: '#FEF2F2' },
+  optSelected: {
+    borderWidth: 2,
+    borderColor: T.accent,
+    backgroundColor: '#FEF2F2',
+  },
+  optRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  optTextCol: { flex: 1, minWidth: 0 },
   optText: { fontSize: 15, fontWeight: '700', color: T.text },
-  optSub: { fontSize: 12, color: T.textSecondary, marginTop: 4 },
+  optTextPrimary: { fontSize: 16, fontWeight: '800' },
+  optSub: { fontSize: 13, color: T.textSecondary, marginTop: 4, lineHeight: 18 },
+  optCheck: { marginTop: 2 },
   loading: { alignItems: 'center', marginTop: 28, gap: 12 },
   loadingText: { fontSize: 14, color: T.textSecondary, textAlign: 'center' },
   continue: {
@@ -789,4 +804,29 @@ const styles = StyleSheet.create({
   },
   continueDisabled: { opacity: 0.45 },
   continueText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  photoModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  photoModalCard: {
+    backgroundColor: T.surface,
+    borderRadius: 14,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  photoModalTitle: { fontSize: 18, fontWeight: '800', color: T.text },
+  photoModalSub: { fontSize: 14, color: T.textSecondary, marginTop: 8, lineHeight: 20 },
+  photoModalBtn: {
+    marginTop: 14,
+    backgroundColor: T.accent,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  photoModalBtnTx: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  photoModalCancel: { marginTop: 10, paddingVertical: 12, alignItems: 'center' },
+  photoModalCancelTx: { fontSize: 16, fontWeight: '600', color: T.textSecondary },
 });

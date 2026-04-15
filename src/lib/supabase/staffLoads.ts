@@ -439,6 +439,35 @@ export async function reopenStaleStaffLoadRequest(requestId: string): Promise<{ 
   return { ok: true };
 }
 
+/** Legacy Marsha demo user id; DB also allows `marcus.wrightllc@gmail.com` for reseed RPC. */
+export const MARSHA_DEMO_USER_ID = '85f152bb-4b50-44c6-9f31-74f5906abb38';
+
+const MARSHA_DEMO_EMAIL = 'marcus.wrightllc@gmail.com';
+
+function normalizeDemoEmail(email: string | null | undefined): string {
+  return (email ?? '').trim().toLowerCase();
+}
+
+/** True when signed in as Marsha demo (email or legacy UUID). Matches `rpc_staff_loads_dev_reseed_demos`. */
+export function isMarshaDemoUser(
+  userId: string | null | undefined,
+  email?: string | null | undefined
+): boolean {
+  if (normalizeDemoEmail(email) === MARSHA_DEMO_EMAIL) return true;
+  return !!userId && userId === MARSHA_DEMO_USER_ID;
+}
+
+/** Dev: re-apply `staff_loads_reseed_demos` (Marsha session only; RPC enforces server-side). */
+export async function devReseedStaffLoadsDemoFixtures(): Promise<{
+  ok: boolean;
+  error?: string;
+  result?: Record<string, unknown>;
+}> {
+  const { data, error } = await supabase.rpc('rpc_staff_loads_dev_reseed_demos');
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, result: (data as Record<string, unknown>) || {} };
+}
+
 export function flightToRequestPayload(
   f: NonRevLoadFlight,
   kind: StaffRequestKind,

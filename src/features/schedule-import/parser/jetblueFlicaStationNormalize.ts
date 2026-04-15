@@ -65,7 +65,8 @@ export function normalizeStationCode(code: string | null | undefined, neighbors:
 
   if (u === 'JHR') return 'JFK';
   if (u === 'JIK' || u === 'J1K') return 'JFK';
-  if (u === 'JAS' && (neighbors.has('LAS') || neighbors.has('MCO'))) return 'LAS';
+  /** FLICA mobile OCR often reads LAS as JAS (weak L stem). JAS is not a B6 station code. */
+  if (u === 'JAS') return 'LAS';
   if (u === 'JSF') return 'SFO';
 
   if (!KNOWN.has(u) && base && u.slice(0, 2) === base.slice(0, 2)) {

@@ -97,11 +97,11 @@ function empty(s: string | null | undefined): boolean {
   return !String(s ?? '').trim();
 }
 
-const OCR_STATION_TYPO = new Set(['JHR', 'SFOX', 'LAXX']); // common OCR slips; expandable
+const OCR_STATION_TYPO = new Set(['JHR', 'SFOX', 'LAXX', 'JAS']); // common OCR slips; expandable
 
 /** Likely corrections for known suspicious 3-letter codes (context-free heuristic). */
 function suspiciousStationCandidates(code: string): FieldCandidate[] | undefined {
-  const fix: Record<string, string> = { JHR: 'LHR', SFOX: 'SFO', LAXX: 'LAX' };
+  const fix: Record<string, string> = { JHR: 'LHR', SFOX: 'SFO', LAXX: 'LAX', JAS: 'LAS' };
   const v = fix[code];
   if (v) {
     return [

@@ -376,14 +376,93 @@ function lineLooksLikeTableHeader(line: string): boolean {
 }
 
 function lineLooksLikeSegmentRow(line: string, monthCtx?: JetBluePairingMonthContext): boolean {
-  if (lineLooksLikeTableHeader(line)) return false;
-  if (extractPairingHeaderFromLine(line, monthCtx)) return false;
-  if (PAIRING_HEADER.test(line)) return false;
-  if (DUTY_MARKER.test(line.trim())) return false;
-  if (D_END.test(line)) return false;
-  const pairs = extractStationPairs(line);
+  const t = line.trim();
+  if (lineLooksLikeTableHeader(t)) return false;
+  if (extractPairingHeaderFromLine(t, monthCtx)) return false;
+  if (PAIRING_HEADER.test(t)) return false;
+  if (D_END.test(t)) return false;
+  /** Phone FLICA often glues `FR 03 7 JFK-LHR 2057 0915` — DOW+day + FLT + pair on one line; must still be a segment row. */
+  const pairs = extractStationPairs(t);
   if (pairs.length > 0) return true;
-  return /\bDH\b/i.test(line) && extractStationPairs(line.replace(/\bDH\b/g, '')).length >= 0 && /\d{3,4}/.test(line);
+  if (DUTY_MARKER.test(t)) return false;
+  return /\bDH\b/i.test(t) && extractStationPairs(t.replace(/\bDH\b/g, '')).length >= 0 && /\d{3,4}/.test(t);
+}
+
+/**
+ * FLICA column order: FLTNO … DPS-ARS … DEPL ARRL — the first `HHMM HHMM` after the first airport pair
+ * is almost always block-out / block-in, not the flight number (e.g. `2229 LHR-JFK 0812 1139` must not take 2229+0812 as times).
+ */
+function pickDepArrFourFourMatch(line: string): RegExpMatchArray | null {
+  const pairM = /\b([A-Z]{3})\s*[-–]\s*([A-Z]{3})\b/.exec(line);
+  const pairEnd = pairM ? pairM.index! + pairM[0].length : 0;
+  const cands = [...line.matchAll(/\b(\d{4})\s+(\d{4})\b/g)];
+  if (!cands.length) return null;
+  const afterPair = cands.filter((m) => (m.index ?? 0) >= pairEnd);
+  if (afterPair.length) return afterPair[0]!;
+  return cands[0]!;
+}
+
+function tryDutyColumnFlightToken(
+  m: RegExpExecArray,
+  flightGroup: number,
+  firstPairStart: number,
+  usedFourDigit: Set<string>
+): string | null {
+  const flTok = m[flightGroup];
+  if (!flTok || !/^\d{1,4}$/.test(flTok)) return null;
+  const end = (m.index ?? 0) + m[0].length;
+  if (end > firstPairStart) return null;
+  if (flTok.length === 4 && usedFourDigit.has(flTok)) return null;
+  const n = Number(flTok);
+  if (n < 1 || n > 9999) return null;
+  return String(n);
+}
+
+/**
+ * FLICA segment rows: flight column is often 1–4 digits (e.g. 7, 15, 411) before DPS-ARS; dep/arr are 4-digit times.
+ * OCR line may be `FR 03 7 JFK-LHR 2057 0915` or `FR037 JFK-LHR` (tight) or `FLTNO 411 JFK-LAS ...`.
+ */
+function extractFlicaFlightNumberFromLine(line: string, usedFourDigit: Set<string>): string | null {
+  const t = line.replace(/\s+/g, ' ').trim();
+  const pairM = /\b([A-Z]{3})\s*[-–]\s*([A-Z]{3})\b/.exec(t);
+  const firstPairStart = pairM?.index ?? t.length;
+
+  const dutyStrict = /^(SU|MO|TU|WE|TH|FR|SA)\s+\d{1,2}\s+(?:(?:DH|D\/H|DHC)\s+)?(\d{1,4})\b/i.exec(t);
+  let fn = dutyStrict ? tryDutyColumnFlightToken(dutyStrict, 2, firstPairStart, usedFourDigit) : null;
+  if (!fn) {
+    /** Tight OCR: `FR037 JFK-LHR` — non-greedy flight digits before first station pair. */
+    const dutyLoose =
+      /^(SU|MO|TU|WE|TH|FR|SA)\s+(\d{1,2})\s*(?:(?:DH|D\/H|DHC)\s*)?(\d{1,4}?)(?=\s*[A-Z]{3}\s*[-–])/i.exec(t);
+    fn = dutyLoose ? tryDutyColumnFlightToken(dutyLoose, 3, firstPairStart, usedFourDigit) : null;
+  }
+  if (fn) return fn;
+
+  const fltnoLab = /\b(?:FLTNO|FLT)\s*[ #:]*(\d{1,4})\b/i.exec(t);
+  if (fltnoLab) {
+    const flTok = fltnoLab[1];
+    const n = Number(flTok);
+    if (n >= 1 && n <= 9999 && !(flTok.length === 4 && usedFourDigit.has(flTok))) return String(n);
+  }
+
+  for (const mm of t.matchAll(/\b(\d{3,4})\b/g)) {
+    const d = mm[1];
+    if (usedFourDigit.has(d)) continue;
+    const idx = mm.index ?? 0;
+    if (idx < firstPairStart) {
+      const n = Number(d);
+      if (n >= 1 && n <= 9999) return d;
+    }
+  }
+
+  /** Continuation line split from DOW: `7 JFK-LHR 2057 0915` or `DH 411 JFK-LAS …` */
+  const leadFl = /^\s*(?:(?:DH|D\/H|DHC)\s+)?(\d{1,4})\s+[A-Z]{3}\s*[-–]/i.exec(t);
+  if (leadFl) {
+    const flTok = leadFl[1];
+    const n = Number(flTok);
+    if (n >= 1 && n <= 9999 && !(flTok.length === 4 && usedFourDigit.has(flTok))) return String(n);
+  }
+
+  return null;
 }
 
 function parseSegmentFromLine(line: string): JetBlueSegmentParsed {
@@ -392,12 +471,16 @@ function parseSegmentFromLine(line: string): JetBlueSegmentParsed {
   const isDh = /\bDH\b|\bD\/H\b|\bDEAD\s*HEAD\b/i.test(line);
   let depT: string | null = null;
   let arrT: string | null = null;
-  const fourFour = line.match(/\b(\d{4})\s+(\d{4})\b/);
+  const pairM = /\b([A-Z]{3})\s*[-–]\s*([A-Z]{3})\b/.exec(line);
+  const pairEnd = pairM ? pairM.index! + pairM[0].length : 0;
+  const fourFour = pickDepArrFourFourMatch(line);
   if (fourFour) {
     depT = hhmmDigitsToLocal(fourFour[1]);
     arrT = hhmmDigitsToLocal(fourFour[2]);
   } else {
-    const times = [...line.matchAll(/\b(\d{4})\b/g)].map((x) => x[1]);
+    const times = [...line.matchAll(/\b(\d{4})\b/g)]
+      .filter((m) => (m.index ?? 0) >= pairEnd)
+      .map((x) => x[1]);
     if (times.length >= 2) {
       depT = hhmmDigitsToLocal(times[0]);
       arrT = hhmmDigitsToLocal(times[1]);
@@ -419,7 +502,9 @@ function parseSegmentFromLine(line: string): JetBlueSegmentParsed {
       usedDigits.add(b);
     }
   } else {
-    const all4 = [...line.matchAll(/\b(\d{4})\b/g)].map((x) => x[1]);
+    const all4 = [...line.matchAll(/\b(\d{4})\b/g)]
+      .filter((m) => (m.index ?? 0) >= pairEnd)
+      .map((x) => x[1]);
     if (fourFour && all4.length >= 3) {
       const third = all4.find((d) => d !== fourFour[1] && d !== fourFour[2]);
       if (third) {
@@ -433,18 +518,20 @@ function parseSegmentFromLine(line: string): JetBlueSegmentParsed {
     }
   }
 
-  let fnVal: string | null = null;
-  for (const mm of line.matchAll(/\b(\d{3,4})\b/g)) {
-    const d = mm[1];
-    if (usedDigits.has(d)) continue;
-    const n = Number(d);
-    if (n < 1 || n > 9999) continue;
-    fnVal = d;
-    break;
+  let fnVal = extractFlicaFlightNumberFromLine(line, usedDigits);
+  if (!fnVal) {
+    for (const mm of line.matchAll(/\b(\d{3,4})\b/g)) {
+      const d = mm[1];
+      if (usedDigits.has(d)) continue;
+      const n = Number(d);
+      if (n < 1 || n > 9999) continue;
+      fnVal = d;
+      break;
+    }
   }
   if (!fnVal) {
-    const mB6 = line.match(/\bB6\s*(\d{3,4})\b/i);
-    if (mB6) fnVal = mB6[1];
+    const mB6 = line.match(/\bB6\s*(\d{1,4})\b/i);
+    if (mB6) fnVal = String(Number(mB6[1]));
   }
 
   const eq =
@@ -524,7 +611,10 @@ export function flicaTimeTokenToLocal(raw: string | null | undefined): string | 
  * Extract Base + equip from FLICA pairing block. Base is pairing-level; never drop an explicit header value.
  */
 function extractBaseAndEquipFromBlock(bodyText: string): { baseCode: string | null; equip: string | null } {
-  const be = BASE_EQUIP.exec(bodyText) || BASE_EQUIP_ALT.exec(bodyText);
+  const be =
+    BASE_EQUIP.exec(bodyText) ||
+    BASE_EQUIP_ALT.exec(bodyText) ||
+    /\bBase\s+Equip\s*:?\s*([^|\n]+)/i.exec(bodyText);
   if (be?.[1]) {
     const chunk = be[1].trim();
     const parts = chunk.split('/').map((p) => p.trim()).filter(Boolean);
@@ -584,7 +674,7 @@ function textAfterDEndClause(line: string): string | null {
 /** Departure + arrival HHMM on a segment row — never treat those as layover “rest”. */
 function segmentDepArrDigitSet(line: string): Set<string> {
   const s = new Set<string>();
-  const fourFour = line.match(/\b(\d{4})\s+(\d{4})\b/);
+  const fourFour = pickDepArrFourFourMatch(line);
   if (fourFour) {
     s.add(fourFour[1]);
     s.add(fourFour[2]);
@@ -724,7 +814,7 @@ function parsePairingBlock(
     let dend: string | null = null;
     let dEndLocal: string | null = null;
     let nextReportLocal: string | null = null;
-    for (const ln of sec.slice(1)) {
+    for (const ln of sec) {
       const t = ln.trim();
       if (D_END.test(t)) {
         dend = t;
@@ -758,7 +848,12 @@ function parsePairingBlock(
       dEndNotes: dend,
       dEndLocal,
       nextReportLocal,
-      layoverCityCode: layEx.city,
+      layoverCityCode: (() => {
+        const c = (layEx.city ?? '').trim().toUpperCase();
+        if (!c) return null;
+        if (c === 'JAS') return 'LAS';
+        return c;
+      })(),
       layoverRestDisplay: layEx.rest,
       hotelNote: layoverNotes,
       rawBlock: sec.join('\n'),
@@ -1116,7 +1211,7 @@ export function parseJetBlueFlicaMonthlyScreenshot(
     meta,
     monthlyTotals,
     pairings,
-    parserVersion: 'jetblue_flica_structured_v10_summary_tail_layover_split',
+    parserVersion: 'jetblue_flica_structured_v13_loose_duty_flight_layover_jas',
     debug,
   };
 }

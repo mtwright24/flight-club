@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Pressable,
   RefreshControl,
@@ -16,6 +17,8 @@ import LoadsSegmentedControl from '../../src/components/loads/LoadsSegmentedCont
 import { useAuth } from '../../src/hooks/useAuth';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
 import {
+  devReseedStaffLoadsDemoFixtures,
+  isMarshaDemoUser,
   listStaffLoadRequests,
   listUserAirlineAccess,
   setUserAirlineAccess,
@@ -97,6 +100,7 @@ export default function LoadsRequestsScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user?.id;
+  const userEmail = session?.user?.email;
   const [tab, setTab] = useState<'open' | 'answered'>('open');
   const [rows, setRows] = useState<StaffLoadRequestRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -104,6 +108,7 @@ export default function LoadsRequestsScreen() {
   const [now, setNow] = useState(Date.now());
   const [airModal, setAirModal] = useState(false);
   const [airAccess, setAirAccess] = useState<string[]>(ALL_AIR);
+  const [devSeedBusy, setDevSeedBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -156,6 +161,29 @@ export default function LoadsRequestsScreen() {
         <Text style={styles.airBtnTx}>Airlines you can answer for</Text>
         <Ionicons name="chevron-forward" size={18} color={colors.headerRed} />
       </Pressable>
+      {__DEV__ && isMarshaDemoUser(userId, userEmail) ? (
+        <Pressable
+          style={styles.devSeedBtn}
+          disabled={devSeedBusy}
+          onPress={async () => {
+            setDevSeedBusy(true);
+            try {
+              const r = await devReseedStaffLoadsDemoFixtures();
+              if (!r.ok) {
+                Alert.alert('Demo seed', r.error || 'RPC failed. Apply latest Supabase migrations (includes rpc_staff_loads_dev_reseed_demos).');
+              } else {
+                const msg = r.result?.skipped ? 'Already present (skipped).' : JSON.stringify(r.result ?? {});
+                Alert.alert('Demo seed', String(msg));
+              }
+              void load();
+            } finally {
+              setDevSeedBusy(false);
+            }
+          }}
+        >
+          <Text style={styles.devSeedTx}>{devSeedBusy ? 'Seeding…' : 'Re-seed Staff Loads demos (dev)'}</Text>
+        </Pressable>
+      ) : null}
       {loading ? <ActivityIndicator style={{ marginTop: 20 }} color={colors.headerRed} /> : null}
       {!loading && error && rows.length > 0 ? <Text style={styles.errorText}>{error}</Text> : null}
     </>
@@ -317,6 +345,16 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
   },
   airBtnTx: { fontWeight: '800', color: colors.headerRed, fontSize: 14 },
+  devSeedBtn: {
+    marginHorizontal: 8,
+    marginTop: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#0f172a',
+    alignItems: 'center',
+  },
+  devSeedTx: { color: '#fff', fontWeight: '800', fontSize: 12 },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', padding: 24 },
   modalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 18 },
   modalTitle: { fontWeight: '900', fontSize: 18, color: '#0f172a' },
