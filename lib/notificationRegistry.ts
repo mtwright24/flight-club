@@ -51,6 +51,14 @@ const routeLoadDetail = (n: NotificationRouteContext) => `/loads/request/${enc(n
 const routeNonRev = () => '/non-rev-loads';
 const routeCrewTools = () => '/(tabs)/crew-tools';
 const routeCrewSchedule = () => '/crew-schedule';
+const routeScheduleTripChatMessage = (n: NotificationRouteContext) => {
+  const d = (n.data || {}) as Record<string, unknown>;
+  const r = typeof d.route === 'string' ? d.route.trim() : '';
+  if (r) return r.startsWith('/') ? r : `/${r}`;
+  const tg = typeof d.trip_group_id === 'string' ? d.trip_group_id.trim() : '';
+  if (tg) return `/crew-schedule/trip-chat?tripId=${enc(tg)}`;
+  return '/crew-schedule';
+};
 const routeAccountSettings = () => '/account-settings';
 const routeEditProfile = () => '/edit-profile';
 const routeMessagesInbox = () => '/messages-inbox';
@@ -128,6 +136,11 @@ export type NotificationTypeKey =
   | 'loads_route_update'
   | 'loads_watch_match'
   | 'loads_threshold_hit'
+  | 'staff_loads_request_answered'
+  | 'staff_loads_request_loads_updated'
+  | 'staff_loads_request_status'
+  | 'staff_loads_request_refresh'
+  | 'staff_loads_lock_expiring'
   | 'tool_alert'
   | 'schedule_reminder'
   | 'rest_warning'
@@ -158,7 +171,8 @@ export type NotificationTypeKey =
   | 'flight_tracker_delay'
   | 'flight_tracker_cancelled'
   | 'flight_tracker_departed'
-  | 'flight_tracker_arrived';
+  | 'flight_tracker_arrived'
+  | 'schedule_trip_chat_message';
 
 export const NOTIFICATION_REGISTRY: Record<NotificationTypeKey, NotificationRegistryEntry> = {
   // Social
@@ -431,6 +445,37 @@ export const NOTIFICATION_REGISTRY: Record<NotificationTypeKey, NotificationRegi
     pushEligible: true,
     resolveRoute: (n) => (n.entity_id ? routeLoadDetail(n) : routeLoadsHub()),
   },
+  /** Staff Loads marketplace — use `entity_id` = `load_requests.id` (or `request_id` in payload). */
+  staff_loads_request_answered: {
+    category: 'alerts',
+    priority: 'high',
+    pushEligible: true,
+    resolveRoute: (n) => (n.entity_id ? routeLoadDetail(n) : routeLoadsHub()),
+  },
+  staff_loads_request_loads_updated: {
+    category: 'alerts',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: (n) => (n.entity_id ? routeLoadDetail(n) : routeLoadsHub()),
+  },
+  staff_loads_request_status: {
+    category: 'alerts',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: (n) => (n.entity_id ? routeLoadDetail(n) : routeLoadsHub()),
+  },
+  staff_loads_request_refresh: {
+    category: 'alerts',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: (n) => (n.entity_id ? routeLoadDetail(n) : routeLoadsHub()),
+  },
+  staff_loads_lock_expiring: {
+    category: 'alerts',
+    priority: 'medium',
+    pushEligible: true,
+    resolveRoute: (n) => (n.entity_id ? routeLoadDetail(n) : routeLoadsHub()),
+  },
   tool_alert: {
     category: 'alerts',
     priority: 'medium',
@@ -619,6 +664,12 @@ export const NOTIFICATION_REGISTRY: Record<NotificationTypeKey, NotificationRegi
     priority: 'medium',
     pushEligible: true,
     resolveRoute: routeFlightTrackerDetail,
+  },
+  schedule_trip_chat_message: {
+    category: 'messages',
+    priority: 'high',
+    pushEligible: true,
+    resolveRoute: routeScheduleTripChatMessage,
   },
 };
 

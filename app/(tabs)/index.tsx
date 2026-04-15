@@ -751,10 +751,8 @@ function LiveActionAlertsRow({
   rooms: Room[];
   router: ReturnType<typeof useRouter>;
 }) {
-  const CHAT_CARD_W = 268;
-  const CHAT_CARD_H = 168;
-  const TREND_LIVE_W = 190;
-  const TREND_CARD_H = 175;
+  const LIVE_ACTION_TILE_W = 268;
+  const LIVE_ACTION_TILE_H = 184;
   const GAP = 12;
   const SIDE_PAD = 16;
 
@@ -779,7 +777,7 @@ function LiveActionAlertsRow({
           styles.trendingCard,
           styles.trendingCardSmall,
           SHADOW.soft,
-          { width: TREND_LIVE_W, height: TREND_CARD_H },
+          { width: LIVE_ACTION_TILE_W, height: LIVE_ACTION_TILE_H },
         ]}
         onPress={() => router.push('/(tabs)/crew-rooms')}
       >
@@ -809,7 +807,11 @@ function LiveActionAlertsRow({
       {previewRooms.map((room) => (
         <Pressable
           key={room.id}
-          style={[styles.liveActionRoomCard, SHADOW.soft, { width: CHAT_CARD_W, minHeight: CHAT_CARD_H }]}
+          style={[
+            styles.liveActionRoomCard,
+            SHADOW.soft,
+            { width: LIVE_ACTION_TILE_W, height: LIVE_ACTION_TILE_H },
+          ]}
           onPress={() =>
             router.push({
               pathname: '/(tabs)/crew-rooms/room-home',
@@ -1166,6 +1168,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(0,0,0,0.06)',
     padding: 14,
     justifyContent: 'flex-start',
+    overflow: 'hidden',
   },
   liveActionRoomTitle: {
     color: COLORS.navy,

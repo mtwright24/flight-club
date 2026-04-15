@@ -4,6 +4,7 @@ import { notifyNotificationsBadgeRefresh } from './notificationsBadgeStore';
 import {
   Notification,
   countUnreadNotificationsForUser,
+  isLikelyOfflineOrNetworkError,
   resolveNotificationRoute,
 } from './notifications';
 
@@ -42,6 +43,10 @@ export async function getRecentNotifications(userId: string, limit = 4): Promise
     return [];
   }
 
+  if (isLikelyOfflineOrNetworkError(error)) {
+    return [];
+  }
+
   const { data: dataPlain, error: errPlain } = await supabase
     .from('notifications')
     .select('*')
@@ -57,7 +62,13 @@ export async function getRecentNotifications(userId: string, limit = 4): Promise
     return [];
   }
 
-  console.warn('[getRecentNotifications] Falling back to empty list:', errPlain.message || errPlain);
+  if (isLikelyOfflineOrNetworkError(errPlain)) {
+    return [];
+  }
+
+  if (__DEV__) {
+    console.warn('[getRecentNotifications] Falling back to empty list:', errPlain.message || errPlain);
+  }
   return [];
 }
 

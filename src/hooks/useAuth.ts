@@ -1,31 +1,28 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '../lib/supabaseClient';
-import { Session } from '@supabase/supabase-js';
+import type { Session } from '@supabase/supabase-js';
+import {
+  ensureAuthSessionStarted,
+  getAuthSessionSnapshot,
+  subscribeAuthSession,
+} from '../lib/authSessionStore';
 
 /**
  * Hook to get the current user session.
- * Returns session data or null if not authenticated.
+ * Uses a shared store so many mounted components do not each open a Supabase auth channel.
  */
 export function useAuth() {
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [session, setSession] = useState<Session | null>(() => getAuthSessionSnapshot().session);
+  const [loading, setLoading] = useState(() => getAuthSessionSnapshot().loading);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
-    });
-
-    // Listen for auth state changes
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setLoading(false);
-    });
-
-    return () => {
-      listener?.subscription.unsubscribe();
+    ensureAuthSessionStarted();
+    const sync = () => {
+      const snap = getAuthSessionSnapshot();
+      setSession(snap.session);
+      setLoading(snap.loading);
     };
+    sync();
+    return subscribeAuthSession(sync);
   }, []);
 
   return { session, loading };

@@ -16,7 +16,8 @@
     "lint": "expo lint",
     "supabase:deploy-functions": "bash scripts/supabase-deploy-all-functions.sh",
     "supabase:migration-list": "npx supabase migration list",
-    "supabase:db-query": "npx supabase db query --linked"
+    "supabase:db-query": "npx supabase db query --linked",
+    "supabase:db-push": "npx supabase db push --linked"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -60,7 +61,7 @@
     "react-native-gesture-handler": "~2.28.0",
     "react-native-google-places-autocomplete": "^2.6.4",
     "react-native-iap": "^14.7.12",
-    "react-native-maps": "^1.27.2",
+    "react-native-maps": "1.20.1",
     "react-native-modal": "^14.0.0-rc.1",
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",

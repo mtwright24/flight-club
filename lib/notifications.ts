@@ -21,6 +21,16 @@ export { notificationPathToHref } from './notificationPathMapping';
 
 let missingNotificationsTableLogged = false;
 
+/** Supabase client could not reach the server (common in RN/Expo: "Network request failed"). */
+export function isLikelyOfflineOrNetworkError(error: unknown): boolean {
+  const msg = String((error as Error)?.message ?? (error as { error_description?: string })?.error_description ?? error ?? '').toLowerCase();
+  if (msg.includes('network request failed')) return true;
+  if (msg.includes('failed to fetch')) return true;
+  if (msg.includes('networkerror')) return true;
+  if ((error as Error)?.name === 'AuthRetryableFetchError') return true;
+  return false;
+}
+
 /**
  * Unified in-app + push notification row (`public.notifications`).
  * Navigation uses `type` + `entity_*` + JSON `data` via `lib/notificationRegistry.ts` and `lib/notificationRouting.ts`.
@@ -394,6 +404,10 @@ export async function countUnreadNotificationsForUser(userId: string): Promise<n
   const primary = await tryUnreadNotificationsDeduped(userId, 'is_read');
   if ('count' in primary) return primary.count;
 
+  if (isLikelyOfflineOrNetworkError(primary.error)) {
+    return 0;
+  }
+
   const code = (primary.error as any)?.code;
   const message = String((primary.error as any)?.message || '');
   if (code === 'PGRST205' || message.includes("Could not find the table 'public.notifications'")) {
@@ -408,6 +422,10 @@ export async function countUnreadNotificationsForUser(userId: string): Promise<n
 
   const alt = await tryUnreadNotificationsDeduped(userId, 'read');
   if ('count' in alt) return alt.count;
+
+  if (isLikelyOfflineOrNetworkError(alt.error)) {
+    return 0;
+  }
 
   const { count, error } = await supabase
     .from('notifications')
@@ -427,7 +445,9 @@ export async function countUnreadNotificationsForUser(userId: string): Promise<n
     if (!head.error) return head.count ?? 0;
   }
 
-  console.warn('[Notifications] Unread count query failed (check notifications schema/RLS):', (error as any)?.message);
+  if (!isLikelyOfflineOrNetworkError(error) && __DEV__) {
+    console.warn('[Notifications] Unread count query failed (check notifications schema/RLS):', (error as any)?.message);
+  }
   return 0;
 }
 

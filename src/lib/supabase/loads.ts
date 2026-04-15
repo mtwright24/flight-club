@@ -556,7 +556,7 @@ export async function getCreditsBalance() {
   if (!uid) {
     return { data: null, error: { message: 'Not signed in' } as any };
   }
-  return supabase.from('user_credits').select('balance').eq('user_id', uid).maybeSingle();
+  return supabase.from('user_credits').select('balance, priority_balance').eq('user_id', uid).maybeSingle();
 }
 
 // Purchase credits (stub, updates UI and simulates purchase)

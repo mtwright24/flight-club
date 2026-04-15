@@ -4,39 +4,74 @@ import { colors } from '../../styles/theme';
 
 interface FlightCardProps {
   flightNumber: string;
+  airline?: string;
   route: string;
   departTime: string;
   arriveTime: string;
   duration: string;
   reportCount: number;
+  aircraft?: string | null;
+  /** When set, card shows selection UI and calls onToggleSelect instead of navigating. */
+  selectionMode?: boolean;
+  selected?: boolean;
+  prioritySelected?: boolean;
   onPress: () => void;
+  onToggleSelect?: () => void;
+  /** When selected in selection mode, long-press toggles priority for this flight. */
+  onTogglePriority?: () => void;
 }
 
-export const FlightCard: React.FC<FlightCardProps & { onPress: () => void }> = ({
+export const FlightCard: React.FC<FlightCardProps> = ({
   flightNumber,
+  airline,
   route,
   departTime,
   arriveTime,
   duration,
   reportCount,
+  aircraft,
+  selectionMode,
+  selected,
+  prioritySelected,
   onPress,
+  onToggleSelect,
+  onTogglePriority,
 }) => {
+  const onCardPress = () => {
+    if (selectionMode && onToggleSelect) onToggleSelect();
+    else onPress();
+  };
   return (
     <Pressable
-      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
-      onPress={onPress}
+      style={({ pressed }) => [
+        styles.card,
+        pressed && styles.cardPressed,
+        selectionMode && selected && styles.cardSelected,
+        selectionMode && prioritySelected && styles.cardPriority,
+      ]}
+      onPress={onCardPress}
+      onLongPress={selectionMode && selected && onTogglePriority ? () => onTogglePriority() : undefined}
+      delayLongPress={320}
       accessibilityRole="button"
       accessibilityLabel={`Flight ${flightNumber}, ${route}`}
+      accessibilityState={selectionMode ? { selected: !!selected, disabled: false } : undefined}
     >
       <View style={styles.content}>
         <View style={styles.left}>
+          {selectionMode ? (
+            <View style={[styles.check, selected && styles.checkOn, prioritySelected && styles.checkPriority]}>
+              <Text style={styles.checkMark}>{selected ? (prioritySelected ? '★' : '✓') : ''}</Text>
+            </View>
+          ) : null}
           <View style={styles.flightBadge}>
+            {airline ? <Text style={styles.airlineTiny}>{airline}</Text> : null}
             <Text style={styles.flightBadgeText}>{flightNumber}</Text>
           </View>
         </View>
 
         <View style={styles.middle}>
           <Text style={styles.route}>{route}</Text>
+          {aircraft ? <Text style={styles.ac}>{aircraft}</Text> : null}
           <View style={styles.timingRow}>
             <Text style={styles.time}>{departTime}</Text>
             <Text style={styles.duration}>{duration}</Text>
@@ -45,10 +80,16 @@ export const FlightCard: React.FC<FlightCardProps & { onPress: () => void }> = (
         </View>
 
         <View style={styles.right}>
-          <View style={styles.reportBadge}>
-            <Text style={styles.reportCount}>{reportCount}</Text>
-            <Text style={styles.reportLabel}>reports</Text>
-          </View>
+          {selectionMode && reportCount <= 0 ? (
+            <View style={styles.selectHint}>
+              <Text style={styles.selectHintTx}>Tap</Text>
+            </View>
+          ) : (
+            <View style={styles.reportBadge}>
+              <Text style={styles.reportCount}>{reportCount}</Text>
+              <Text style={styles.reportLabel}>reports</Text>
+            </View>
+          )}
         </View>
       </View>
     </Pressable>
@@ -114,10 +155,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#eee',
   },
+  cardSelected: { borderColor: colors.headerRed, borderWidth: 2, backgroundColor: '#fff8f8' },
+  cardPriority: { borderColor: '#B8860B', backgroundColor: '#fffdf5' },
   cardPressed: {
     opacity: 0.92,
     backgroundColor: '#fafafa',
   },
+  check: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#ccc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  checkOn: { borderColor: colors.headerRed, backgroundColor: colors.headerRed },
+  checkPriority: { borderColor: '#B8860B', backgroundColor: '#B8860B' },
+  checkMark: { color: '#fff', fontWeight: '900', fontSize: 14 },
+  airlineTiny: { fontSize: 9, fontWeight: '800', color: '#666', marginBottom: 2 },
+  ac: { fontSize: 11, color: '#888', marginBottom: 4 },
   content: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -178,6 +236,8 @@ const styles = StyleSheet.create({
     color: '#999',
     marginTop: 1,
   },
+  selectHint: { alignItems: 'center', justifyContent: 'center', minWidth: 44 },
+  selectHintTx: { fontSize: 11, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase' },
   pill: {
     borderRadius: 6,
     alignSelf: 'flex-start',

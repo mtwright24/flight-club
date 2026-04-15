@@ -104,7 +104,14 @@ function coalesceEntityId(key: NotificationTypeKey, data: Record<string, unknown
     case 'loads_route_update':
     case 'loads_watch_match':
     case 'loads_threshold_hit':
-      return pick('entity_id', 'load_id', 'loadId', 'watch_id');
+    case 'staff_loads_request_answered':
+    case 'staff_loads_request_loads_updated':
+    case 'staff_loads_request_status':
+    case 'staff_loads_request_refresh':
+    case 'staff_loads_lock_expiring':
+      return pick('entity_id', 'request_id', 'load_id', 'loadId', 'watch_id');
+    case 'schedule_trip_chat_message':
+      return pick('entity_id', 'thread_uuid');
     default:
       return pick('entity_id');
   }
@@ -147,6 +154,18 @@ function inferEntityType(key: NotificationTypeKey, data: Record<string, unknown>
     case 'housing_listing_saved_match':
     case 'housing_inquiry':
       return 'listing';
+    case 'schedule_trip_chat_message':
+      return 'schedule_trip_chat';
+    case 'loads_alert':
+    case 'loads_route_update':
+    case 'loads_watch_match':
+    case 'loads_threshold_hit':
+    case 'staff_loads_request_answered':
+    case 'staff_loads_request_loads_updated':
+    case 'staff_loads_request_status':
+    case 'staff_loads_request_refresh':
+    case 'staff_loads_lock_expiring':
+      return 'staff_load_request';
     default:
       return 'unknown';
   }
@@ -224,6 +243,8 @@ function fallbackPathFromEntityFields(data: Record<string, unknown>): string | n
       }
       return `/dm-thread?conversationId=${encodeURIComponent(eid)}`;
     }
+    case 'staff_load_request':
+      return `/loads/request/${encodeURIComponent(eid)}`;
     default:
       return null;
   }

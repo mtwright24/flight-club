@@ -1,12 +1,22 @@
-import React, { useState } from 'react';
+import { useLocalSearchParams } from 'expo-router';
+import React, { useEffect, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
 import LoadsSegmentedControl from '../../src/components/loads/LoadsSegmentedControl';
 import LoadsSearchScreen from './search';
 import LoadsRequestsScreen from './requests';
 import LoadsWalletScreen from './wallet';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
+
 export default function LoadsScreen() {
+  const { tab: tabParam } = useLocalSearchParams<{ tab?: string | string[] }>();
   const [tab, setTab] = useState<'loads' | 'requests' | 'wallet'>('loads');
+
+  useEffect(() => {
+    const t = Array.isArray(tabParam) ? tabParam[0] : tabParam;
+    if (t === 'wallet') setTab('wallet');
+    else if (t === 'requests') setTab('requests');
+    else if (t === 'loads') setTab('loads');
+  }, [tabParam]);
 
   return (
     <View style={styles.safe}>

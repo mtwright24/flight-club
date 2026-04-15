@@ -1,19 +1,84 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
+import { useAuth } from '../../src/hooks/useAuth';
 import { fetchHousingListingById, fetchHousingListingPhotos } from '../../src/lib/housing';
+import { sendMessage, startDirectConversation } from '../../src/lib/supabase/dms';
 import { colors, radius, shadow, spacing } from '../../src/styles/theme';
 import type { HousingListing, HousingListingPhoto } from '../../src/types/housing';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export default function CrashpadsDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const { session } = useAuth();
+  const meId = session?.user?.id ?? null;
+  const { width: windowWidth } = useWindowDimensions();
   const id = params.id as string | undefined;
   const [item, setItem] = useState(null as HousingListing | null);
   const [photos, setPhotos] = useState([] as HousingListingPhoto[]);
   const [loading, setLoading] = useState(true);
+  const [dmBusy, setDmBusy] = useState(false);
+
+  const heroSlideWidth = useMemo(() => Math.max(0, windowWidth - spacing.lg * 2), [windowWidth]);
+
+  const listingLine = useMemo(() => {
+    if (!item) return '';
+    const bits = [item.title, item.base_airport].filter(Boolean);
+    return bits.join(' · ');
+  }, [item]);
+
+  const openDmWithHost = useCallback(
+    async (initialMessage?: string) => {
+      if (!item || dmBusy) return;
+      if (!meId) {
+        Alert.alert('Sign in required', 'Sign in to message the host about this listing.');
+        return;
+      }
+      const hostId = (item.created_by || '').trim();
+      if (!hostId || !UUID_RE.test(hostId)) {
+        Alert.alert('Host unavailable', 'This listing does not have a linked host account yet.');
+        return;
+      }
+      if (hostId === meId) {
+        Alert.alert('Your listing', 'You are the host for this listing.');
+        return;
+      }
+      setDmBusy(true);
+      try {
+        const { conversationId } = await startDirectConversation(meId, hostId);
+        const convId = String(conversationId);
+        const trimmed = typeof initialMessage === 'string' ? initialMessage.trim() : '';
+        if (trimmed) {
+          try {
+            await sendMessage(convId, meId, trimmed);
+          } catch {
+            // Message-request flows (or other gates) may block the first send until accepted — still open the thread.
+          }
+        }
+        router.push({ pathname: '/dm-thread', params: { conversationId: convId } });
+      } catch (e: unknown) {
+        const msg = e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'Please try again.';
+        Alert.alert('Unable to open messages', msg);
+      } finally {
+        setDmBusy(false);
+      }
+    },
+    [dmBusy, item, meId, router]
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -57,7 +122,7 @@ export default function CrashpadsDetailScreen() {
                   <Image
                     key={index}
                     source={{ uri: uri as string }}
-                    style={styles.heroImage}
+                    style={[styles.heroImage, { width: heroSlideWidth }]}
                   />
                 ))}
             </ScrollView>
@@ -138,7 +203,14 @@ export default function CrashpadsDetailScreen() {
               </Text>
             )}
             {item.posting_as && (
-              <Text style={styles.factLine}>Posted by {item.posting_as}</Text>
+              <Text style={styles.factLine}>
+                Posted by{' '}
+                {item.posting_as === 'pad_manager'
+                  ? 'Pad Leader / Manager'
+                  : item.posting_as === 'owner'
+                    ? 'Crashpad Owner'
+                    : item.posting_as.replace(/_/g, ' ')}
+              </Text>
             )}
           </View>
 
@@ -208,20 +280,40 @@ export default function CrashpadsDetailScreen() {
           </View>
 
           <View style={styles.primaryActions}>
-            <Pressable style={styles.primaryBtn} onPress={() => {}}>
+            <Pressable
+              style={[styles.primaryBtn, dmBusy && styles.btnDisabled]}
+              disabled={dmBusy}
+              onPress={() =>
+                openDmWithHost(
+                  `Hi — I'm interested in requesting a spot for your Flight Club housing listing: ${listingLine}. When you have a moment, could you let me know if you still have availability? Thanks!`
+                )
+              }
+            >
               <Text style={styles.primaryBtnText}>Request Spot</Text>
             </Pressable>
             <Pressable
-              style={styles.secondaryBtn}
-              onPress={() => router.push('/messages-inbox')}
+              style={[styles.secondaryBtn, dmBusy && styles.btnDisabled]}
+              disabled={dmBusy}
+              onPress={() => openDmWithHost()}
             >
               <Text style={styles.secondaryBtnText}>Message Host</Text>
             </Pressable>
           </View>
 
-          <Pressable style={styles.tertiaryBtn} onPress={() => {}}>
+          <Pressable
+            style={[styles.tertiaryBtn, dmBusy && styles.btnDisabled]}
+            disabled={dmBusy}
+            onPress={() =>
+              openDmWithHost(
+                `Hi — I have a question about your Flight Club housing listing: ${listingLine}.\n\n`
+              )
+            }
+          >
             <Text style={styles.tertiaryBtnText}>Ask a Question</Text>
           </Pressable>
+          {dmBusy ? (
+            <ActivityIndicator style={{ marginTop: spacing.md }} color={colors.primary} />
+          ) : null}
         </ScrollView>
       )}
     </View>
@@ -250,7 +342,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   heroImage: {
-    width: '100%',
     height: 240,
   },
   heroOverlayRow: {
@@ -396,5 +487,8 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 14,
     fontWeight: '700',
+  },
+  btnDisabled: {
+    opacity: 0.65,
   },
 });

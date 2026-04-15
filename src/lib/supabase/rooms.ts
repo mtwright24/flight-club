@@ -78,8 +78,9 @@ export async function fetchMyRooms(userId: string): Promise<MyRoom[]> {
 
     return myRooms;
   } catch (error) {
-    console.error('Error fetching my rooms:', error);
-    throw error;
+    // Offline / tunnel DNS / transient network: avoid throwing (callers expect empty state).
+    if (__DEV__) console.warn('[rooms] fetchMyRooms failed:', error);
+    return [];
   }
 }
 
@@ -129,7 +130,7 @@ export async function getLastActiveRoom(userId: string): Promise<MyRoom | null> 
       joined_at: membership.joined_at,
     };
   } catch (error) {
-    console.error('Error fetching last active room:', error);
+    if (__DEV__) console.warn('[rooms] getLastActiveRoom failed:', error);
     return null;
   }
 }
@@ -168,7 +169,7 @@ export async function fetchPublicRooms(filters?: {
     if (error) throw error;
     return data || [];
   } catch (error) {
-    console.error('Error fetching public rooms:', error);
+    if (__DEV__) console.warn('[rooms] fetchPublicRooms failed:', error);
     return [];
   }
 }
@@ -427,7 +428,7 @@ export async function fetchPublicRoomsForSuggestion(limit: number = 200): Promis
     if (error) throw error;
     return data || [];
   } catch (error) {
-    console.error('Error fetching public rooms for suggestion:', error);
+    if (__DEV__) console.warn('[rooms] fetchPublicRoomsForSuggestion failed:', error);
     return [];
   }
 }

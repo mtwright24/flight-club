@@ -16,6 +16,7 @@
       }
     },
     "android": {
+      "usesCleartextTraffic": true,
       "useNextNotificationsApi": true,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",

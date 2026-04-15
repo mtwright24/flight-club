@@ -17,6 +17,8 @@ import { supabase } from '../../../lib/supabaseClient';
 import {
   fetchTripChatMessages,
   insertTripChatMessage,
+  notifyScheduleTripChatPeers,
+  resolveTripChatThreadId,
   type ScheduleTripChatMessage,
 } from '../scheduleTripChatApi';
 import { scheduleTheme as T } from '../scheduleTheme';
@@ -54,8 +56,10 @@ export default function TripChatScreen({ tripId }: { tripId: string | undefined 
   const [messages, setMessages] = useState<ScheduleTripChatMessage[]>([]);
   const [profiles, setProfiles] = useState<Record<string, Profile>>({});
   const [text, setText] = useState('');
-  const [loadingMsgs, setLoadingMsgs] = useState(true);
+  const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [sending, setSending] = useState(false);
+  /** DB + realtime key: shared UUID for the same logical pairing across users, else route id (demo). */
+  const [chatThreadId, setChatThreadId] = useState<string | null>(null);
 
   const roomExpiresAtIso = useMemo(() => {
     if (!trip?.endDate) return null;
@@ -99,8 +103,28 @@ export default function TripChatScreen({ tripId }: { tripId: string | undefined 
   }, [tripId]);
 
   useEffect(() => {
-    if (!tripId || !trip) return;
-    const tid = tripId;
+    if (!tripId) {
+      setChatThreadId(null);
+      return;
+    }
+    if (!UUID_RE.test(tripId)) {
+      setChatThreadId(tripId);
+      return;
+    }
+    let cancelled = false;
+    setChatThreadId(null);
+    void (async () => {
+      const tid = await resolveTripChatThreadId(tripId);
+      if (!cancelled) setChatThreadId(tid);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tripId]);
+
+  useEffect(() => {
+    if (!tripId || chatThreadId == null) return;
+    const tid = chatThreadId;
     let cancelled = false;
     async function load() {
       setLoadingMsgs(true);
@@ -117,10 +141,10 @@ export default function TripChatScreen({ tripId }: { tripId: string | undefined 
     return () => {
       cancelled = true;
     };
-  }, [tripId, trip?.id]);
+  }, [tripId, chatThreadId]);
 
   useEffect(() => {
-    if (!tripId || !messages.length) return;
+    if (!tripId || chatThreadId == null || !messages.length) return;
     const ids = [...new Set(messages.map((m) => m.user_id).filter(Boolean))] as string[];
     if (!ids.length) return;
     void (async () => {
@@ -132,19 +156,19 @@ export default function TripChatScreen({ tripId }: { tripId: string | undefined 
       });
       setProfiles((prev) => ({ ...prev, ...next }));
     })();
-  }, [messages, tripId]);
+  }, [messages, tripId, chatThreadId]);
 
   useEffect(() => {
-    if (!tripId) return;
+    if (!tripId || chatThreadId == null) return;
     const channel = supabase
-      .channel(`schedule-trip-chat-${tripId}`)
+      .channel(`schedule-trip-chat-${chatThreadId}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'schedule_trip_chat_messages',
-          filter: `trip_id=eq.${tripId}`,
+          filter: `trip_id=eq.${chatThreadId}`,
         },
         (payload) => {
           const row = payload.new as ScheduleTripChatMessage;
@@ -158,30 +182,37 @@ export default function TripChatScreen({ tripId }: { tripId: string | undefined 
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [tripId]);
+  }, [tripId, chatThreadId]);
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || !tripId || !userId || !roomExpiresAtIso || chatEnded || sending) return;
+    if (!trimmed || !tripId || chatThreadId == null || !userId || !roomExpiresAtIso || chatEnded || sending)
+      return;
     if (Date.now() >= new Date(roomExpiresAtIso).getTime()) return;
     setSending(true);
     setText('');
     try {
       const inserted = await insertTripChatMessage({
-        tripId,
+        tripId: chatThreadId,
         userId,
         text: trimmed,
         roomExpiresAtIso,
       });
       if (inserted) {
         setMessages((prev) => (prev.some((m) => m.id === inserted.id) ? prev : [...prev, inserted]));
+        const label = trip ? `${trip.pairingCode} · ${trip.routeSummary}` : tripId;
+        void notifyScheduleTripChatPeers({
+          threadUuid: chatThreadId,
+          pairingLabel: label,
+          preview: trimmed,
+        });
       }
     } catch (e) {
       console.warn('[TripChat] send failed:', e);
     } finally {
       setSending(false);
     }
-  }, [text, tripId, userId, roomExpiresAtIso, chatEnded, sending]);
+  }, [text, tripId, chatThreadId, userId, roomExpiresAtIso, chatEnded, sending, trip]);
 
   const renderItem = useCallback(
     ({ item }: { item: ScheduleTripChatMessage }) => {

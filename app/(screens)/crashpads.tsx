@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
 import HousingListingCard from '../../src/components/housing/HousingListingCard';
 import { useAuth } from '../../src/hooks/useAuth';
@@ -361,8 +361,13 @@ export default function CrashpadsHousingHubScreen() {
                 onToggleSave={async () => {
                   if (!userId) return;
                   const willSave = !savedIds.includes(item.id);
-                  setSavedIds((prev) => (willSave ? [...prev, item.id] : prev.filter((id) => id !== item.id)));
-                  await toggleSavedListing(userId, item.id, willSave);
+                  const previous = savedIds;
+                  setSavedIds((prev) => (willSave ? [...prev, item.id] : prev.filter((x) => x !== item.id)));
+                  const { error } = await toggleSavedListing(userId, item.id, willSave);
+                  if (error) {
+                    setSavedIds(previous);
+                    Alert.alert('Could not update saved listing', error);
+                  }
                 }}
                 onPress={() => router.push({ pathname: '/(screens)/crashpads-detail', params: { id: item.id } })}
               />

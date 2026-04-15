@@ -215,7 +215,13 @@ export function getNotificationDisplayLines(n: Notification): { primary: string;
         if (key === 'trade_match' || key === 'trade_interest') return title || 'Trade activity';
         if (key === 'swap_signal_near_match') return title || 'Swap signal near you';
         if (key === 'tool_alert' || key === 'schedule_reminder') return title || 'Crew tools update';
-        if (key === 'loads_alert' || key === 'loads_watch_match') return title || 'Loads update';
+        if (key === 'loads_alert' || key === 'loads_watch_match' || key === 'loads_route_update' || key === 'loads_threshold_hit')
+          return title || 'Loads update';
+        if (key === 'staff_loads_request_answered') return title || 'Your load request was answered';
+        if (key === 'staff_loads_request_loads_updated') return title || 'New loads on your request';
+        if (key === 'staff_loads_request_status') return title || 'Status update on your request';
+        if (key === 'staff_loads_request_refresh') return title || 'Your request needs a refresh';
+        if (key === 'staff_loads_lock_expiring') return title || 'Answer lock expiring';
         return title || body || 'New notification';
       }
     }

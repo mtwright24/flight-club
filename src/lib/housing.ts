@@ -157,17 +157,28 @@ export async function createHousingNeedPost(payload: Omit<HousingNeedPost, 'id' 
   if (error) console.log('createHousingNeedPost error', error);
 }
 
-export async function toggleSavedListing(userId: string, listingId: string, save: boolean): Promise<void> {
+export async function toggleSavedListing(
+  userId: string,
+  listingId: string,
+  save: boolean
+): Promise<{ error: string | null }> {
   if (save) {
     const { error } = await supabase.from('user_saved_housing_listings').insert({ user_id: userId, listing_id: listingId });
-    if (error) console.log('toggleSavedListing insert error', error);
+    if (error) {
+      console.log('toggleSavedListing insert error', error);
+      return { error: error.message };
+    }
   } else {
     const { error } = await supabase
       .from('user_saved_housing_listings')
       .delete()
       .match({ user_id: userId, listing_id: listingId });
-    if (error) console.log('toggleSavedListing delete error', error);
+    if (error) {
+      console.log('toggleSavedListing delete error', error);
+      return { error: error.message };
+    }
   }
+  return { error: null };
 }
 
 export async function fetchHousingNeedPosts(filters: { base_airport?: string } = {}): Promise<HousingNeedPost[]> {

@@ -4,6 +4,7 @@ import {
   TextInput,
   StyleSheet,
   TouchableOpacity,
+  Platform,
   type TextInputProps,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +18,8 @@ export type AuthTextFieldProps = {
   rightIcon?: string;
   onRightPress?: () => void;
   secureTextEntry?: boolean;
+  /** Default false — email/password stay one line like standard sign-in fields */
+  multiline?: boolean;
   /** Primary / return key label (Next, Go, Send, Done, …) */
   returnKeyType?: TextInputProps['returnKeyType'];
   /** Fires when user presses the keyboard submit/enter key — use for same action as primary button or focus next field */
@@ -36,6 +39,7 @@ const AuthTextField = forwardRef<TextInput, AuthTextFieldProps>(function AuthTex
     rightIcon,
     onRightPress,
     secureTextEntry,
+    multiline = false,
     returnKeyType = 'default',
     onSubmitEditing,
     blurOnSubmit,
@@ -45,6 +49,14 @@ const AuthTextField = forwardRef<TextInput, AuthTextFieldProps>(function AuthTex
   },
   ref,
 ) {
+  const handleChange = (t: string) => {
+    if (multiline) {
+      onChangeText(t);
+      return;
+    }
+    onChangeText(t.replace(/\r\n|\n|\r/g, ''));
+  };
+
   return (
     <View style={styles.outerWrap}>
       <View style={styles.blur}>
@@ -55,22 +67,33 @@ const AuthTextField = forwardRef<TextInput, AuthTextFieldProps>(function AuthTex
           {leftIcon && (
             <Ionicons name={leftIcon as never} size={20} color="#888888" style={styles.leftIcon} />
           )}
-          <TextInput
-            ref={ref}
-            style={styles.input}
-            value={value}
-            onChangeText={onChangeText}
-            placeholder={placeholder}
-            placeholderTextColor="#999999"
-            secureTextEntry={secureTextEntry}
-            autoCapitalize="none"
-            returnKeyType={returnKeyType}
-            onSubmitEditing={onSubmitEditing}
-            blurOnSubmit={blurOnSubmit}
-            keyboardType={keyboardType}
-            autoComplete={autoComplete}
-            textContentType={textContentType}
-          />
+          <View style={[styles.inputClip, !multiline && styles.inputClipSingle]}>
+            <TextInput
+              ref={ref}
+              style={[styles.input, !multiline && styles.inputSingleLine]}
+              value={value}
+              onChangeText={handleChange}
+              placeholder={placeholder}
+              placeholderTextColor="#999999"
+              secureTextEntry={secureTextEntry}
+              multiline={multiline}
+              scrollEnabled
+              autoCapitalize="none"
+              returnKeyType={returnKeyType}
+              onSubmitEditing={onSubmitEditing}
+              blurOnSubmit={blurOnSubmit}
+              keyboardType={keyboardType}
+              autoComplete={autoComplete}
+              textContentType={textContentType}
+              {...Platform.select({
+                android: {
+                  textAlignVertical: 'center' as const,
+                  includeFontPadding: false,
+                },
+                default: {},
+              })}
+            />
+          </View>
           {rightIcon && (
             <TouchableOpacity onPress={onRightPress} style={styles.rightIconBtn} hitSlop={8}>
               <Ionicons name={rightIcon as never} size={20} color="#888888" />
@@ -109,6 +132,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: authTheme.spacing.lg,
     height: 54,
     position: 'relative',
+    /** Must sit above innerHighlight / innerStroke / bottomShade (they use zIndex 1) or text looks stacked when blurred */
+    zIndex: 3,
+    ...Platform.select({
+      android: { elevation: 16 },
+      default: {},
+    }),
+  },
+  inputClip: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  inputClipSingle: {
+    height: 54,
   },
   leftIcon: {
     marginRight: 10,
@@ -120,6 +158,7 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
+    alignSelf: 'stretch',
     fontSize: 16,
     color: '#222222',
     fontWeight: '500',
@@ -127,11 +166,15 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
     backgroundColor: 'transparent',
     borderRadius: 12,
-    height: 54,
+    width: '100%',
     minWidth: 0,
-    maxWidth: 360,
     textAlign: 'left',
-    flexShrink: 0,
+  },
+  inputSingleLine: {
+    maxHeight: 54,
+    lineHeight: 22,
+    paddingTop: Platform.OS === 'ios' ? 16 : 0,
+    paddingBottom: Platform.OS === 'ios' ? 16 : 0,
   },
   innerHighlight: {
     position: 'absolute',

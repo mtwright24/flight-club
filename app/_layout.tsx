@@ -8,6 +8,11 @@ import FloatingBackButton from '../src/components/FloatingBackButton';
 import { LocalNotificationDebugListeners } from '../src/components/LocalNotificationDebugListeners';
 import { PushNotificationRoot } from '../src/components/PushNotificationRoot';
 import { ThemeProvider } from '../src/context/ThemeContext';
+import {
+  ensureAuthSessionStarted,
+  getAuthSessionSnapshot,
+  subscribeAuthSession,
+} from '../src/lib/authSessionStore';
 import { clearProfileDraft, getProfileDraft } from '../src/lib/profileDraft';
 import { supabase } from "../src/lib/supabaseClient";
 
@@ -65,23 +70,20 @@ export default function RootLayout() {
         if (initialUrl != null) {
           handleDeepLink(initialUrl);
         }
-
-        const { data } = await supabase.auth.getSession();
-        if (!mounted) return;
-        setSession(data.session ?? null);
-      } catch (err) {
-        if (!mounted) return;
-        setSession(null);
-      } finally {
-        if (!mounted) return;
-        setLoading(false);
+      } catch {
+        /* ignore */
       }
     })();
 
-    const { data: subData } = supabase.auth.onAuthStateChange((_event: any, newSession: Session | null) => {
+    ensureAuthSessionStarted();
+    const syncFromStore = () => {
       if (!mounted) return;
-      setSession(newSession ?? null);
-    });
+      const snap = getAuthSessionSnapshot();
+      setSession(snap.session);
+      setLoading(snap.loading);
+    };
+    syncFromStore();
+    const unsubscribeStore = subscribeAuthSession(syncFromStore);
 
     // Listen for runtime deep-links while the app is open.
     const urlHandler = async ({ url }: { url: string }) => {
@@ -89,10 +91,9 @@ export default function RootLayout() {
     };
     const linkingSub = Linking.addEventListener("url", urlHandler as any);
 
-    const subscription = subData?.subscription;
     return () => {
       mounted = false;
-      subscription?.unsubscribe?.();
+      unsubscribeStore();
       linkingSub.remove();
     };
   }, []);

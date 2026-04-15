@@ -9,7 +9,8 @@ export function isScheduleScopedNotification(n: Notification): boolean {
   if (route.includes('crew-schedule')) return true;
 
   const t = (n.type || '').toLowerCase();
-  if (t.includes('schedule') || t.includes('pairing') || t.includes('trip_trade')) return true;
+  if (t.includes('schedule') || t.includes('pairing') || t.includes('trip_trade') || t.includes('trip_chat'))
+    return true;
 
   const et = (n.entity_type || '').toLowerCase();
   if (et === 'schedule' || et === 'schedule_trip' || et.includes('schedule')) return true;

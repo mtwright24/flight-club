@@ -703,7 +703,7 @@ export default function ImportReviewScreen() {
         contentContainerStyle={[
           styles.content,
           {
-            paddingBottom: pairingPrimaryMode ? 16 : insets.bottom + 28,
+            paddingBottom: pairingPrimaryMode ? 10 : insets.bottom + 28,
           },
         ]}
       >
@@ -1077,31 +1077,31 @@ export default function ImportReviewScreen() {
           </View>
         ) : !pairingPrimaryMode ? (
           <View style={styles.actions}>
-            <Pressable style={styles.btnPrimary} onPress={openSaveDialog}>
-              <Text style={styles.btnPrimaryText}>Save confirmed items</Text>
+            <Pressable style={[styles.btnPrimary, styles.btnPrimaryCompact]} onPress={openSaveDialog}>
+              <Text style={[styles.btnPrimaryText, styles.btnPrimaryTextCompact]}>Save confirmed items</Text>
             </Pressable>
             {needsReview.length > 0 ? (
-              <Pressable style={styles.btnSecondary} onPress={scrollToNeedsReview}>
-                <Text style={styles.btnSecondaryText}>Review remaining</Text>
+              <Pressable style={[styles.btnSecondary, styles.btnSecondaryCompact]} onPress={scrollToNeedsReview}>
+                <Text style={[styles.btnSecondaryText, styles.btnSecondaryTextCompact]}>Review remaining</Text>
               </Pressable>
             ) : null}
-            <Pressable style={styles.btnSecondary} onPress={onEdit}>
-              <Text style={styles.btnSecondaryText}>Edit all rows</Text>
+            <Pressable style={[styles.btnSecondary, styles.btnSecondaryCompact]} onPress={onEdit}>
+              <Text style={[styles.btnSecondaryText, styles.btnSecondaryTextCompact]}>Edit all rows</Text>
             </Pressable>
-            <Pressable style={styles.btnGhost} onPress={() => router.back()}>
-              <Text style={styles.btnGhostText}>Start over</Text>
+            <Pressable style={[styles.btnGhost, styles.btnGhostCompact]} onPress={() => router.back()}>
+              <Text style={[styles.btnGhostText, styles.btnGhostTextCompact]}>Start over</Text>
             </Pressable>
           </View>
         ) : null}
       </ScrollView>
       {pairingPrimaryMode ? (
         <View
-          style={[styles.ctaDock, { paddingBottom: Math.max(insets.bottom, 14), borderTopColor: FC.border }]}
+          style={[styles.ctaDock, { paddingBottom: Math.max(insets.bottom, 8), borderTopColor: FC.border }]}
           pointerEvents="box-none"
         >
           {saving ? (
             <View style={styles.ctaSavingRow}>
-              <ActivityIndicator color={FC.accent} />
+              <ActivityIndicator color={FC.accent} size="small" />
               <Text style={styles.ctaSavingText}>Saving…</Text>
             </View>
           ) : (
@@ -1112,7 +1112,11 @@ export default function ImportReviewScreen() {
                 </Text>
               ) : null}
               <Pressable
-                style={[styles.btnPrimary, totalMissingFieldCount > 0 && styles.btnPrimaryDisabled]}
+                style={[
+                  styles.btnPrimary,
+                  styles.btnPrimaryCompact,
+                  totalMissingFieldCount > 0 && styles.btnPrimaryDisabled,
+                ]}
                 onPress={() => {
                   if (totalMissingFieldCount > 0) {
                     const shown = pairingsMissingRequiredCodes.slice(0, 14).join(', ');
@@ -1130,15 +1134,15 @@ export default function ImportReviewScreen() {
                   void openSaveDialog();
                 }}
               >
-                <Text style={styles.btnPrimaryText}>Save pairings to schedule</Text>
+                <Text style={[styles.btnPrimaryText, styles.btnPrimaryTextCompact]}>Save pairings to schedule</Text>
               </Pressable>
               {hasPairingReviewOrMissing ? (
-                <Pressable style={styles.btnSecondary} onPress={scrollToPairingList}>
-                  <Text style={styles.btnSecondaryText}>Review all issues</Text>
+                <Pressable style={[styles.btnSecondary, styles.btnSecondaryCompact]} onPress={scrollToPairingList}>
+                  <Text style={[styles.btnSecondaryText, styles.btnSecondaryTextCompact]}>Review all issues</Text>
                 </Pressable>
               ) : null}
-              <Pressable style={styles.btnGhost} onPress={() => router.back()}>
-                <Text style={styles.btnGhostText}>Start over</Text>
+              <Pressable style={[styles.btnGhost, styles.btnGhostCompact]} onPress={() => router.back()}>
+                <Text style={[styles.btnGhostText, styles.btnGhostTextCompact]}>Start over</Text>
               </Pressable>
             </>
           )}
@@ -1192,8 +1196,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: FC.border,
-    padding: 20,
-    marginBottom: 16,
+    padding: 16,
+    marginBottom: 12,
     ...Platform.select({
       ios: {
         shadowColor: '#0f172a',
@@ -1230,7 +1234,7 @@ const styles = StyleSheet.create({
   uploadCollapsibleTitle: { fontSize: 15, fontWeight: '700', color: FC.text },
   uploadCollapsibleSub: { fontSize: 12, color: FC.textMuted, marginTop: 2 },
   previewWrapCompact: { marginBottom: 12 },
-  previewMedium: { width: '100%', height: 200 },
+  previewMedium: { width: '100%', height: 160 },
   pairingCardPremium: {
     backgroundColor: FC.card,
     borderRadius: 16,
@@ -1265,10 +1269,10 @@ const styles = StyleSheet.create({
   ctaDock: {
     backgroundColor: FC.card,
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 20,
-    paddingTop: 14,
-    paddingBottom: 14,
-    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
+    gap: 6,
     ...Platform.select({
       ios: {
         shadowColor: '#0f172a',
@@ -1507,14 +1511,20 @@ const styles = StyleSheet.create({
   muted: { fontSize: 14, color: T.textSecondary },
   err: { padding: 24, color: T.accent },
   saving: { alignItems: 'center', marginTop: 20, gap: 8 },
-  actions: { marginTop: 22, gap: 10, paddingTop: 4 },
+  actions: { marginTop: 22, gap: 8, paddingTop: 4 },
   btnPrimary: {
     backgroundColor: T.accent,
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
   },
+  btnPrimaryCompact: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
   btnPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  btnPrimaryTextCompact: { fontSize: 14, fontWeight: '800' },
   btnSecondary: {
     borderWidth: 1,
     borderColor: T.line,
@@ -1523,8 +1533,16 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
   },
+  btnSecondaryCompact: {
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
   btnSecondaryText: { color: T.text, fontWeight: '800', fontSize: 16 },
+  btnSecondaryTextCompact: { fontSize: 14, fontWeight: '700' },
   btnGhost: { paddingVertical: 12, alignItems: 'center' },
+  btnGhostCompact: { paddingVertical: 6 },
   btnGhostText: { color: T.textSecondary, fontWeight: '700', fontSize: 15 },
+  btnGhostTextCompact: { fontSize: 13, fontWeight: '600' },
   btnGhostTextDestructive: { color: '#B91C1C', fontWeight: '700', fontSize: 15 },
 });

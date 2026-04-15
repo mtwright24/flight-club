@@ -74,13 +74,14 @@ function normalizeWinnerDisplay(profile: any, pref: any) {
     profile?.display_name?.trim() ||
     profile?.full_name?.trim() ||
     profile?.first_name?.trim() ||
-    'Crew Member';
+    profile?.handle?.trim() ||
+    'Flight crew';
   const displayName =
     pref?.name_display === 'first_name_last_initial'
       ? (() => {
           const parts = full.split(/\s+/).filter(Boolean);
           if (parts.length >= 2) return `${parts[0]} ${parts[1][0]}.`;
-          return parts[0] || 'Crew Member';
+          return parts[0] || 'Flight crew';
         })()
       : full;
   const avatarUrl =
@@ -104,7 +105,12 @@ async function fetchEngagement(winnerIds: string[], userId: string | null) {
     supabase.from('crew_honor_reactions').select('winner_id, reaction').in('winner_id', winnerIds),
     supabase.from('crew_honor_comments').select('winner_id').in('winner_id', winnerIds),
     userId
-      ? supabase.from('crew_honor_reactions').select('winner_id, reaction').in('winner_id', winnerIds).eq('user_id', userId)
+      ? supabase
+          .from('crew_honor_reactions')
+          .select('winner_id, reaction, created_at')
+          .in('winner_id', winnerIds)
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
       : Promise.resolve({ data: [], error: null } as any),
   ]);
 
@@ -129,10 +135,11 @@ async function fetchEngagement(winnerIds: string[], userId: string | null) {
     }
   }
   if (!myRes.error) {
+    /** One reaction per user per honor (MVP): keep latest row only. */
     for (const row of myRes.data || []) {
-      const list = myReactions.get(row.winner_id) || [];
-      list.push(row.reaction as CrewHonorReactionType);
-      myReactions.set(row.winner_id, list);
+      if (!myReactions.has(row.winner_id)) {
+        myReactions.set(row.winner_id, [row.reaction as CrewHonorReactionType]);
+      }
     }
   }
   return { reactionCounts, myReactions, commentCounts };
@@ -178,9 +185,90 @@ function winnerSelect() {
     id, cycle_id, category_id, winner_user_id, why_they_won, short_blurb, selected_by_mode, published_at,
     category:crew_honor_categories!inner(id, slug, title, short_description, category_group, selection_mode, accent_primary, accent_secondary, trim_color, display_order),
     cycle:crew_honor_cycles!inner(id, title, month, year, status, nomination_open_at, nomination_close_at, voting_open_at, voting_close_at, winners_publish_at),
-    winner:profiles!crew_honor_winners_winner_user_id_fkey(id, display_name, full_name, first_name, avatar_url, role, base),
+    winner:profiles!crew_honor_winners_winner_user_id_fkey(id, display_name, full_name, first_name, avatar_url, role, base, handle),
     preference:crew_honor_winner_preferences(winner_id, declined_public_display, name_display, use_profile_photo, use_initials_avatar, alt_photo_url)
   `;
+}
+
+/** Crew MVP and flagship categories surface first on Home. */
+export function sortCrewHonorsWinnersForHome(winners: CrewHonorWinner[]): CrewHonorWinner[] {
+  return [...winners].sort((a, b) => {
+    const ap = a.category.slug === 'crew-mvp' ? 0 : 1;
+    const bp = b.category.slug === 'crew-mvp' ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return (a.category.display_order ?? 0) - (b.category.display_order ?? 0);
+  });
+}
+
+export function formatHonorCycleLabel(cycle: Pick<CrewHonorWinner['cycle'], 'month' | 'year'>): string {
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  const m = cycle.month;
+  if (m >= 1 && m <= 12) return `${months[m - 1]} ${cycle.year}`;
+  return `${String(cycle.month).padStart(2, '0')}/${cycle.year}`;
+}
+
+export function crewHonorRoleBaseLine(w: CrewHonorWinner): string | null {
+  const role = w.role?.trim();
+  const base = w.base?.trim();
+  if (role && base) return `${role} · ${base}`;
+  if (role) return role;
+  if (base) return base;
+  return null;
+}
+
+/** Strip legacy seed / internal phrasing from public honor copy. */
+const INTERNAL_HONOR_COPY = /preview\s*seed|so you can see home|detail,\s*reactions|internal\s*note|demo\s*copy/i;
+
+export function sanitizeCrewHonorWhyTheyWon(raw: string | null | undefined): string {
+  const t = (raw || '').trim();
+  if (!t || INTERNAL_HONOR_COPY.test(t)) return '';
+  return t;
+}
+
+/** One concise recognition line/block for modal & hero (no essay, no seed text). */
+export function honorRecognitionBodyForUi(w: CrewHonorWinner): string {
+  const short = (w.short_blurb || '').trim();
+  const why = sanitizeCrewHonorWhyTheyWon(w.why_they_won);
+  if (why && why.length <= 240) return why;
+  if (short) return short;
+  if (why) return `${why.slice(0, 200).trim()}${why.length > 200 ? '…' : ''}`;
+  return '';
+}
+
+/** Home / mini cards: concise reason line without repeating the category pill. */
+export function honorShortLineForCard(w: CrewHonorWinner, opts?: { maxChars?: number }): string {
+  const maxChars = opts?.maxChars ?? 90;
+  const clip = (t: string) =>
+    t.length > maxChars ? `${t.slice(0, Math.max(0, maxChars - 3)).trim()}…` : t;
+
+  let s = (w.short_blurb || '').trim();
+  if (!s || INTERNAL_HONOR_COPY.test(s)) {
+    const body = honorRecognitionBodyForUi(w);
+    return clip(body);
+  }
+  const title = w.category.title?.trim();
+  if (title) {
+    const esc = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^\\s*${esc}\\s*[—\\-–:]\\s*`, 'i');
+    s = s.replace(re, '').trim();
+  }
+  if (s) return s.length > maxChars ? clip(s) : s;
+  const body = honorRecognitionBodyForUi(w);
+  const b = clip(body);
+  return b || w.category.title;
 }
 
 export async function getCrewHonorsHomeWinners(userId: string | null): Promise<CrewHonorWinner[]> {
@@ -193,7 +281,8 @@ export async function getCrewHonorsHomeWinners(userId: string | null): Promise<C
     .limit(20);
   if (error) return [];
   const engagement = await fetchEngagement((data || []).map((r: any) => r.id), userId);
-  return (data || []).map((row: any) => toWinner(row, engagement)).filter(Boolean) as CrewHonorWinner[];
+  const rows = (data || []).map((row: any) => toWinner(row, engagement)).filter(Boolean) as CrewHonorWinner[];
+  return sortCrewHonorsWinnersForHome(rows);
 }
 
 export async function getCrewHonorsCycles() {
@@ -218,7 +307,8 @@ export async function getCrewHonorsByCycle(cycleId: string, userId: string | nul
   const { data, error } = await query;
   if (error) return [];
   const engagement = await fetchEngagement((data || []).map((r: any) => r.id), userId);
-  return (data || []).map((row: any) => toWinner(row, engagement)).filter(Boolean) as CrewHonorWinner[];
+  const list = (data || []).map((row: any) => toWinner(row, engagement)).filter(Boolean) as CrewHonorWinner[];
+  return sortCrewHonorsWinnersForHome(list);
 }
 
 export async function getCrewHonorWinnerDetail(winnerId: string, userId: string | null) {
@@ -236,7 +326,9 @@ export async function getCrewHonorWinnerDetail(winnerId: string, userId: string 
 export async function getCrewHonorComments(winnerId: string): Promise<CrewHonorComment[]> {
   const { data, error } = await supabase
     .from('crew_honor_comments')
-    .select('id, winner_id, user_id, body, created_at, author:profiles!crew_honor_comments_user_id_fkey(id, display_name, full_name, first_name, avatar_url)')
+    .select(
+      'id, winner_id, user_id, body, created_at, author:profiles!crew_honor_comments_user_id_fkey(id, display_name, full_name, first_name, avatar_url, handle)'
+    )
     .eq('winner_id', winnerId)
     .order('created_at', { ascending: false });
   if (error) return [];
@@ -247,7 +339,11 @@ export async function getCrewHonorComments(winnerId: string): Promise<CrewHonorC
     body: row.body,
     created_at: row.created_at,
     user_display_name:
-      row.author?.display_name?.trim() || row.author?.full_name?.trim() || row.author?.first_name?.trim() || 'Crew Member',
+      row.author?.display_name?.trim() ||
+      row.author?.full_name?.trim() ||
+      row.author?.first_name?.trim() ||
+      row.author?.handle?.trim() ||
+      'Flight crew',
     user_avatar_url: row.author?.avatar_url || null,
   }));
 }
@@ -320,17 +416,20 @@ export async function submitCrewHonorVote(input: { cycleId: string; categoryId: 
 export async function toggleCrewHonorReaction(winnerId: string, reaction: CrewHonorReactionType) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user?.id) return { ok: false as const, error: 'You must be signed in.' };
-  const { data: existing } = await supabase
+  const { data: mine } = await supabase
     .from('crew_honor_reactions')
-    .select('id')
+    .select('id, reaction')
     .eq('winner_id', winnerId)
-    .eq('user_id', user.id)
-    .eq('reaction', reaction)
-    .maybeSingle();
-  if (existing?.id) {
-    const { error } = await supabase.from('crew_honor_reactions').delete().eq('id', existing.id);
+    .eq('user_id', user.id);
+  const rows = mine || [];
+  const same = rows.find((r) => r.reaction === reaction);
+  if (same?.id) {
+    const { error } = await supabase.from('crew_honor_reactions').delete().eq('id', same.id);
     if (error) return { ok: false as const, error: error.message };
     return { ok: true as const };
+  }
+  if (rows.length) {
+    await supabase.from('crew_honor_reactions').delete().eq('winner_id', winnerId).eq('user_id', user.id);
   }
   const { error } = await supabase.from('crew_honor_reactions').insert({ winner_id: winnerId, user_id: user.id, reaction });
   if (error) return { ok: false as const, error: error.message };
@@ -456,4 +555,52 @@ export async function getActiveCycleForNominations() {
     .maybeSingle();
   if (error) return null;
   return data || null;
+}
+
+export type CrewHonorCycleListRow = {
+  id: string;
+  title: string;
+  month: number;
+  year: number;
+  status: string;
+  nomination_open_at: string;
+  nomination_close_at: string;
+  voting_open_at: string;
+  voting_close_at: string;
+  winners_publish_at: string;
+};
+
+/** Latest published cycle for calendar month, else most recently published row. */
+export function pickSpotlightPublishedCycle(cycles: CrewHonorCycleListRow[]): CrewHonorCycleListRow | null {
+  const pub = cycles.filter((c) => c.status === 'published' || c.status === 'archived');
+  if (!pub.length) return null;
+  const now = new Date();
+  const m = now.getMonth() + 1;
+  const y = now.getFullYear();
+  const exact = pub.find((c) => c.month === m && c.year === y);
+  if (exact) return exact;
+  return pub[0];
+}
+
+export function featuredWinnersFromList(winners: CrewHonorWinner[]): CrewHonorWinner[] {
+  const mvp = winners.filter((w) => w.category.slug === 'crew-mvp');
+  if (mvp.length) return mvp;
+  return winners.length ? [winners[0]] : [];
+}
+
+export function restWinnersExcludingFeatured(winners: CrewHonorWinner[], featured: CrewHonorWinner[]): CrewHonorWinner[] {
+  const ids = new Set(featured.map((f) => f.id));
+  return winners.filter((w) => !ids.has(w.id));
+}
+
+export function mergePublishedWinnersSorted(
+  publishedCycles: CrewHonorCycleListRow[],
+  winnersByCycle: Record<string, CrewHonorWinner[]>
+): CrewHonorWinner[] {
+  const flat = publishedCycles.flatMap((c) => winnersByCycle[c.id] || []);
+  return [...flat].sort((a, b) => {
+    const ta = a.published_at ? new Date(a.published_at).getTime() : 0;
+    const tb = b.published_at ? new Date(b.published_at).getTime() : 0;
+    return tb - ta;
+  });
 }

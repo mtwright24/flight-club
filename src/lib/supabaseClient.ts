@@ -20,10 +20,36 @@ rawUrl = rawUrl.trim();
 if (!rawUrl.startsWith('http')) rawUrl = `https://${rawUrl}`;
 if (rawUrl.endsWith('/')) rawUrl = rawUrl.slice(0, -1);
 
+/**
+ * Android emulator: `localhost` / `127.0.0.1` is the emulator itself, not the host machine.
+ * Local Supabase (`supabase start`) on the dev machine should use 10.0.2.2 from the emulator.
+ */
+function rewriteLocalhostForAndroidEmulator(url: string): string {
+  if (Platform.OS !== 'android' || !__DEV__) return url;
+  try {
+    const u = new URL(url);
+    if (u.hostname !== '127.0.0.1' && u.hostname !== 'localhost') return url;
+    u.hostname = '10.0.2.2';
+    return u.toString().replace(/\/$/, '');
+  } catch {
+    return url;
+  }
+}
+
+rawUrl = rewriteLocalhostForAndroidEmulator(rawUrl);
+
 export const SUPABASE_URL = rawUrl;
 /** Public anon key (same as createClient second arg). Edge Functions need `apikey` + `Authorization` on raw fetch. */
 export const SUPABASE_ANON_KEY = supabaseAnonKey;
-console.log('Supabase URL:', SUPABASE_URL);
+if (__DEV__) {
+  console.log('[Supabase] URL host:', (() => {
+    try {
+      return new URL(SUPABASE_URL).host;
+    } catch {
+      return '(invalid URL)';
+    }
+  })());
+}
 
 // Supabase session blobs can exceed SecureStore's ~2048 byte limit.
 // Native: AsyncStorage. Web: localStorage (AsyncStorage web impl can throw when `window` is missing, e.g. Node/SSR).
