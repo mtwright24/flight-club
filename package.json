@@ -8,9 +8,13 @@
     "start:tunnel": "expo start --go --tunnel",
     "start:dev-client": "expo start",
     "start:dev-client:tunnel": "expo start --tunnel",
+    "start:offline": "expo start --go --offline",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "ios:device": "expo run:ios --device",
+    "prebuild:ios": "expo prebuild --platform ios",
+    "prebuild:android": "expo prebuild --platform android",
     "ios:open": "open ios/flightclub.xcworkspace",
     "web": "expo start --web",
     "postinstall": "patch-package",
@@ -18,7 +22,9 @@
     "supabase:deploy-functions": "bash scripts/supabase-deploy-all-functions.sh",
     "supabase:migration-list": "npx supabase migration list",
     "supabase:db-query": "npx supabase db query --linked",
-    "supabase:db-push": "npx supabase db push --linked"
+    "supabase:db-push": "npx supabase db push --linked",
+    "eas:dev:ios": "eas build --profile development --platform ios",
+    "eas:dev:android": "eas build --profile development --platform android"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

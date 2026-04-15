@@ -1,7 +1,7 @@
 import { EncodingType, readAsStringAsync } from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -154,10 +154,14 @@ async function buildUploadBytes(
 export default function ImportScheduleScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [selected, setSelected] = useState<Source>(null);
+  /** Default to screenshot/photo so Continue works immediately (matches primary option styling). */
+  const [selected, setSelected] = useState<Source>('photo');
   const [busy, setBusy] = useState(false);
   const [busyHint, setBusyHint] = useState('Importing schedule…');
   const [photoSourceModalVisible, setPhotoSourceModalVisible] = useState(false);
+  /** After closing the RN Modal, open picker on next effect — InteractionManager can stall and never run. */
+  const pendingOpenLibraryRef = useRef(false);
+  const pendingOpenCameraRef = useRef(false);
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth() + 1);
   useEffect(() => {
@@ -514,64 +518,95 @@ export default function ImportScheduleScreen() {
   );
 
   const pickPhotoLibrary = useCallback(async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Permission needed', 'Allow photo library access to import a screenshot.');
-      return;
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permission needed', 'Allow photo library access to import a screenshot.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        selectionLimit: 4,
+        /** Full resolution for server OCR — the review screen thumbnail is display-only. */
+        quality: 1,
+        base64: true,
+        // iOS: prefer JPEG-compatible export instead of HEIC when possible (Vision API does not support HEIC).
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const assets = result.assets;
+      dbg('pickPhotoLibrary assets', { count: assets.length });
+      if (assets.length > 1) {
+        await uploadAndProcessManyImages(assets);
+        return;
+      }
+      const asset = assets[0];
+      dbg('pickPhotoLibrary asset', {
+        uriPrefix: asset.uri.slice(0, 32),
+        mimeType: asset.mimeType,
+        fileName: asset.fileName,
+        hasBase64: !!asset.base64,
+        base64Length: asset.base64?.length ?? 0,
+        width: asset.width,
+        height: asset.height,
+        fileSize: (asset as { fileSize?: number }).fileSize,
+      });
+      await uploadAndProcess(asset.uri, asset.mimeType ?? 'image/jpeg', asset.fileName ?? 'photo.jpg', 'screenshot', {
+        jpegBase64: asset.base64,
+      });
+    } catch (e) {
+      dbg('pickPhotoLibrary error', e);
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert('Could not open photo library', msg);
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsMultipleSelection: true,
-      selectionLimit: 4,
-      /** Full resolution for server OCR — the review screen thumbnail is display-only. */
-      quality: 1,
-      base64: true,
-      // iOS: prefer JPEG-compatible export instead of HEIC when possible (Vision API does not support HEIC).
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const assets = result.assets;
-    dbg('pickPhotoLibrary assets', { count: assets.length });
-    if (assets.length > 1) {
-      await uploadAndProcessManyImages(assets);
-      return;
-    }
-    const asset = assets[0];
-    dbg('pickPhotoLibrary asset', {
-      uriPrefix: asset.uri.slice(0, 32),
-      mimeType: asset.mimeType,
-      fileName: asset.fileName,
-      hasBase64: !!asset.base64,
-      base64Length: asset.base64?.length ?? 0,
-      width: asset.width,
-      height: asset.height,
-      fileSize: (asset as { fileSize?: number }).fileSize,
-    });
-    await uploadAndProcess(asset.uri, asset.mimeType ?? 'image/jpeg', asset.fileName ?? 'photo.jpg', 'screenshot', {
-      jpegBase64: asset.base64,
-    });
   }, [uploadAndProcess, uploadAndProcessManyImages]);
 
   const pickCamera = useCallback(async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Permission needed', 'Allow camera access to capture your schedule.');
-      return;
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permission needed', 'Allow camera access to capture your schedule.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 1,
+        base64: true,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const asset = result.assets[0];
+      dbg('pickCamera asset', {
+        hasBase64: !!asset.base64,
+        base64Length: asset.base64?.length ?? 0,
+        mimeType: asset.mimeType,
+      });
+      await uploadAndProcess(asset.uri, asset.mimeType ?? 'image/jpeg', 'camera.jpg', 'photo', { jpegBase64: asset.base64 });
+    } catch (e) {
+      dbg('pickCamera error', e);
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert('Could not open camera', msg);
     }
-    const result = await ImagePicker.launchCameraAsync({
-      quality: 1,
-      base64: true,
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
-    dbg('pickCamera asset', {
-      hasBase64: !!asset.base64,
-      base64Length: asset.base64?.length ?? 0,
-      mimeType: asset.mimeType,
-    });
-    await uploadAndProcess(asset.uri, asset.mimeType ?? 'image/jpeg', 'camera.jpg', 'photo', { jpegBase64: asset.base64 });
   }, [uploadAndProcess]);
+
+  useEffect(() => {
+    if (photoSourceModalVisible) return;
+
+    const openLibrary = pendingOpenLibraryRef.current;
+    const openCamera = pendingOpenCameraRef.current;
+    if (!openLibrary && !openCamera) return;
+
+    pendingOpenLibraryRef.current = false;
+    pendingOpenCameraRef.current = false;
+
+    const delay = Platform.OS === 'ios' ? 550 : 120;
+    const id = setTimeout(() => {
+      if (openLibrary) void pickPhotoLibrary();
+      else void pickCamera();
+    }, delay);
+
+    return () => clearTimeout(id);
+  }, [photoSourceModalVisible, pickPhotoLibrary, pickCamera]);
 
   const pickPdf = useCallback(async () => {
     try {
@@ -594,46 +629,65 @@ export default function ImportScheduleScreen() {
   }, [uploadAndProcess]);
 
   const continueFlow = useCallback(() => {
-    if (selected === 'calendar') {
-      Alert.alert('Calendar', 'Coming soon.');
+    if (!selected) {
+      Alert.alert('Choose an import method', 'Tap Screenshot / photo, Scan, or PDF above, then Continue.');
       return;
     }
-    if (selected === 'manual') {
-      Alert.alert('Manual entry', 'Coming soon.');
-      return;
+    try {
+      if (selected === 'calendar') {
+        Alert.alert('Calendar', 'Coming soon.');
+        return;
+      }
+      if (selected === 'manual') {
+        Alert.alert('Manual entry', 'Coming soon.');
+        return;
+      }
+      if (selected === 'scan') {
+        void (async () => {
+          try {
+            const r = await scanScheduleDocuments();
+            if (r.kind === 'cancel') return;
+            if (r.kind === 'unavailable') {
+              Alert.alert(
+                'Document scan isn’t available',
+                r.reason === 'module'
+                  ? 'This build doesn’t include the native document scanner (Expo Go can’t load it). Install a development build, or use Choose screenshot / Photo — same review flow.'
+                  : 'Couldn’t open the scanner. Try again, or use Choose screenshot / Photo.',
+                [
+                  { text: 'Choose photo', onPress: () => void pickPhotoLibrary() },
+                  { text: 'OK', style: 'cancel' },
+                ]
+              );
+              return;
+            }
+            await uploadDocumentScanPages(r.filePaths);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            Alert.alert('Scan failed', msg);
+          }
+        })();
+        return;
+      }
+      if (selected === 'photo') {
+        setPhotoSourceModalVisible(true);
+        return;
+      }
+      if (selected === 'pdf') {
+        void pickPdf();
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert('Could not continue', msg);
     }
-    if (selected === 'scan') {
-      void (async () => {
-        const r = await scanScheduleDocuments();
-        if (r.kind === 'cancel') return;
-        if (r.kind === 'unavailable') {
-          Alert.alert(
-            'Document scan isn’t available',
-            r.reason === 'module'
-              ? 'This build doesn’t include the native document scanner (Expo Go can’t load it). Install a development build, or use Choose screenshot / Photo — same review flow.'
-              : 'Couldn’t open the scanner. Try again, or use Choose screenshot / Photo.',
-            [
-              { text: 'Choose photo', onPress: () => void pickPhotoLibrary() },
-              { text: 'OK', style: 'cancel' },
-            ]
-          );
-          return;
-        }
-        await uploadDocumentScanPages(r.filePaths);
-      })();
-      return;
-    }
-    if (selected === 'photo') {
-      setPhotoSourceModalVisible(true);
-      return;
-    }
-    if (selected === 'pdf') void pickPdf();
   }, [pickPdf, pickPhotoLibrary, selected, uploadDocumentScanPages]);
 
   return (
     <View style={styles.shell}>
       <CrewScheduleHeader title="Import schedule" />
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+      >
         <View style={styles.monthCard}>
           <View style={styles.monthRow}>
             <Pressable onPress={goPrevMonth} style={styles.monthArrow} accessibilityLabel="Previous month">
@@ -702,6 +756,8 @@ export default function ImportScheduleScreen() {
             style={[styles.continue, !selected && styles.continueDisabled]}
             onPress={continueFlow}
             disabled={!selected}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !selected }}
           >
             <Text style={styles.continueText}>Continue</Text>
           </Pressable>
@@ -721,8 +777,9 @@ export default function ImportScheduleScreen() {
             <Pressable
               style={styles.photoModalBtn}
               onPress={() => {
+                pendingOpenLibraryRef.current = true;
+                pendingOpenCameraRef.current = false;
                 setPhotoSourceModalVisible(false);
-                void pickPhotoLibrary();
               }}
             >
               <Text style={styles.photoModalBtnTx}>Photo library</Text>
@@ -731,8 +788,9 @@ export default function ImportScheduleScreen() {
               <Pressable
                 style={styles.photoModalBtn}
                 onPress={() => {
+                  pendingOpenCameraRef.current = true;
+                  pendingOpenLibraryRef.current = false;
                   setPhotoSourceModalVisible(false);
-                  void pickCamera();
                 }}
               >
                 <Text style={styles.photoModalBtnTx}>Camera</Text>
