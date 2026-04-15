@@ -1,0 +1,19 @@
+---
+description: Always apply Supabase migrations and verify DB-backed features; never rely on unsafe client fallbacks for permission logic.
+alwaysApply: true
+---
+
+# Supabase migrations and database-backed features
+
+When adding or changing anything under `supabase/migrations/`, RPCs, RLS, or tables that the app depends on:
+
+1. **Run migrations** after schema/RPC changes so every environment matches the code:
+   - Linked remote: `npx supabase db push --yes`
+   - If the CLI reports migrations out of order: `npx supabase db push --include-all --yes` (only when needed to reconcile history).
+   - Local stack: start/link as appropriate, then push or reset per project norms.
+
+2. **Do not add client fallbacks** that bypass server-side permission rules (e.g. listing `load_requests` directly when an RPC exists for visibility). If the RPC fails, return a clear error and fix the DB—do not silently widen access.
+
+3. **Confirm** the feature works against the migrated schema (e.g. `npx tsc --noEmit`); mention migration file names in the handoff when relevant.
+
+The user should not have to remind you to deploy migrations for features to work.
