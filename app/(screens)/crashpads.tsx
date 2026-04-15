@@ -248,7 +248,25 @@ export default function CrashpadsHousingHubScreen() {
         </View>
 
         <View style={styles.mapSortRow}>
-          <Pressable style={styles.mapButton} onPress={() => router.push('/(screens)/crashpads-map')}>
+          <Pressable
+            style={styles.mapButton}
+            onPress={() =>
+              router.push({
+                pathname: '/(screens)/crashpads-map',
+                params: {
+                  base: baseFromParams ?? '',
+                  area: areaFromParams ?? '',
+                  type: activeTab,
+                  min: minFromParams != null ? String(minFromParams) : '',
+                  max: maxFromParams != null ? String(maxFromParams) : '',
+                  bed: bedFromParams ?? '',
+                  hot: hotTonight ? '1' : '',
+                  standby: standbyOnlyFromParams ? '1' : '',
+                  sort,
+                },
+              })
+            }
+          >
             <Ionicons name="map-outline" size={16} color={colors.textSecondary} />
             <Text style={styles.mapSortText}>Map</Text>
           </Pressable>
