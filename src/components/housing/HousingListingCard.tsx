@@ -9,6 +9,8 @@ interface Props {
   onPress: () => void;
   onToggleSave?: () => void;
   isSaved?: boolean;
+  /** In-app sample listing (not persisted); shows a small ribbon on the card. */
+  isDemoSample?: boolean;
 }
 
 function getBedLabel(type: string) {
@@ -60,7 +62,7 @@ function mapTagLabel(key: string) {
   }
 }
 
-export default function HousingListingCard({ item, onPress, onToggleSave, isSaved }: Props) {
+export default function HousingListingCard({ item, onPress, onToggleSave, isSaved, isDemoSample }: Props) {
   const bedLabel = getBedLabel(item.bed_type);
   const priceLabel =
     item.price_type === 'per_trip' && item.price_per_trip
@@ -98,7 +100,13 @@ export default function HousingListingCard({ item, onPress, onToggleSave, isSave
         imageStyle={styles.imageInner}
       >
         <View style={styles.imageTopRow}>
-          <View style={styles.badgeRow}>
+          <View style={styles.imageTopLeft}>
+            {isDemoSample ? (
+              <View style={styles.sampleRibbon}>
+                <Text style={styles.sampleRibbonText}>SAMPLE</Text>
+              </View>
+            ) : null}
+            <View style={styles.badgeRow}>
             {item.available_tonight && item.standby_bed_allowed && (
               <View style={[styles.badge, styles.badgeHot]}>
                 <Text style={styles.badgeText}>STANDBY TONIGHT</Text>
@@ -114,6 +122,7 @@ export default function HousingListingCard({ item, onPress, onToggleSave, isSave
                 <Text style={styles.badgeText}>COLD BED</Text>
               </View>
             )}
+            </View>
           </View>
           <Pressable
             onPress={onToggleSave}
@@ -186,7 +195,27 @@ const styles = StyleSheet.create({
   imageTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
     padding: spacing.sm,
+  },
+  imageTopLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sampleRibbon: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(234,179,8,0.95)',
+  },
+  sampleRibbonText: {
+    color: '#1e293b',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
   },
   badgeRow: {
     flexDirection: 'row',
