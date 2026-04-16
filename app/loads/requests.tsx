@@ -33,6 +33,7 @@ import {
 } from '../../src/lib/supabase/staffLoads';
 import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 import { colors } from '../../src/styles/theme';
+import { formatStaffLoadsEdgeAge } from '../../src/components/loads/staffLoadsDisplay';
 
 function lockLabel(r: StaffLoadRequestRow, now: number): string | null {
   if (!r.locked_by || !r.lock_expires_at) return null;
@@ -53,6 +54,10 @@ function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
         '— open · — listed'
       : null;
 
+  const edgeStamp = formatStaffLoadsEdgeAge(
+    r.status === 'answered' ? r.latest_answer_at ?? null : r.created_at
+  );
+
   return (
     <Pressable style={styles.cardOuter} onPress={() => router.push(`/loads/request/${r.id}`)}>
       <StaffLoadsCardShell accentColor={accent} style={styles.cardShell} compact>
@@ -67,6 +72,7 @@ function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
             arriveAt={r.arrive_at}
             aircraftType={r.aircraft_type ?? null}
             flightIdForPlaceholder={r.id}
+            edgeTimestamp={edgeStamp || null}
             previewLine={preview}
             trailingBadge={
               r.request_kind === 'priority' ? (
@@ -74,6 +80,7 @@ function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
                   label="Priority"
                   backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
                   color={STAFF_LOADS_VISUAL.chip.fgPriority}
+                  textStyle={{ fontWeight: '600' }}
                 />
               ) : null
             }

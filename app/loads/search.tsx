@@ -381,8 +381,8 @@ export default function LoadsSearchScreen() {
     Alert.alert('Requests posted', 'Your active requests are listed below on the Loads tab. Check the Requests tab to help other crew.');
   };
 
-  const STICKY_BAR_HEIGHT = resultsMode ? 56 + insets.bottom + 8 : 72;
-  const canSearch = !!from && !!to && !!date && !loading;
+  /** Safe-area only — no fixed bottom bar; search CTA lives in the Where to? card; post CTA scrolls in the list footer. */
+  const scrollBottomPad = insets.bottom + 20;
   const selectionMode = resultsMode;
 
   const previewCards = useMemo(
@@ -408,6 +408,8 @@ export default function LoadsSearchScreen() {
             latest_answer_load_level: (r.latest_answer_load_level as string | null) ?? null,
             latest_answer_open_seats_total: (r.latest_answer_open_seats_total as number | null | undefined) ?? null,
             latest_answer_nonrev_listed_total: (r.latest_answer_nonrev_listed_total as number | null | undefined) ?? null,
+            created_at: (r.created_at as string | undefined) ?? undefined,
+            latest_answer_at: (r.latest_answer_at as string | null | undefined) ?? null,
             options: r.options,
           }}
         />
@@ -417,7 +419,14 @@ export default function LoadsSearchScreen() {
 
   const listHeader = useMemo(
     () => (
-      <View style={{ paddingHorizontal: 16 }}>
+      <View
+        style={{
+          paddingHorizontal: 16,
+          /** Space under Loads / Requests / Wallet before the Where to? card (or results toolbar). */
+          paddingTop: 12,
+          paddingBottom: 0,
+        }}
+      >
         {!resultsMode ? (
           <>
             <AirportAirlinePickers
@@ -548,6 +557,32 @@ export default function LoadsSearchScreen() {
     ]
   );
 
+  const listFooter = useMemo(() => {
+    if (!selectionMode) return null;
+    return (
+      <View style={styles.scrollFooterCta}>
+        <Pressable
+          style={[
+            styles.primaryButton,
+            (posting || selectedIds.length === 0 || costPreview > credits) && styles.primaryButtonDisabled,
+          ]}
+          disabled={posting || selectedIds.length === 0 || costPreview > credits}
+          onPress={() => void onPostRequests()}
+        >
+          <Text style={styles.primaryButtonText}>
+            {posting
+              ? 'Posting…'
+              : selectedIds.length === 0
+                ? 'Select flights'
+                : costPreview > credits
+                  ? `Need ${costPreview} credits`
+                  : `Post ${selectedIds.length} request${selectedIds.length === 1 ? '' : 's'}`}
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }, [selectionMode, posting, selectedIds.length, costPreview, credits, onPostRequests]);
+
   const renderItem = useCallback(
     ({ item }: { item: NonRevLoadFlight }) => {
       const sel = !!selected[item.id];
@@ -588,57 +623,18 @@ export default function LoadsSearchScreen() {
       />
       <FlatList
         ref={listRef}
-        style={{ flex: 1 }}
+        style={{ flex: 1, backgroundColor: '#f8fafc' }}
         data={selectionMode ? visibleFlights : []}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={listHeader}
+        ListFooterComponent={listFooter}
         renderItem={renderItem}
         keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={REFRESH_CONTROL_COLORS} tintColor={REFRESH_TINT} />
         }
-        contentContainerStyle={{ paddingBottom: STICKY_BAR_HEIGHT }}
+        contentContainerStyle={{ paddingBottom: scrollBottomPad, flexGrow: 1 }}
       />
-      <View style={[styles.stickyBar, { paddingBottom: Math.max(insets.bottom, 6) }]}>
-        {resultsMode ? (
-          <>
-            <Pressable
-              style={[
-                styles.primaryButton,
-                (posting || selectedIds.length === 0 || costPreview > credits) && styles.primaryButtonDisabled,
-              ]}
-              disabled={posting || selectedIds.length === 0 || costPreview > credits}
-              onPress={() => void onPostRequests()}
-            >
-              <Text style={styles.primaryButtonText}>
-                {posting
-                  ? 'Posting…'
-                  : selectedIds.length === 0
-                    ? 'Select flights'
-                    : costPreview > credits
-                      ? `Need ${costPreview} credits`
-                      : `Post ${selectedIds.length} request${selectedIds.length === 1 ? '' : 's'}`}
-              </Text>
-            </Pressable>
-          </>
-        ) : (
-          <>
-            <Pressable
-              onPress={() => void handleSearch()}
-              disabled={!canSearch}
-              style={({ pressed }) => [
-                styles.primaryButton,
-                !canSearch && styles.primaryButtonDisabled,
-                pressed && canSearch && { opacity: 0.85 },
-              ]}
-            >
-              <Text style={styles.primaryButtonText}>
-                {!canSearch ? 'Add route & date' : 'Search flights'}
-              </Text>
-            </Pressable>
-          </>
-        )}
-      </View>
 
       <Modal visible={airlineModalOpen} transparent animationType="fade" onRequestClose={() => setAirlineModalOpen(false)}>
         <Pressable style={styles.airlineModalOverlay} onPress={() => setAirlineModalOpen(false)}>
@@ -701,11 +697,11 @@ export default function LoadsSearchScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: '#f8fafc' },
   previewBox: {
-    marginBottom: 8,
+    marginBottom: 0,
   },
-  previewTitle: { fontWeight: '800', fontSize: 15, color: '#64748b', marginBottom: 8, letterSpacing: 0.3 },
+  previewTitle: { fontWeight: '700', fontSize: 13, color: '#64748b', marginBottom: 6, letterSpacing: 0.2 },
   compactSearchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -767,19 +763,8 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: 'center', marginTop: 32 },
   emptyText: { color: '#888', fontSize: 16, marginTop: 12 },
   emptySub: { color: '#94a3b8', fontSize: 14, marginTop: 8, textAlign: 'center', paddingHorizontal: 24, fontWeight: '600' },
-  stickyBar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    backgroundColor: '#FFFFFF',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.06)',
-    zIndex: 50,
-    elevation: 20,
-  },
+  /** Post-requests CTA at end of scroll (replaces former fixed bottom bar). */
+  scrollFooterCta: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 },
   primaryButton: {
     height: 56,
     borderRadius: 16,
@@ -832,8 +817,8 @@ const pickerStyles = StyleSheet.create({
     marginBottom: 8,
     minHeight: 48,
   },
-  inputText: { color: '#222', fontWeight: '600', fontSize: 16 },
-  inputPlaceholder: { color: '#bbb', fontSize: 16 },
+  inputText: { color: '#222', fontWeight: '600', fontSize: 16, flex: 1 },
+  inputPlaceholder: { color: '#bbb', fontSize: 16, flex: 1 },
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   swapBtn: { marginHorizontal: 8, backgroundColor: '#fff5f5', borderRadius: 20, padding: 8, borderWidth: 1, borderColor: '#eee' },
   rowBtns: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, marginBottom: 8 },

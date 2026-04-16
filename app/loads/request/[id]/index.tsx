@@ -17,19 +17,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import FlightClubHeader from '../../../../src/components/FlightClubHeader';
 import {
-  AirlineMonogram,
   STAFF_LOADS_VISUAL,
   StaffChip,
   StaffLoadsCardShell,
-  formatLocalHm,
-  formatTravelDateShort,
-  loadLevelChipColors,
-  loadLevelHeadline,
-  loadLevelStripColor,
-  normalizeStaffLoadLevel,
-  staffLoadsDetailAccentStrip,
+  staffLoadsAnsweredAccentStripFromSnapshot,
+  staffLoadsOpenSeatsHighlightBox,
 } from '../../../../src/components/loads/StaffLoadsRequestPresentation';
-import { StaffLoadsRoutePair } from '../../../../src/components/loads/StaffLoadsRoutePair';
+import { StaffLoadsTileInner } from '../../../../src/components/loads/StaffLoadsTileInner';
 import { useAuth } from '../../../../src/hooks/useAuth';
 import {
   addStaffRequestComment,
@@ -57,7 +51,6 @@ import {
   reportInaccurateStaffLoads,
   reopenStaleStaffLoadRequest,
   requestStaffLoadRefresh,
-  staffLoadsCabinEntries,
   upgradeStaffRequestToPriority,
   updateStaffRequestSettings,
   type NonrevFlightReportSummary,
@@ -80,6 +73,43 @@ function formatDurationLabel(depIso: string | null | undefined, arrIso: string |
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
   return `${h}h ${m}m block time`;
+}
+
+/** StaffTraveler-style “about 21 hours ago” copy. */
+function formatRelativeTimeAgo(iso: string | null | undefined): string {
+  if (!iso) return 'recently';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'recently';
+  const ms = Math.max(0, Date.now() - d.getTime());
+  const mins = Math.floor(ms / 60000);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `about ${mins} minute${mins === 1 ? '' : 's'} ago`;
+  if (hours < 24) return `about ${hours} hour${hours === 1 ? '' : 's'} ago`;
+  if (days < 7) return `about ${days} day${days === 1 ? '' : 's'} ago`;
+  return d.toLocaleDateString();
+}
+
+function formatCabinLabel(key: string): string {
+  const lower = key.trim().toLowerCase();
+  if (lower === 'f' || lower === 'first') return 'First';
+  if (lower === 'j' || lower === 'business' || lower === 'biz') return 'Business';
+  if (lower === 'w' || lower === 'premium' || lower === 'premium_economy' || lower === 'premium economy') return 'Premium Eco';
+  if (lower === 'y' || lower === 'eco' || lower === 'economy' || lower === 'coach') return 'Eco';
+  if (lower === 'main') return 'Main';
+  if (!key) return 'Cabin';
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function cabinBreakdownForDisplay(by: Record<string, unknown> | null | undefined): { label: string; n: number }[] {
+  if (!by || typeof by !== 'object') return [];
+  return Object.entries(by)
+    .map(([k, raw]) => ({
+      label: formatCabinLabel(k),
+      n: typeof raw === 'number' ? raw : Number(raw) || 0,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 function timelineEventLabel(eventType: string): string {
@@ -252,8 +282,12 @@ export default function StaffLoadRequestDetailRoute() {
     request.lock_expires_at &&
     new Date(request.lock_expires_at).getTime() > Date.now();
   const lockedByOther = !!(lockActive && userId && request.locked_by !== userId);
-  const openCabinLines = latest ? staffLoadsCabinEntries(latest.open_seats_by_cabin as Record<string, unknown>) : [];
-  const nonrevCabinLines = latest ? staffLoadsCabinEntries(latest.nonrev_by_cabin as Record<string, unknown>) : [];
+  const openCabinBreakdown = latest
+    ? cabinBreakdownForDisplay(latest.open_seats_by_cabin as Record<string, unknown> | null | undefined)
+    : [];
+  const nonrevCabinBreakdown = latest
+    ? cabinBreakdownForDisplay(latest.nonrev_by_cabin as Record<string, unknown> | null | undefined)
+    : [];
   const canRespondLoads =
     !!userId &&
     !!request &&
@@ -275,7 +309,25 @@ export default function StaffLoadRequestDetailRoute() {
       ['status_update', 'gate_change', 'refresh_requested', 'report_inaccurate'].includes(t.event_type)
     ).length;
 
-  const latestFlagged = latest && inaccuracyReports.some((r) => r.answer_id === latest.id);
+  const openSeatsHighlight = useMemo(
+    () =>
+      latest
+        ? staffLoadsOpenSeatsHighlightBox(latest.open_seats_total, latest.nonrev_listed_total, latest.load_level)
+        : null,
+    [latest]
+  );
+
+  const summaryAccentStrip = useMemo(
+    () =>
+      latest
+        ? staffLoadsAnsweredAccentStripFromSnapshot({
+            openSeats: latest.open_seats_total,
+            listedNonrev: latest.nonrev_listed_total,
+            loadLevel: latest.load_level,
+          })
+        : STAFF_LOADS_VISUAL.strip.neutral,
+    [latest]
+  );
 
   const canAddStructuredStatus = !!userId && !!request && (mine || request.enable_status_updates);
 
@@ -430,145 +482,190 @@ export default function StaffLoadRequestDetailRoute() {
 
   const depIso = flight?.depart_at ?? request.depart_at ?? null;
   const arrIso = flight?.arrive_at ?? request.arrive_at ?? null;
-  const dep = formatLocalHm(depIso);
-  const arr = formatLocalHm(arrIso);
-  const blockDur = formatDurationLabel(depIso, arrIso);
-  const travelLabel = formatTravelDateShort(request.travel_date);
-  const loadKind = latest ? normalizeStaffLoadLevel(latest.load_level) : 'unknown';
-  const loadHeadline = loadLevelHeadline(loadKind);
-  const loadStrip = latest ? loadLevelStripColor(loadKind) : STAFF_LOADS_VISUAL.strip.waiting;
-  const loadChipColors = loadLevelChipColors(loadKind);
-  const headerAccent = staffLoadsDetailAccentStrip({
-    status: request.status,
-    loadLevel: latest?.load_level,
-    refreshRequested: !!request.refresh_requested_at,
-    lockActive: !!lockActive,
-    latestFlagged: !!latestFlagged,
-  });
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
       <FlightClubHeader title="Load request" showLogo={false} />
-      <ScrollView contentContainerStyle={styles.pad}>
-        <StaffLoadsCardShell accentColor={headerAccent} style={styles.headerShell}>
-          <View style={styles.headerTopRow}>
-            <AirlineMonogram code={request.airline_code} />
-            <View style={styles.headerMain}>
-              <View style={styles.headerTitleRow}>
-                <Text style={styles.hAir}>
-                  {request.airline_code} {request.flight_number || '—'}
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.pad}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator
+      >
+        {!latest ? (
+          <StaffLoadsCardShell accentColor={STAFF_LOADS_VISUAL.strip.neutral} style={styles.headerShell}>
+            <StaffLoadsTileInner
+              airlineCode={request.airline_code}
+              flightNumber={request.flight_number}
+              fromAirport={request.from_airport}
+              toAirport={request.to_airport}
+              travelDate={request.travel_date}
+              departAt={depIso}
+              arriveAt={arrIso}
+              aircraftType={(flight as { aircraft_type?: string } | null)?.aircraft_type ?? request.aircraft_type ?? null}
+              flightIdForPlaceholder={request.id}
+              previewLine={null}
+              trailingBadge={
+                request.request_kind === 'priority' ? (
+                  <StaffChip
+                    label="Priority"
+                    backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
+                    color={STAFF_LOADS_VISUAL.chip.fgPriority}
+                  />
+                ) : null
+              }
+            />
+            {request.request_kind === 'priority' && request.priority_upgraded_at ? (
+              <Text style={styles.upgradeMeta}>Priority since {new Date(request.priority_upgraded_at).toLocaleDateString()}</Text>
+            ) : null}
+            {request.refresh_requested_at ? (
+              <View style={styles.calloutRefresh}>
+                <Ionicons name="refresh-circle-outline" size={16} color={STAFF_LOADS_VISUAL.chip.fgRefresh} />
+                <Text style={styles.calloutRefreshTx} numberOfLines={2}>
+                  Refresh requested · {new Date(request.refresh_requested_at).toLocaleString()}
                 </Text>
-                {request.request_kind === 'priority' ? (
-                  <View style={styles.headerChipRow}>
+              </View>
+            ) : null}
+            {lockActive ? (
+              <View style={styles.calloutLock}>
+                <Ionicons name="lock-closed-outline" size={16} color={STAFF_LOADS_VISUAL.chip.fgLock} />
+                <Text style={styles.calloutLockTx} numberOfLines={3}>
+                  {lockedByOther
+                    ? lockHolderDisplayName
+                      ? `${lockHolderDisplayName} is answering.`
+                      : 'Another crew member is answering.'
+                    : 'You have the answer lock — finish on the answer screen.'}
+                </Text>
+              </View>
+            ) : null}
+          </StaffLoadsCardShell>
+        ) : null}
+
+        {!latest ? (
+          <View style={styles.sectionLabelRow}>
+            <View style={styles.sectionAccentRule} />
+            <Text style={styles.sectionTitle}>Loads summary</Text>
+          </View>
+        ) : null}
+        <StaffLoadsCardShell accentColor={summaryAccentStrip} compact={!!latest} style={styles.summaryShell}>
+          {latest ? (
+            <>
+              <StaffLoadsTileInner
+                airlineCode={request.airline_code}
+                flightNumber={request.flight_number}
+                fromAirport={request.from_airport}
+                toAirport={request.to_airport}
+                travelDate={request.travel_date}
+                departAt={depIso}
+                arriveAt={arrIso}
+                aircraftType={(flight as { aircraft_type?: string } | null)?.aircraft_type ?? request.aircraft_type ?? null}
+                flightIdForPlaceholder={request.id}
+                previewLine={null}
+                trailingBadge={
+                  request.request_kind === 'priority' ? (
                     <StaffChip
                       label="Priority"
+                      size="sm"
                       backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
                       color={STAFF_LOADS_VISUAL.chip.fgPriority}
                     />
-                  </View>
-                ) : null}
+                  ) : null
+                }
+                edgeAction={
+                  <Pressable
+                    style={styles.stEdgeKebab}
+                    onPress={() => setMoreOpen(true)}
+                    accessibilityRole="button"
+                    accessibilityLabel="More actions"
+                    hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+                  >
+                    <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+                  </Pressable>
+                }
+              />
+
+              <View style={styles.stSummaryDivider} />
+
+              {request.refresh_requested_at ? (
+                <View style={styles.stUpdateBannerCompact}>
+                  <Text style={styles.stUpdateBannerTxCompact}>An update has been requested.</Text>
+                </View>
+              ) : null}
+              {lockActive ? (
+                <View style={styles.stLockBannerCompact}>
+                  <Ionicons name="lock-closed-outline" size={14} color={colors.headerRed} />
+                  <Text style={styles.stLockBannerTxCompact} numberOfLines={3}>
+                    {lockedByOther
+                      ? lockHolderDisplayName
+                        ? `${lockHolderDisplayName} is answering.`
+                        : 'Another crew member is answering.'
+                      : 'You have the answer lock — finish on the answer screen.'}
+                  </Text>
+                </View>
+              ) : null}
+
+              <Text style={styles.stSectionTitle}>Open seats</Text>
+              <View style={styles.stMetricRow}>
+                <View
+                  style={[
+                    styles.stTotalBoxOpen,
+                    openSeatsHighlight && {
+                      backgroundColor: openSeatsHighlight.bg,
+                      borderColor: openSeatsHighlight.borderColor,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.stTotalNum, openSeatsHighlight && { color: openSeatsHighlight.fg }]}>
+                    {latest.open_seats_total ?? '—'}
+                  </Text>
+                  <Text style={[styles.stTotalLabel, openSeatsHighlight && { color: openSeatsHighlight.labelFg }]}>
+                    Total
+                  </Text>
+                </View>
+                <View style={styles.stCabinStations}>
+                  {openCabinBreakdown.length ? (
+                    openCabinBreakdown.map((c) => (
+                      <View key={`o-${c.label}`} style={styles.stCabinStation}>
+                        <Text style={styles.stCabinStationNum}>{c.n}</Text>
+                        <Text style={styles.stCabinStationLbl}>{c.label}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    <View style={styles.stCabinMutedWrap}>
+                      <Text style={styles.stCabinMuted}>No cabin breakdown</Text>
+                    </View>
+                  )}
+                </View>
               </View>
-              <View style={styles.hRouteWrap}>
-                <StaffLoadsRoutePair from={request.from_airport} to={request.to_airport} size="lg" />
+
+              <Text style={[styles.stSectionTitle, styles.stSectionTitleSpaced]}>Listed non-rev passengers</Text>
+              <View style={styles.stMetricRow}>
+                <View style={styles.stTotalBoxNonrev}>
+                  <Text style={styles.stTotalNumDark}>{latest.nonrev_listed_total ?? '—'}</Text>
+                  <Text style={styles.stTotalLabelDark}>Total</Text>
+                </View>
+                <View style={styles.stCabinStations}>
+                  {nonrevCabinBreakdown.length ? (
+                    nonrevCabinBreakdown.map((c) => (
+                      <View key={`n-${c.label}`} style={styles.stCabinStation}>
+                        <Text style={styles.stCabinStationNum}>{c.n}</Text>
+                        <Text style={styles.stCabinStationLbl}>{c.label}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    <View style={styles.stCabinMutedWrap}>
+                      <Text style={styles.stCabinMuted}>No cabin breakdown</Text>
+                    </View>
+                  )}
+                </View>
               </View>
-              <View style={styles.headerMetaRow}>
-                <Text style={styles.hDate}>{travelLabel}</Text>
-                <Text style={styles.headerDot}>·</Text>
-                <Text style={styles.hTime}>
-                  {dep} – {arr}
-                  {blockDur ? ` · ${blockDur}` : ''}
+
+              <View style={styles.stFooterRow}>
+                <Ionicons name="person-circle-outline" size={12} color="#e2e8f0" />
+                <Text style={styles.stFooterTx}>
+                  Updated {formatRelativeTimeAgo(latest.as_of || latest.created_at)} by {latest.responder?.display_name || 'Crew'}
                 </Text>
               </View>
-            </View>
-          </View>
-          {request.request_kind === 'priority' && request.priority_upgraded_at ? (
-            <Text style={styles.upgradeMeta}>Priority since {new Date(request.priority_upgraded_at).toLocaleDateString()}</Text>
-          ) : null}
-          {request.refresh_requested_at ? (
-            <View style={styles.calloutRefresh}>
-              <Ionicons name="refresh-circle-outline" size={16} color={STAFF_LOADS_VISUAL.chip.fgRefresh} />
-              <Text style={styles.calloutRefreshTx} numberOfLines={2}>
-                Refresh requested · {new Date(request.refresh_requested_at).toLocaleString()}
-              </Text>
-            </View>
-          ) : null}
-          {lockActive ? (
-            <View style={styles.calloutLock}>
-              <Ionicons name="lock-closed-outline" size={16} color={STAFF_LOADS_VISUAL.chip.fgLock} />
-              <Text style={styles.calloutLockTx} numberOfLines={3}>
-                {lockedByOther
-                  ? lockHolderDisplayName
-                    ? `${lockHolderDisplayName} is answering.`
-                    : 'Another crew member is answering.'
-                  : 'You have the answer lock — finish on the answer screen.'}
-              </Text>
-            </View>
-          ) : null}
-        </StaffLoadsCardShell>
-
-        <View style={styles.sectionLabelRow}>
-          <View style={styles.sectionAccentRule} />
-          <Text style={styles.sectionTitle}>Loads summary</Text>
-        </View>
-        <StaffLoadsCardShell accentColor={latest ? loadStrip : STAFF_LOADS_VISUAL.strip.neutral} style={styles.summaryShell}>
-          {latest ? (
-            <>
-              <View style={styles.summaryHeadRow}>
-                <Text style={styles.summaryHeadline}>{loadHeadline}</Text>
-                <StaffChip
-                  label={latest.load_level}
-                  backgroundColor={loadChipColors.bg}
-                  color={loadChipColors.fg}
-                  size="md"
-                />
-              </View>
-              <View style={styles.statGrid}>
-                <View style={styles.statCell}>
-                  <Text style={styles.statLabel}>Open seats</Text>
-                  <Text style={styles.statValue}>{latest.open_seats_total ?? '—'}</Text>
-                </View>
-                <View style={styles.statCell}>
-                  <Text style={styles.statLabel}>Listed non-rev</Text>
-                  <Text style={styles.statValue}>{latest.nonrev_listed_total ?? '—'}</Text>
-                </View>
-              </View>
-              {openCabinLines.length ? (
-                <View style={styles.cabinSection}>
-                  <Text style={styles.cabinSectionTitle}>By cabin · open</Text>
-                  <View style={styles.cabinChipWrap}>
-                    {openCabinLines.map((c) => (
-                      <View key={`o-${c.key}`} style={styles.cabinChip}>
-                        <Text style={styles.cabinChipKey}>{c.key}</Text>
-                        <Text style={styles.cabinChipVal}>{c.value}</Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-              ) : null}
-              {nonrevCabinLines.length ? (
-                <View style={styles.cabinSection}>
-                  <Text style={styles.cabinSectionTitle}>By cabin · non-rev</Text>
-                  <View style={styles.cabinChipWrap}>
-                    {nonrevCabinLines.map((c) => (
-                      <View key={`n-${c.key}`} style={styles.cabinChip}>
-                        <Text style={styles.cabinChipKey}>{c.key}</Text>
-                        <Text style={styles.cabinChipVal}>{c.value}</Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-              ) : null}
-              <Text style={styles.sumMeta}>
-                Updated {new Date(latest.as_of || latest.created_at).toLocaleString()} · {latest.responder?.display_name || 'Crew'} ·{' '}
-                {latest.answer_source || 'community'}
-              </Text>
-              {latest.notes ? <Text style={styles.notes}>{latest.notes}</Text> : null}
-              {latestFlagged ? (
-                <View style={styles.flagBanner}>
-                  <StaffChip label="Needs refresh" backgroundColor={STAFF_LOADS_VISUAL.chip.bgRefresh} color={STAFF_LOADS_VISUAL.chip.fgRefresh} />
-                  <Text style={styles.flagBannerTx}>Latest answer was flagged inaccurate.</Text>
-                </View>
-              ) : null}
             </>
           ) : (
             <View style={styles.emptyLoads}>
@@ -576,14 +673,6 @@ export default function StaffLoadRequestDetailRoute() {
               <Text style={styles.muted}>No community loads on this request yet.</Text>
             </View>
           )}
-          {answers.length > 0 ? (
-            <Pressable style={styles.historyLink} onPress={() => router.push(`/loads/request/${request.id}/history`)}>
-              <Text style={styles.historyLinkTx}>
-                Loads history · {loadsUpdatesCount} update{loadsUpdatesCount === 1 ? '' : 's'}
-              </Text>
-              <Ionicons name="chevron-forward" size={18} color={colors.headerRed} />
-            </Pressable>
-          ) : null}
         </StaffLoadsCardShell>
 
         <View style={styles.sectionLabelRow}>
@@ -959,18 +1048,10 @@ export default function StaffLoadRequestDetailRoute() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f8fafc' },
-  pad: { padding: 16, paddingBottom: 48 },
+  pad: { padding: 16, paddingBottom: 16 },
+  /** Fills space under header so stack default white never shows through below short content. */
+  scroll: { flex: 1, backgroundColor: '#f8fafc' },
   headerShell: { marginBottom: 14 },
-  headerTopRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  headerMain: { flex: 1, minWidth: 0 },
-  headerTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  headerChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end', maxWidth: '52%' },
-  headerMetaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  headerDot: { fontSize: 13, color: '#cbd5e1', fontWeight: '700' },
-  hAir: { fontWeight: '900', fontSize: 18, color: '#0f172a', letterSpacing: -0.2, flex: 1, minWidth: 120 },
-  hRouteWrap: { marginTop: 8, alignItems: 'stretch' },
-  hDate: { color: '#64748b', fontWeight: '700', fontSize: 13 },
-  hTime: { color: '#0f172a', fontWeight: '800', fontSize: 13 },
   upgradeMeta: { marginTop: 10, fontSize: 11, fontWeight: '600', color: '#b45309' },
   calloutRefresh: {
     flexDirection: 'row',
@@ -1021,6 +1102,127 @@ const styles = StyleSheet.create({
   filterChipTx: { fontWeight: '800', fontSize: 11, color: '#64748b' },
   filterChipTxOn: { color: colors.headerRed },
   summaryShell: { marginBottom: 14 },
+  stEdgeKebab: { paddingVertical: 8, paddingHorizontal: 4, justifyContent: 'center', alignItems: 'center' },
+  stSummaryDivider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e2e8f0', marginVertical: 14 },
+  stUpdateBannerCompact: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 10,
+    borderRadius: 10,
+    backgroundColor: 'rgba(181,22,30,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(181,22,30,0.2)',
+  },
+  stUpdateBannerTxCompact: { textAlign: 'center', fontWeight: '700', fontSize: 12, color: colors.headerRed },
+  stLockBannerCompact: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginBottom: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#fef2f2',
+    borderRadius: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.headerRed,
+  },
+  stLockBannerTxCompact: { flex: 1, color: '#7f1d1d', fontWeight: '700', fontSize: 11, lineHeight: 15 },
+  stAnsweredTopRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  stAnsweredTopFlex: { flex: 1, minWidth: 8 },
+  stMoreHit: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingLeft: 8 },
+  stMoreTx: { fontSize: 15, fontWeight: '700', color: '#64748b' },
+  stUpdateBanner: {
+    backgroundColor: 'rgba(181,22,30,0.08)',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(181,22,30,0.22)',
+  },
+  stUpdateBannerTx: { textAlign: 'center', fontWeight: '700', fontSize: 14, color: colors.headerRed },
+  stLockBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.headerRed,
+  },
+  stLockBannerTx: { flex: 1, color: '#7f1d1d', fontWeight: '700', fontSize: 12, lineHeight: 17 },
+  stSectionTitle: { fontSize: 14, fontWeight: '800', color: '#0f172a', letterSpacing: -0.2, marginBottom: 8 },
+  stSectionTitleSpaced: { marginTop: 18 },
+  stMetricRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    flexWrap: 'nowrap',
+    gap: 10,
+    marginTop: 0,
+    minHeight: 52,
+  },
+  /** Open-seat total — fill + border from `staffLoadsOpenSeatsHighlightBox` (green / amber / red rule). */
+  stTotalBoxOpen: {
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingVertical: 7,
+    paddingHorizontal: 11,
+    minWidth: 68,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /** Same size for total + cabin columns — compact summary. */
+  stTotalNum: { fontSize: 14, fontWeight: '800', letterSpacing: -0.2 },
+  stTotalLabel: { fontSize: 9, fontWeight: '700', marginTop: 2, letterSpacing: 0.15 },
+  stTotalBoxNonrev: {
+    borderRadius: 10,
+    backgroundColor: '#e8e8ed',
+    paddingVertical: 7,
+    paddingHorizontal: 11,
+    minWidth: 68,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stTotalNumDark: { fontSize: 14, fontWeight: '800', color: '#334155', letterSpacing: -0.2 },
+  stTotalLabelDark: { fontSize: 9, fontWeight: '700', color: '#64748b', marginTop: 2, letterSpacing: 0.15 },
+  stCabinStations: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-evenly',
+    paddingBottom: 2,
+    paddingLeft: 4,
+  },
+  stCabinStation: { flex: 1, minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 4 },
+  stCabinStationNum: { fontSize: 14, fontWeight: '800', color: '#475569', letterSpacing: -0.2 },
+  stCabinStationLbl: { fontSize: 9, fontWeight: '700', color: '#94a3b8', marginTop: 5, textAlign: 'center' },
+  stCabinMutedWrap: { flex: 1, minHeight: 48, justifyContent: 'center', alignItems: 'center' },
+  stCabinMuted: { fontSize: 12, fontWeight: '600', color: '#94a3b8' },
+  stFooterRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18 },
+  stFooterTx: { flex: 1, fontSize: 13, fontWeight: '600', color: '#94a3b8', lineHeight: 18 },
+  stHelpRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 14 },
+  stHelpTx: { flex: 1, fontSize: 13, fontWeight: '600', color: '#64748b', lineHeight: 20 },
+  stHelpLink: { fontWeight: '800', color: colors.headerRed },
+  stLoadLevelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 18,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e2e8f0',
+  },
+  stLoadLevelLeft: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, flexShrink: 1 },
+  stLoadLevelLabel: { fontSize: 13, fontWeight: '800', color: '#64748b' },
+  stSourceMeta: { fontSize: 11, fontWeight: '700', color: '#94a3b8' },
   summaryHeadRow: {
     flexDirection: 'row',
     alignItems: 'center',

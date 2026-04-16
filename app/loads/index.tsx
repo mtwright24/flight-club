@@ -42,7 +42,7 @@ export default function LoadsScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
+  safe: { flex: 1, backgroundColor: '#f8fafc' },
   stickyHeader: {
     backgroundColor: '#fff',
     zIndex: 10,
@@ -54,5 +54,6 @@ const styles = StyleSheet.create({
     // Add elevation for Android
     elevation: 2,
   },
-  flex1: { flex: 1 },
+  /** Match list surface so any transient layout gap is not a harsh white slab. */
+  flex1: { flex: 1, backgroundColor: '#f8fafc' },
 });

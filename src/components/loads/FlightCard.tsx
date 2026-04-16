@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../../styles/theme';
 import { StaffLoadsCardShell } from './StaffLoadsRequestPresentation';
 import { StaffLoadsTileInner } from './StaffLoadsTileInner';
+import { formatStaffLoadsEdgeUntilDeparture } from './staffLoadsDisplay';
 
 /** Search / staff variant: same layout as active request tiles (StaffTraveler-style). */
 export type StaffLoadsStaffFlightMeta = {
@@ -81,10 +82,12 @@ export const FlightCard: React.FC<FlightCardProps> = ({
   };
 
   if (staff && staffMeta) {
+    const depStamp = formatStaffLoadsEdgeUntilDeparture(staffMeta.departAt);
     return (
       <View
         style={[
           styles.staffOuter,
+          selectionMode && styles.staffOuterSelBase,
           selectionMode && selected && !prioritySelected && styles.staffOuterSelStd,
           selectionMode && selected && prioritySelected && styles.staffOuterSelPri,
           selectionMode && selected && !prioritySelected && styles.staffOuterSelFillStd,
@@ -111,6 +114,7 @@ export const FlightCard: React.FC<FlightCardProps> = ({
               arriveAt={staffMeta.arriveAt}
               aircraftType={staffMeta.aircraft}
               flightIdForPlaceholder={staffMeta.flightId}
+              edgeTimestamp={depStamp || null}
             />
           </Pressable>
         </StaffLoadsCardShell>
@@ -207,24 +211,27 @@ const styles = StyleSheet.create({
   staffOuter: {
     marginHorizontal: 16,
     marginVertical: 5,
-    borderRadius: 22,
+    borderRadius: 20,
     overflow: 'visible',
+  },
+  /** Thin ring in selection mode — no layout jump; selected state swaps tint + border color */
+  staffOuterSelBase: {
+    borderWidth: 1.5,
+    borderColor: 'transparent',
   },
   staffShellFlex: { flex: 1 },
   staffPress: { flex: 1 },
   staffOuterSelStd: {
-    borderColor: colors.headerRed,
-    borderWidth: 2.5,
+    borderColor: 'rgba(181, 22, 30, 0.62)',
   },
   staffOuterSelPri: {
-    borderColor: '#ca8a04',
-    borderWidth: 2.5,
+    borderColor: 'rgba(217, 119, 6, 0.62)',
   },
   staffOuterSelFillStd: {
-    backgroundColor: '#fff7f7',
+    backgroundColor: 'rgba(181, 22, 30, 0.065)',
   },
   staffOuterSelFillPri: {
-    backgroundColor: '#fffbeb',
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
   },
   cardStaffPressed: {
     opacity: 0.96,
