@@ -1,3 +1,4 @@
+import { formatTripCompactShorthand } from './jetblueFlicaImport';
 import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus } from './types';
 import type { ScheduleEntryRow } from './scheduleApi';
 
@@ -60,19 +61,19 @@ function firstNonContPairing(days: ScheduleEntryRow[]): string {
   return days[0]?.pairing_code ?? '—';
 }
 
-function buildRouteSummary(legs: CrewScheduleLeg[], fallback: string): string {
+function buildCompactTripRouteSummary(legs: CrewScheduleLeg[], fallback: string): string {
   if (!legs.length) return fallback;
-  const parts: string[] = [];
-  for (const leg of legs) {
-    if (!parts.length) {
-      parts.push(leg.departureAirport, leg.arrivalAirport);
-    } else if (parts[parts.length - 1] === leg.departureAirport) {
-      parts.push(leg.arrivalAirport);
-    } else {
-      parts.push(leg.departureAirport, leg.arrivalAirport);
-    }
-  }
-  return parts.filter(Boolean).join(' → ');
+  /** Schedule calendar rows omit pairing base; use multi-day + round-trip heuristics in `formatTripCompactShorthand`. */
+  const compact = formatTripCompactShorthand(
+    legs.map((l) => ({
+      from_airport: l.departureAirport,
+      to_airport: l.arrivalAirport,
+      duty_date: l.dutyDate ?? null,
+    })),
+    null
+  );
+  if (compact !== '—') return compact;
+  return fallback;
 }
 
 function legFromRow(day: ScheduleEntryRow): CrewScheduleLeg | null {
@@ -153,7 +154,7 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
   const origin = firstLeg?.departureAirport;
   const destination = lastLeg?.arrivalAirport;
 
-  const routeSummary = buildRouteSummary(legs, first.city?.includes('→') ? String(first.city) : pairingCode);
+  const routeSummary = buildCompactTripRouteSummary(legs, first.city?.includes('→') ? String(first.city) : pairingCode);
 
   /** `schedule_entries.layover` is FLICA layover *time* (4-digit); do not treat as station name. */
   const layoverMeta = first.layover?.trim();

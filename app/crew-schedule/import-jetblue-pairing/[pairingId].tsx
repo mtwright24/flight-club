@@ -44,7 +44,8 @@ import {
 import {
   FC,
   formatDateRangeDisplay,
-  formatTripRouteArrows,
+  formatTripCompactFromDashChain,
+  formatTripCompactShorthandDisplay,
 } from '../../../src/features/crew-schedule/jetblueFlicaImportUi';
 import { confidenceBand } from '../../../src/features/crew-schedule/jetblueFlicaTemplate';
 import { scheduleTheme as T } from '../../../src/features/crew-schedule/scheduleTheme';
@@ -65,13 +66,10 @@ function useParams(): { pairingId?: string; importId?: string; batchId?: string 
 
 function legAssistTier(
   lf: Partial<Record<LegFieldKey, { state?: string }>> | undefined
-): 'ok' | 'review' | 'miss' {
+): 'ok' | 'miss' {
   if (!lf) return 'ok';
   for (const fs of Object.values(lf)) {
     if (fs?.state === 'missing_required') return 'miss';
-  }
-  for (const fs of Object.values(lf)) {
-    if (fs?.state === 'needs_review') return 'review';
   }
   return 'ok';
 }
@@ -93,7 +91,9 @@ function displayOcrAirportCode(s: string | null | undefined): string {
 }
 
 function shellColors(state: FieldReviewState | undefined): { border: string; bg: string } {
-  if (state === 'missing_required' || state === 'needs_review') return { border: '#F59E0B', bg: '#FFFBEB' };
+  if (state === 'missing_required') return { border: '#F59E0B', bg: '#FFFBEB' };
+  /** Soft parser hints (`needs_review`) stay neutral — only missing required gets warning chrome. */
+  if (state === 'needs_review') return { border: T.line, bg: T.surface };
   if (state === 'good') return { border: '#A7F3D0', bg: '#FFFFFF' };
   return { border: T.line, bg: T.surface };
 }
@@ -307,13 +307,8 @@ export default function ImportJetBluePairingScreen() {
   );
 
   const issueSummaryText = useMemo(() => {
-    const v = editorValidation;
-    const m = v.counts.missing;
-    const r = v.counts.review;
-    if (m > 0 && r > 0)
-      return `${m} required field${m === 1 ? '' : 's'} missing · ${r} field${r === 1 ? '' : 's'} need review`;
+    const m = editorValidation.counts.missing;
     if (m > 0) return `${m} required field${m === 1 ? '' : 's'} missing`;
-    if (r > 0) return `${r} field${r === 1 ? '' : 's'} need review`;
     return null;
   }, [editorValidation]);
 
@@ -322,7 +317,6 @@ export default function ImportJetBluePairingScreen() {
     [duties, editorValidation.pairingFields, editorValidation.legFields]
   );
   const issueRowsMissing = useMemo(() => issueRows.filter((r) => r.kind === 'missing_required'), [issueRows]);
-  const issueRowsReview = useMemo(() => issueRows.filter((r) => r.kind === 'needs_review'), [issueRows]);
 
   const tripExpandOnce = useRef(false);
   useEffect(() => {
@@ -345,7 +339,7 @@ export default function ImportJetBluePairingScreen() {
       'report_time_local',
       'base_code',
     ];
-    const hasPairingIssue = pairingKeys.some((k) => v.pairingFields[k]?.state !== 'good');
+    const hasPairingIssue = pairingKeys.some((k) => v.pairingFields[k]?.state === 'missing_required');
     if (hasPairingIssue) {
       setTripDetailsOpen(true);
       tripExpandOnce.current = true;
@@ -467,19 +461,6 @@ export default function ImportJetBluePairingScreen() {
       Alert.alert('Required fields', 'Please complete the highlighted fields before saving.');
       return;
     }
-    let reviewCt = 0;
-    for (const fs of Object.values(lf ?? {})) {
-      if (fs?.state === 'needs_review') reviewCt += 1;
-    }
-    if (reviewCt > 0) {
-      const ok = await new Promise<boolean>((res) => {
-        Alert.alert('Needs review', 'Some values still look uncertain. Save this leg anyway?', [
-          { text: 'Cancel', style: 'cancel', onPress: () => res(false) },
-          { text: 'Save changes', onPress: () => res(true) },
-        ]);
-      });
-      if (!ok) return;
-    }
     setLegSaving(true);
     try {
       const blockNum = hhmmToBlockNumeric(legBlock);
@@ -535,7 +516,7 @@ export default function ImportJetBluePairingScreen() {
       operate_end_date: endDate.trim() || null,
       report_time_local: report.trim() || null,
       base_code: base.trim() || null,
-      needs_review: persistValidation.badge === 'needs_review',
+      needs_review: persistValidation.badge === 'missing_info',
       pairing_confidence: persistValidation.badge === 'good' ? 0.92 : pairing?.pairing_confidence ?? 0.75,
     });
   }, [
@@ -628,31 +609,6 @@ export default function ImportJetBluePairingScreen() {
       );
       return;
     }
-    if (v.badge === 'needs_review' || v.counts.review > 0) {
-      Alert.alert(
-        'Needs review',
-        'Some fields still look uncertain. Save your trip details anyway?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Save pairing',
-            onPress: () => {
-              setSaving(true);
-              void (async () => {
-                try {
-                  await finishSaveAndNavigate();
-                } catch (e) {
-                  Alert.alert('Save failed', e instanceof Error ? e.message : String(e));
-                } finally {
-                  setSaving(false);
-                }
-              })();
-            },
-          },
-        ]
-      );
-      return;
-    }
     setSaving(true);
     try {
       await finishSaveAndNavigate();
@@ -707,12 +663,10 @@ export default function ImportJetBluePairingScreen() {
     ?.normalized_json;
   const routeFromNj = typeof nj?.routeSummary === 'string' ? nj.routeSummary.replace(/\s*→\s*/g, '-').replace(/→/g, '-') : null;
   const routeSummary = routeFromNj ?? buildRouteSummaryFromDuties(duties);
-  const routeArrowDisplay =
+  const routeHeroCompact =
     duties.length > 0
-      ? formatTripRouteArrows(duties)
-      : routeSummary && routeSummary !== '—'
-        ? routeSummary.split('-').join(' → ')
-        : '—';
+      ? formatTripCompactShorthandDisplay(duties, pairing?.base_code ?? null)
+      : formatTripCompactFromDashChain(routeSummary, pairing?.base_code ?? null);
   const laySummary = buildLayoverSummaryFromDuties(duties);
   const band = confidenceBand(pairing?.pairing_confidence ?? null);
 
@@ -744,7 +698,7 @@ export default function ImportJetBluePairingScreen() {
             </View>
           </View>
           <Text style={styles.summaryHeroRoute} numberOfLines={4}>
-            {routeArrowDisplay}
+            {routeHeroCompact}
           </Text>
           <Text style={styles.summaryHeroDates}>{formatDateRangeDisplay(startDate, endDate)}</Text>
           <Text style={styles.summaryHeroSub}>
@@ -765,58 +719,29 @@ export default function ImportJetBluePairingScreen() {
           </View>
         ) : null}
 
-        {issueRows.length > 0 ? (
+        {issueRowsMissing.length > 0 ? (
           <View style={styles.issueListCard}>
             <Text style={styles.issueListTitle}>What to check</Text>
             <Text style={styles.issueListHint}>Tap a row to jump to the field.</Text>
-            {issueRowsMissing.length > 0 ? (
-              <>
-                <Text style={styles.issueSectionLabel}>Missing required</Text>
-                {issueRowsMissing.map((row) => (
-                  <Pressable
-                    key={row.id}
-                    onPress={() => onIssueRowPress(row)}
-                    style={({ pressed }) => [styles.issueRow, pressed && styles.issueRowPressed]}
-                  >
-                    <Ionicons name="alert-circle" size={18} color={FC.warn} style={styles.issueRowIcon} />
-                    <View style={styles.issueRowTextCol}>
-                      <Text style={styles.issueRowText}>{row.label}</Text>
-                      {row.detail ? (
-                        <Text style={styles.issueRowDetail} numberOfLines={4}>
-                          {row.detail}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color={FC.textSubtle} />
-                  </Pressable>
-                ))}
-              </>
-            ) : null}
-            {issueRowsReview.length > 0 ? (
-              <>
-                <Text style={[styles.issueSectionLabel, issueRowsMissing.length > 0 && { marginTop: 10 }]}>
-                  Needs review
-                </Text>
-                {issueRowsReview.map((row) => (
-                  <Pressable
-                    key={row.id}
-                    onPress={() => onIssueRowPress(row)}
-                    style={({ pressed }) => [styles.issueRow, pressed && styles.issueRowPressed]}
-                  >
-                    <Ionicons name="warning" size={18} color={FC.warn} style={styles.issueRowIcon} />
-                    <View style={styles.issueRowTextCol}>
-                      <Text style={styles.issueRowText}>{row.label}</Text>
-                      {row.detail ? (
-                        <Text style={styles.issueRowDetail} numberOfLines={4}>
-                          {row.detail}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color={FC.textSubtle} />
-                  </Pressable>
-                ))}
-              </>
-            ) : null}
+            <Text style={styles.issueSectionLabel}>Missing required</Text>
+            {issueRowsMissing.map((row) => (
+              <Pressable
+                key={row.id}
+                onPress={() => onIssueRowPress(row)}
+                style={({ pressed }) => [styles.issueRow, pressed && styles.issueRowPressed]}
+              >
+                <Ionicons name="alert-circle" size={18} color={FC.warn} style={styles.issueRowIcon} />
+                <View style={styles.issueRowTextCol}>
+                  <Text style={styles.issueRowText}>{row.label}</Text>
+                  {row.detail ? (
+                    <Text style={styles.issueRowDetail} numberOfLines={4}>
+                      {row.detail}
+                    </Text>
+                  ) : null}
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={FC.textSubtle} />
+              </Pressable>
+            ))}
           </View>
         ) : null}
 

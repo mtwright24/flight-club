@@ -25,6 +25,7 @@ import {
   getSignedImportFileUrl,
   reviewCategoryForCandidate,
   updateImportCandidate,
+  type ApplyRow,
   type ScheduleImportCandidateRow,
 } from '../../../src/features/crew-schedule/scheduleApi';
 import {
@@ -41,7 +42,7 @@ import {
 import {
   FC,
   formatDateRangeDisplay,
-  formatTripRouteArrows,
+  formatTripCompactShorthandDisplay,
   pairingCardAttentionSubtext,
   pairingCardPrimaryLabel,
 } from '../../../src/features/crew-schedule/jetblueFlicaImportUi';
@@ -373,6 +374,13 @@ export default function ImportReviewScreen() {
 
   const pairingListY = useRef(0);
   const [uploadExpanded, setUploadExpanded] = useState(true);
+  /** Merge/replace must use a real Modal — `Alert.alert` with multiple buttons is a no-op on React Native Web. */
+  const [calendarSaveModal, setCalendarSaveModal] = useState<{
+    rows: ApplyRow[];
+    monthKey: string;
+    title: string;
+    message: string;
+  } | null>(null);
 
   useEffect(() => {
     if (pairings.length > 0) setUploadExpanded(false);
@@ -394,8 +402,31 @@ export default function ImportReviewScreen() {
   const confirmedApplyRows = useMemo(() => candidatesToConfirmedApplyRows(candidates), [candidates]);
   const confirmedCount = confirmedApplyRows.length;
 
+  const runCalendarSave = useCallback(
+    async (mode: 'merge' | 'replace', payload: { rows: ApplyRow[]; monthKey: string }) => {
+      if (!batchId) return;
+      setSaving(true);
+      try {
+        if (mode === 'merge') {
+          await applyMergeMonth(payload.monthKey, batchId, payload.rows);
+        } else {
+          await applyReplaceMonth(payload.monthKey, batchId, payload.rows);
+        }
+        router.replace('/crew-schedule/(tabs)');
+      } catch (e) {
+        Alert.alert('Save failed', e instanceof Error ? e.message : String(e));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [batchId, router]
+  );
+
   const openPairingSaveDialog = useCallback(async () => {
-    if (!batchId) return;
+    if (!batchId) {
+      Alert.alert('Missing batch', 'Go back and open this import again.');
+      return;
+    }
     if (!monthKey) {
       Alert.alert(
         'Month not set',
@@ -423,62 +454,27 @@ export default function ImportReviewScreen() {
         return;
       }
 
-      const showMergeReplace = () => {
-        Alert.alert(
-          'Save to calendar',
-          `Save ${pairingRows.length} schedule day${pairingRows.length === 1 ? '' : 's'} from your pairings for ${formatMonthSentence(monthKey)}.`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Merge with existing',
-              onPress: async () => {
-                setSaving(true);
-                try {
-                  await applyMergeMonth(monthKey, batchId, pairingRows);
-                  router.replace('/crew-schedule/(tabs)');
-                } catch (e) {
-                  Alert.alert('Save failed', e instanceof Error ? e.message : String(e));
-                } finally {
-                  setSaving(false);
-                }
-              },
-            },
-            {
-              text: 'Replace this month',
-              style: 'destructive',
-              onPress: async () => {
-                setSaving(true);
-                try {
-                  await applyReplaceMonth(monthKey, batchId, pairingRows);
-                  router.replace('/crew-schedule/(tabs)');
-                } catch (e) {
-                  Alert.alert('Save failed', e instanceof Error ? e.message : String(e));
-                } finally {
-                  setSaving(false);
-                }
-              },
-            },
-          ]
-        );
-      };
-
+      const baseMsg = `Save ${pairingRows.length} schedule day${pairingRows.length === 1 ? '' : 's'} from your pairings for ${formatMonthSentence(monthKey)}.`;
       if (gate.needsReviewConfirm) {
-        Alert.alert(
-          'Save with open review items?',
-          `${gate.reviewCount} item${gate.reviewCount === 1 ? '' : 's'} are still flagged for review. You can save now or go back and double-check.`,
-          [
-            { text: 'Go back', style: 'cancel' },
-            { text: 'Save to schedule', onPress: showMergeReplace },
-          ]
-        );
+        setCalendarSaveModal({
+          rows: pairingRows,
+          monthKey,
+          title: 'Save with open review items?',
+          message: `${gate.reviewCount} item${gate.reviewCount === 1 ? '' : 's'} are still flagged for review. You can merge or replace anyway, or go back to double-check.\n\n${baseMsg}`,
+        });
         return;
       }
 
-      showMergeReplace();
+      setCalendarSaveModal({
+        rows: pairingRows,
+        monthKey,
+        title: 'Save to calendar',
+        message: baseMsg,
+      });
     } catch (e) {
       Alert.alert('Could not prepare save', e instanceof Error ? e.message : String(e));
     }
-  }, [batchId, legsByPairing, monthKey, pairings, router]);
+  }, [batchId, legsByPairing, monthKey, pairings]);
 
   const openLineBasedSaveDialog = useCallback(() => {
     if (!batchId || !monthKey) return;
@@ -489,43 +485,13 @@ export default function ImportReviewScreen() {
       );
       return;
     }
-    Alert.alert(
-      'Add to calendar',
-      `Save ${confirmedCount} confirmed row${confirmedCount === 1 ? '' : 's'} for ${formatMonthSentence(monthKey)}.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Merge with existing',
-          onPress: async () => {
-            setSaving(true);
-            try {
-              await applyMergeMonth(monthKey, batchId, confirmedApplyRows);
-              router.replace('/crew-schedule/(tabs)');
-            } catch (e) {
-              Alert.alert('Save failed', e instanceof Error ? e.message : String(e));
-            } finally {
-              setSaving(false);
-            }
-          },
-        },
-        {
-          text: 'Replace this month',
-          style: 'destructive',
-          onPress: async () => {
-            setSaving(true);
-            try {
-              await applyReplaceMonth(monthKey, batchId, confirmedApplyRows);
-              router.replace('/crew-schedule/(tabs)');
-            } catch (e) {
-              Alert.alert('Save failed', e instanceof Error ? e.message : String(e));
-            } finally {
-              setSaving(false);
-            }
-          },
-        },
-      ]
-    );
-  }, [batchId, confirmedApplyRows, confirmedCount, monthKey, router]);
+    setCalendarSaveModal({
+      rows: confirmedApplyRows,
+      monthKey,
+      title: 'Add to calendar',
+      message: `Save ${confirmedCount} confirmed row${confirmedCount === 1 ? '' : 's'} for ${formatMonthSentence(monthKey)}.`,
+    });
+  }, [batchId, confirmedApplyRows, confirmedCount, monthKey]);
 
   const openSaveDialog = useCallback(() => {
     if (pairings.length > 0) {
@@ -859,7 +825,7 @@ export default function ImportReviewScreen() {
               const badgeLabel = primary.label;
               const needsAttention = primary.severity !== 'good';
               const badgeStyle = needsAttention ? styles.badgeSmWarn : styles.badgeSmOk;
-              const routeDisplay = formatTripRouteArrows(legs);
+              const routeDisplay = formatTripCompactShorthandDisplay(legs, p.base_code);
               const attentionSub = pairingCardAttentionSubtext(pv);
               return pairingPrimaryMode ? (
                 <Pressable
@@ -914,7 +880,7 @@ export default function ImportReviewScreen() {
                   </Text>
                   {routeDisplay !== '—' ? (
                     <Text style={styles.pairingCardRoute} numberOfLines={2}>
-                      Route {routeDisplay.replace(/ → /g, '-')}
+                      Trip {routeDisplay}
                     </Text>
                   ) : null}
                   {attentionSub ? (
@@ -1136,6 +1102,48 @@ export default function ImportReviewScreen() {
           )}
         </View>
       ) : null}
+
+      <Modal
+        visible={calendarSaveModal != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCalendarSaveModal(null)}
+      >
+        <Pressable style={styles.calModalBackdrop} onPress={() => setCalendarSaveModal(null)}>
+          <Pressable style={styles.calModalCard} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.calModalTitle}>{calendarSaveModal?.title ?? 'Save to calendar'}</Text>
+            <Text style={styles.calModalBody}>{calendarSaveModal?.message}</Text>
+            <View style={styles.calModalBtns}>
+              <Pressable style={styles.calModalGhost} onPress={() => setCalendarSaveModal(null)}>
+                <Text style={styles.calModalGhostTx}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.calModalPrimary}
+                onPress={() => {
+                  const p = calendarSaveModal;
+                  if (!p) return;
+                  setCalendarSaveModal(null);
+                  void runCalendarSave('merge', { rows: p.rows, monthKey: p.monthKey });
+                }}
+              >
+                <Text style={styles.calModalPrimaryTx}>Merge with existing</Text>
+              </Pressable>
+              <Pressable
+                style={styles.calModalDanger}
+                onPress={() => {
+                  const p = calendarSaveModal;
+                  if (!p) return;
+                  setCalendarSaveModal(null);
+                  void runCalendarSave('replace', { rows: p.rows, monthKey: p.monthKey });
+                }}
+              >
+                <Text style={styles.calModalDangerTx}>Replace this month</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <ZoomableImportImage
         visible={imageModalVisible}
         uri={previewUrl}
@@ -1527,4 +1535,49 @@ const styles = StyleSheet.create({
   btnGhostText: { color: T.textSecondary, fontWeight: '700', fontSize: 15 },
   btnGhostTextCompact: { fontSize: 13, fontWeight: '600' },
   btnGhostTextDestructive: { color: '#B91C1C', fontWeight: '700', fontSize: 15 },
+  calModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  calModalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    maxWidth: 420,
+    width: '100%',
+    alignSelf: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0f172a',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.15,
+        shadowRadius: 24,
+      },
+      android: { elevation: 12 },
+      default: {},
+    }),
+  },
+  calModalTitle: { fontSize: 18, fontWeight: '900', color: '#0f172a', marginBottom: 10 },
+  calModalBody: { fontSize: 15, fontWeight: '600', color: '#475569', lineHeight: 22, marginBottom: 18 },
+  calModalBtns: { gap: 10 },
+  calModalPrimary: {
+    backgroundColor: T.accent,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  calModalPrimaryTx: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  calModalDanger: {
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  calModalDangerTx: { color: '#b91c1c', fontWeight: '800', fontSize: 16 },
+  calModalGhost: { paddingVertical: 10, alignItems: 'center' },
+  calModalGhostTx: { color: '#64748b', fontWeight: '800', fontSize: 15 },
 });

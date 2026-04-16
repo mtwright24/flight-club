@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -9,10 +9,11 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { validateJetBluePairingImport } from '../../../src/features/crew-schedule/jetblueFlicaImportValidation';
 import { confidenceBand } from '../../../src/features/crew-schedule/jetblueFlicaTemplate';
 import {
   buildLayoverSummaryFromDuties,
-  buildRouteSummaryFromDuties,
+  formatTripCompactShorthand,
   fetchBatchesForScheduleImport,
   fetchDutiesForPairing,
   fetchPairingsForScheduleImport,
@@ -47,6 +48,7 @@ export default function ImportJetBlueReviewScreen() {
   const [pairings, setPairings] = useState<SchedulePairingRow[]>([]);
   const [batches, setBatches] = useState<{ id: string }[]>([]);
   const [dutyMap, setDutyMap] = useState<Record<string, SchedulePairingDutyRow[]>>({});
+  const [dutiesLoaded, setDutiesLoaded] = useState(false);
 
   const load = useCallback(async () => {
     if (!importId) return;
@@ -76,8 +78,10 @@ export default function ImportJetBlueReviewScreen() {
   useEffect(() => {
     if (!pairings.length) {
       setDutyMap({});
+      setDutiesLoaded(true);
       return;
     }
+    setDutiesLoaded(false);
     let cancelled = false;
     void (async () => {
       const entries = await Promise.all(
@@ -90,7 +94,10 @@ export default function ImportJetBlueReviewScreen() {
           }
         })
       );
-      if (!cancelled) setDutyMap(Object.fromEntries(entries));
+      if (!cancelled) {
+        setDutyMap(Object.fromEntries(entries));
+        setDutiesLoaded(true);
+      }
     })();
     return () => {
       cancelled = true;
@@ -99,12 +106,34 @@ export default function ImportJetBlueReviewScreen() {
 
   const firstBatchId = batches[0]?.id;
 
-  const confirmedPairings = pairings.filter(
-    (p) => !p.needs_review && !p.pairing_requires_review && (p.pairing_confidence ?? 0) >= 0.85
-  );
-  const reviewPairings = pairings.filter(
-    (p) => p.needs_review || p.pairing_requires_review || (p.pairing_confidence ?? 0) < 0.85
-  );
+  /** Align with pairing detail hero: field validation badge, not raw parser confidence alone. */
+  const needsAttentionByPairingId = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const p of pairings) {
+      if (!dutiesLoaded) {
+        const band = confidenceBand(p.pairing_confidence ?? null);
+        m.set(p.id, band === 'low');
+        continue;
+      }
+      const legs = dutyMap[p.id] ?? [];
+      const v = validateJetBluePairingImport(
+        {
+          pairing_id: (p.pairing_id ?? '').trim(),
+          operate_start_date: (p.operate_start_date ?? '').trim(),
+          operate_end_date: (p.operate_end_date ?? '').trim(),
+          report_time_local: (p.report_time_local ?? '').trim(),
+          base_code: (p.base_code ?? '').trim(),
+        },
+        legs,
+        p
+      );
+      m.set(p.id, v.badge !== 'good');
+    }
+    return m;
+  }, [pairings, dutyMap, dutiesLoaded]);
+
+  const confirmedPairings = pairings.filter((p) => !needsAttentionByPairingId.get(p.id));
+  const reviewPairings = pairings.filter((p) => needsAttentionByPairingId.get(p.id));
 
   if (!importId) {
     return (
@@ -146,7 +175,7 @@ export default function ImportJetBlueReviewScreen() {
           <Text style={styles.statLine}>Screenshots: {images.length}</Text>
           <Text style={styles.statLine}>OCR batches: {batches.length}</Text>
           <Text style={styles.statLine}>Pairings extracted: {pairings.length}</Text>
-          <Text style={styles.statLine}>Confirmed (high): {confirmedPairings.length}</Text>
+          <Text style={styles.statLine}>Confirmed: {confirmedPairings.length}</Text>
           <Text style={styles.statLine}>Needs review: {reviewPairings.length + issues.length}</Text>
         </View>
 
@@ -185,11 +214,10 @@ export default function ImportJetBlueReviewScreen() {
 
         {pairings.map((p) => {
           const legs = dutyMap[p.id] ?? [];
-          const route = buildRouteSummaryFromDuties(legs);
+          const route = formatTripCompactShorthand(legs, p.base_code);
           const lays = buildLayoverSummaryFromDuties(legs);
           const band = confidenceBand(p.pairing_confidence ?? null);
-          const needs =
-            p.needs_review || p.pairing_requires_review || band === 'low' || (p.pairing_confidence ?? 0) < 0.85;
+          const needs = needsAttentionByPairingId.get(p.id) === true;
           return (
             <Pressable
               key={p.id}
@@ -204,16 +232,18 @@ export default function ImportJetBlueReviewScreen() {
               <View style={styles.cardHeader}>
                 <Text style={styles.cardTitle}>{p.pairing_id}</Text>
                 <View style={[styles.badge, needs ? styles.badgeWarn : styles.badgeOk]}>
-                  <Text style={styles.badgeText}>{needs ? 'Review' : 'Confirmed'}</Text>
+                  <Text style={styles.badgeText}>{needs ? 'Needs attention' : 'Confirmed'}</Text>
                 </View>
               </View>
               <Text style={styles.cardLine}>
                 {p.operate_start_date ?? '—'} → {p.operate_end_date ?? '—'} · Report {p.report_time_local ?? '—'}
               </Text>
               <Text style={styles.cardLine}>Base {p.base_code ?? '—'}</Text>
-              <Text style={styles.cardLine} numberOfLines={2}>
-                Route: {route}
-              </Text>
+              {route !== '—' ? (
+                <Text style={styles.cardLine} numberOfLines={2}>
+                  Trip {route}
+                </Text>
+              ) : null}
               <Text style={styles.cardLine} numberOfLines={1}>
                 Layovers: {lays ?? '—'}
               </Text>

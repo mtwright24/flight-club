@@ -28,7 +28,8 @@ function isoToDowThreeLetter(iso: string): string {
 }
 
 function extractDEndDigitsFromText(text: string): string | null {
-  const m = text.match(/D-END\s*:?\s*(\d{3,4})L?\b/i);
+  const flat = text.replace(/\u2013/g, '-').replace(/\u2014/g, '-');
+  const m = flat.match(/\bD[\s\-–—]*END\s*:?\s*(\d{3,4})L?\b/i);
   return m ? m[1].replace(/\D/g, '').slice(0, 4) : null;
 }
 

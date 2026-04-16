@@ -3,7 +3,11 @@
  * Visual tokens are derived from `scheduleTheme` so cards/typography/accent stay aligned with the schedule UI.
  */
 
-import { buildRouteSummaryFromDuties } from './jetblueFlicaImport';
+import {
+  buildRouteSummaryFromDuties,
+  formatTripCompactFromDashChain,
+  formatTripCompactShorthand,
+} from './jetblueFlicaImport';
 import type { SchedulePairingDutyRow } from './jetblueFlicaImport';
 import type { PairingFieldKey, PairingImportValidation } from './jetblueFlicaImportValidation';
 import { scheduleTheme as T } from './scheduleTheme';
@@ -33,7 +37,17 @@ const PAIRING_FIELD_ORDER: PairingFieldKey[] = [
   'base_code',
 ];
 
-/** Route: JFK-LAX-SFO as JFK → LAX → SFO (deduped chain from legs). */
+/** Compact trip line: layover pattern + return base (spaced IATA codes). Prefer this on list/tile cards. */
+export function formatTripCompactShorthandDisplay(
+  legs: Pick<SchedulePairingDutyRow, 'from_airport' | 'to_airport' | 'duty_date'>[],
+  baseCode: string | null | undefined
+): string {
+  return formatTripCompactShorthand(legs, baseCode);
+}
+
+export { formatTripCompactFromDashChain };
+
+/** Full leg chain with arrows — expanded pairing editor / duty detail only. */
 export function formatTripRouteArrows(legs: Pick<SchedulePairingDutyRow, 'from_airport' | 'to_airport'>[]): string {
   const dash = buildRouteSummaryFromDuties(legs);
   if (dash === '—') return '—';
@@ -61,22 +75,18 @@ function formatOne(iso: string): string {
 
 export type ValidationSnapshot = PairingImportValidation;
 
-/** List + detail: single rule — good vs any attention; severity distinguishes missing vs review-only. */
+/** List + detail: “Looks good” unless required fields are missing (soft parser flags do not flip the label). */
 export function pairingCardPrimaryLabel(v: ValidationSnapshot): { label: string; severity: 'good' | 'missing' | 'review' } {
   if (v.badge === 'good') return { label: 'Looks good', severity: 'good' };
-  if (v.badge === 'missing_info') return { label: 'Needs attention', severity: 'missing' };
-  return { label: 'Needs attention', severity: 'review' };
+  return { label: 'Needs attention', severity: 'missing' };
 }
 
-/** Second line on list cards — required missing vs fields that need review. */
+/** Second line on list cards — only missing required (not soft review counts). */
 export function pairingCardAttentionSubtext(v: ValidationSnapshot): string | null {
   if (v.badge === 'good') return null;
   const m = v.counts.missing;
-  const r = v.counts.review;
-  const parts: string[] = [];
-  if (m > 0) parts.push(`${m} required field${m === 1 ? '' : 's'} missing`);
-  if (r > 0) parts.push(`${r} field${r === 1 ? '' : 's'} need review`);
-  return parts.length ? parts.join(' · ') : null;
+  if (m > 0) return `${m} required field${m === 1 ? '' : 's'} missing`;
+  return null;
 }
 
 function footline(fs: { reasonDisplay?: string; helper?: string } | undefined): string | null {
@@ -87,8 +97,9 @@ function footline(fs: { reasonDisplay?: string; helper?: string } | undefined): 
   return t ? shorten(t) : null;
 }
 
-/** One short line for card footer when not “Looks good”. */
+/** One short line for card footer when required fields are missing. */
 export function pairingCardFootnote(v: ValidationSnapshot): string | null {
+  if (v.badge === 'good') return null;
   for (const key of PAIRING_FIELD_ORDER) {
     const f = v.pairingFields[key];
     if (f?.state === 'missing_required') {
@@ -104,23 +115,6 @@ export function pairingCardFootnote(v: ValidationSnapshot): string | null {
       }
     }
   }
-  for (const key of PAIRING_FIELD_ORDER) {
-    const f = v.pairingFields[key];
-    if (f?.state === 'needs_review') {
-      const line = footline(f);
-      if (line) return line;
-    }
-  }
-  for (const leg of Object.values(v.legFields)) {
-    if (!leg) continue;
-    for (const fs of Object.values(leg)) {
-      if (fs?.state === 'needs_review') {
-        const line = footline(fs);
-        if (line) return line;
-      }
-    }
-  }
-  if (v.badge === 'needs_review') return 'Some details need review';
   return null;
 }
 

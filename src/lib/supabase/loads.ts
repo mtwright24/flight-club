@@ -98,9 +98,11 @@ function generateMockFlights(
     const departAt = new Date(`${dYear}-${dMonth}-${dDay}T${String(departHour).padStart(2, '0')}:${String(i * 5 % 60).padStart(2, '0')}:00Z`).toISOString();
     const arriveAt = new Date(`${dYear}-${dMonth}-${dDay}T${String(arriveHour).padStart(2, '0')}:${String((i * 5 + 45) % 60).padStart(2, '0')}:00Z`).toISOString();
 
+    const carrier = (airline || 'DL').toUpperCase().slice(0, 3) || 'DL';
+    const num = 100 + ((seed + i * 37) % 899);
     flights.push({
-      airline_code: airline,
-      flight_number: `${airline.toUpperCase()}${1000 + seed + i}`,
+      airline_code: carrier,
+      flight_number: `${carrier}${num}`,
       from_airport: from,
       to_airport: to,
       depart_at: departAt,

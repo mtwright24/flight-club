@@ -24,4 +24,19 @@ export function getAirlineByCode(code?: string) {
   return AIRLINES.find((x) => x.code === code);
 }
 
+/** Display name for tiles; falls back to IATA code when unknown. */
+const EXTRA_NAMES: Record<string, string> = {
+  NK: 'Spirit',
+  F9: 'Frontier',
+  SY: 'Sun Country',
+  G4: 'Allegiant',
+  AS: 'Alaska',
+};
+
+export function getAirlineDisplayName(code?: string): string {
+  const c = (code || '').trim().toUpperCase();
+  if (!c) return '—';
+  return getAirlineByCode(c)?.name ?? EXTRA_NAMES[c] ?? c;
+}
+
 export default AIRLINES;

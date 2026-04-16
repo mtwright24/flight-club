@@ -53,6 +53,11 @@ export type StaffLoadRequestRow = {
   options: unknown;
   created_at: string;
   requester?: { display_name: string | null; avatar_url: string | null };
+  /** Latest community answer load level (joined client-side for list accent strips). */
+  latest_answer_load_level?: string | null;
+  /** Latest answer seat snapshot (joined client-side for strip color + tile preview). */
+  latest_answer_open_seats_total?: number | null;
+  latest_answer_nonrev_listed_total?: number | null;
 };
 
 export type StaffRequestCommentRow = {
@@ -269,6 +274,61 @@ async function attachProfiles<T extends { user_id: string }>(rows: T[]): Promise
   return rows.map((r) => ({ ...r, requester: map[r.user_id] }));
 }
 
+function deriveLatestAnswerOpenSeats(a: {
+  open_seats_total: number | null;
+  open_seats_by_cabin: Record<string, number> | null;
+}): number | null {
+  if (a.open_seats_total != null && !Number.isNaN(Number(a.open_seats_total))) {
+    return Math.max(0, Number(a.open_seats_total));
+  }
+  const by = a.open_seats_by_cabin;
+  if (by && typeof by === 'object') {
+    const s = Object.values(by).reduce((acc, v) => acc + (typeof v === 'number' && !Number.isNaN(v) ? v : 0), 0);
+    if (s > 0) return s;
+  }
+  return null;
+}
+
+/** Join latest `load_answers` row per request: load level + seat counts for strips and tile previews. */
+export async function attachLatestAnswerLoadLevels(rows: StaffLoadRequestRow[]): Promise<StaffLoadRequestRow[]> {
+  const ids = rows.filter((r) => r.status === 'answered').map((r) => r.id);
+  if (!ids.length) return rows;
+  const { data, error } = await supabase
+    .from('load_answers')
+    .select('request_id, load_level, open_seats_total, open_seats_by_cabin, nonrev_listed_total')
+    .in('request_id', ids)
+    .eq('is_latest', true);
+  if (error || !data?.length) return rows;
+  type Ans = {
+    request_id: string;
+    load_level: string;
+    open_seats_total: number | null;
+    open_seats_by_cabin: Record<string, number> | null;
+    nonrev_listed_total: number | null;
+  };
+  const map = Object.fromEntries(
+    (data as Ans[]).map((a) => {
+      const o = deriveLatestAnswerOpenSeats(a);
+      const n = a.nonrev_listed_total != null && !Number.isNaN(Number(a.nonrev_listed_total)) ? Number(a.nonrev_listed_total) : null;
+      return [
+        a.request_id,
+        { load_level: a.load_level, open: o, listed: n },
+      ];
+    })
+  );
+  return rows.map((r) => {
+    if (r.status !== 'answered') return r;
+    const x = map[r.id] as { load_level: string; open: number | null; listed: number | null } | undefined;
+    if (!x) return r;
+    return {
+      ...r,
+      latest_answer_load_level: x.load_level ?? null,
+      latest_answer_open_seats_total: x.open,
+      latest_answer_nonrev_listed_total: x.listed,
+    };
+  });
+}
+
 export type StaffLoadRequestListTab = 'open' | 'answered';
 
 export async function listStaffLoadRequests(tab: StaffLoadRequestListTab): Promise<{
@@ -291,7 +351,8 @@ export async function listStaffLoadRequests(tab: StaffLoadRequestListTab): Promi
     };
   }
   const withP = await attachProfiles((rpcRows || []) as { user_id: string }[]);
-  return { data: withP as StaffLoadRequestRow[] };
+  const withLevels = await attachLatestAnswerLoadLevels(withP as StaffLoadRequestRow[]);
+  return { data: withLevels };
 }
 
 export async function getStaffLoadRequestDetail(requestId: string): Promise<{
@@ -878,12 +939,15 @@ export async function isStaffRequestPinned(userId: string, requestId: string) {
 export async function listMyOpenStaffRequestsPreview(userId: string, limit = 5) {
   const { data } = await supabase
     .from('load_requests')
-    .select('id, airline_code, from_airport, to_airport, travel_date, flight_number, request_kind')
+    .select(
+      'id, airline_code, from_airport, to_airport, travel_date, flight_number, request_kind, status, depart_at, arrive_at, aircraft_type, refresh_requested_at, created_at, options, locked_by, lock_expires_at'
+    )
     .eq('user_id', userId)
-    .in('status', ['open', 'stale'])
+    .in('status', ['open', 'stale', 'answered'])
     .order('created_at', { ascending: false })
     .limit(limit);
-  return data || [];
+  const rows = (data || []) as StaffLoadRequestRow[];
+  return attachLatestAnswerLoadLevels(rows);
 }
 
 export async function insertStaffTimelineEvent(

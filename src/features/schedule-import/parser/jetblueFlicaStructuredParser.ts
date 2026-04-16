@@ -142,7 +142,6 @@ const BASE_EQUIP = /Base\/Equip\s*:?\s*([^|\n]+)/i;
 const BASE_EQUIP_ALT = /Base\s*[|/]\s*Equip\s*:?\s*([^|\n]+)/i;
 const OPERATES = /Operates\s*:?\s*([^\n]+)/i;
 const ONLY_EXCEPT = /(ONLY ON[^|\n]*|EXCEPT ON[^|\n]*)/gi;
-const D_END = /D-END\s*:?\s*([^\n]+)/i;
 const HOTEL_HINT = /\b(Hilton|Westin|Hyatt|Marriott|Pullman|Holiday Inn|Courtyard|Grand Hyatt|Riverside|Hyatt)\b/i;
 
 const MONTH_MAP: Record<string, number> = {
@@ -571,7 +570,7 @@ function lineLooksLikeSegmentRow(line: string, monthCtx?: JetBluePairingMonthCon
   if (lineLooksLikeTableHeader(t)) return false;
   if (extractPairingHeaderFromLine(t, monthCtx)) return false;
   if (PAIRING_HEADER.test(t)) return false;
-  if (D_END.test(t)) return false;
+  if (lineLooksLikeDEnd(t)) return false;
   /** Phone FLICA often glues `FR 03 7 JFK-LHR 2057 0915` — DOW+day + FLT + pair on one line; must still be a segment row. */
   const pairs = extractStationPairs(t);
   if (pairs.length > 0) return true;
@@ -979,14 +978,47 @@ export function buildRouteChainFromDutyDays(dutyDays: JetBlueDutyDayParsed[]): s
   return collapsed.join('-');
 }
 
-function parseDEndLine(line: string): { dEndLocal: string | null; nextReportLocal: string | null } {
+/** PDF text often uses EN/EM dash or spaced “D END”; unpdf also joins/split lines unpredictably. */
+function lineLooksLikeDEnd(line: string): boolean {
   const t = line.trim();
-  if (!/D-END/i.test(t)) return { dEndLocal: null, nextReportLocal: null };
-  const dm = /\bD-END\s*:?\s*(\d{3,4})L?\b/i.exec(t);
-  const rm = /\bREPT\s*:?\s*(\d{3,4})L?\b/i.exec(t);
+  return /D[\s\u00AD\u200B\-–—]*END/i.test(t.replace(/\u2013/g, '-').replace(/\u2014/g, '-'));
+}
+
+function parseDEndLine(line: string): { dEndLocal: string | null; nextReportLocal: string | null } {
+  const t = line
+    .trim()
+    .replace(/\u2013/g, '-')
+    .replace(/\u2014/g, '-')
+    .replace(/\s+/g, ' ');
+  if (!/D[\s\-–—]*END/i.test(t)) return { dEndLocal: null, nextReportLocal: null };
+  const dm = /\bD[\s\-–—]*END\s*:?\s*(\d{3,4})L?\b/i.exec(t);
+  const rm = /\b(?:REPT|Next\s+report)\s*:?\s*(\d{3,4})L?\b/i.exec(t);
   return {
     dEndLocal: dm ? flicaTimeTokenToLocal(dm[1]) : null,
     nextReportLocal: rm ? flicaTimeTokenToLocal(rm[1]) : null,
+  };
+}
+
+/**
+ * PDF: D-END may sit on one line split across “D-” / “END 1146L” or use Unicode dashes.
+ * Scan the whole duty blob (flattened) when line-by-line matching missed release time.
+ */
+function extractDutyEndFromSectionBlob(raw: string): { dEndLocal: string | null; nextReportLocal: string | null; note: string | null } {
+  const flat = raw
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\u2013/g, '-')
+    .replace(/\u2014/g, '-')
+    .trim();
+  if (!flat) return { dEndLocal: null, nextReportLocal: null, note: null };
+  const dm = /\bD[\s\-–—]*END\s*:?\s*(\d{3,4})L?\b/i.exec(flat);
+  const rm = /\b(?:REPT|Next\s+report)\s*:?\s*(\d{3,4})L?\b/i.exec(flat);
+  const snippet = dm ? flat.slice(Math.max(0, dm.index - 20), Math.min(flat.length, dm.index + dm[0].length + 30)) : null;
+  return {
+    dEndLocal: dm ? flicaTimeTokenToLocal(dm[1]) : null,
+    nextReportLocal: rm ? flicaTimeTokenToLocal(rm[1]) : null,
+    note: snippet,
   };
 }
 
@@ -996,9 +1028,10 @@ function parseDEndLine(line: string): { dEndLocal: string | null; nextReportLoca
  */
 /** Substring after the first D-END time clause — layover city + rest usually follow on the same OCR line. */
 function textAfterDEndClause(line: string): string | null {
-  const dm = /\bD-END\s*:?\s*\d{3,4}L?\b/i.exec(line);
+  const n = line.replace(/\u2013/g, '-').replace(/\u2014/g, '-');
+  const dm = /\bD[\s\-–—]*END\s*:?\s*\d{3,4}L?\b/i.exec(n);
   if (!dm) return null;
-  const tail = line.slice(dm.index + dm[0].length).trim();
+  const tail = n.slice(dm.index + dm[0].length).trim();
   return tail.length ? tail : null;
 }
 
@@ -1022,16 +1055,16 @@ function extractLayoverCityRestFromSection(
   for (const line of sectionLines) {
     const t = line.trim();
     if (/^FLTNO|^DEPL/i.test(t)) continue;
-    if (!/\bD-END\b/i.test(t) && /BSE\s*REPT/i.test(t)) continue;
+    if (!lineLooksLikeDEnd(t) && /BSE\s*REPT/i.test(t)) continue;
 
-    const dEndParsed = /\bD-END\b/i.test(t) ? parseDEndLine(t) : { dEndLocal: null, nextReportLocal: null };
+    const dEndParsed = lineLooksLikeDEnd(t) ? parseDEndLine(t) : { dEndLocal: null, nextReportLocal: null };
     const dEndDigits = dEndParsed.dEndLocal?.replace(/\D/g, '').slice(-4) ?? null;
     const reptDigits = dEndParsed.nextReportLocal?.replace(/\D/g, '').slice(-4) ?? null;
     const flightTimes = segmentDepArrDigitSet(t);
     const isSeg = lineLooksLikeSegmentRow(t, monthCtx);
 
     const scanZones: { text: string; postDEnd: boolean }[] = [];
-    if (/\bD-END\b/i.test(t)) {
+    if (lineLooksLikeDEnd(t)) {
       const tail = textAfterDEndClause(t);
       if (tail) scanZones.push({ text: tail, postDEnd: true });
     } else {
@@ -1208,9 +1241,10 @@ function mergeAdjacentDutyDaysSameIso(days: JetBlueDutyDayParsed[]): JetBlueDuty
       prev.segments = [...prev.segments, ...d.segments];
       prev.rawBlock = [prev.rawBlock, d.rawBlock].filter(Boolean).join('\n');
       prev.confidence = Math.max(prev.confidence, d.confidence);
-      if (!prev.dEndNotes && d.dEndNotes) prev.dEndNotes = d.dEndNotes;
-      if (!prev.dEndLocal && d.dEndLocal) prev.dEndLocal = d.dEndLocal;
-      if (!prev.nextReportLocal && d.nextReportLocal) prev.nextReportLocal = d.nextReportLocal;
+      /** Later chunk usually holds the day’s D-END / REPT after the last leg (PDF splits legs across markers). */
+      if (d.dEndNotes) prev.dEndNotes = d.dEndNotes;
+      if (d.dEndLocal) prev.dEndLocal = d.dEndLocal;
+      if (d.nextReportLocal) prev.nextReportLocal = d.nextReportLocal;
       if (!prev.layoverNotes && d.layoverNotes) prev.layoverNotes = d.layoverNotes;
       if (!prev.layoverCityCode && d.layoverCityCode) prev.layoverCityCode = d.layoverCityCode;
       if (!prev.layoverRestDisplay && d.layoverRestDisplay) prev.layoverRestDisplay = d.layoverRestDisplay;
@@ -1266,7 +1300,8 @@ function parsePairingBlock(
     const chunkText = sec.join('\n');
     /** Drop mini-calendar / stray DOW+DD lines (no airport pair, no D-END) — they skew Mar 1–30 “duty” spans. */
     const chunkHasStationPair = /\b[A-Z]{3}\s*[-–]\s*[A-Z]{3}\b/.test(chunkText);
-    const chunkHasDEnd = sec.some((l) => D_END.test(l.trim()));
+    const chunkHasDEnd =
+      /\bD[\s\-–—]*END/i.test(chunkText) || sec.some((l) => lineLooksLikeDEnd(l));
     const chunkHasHotel = sec.some((l) => HOTEL_HINT.test(l.trim()));
     if (!chunkHasStationPair && !chunkHasDEnd && !chunkHasHotel) continue;
 
@@ -1301,7 +1336,7 @@ function parsePairingBlock(
     const segmentRawLines: string[] = [];
     for (const ln of mergedSec) {
       const t = ln.trim();
-      if (D_END.test(t)) {
+      if (lineLooksLikeDEnd(t)) {
         dend = t;
         const pe = parseDEndLine(t);
         dEndLocal = pe.dEndLocal;
@@ -1321,6 +1356,14 @@ function parsePairingBlock(
       segments.push(seg);
     }
     fillMissingFlightsInDutySection(mergedSec, segments);
+    if (!dEndLocal) {
+      const fb = extractDutyEndFromSectionBlob(mergedSec.join('\n'));
+      if (fb.dEndLocal) {
+        dEndLocal = fb.dEndLocal;
+        if (!nextReportLocal && fb.nextReportLocal) nextReportLocal = fb.nextReportLocal;
+        dend = dend ?? fb.note ?? 'D-END';
+      }
+    }
     const segmentsForDuty = segments.filter(
       (s) => Boolean(s.departureStation?.trim() && s.arrivalStation?.trim())
     );
@@ -1726,7 +1769,7 @@ export function parseJetBlueFlicaMonthlyScreenshot(
     meta,
     monthlyTotals,
     pairings,
-    parserVersion: 'jetblue_flica_structured_v20_duty_dates_pdf_dup_dd_operate_clamp',
+    parserVersion: 'jetblue_flica_structured_v21_d_end_pdf_flex_merge',
     debug,
   };
 }

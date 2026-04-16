@@ -24,7 +24,8 @@ export type FieldStatus = {
   candidates?: FieldCandidate[];
 };
 
-export type PairingImportBadge = 'good' | 'needs_review' | 'missing_info';
+/** Hero / list: only `missing_info` blocks “Looks good”; soft field `needs_review` states do not flip the badge. */
+export type PairingImportBadge = 'good' | 'missing_info';
 
 export type PairingFieldKey =
   | 'pairing_id'
@@ -265,8 +266,7 @@ function sweepPairingFieldStates(
       else if (st === 'needs_review') review += 1;
     }
   }
-  const badge: PairingImportBadge =
-    missing > 0 ? 'missing_info' : review > 0 ? 'needs_review' : 'good';
+  const badge: PairingImportBadge = missing > 0 ? 'missing_info' : 'good';
   return { missing, review, badge };
 }
 
@@ -828,10 +828,8 @@ export function evaluateBatchPairingSave(
   pairings: SchedulePairingRow[],
   legsByPairingId: Map<string, SchedulePairingDutyRow[]>
 ): BatchSaveGate {
-  let anyReviewBadge = false;
   let anyMissing = false;
   let firstPairingId: string | undefined;
-  let reviewCount = 0;
   const pairingCodesWithMissing: string[] = [];
 
   for (const p of pairings) {
@@ -843,10 +841,6 @@ export function evaluateBatchPairingSave(
       const code = (p.pairing_id ?? '').trim() || p.id;
       pairingCodesWithMissing.push(code);
     }
-    if (v.badge === 'needs_review') {
-      anyReviewBadge = true;
-    }
-    reviewCount += v.counts.review;
   }
 
   if (anyMissing) {
@@ -864,6 +858,6 @@ export function evaluateBatchPairingSave(
     };
   }
 
-  const needsReviewConfirm = anyReviewBadge || reviewCount > 0;
-  return { ok: true, needsReviewConfirm, reviewCount };
+  /** Soft “needs_review” fields do not block batch save or require an extra confirm — only missing required does. */
+  return { ok: true, needsReviewConfirm: false, reviewCount: 0 };
 }

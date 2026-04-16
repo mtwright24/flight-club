@@ -55,8 +55,9 @@ export interface CrewScheduleTrip {
   dutyDays: number;
   creditHours?: number;
   status: ScheduleDutyStatus;
+  /** Aviation-style compact trip line (layover pattern + return base), not a full leg chain. */
   routeSummary: string;
-  /** e.g. JFK → SFO */
+  /** First departure airport on the trip (not necessarily crew base). */
   origin?: string;
   destination?: string;
   layoverCity?: string;

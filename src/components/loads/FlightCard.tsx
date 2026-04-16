@@ -1,68 +1,132 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../../styles/theme';
+import { StaffLoadsCardShell } from './StaffLoadsRequestPresentation';
+import { StaffLoadsTileInner } from './StaffLoadsTileInner';
+
+/** Search / staff variant: same layout as active request tiles (StaffTraveler-style). */
+export type StaffLoadsStaffFlightMeta = {
+  airlineCode: string;
+  flightNumber: string | null;
+  from: string;
+  to: string;
+  travelDate: string;
+  departAt: string;
+  arriveAt: string;
+  aircraft: string | null;
+  flightId: string;
+};
 
 interface FlightCardProps {
-  flightNumber: string;
+  /** Legacy list layout only (ignored when `staffMeta` is set). */
+  flightNumber?: string;
   airline?: string;
-  route: string;
-  departTime: string;
-  arriveTime: string;
-  duration: string;
-  reportCount: number;
+  route?: string;
+  departTime?: string;
+  arriveTime?: string;
+  duration?: string;
+  reportCount?: number;
   aircraft?: string | null;
-  /** When set, card shows selection UI and calls onToggleSelect instead of navigating. */
+  travelDateLabel?: string;
   selectionMode?: boolean;
   selected?: boolean;
   prioritySelected?: boolean;
   onPress: () => void;
   onToggleSelect?: () => void;
-  /** When selected in selection mode, long-press toggles priority for this flight. */
   onTogglePriority?: () => void;
+  variant?: 'staff' | 'legacy';
+  /** Staff Loads search tiles — same body as active request cards. */
+  staffMeta?: StaffLoadsStaffFlightMeta;
 }
 
 export const FlightCard: React.FC<FlightCardProps> = ({
-  flightNumber,
+  flightNumber = '',
   airline,
-  route,
-  departTime,
-  arriveTime,
-  duration,
-  reportCount,
+  route = '',
+  departTime = '',
+  arriveTime = '',
+  duration = '',
+  reportCount = 0,
   aircraft,
+  travelDateLabel,
   selectionMode,
   selected,
   prioritySelected,
   onPress,
   onToggleSelect,
   onTogglePriority,
+  variant = 'legacy',
+  staffMeta,
 }) => {
+  const staff = variant === 'staff';
+
+  const stripColor = !staff
+    ? 'transparent'
+    : !selectionMode
+      ? '#cbd5e1'
+      : selected
+        ? prioritySelected
+          ? '#ca8a04'
+          : colors.headerRed
+        : '#cbd5e1';
+
   const onCardPress = () => {
     if (selectionMode && onToggleSelect) onToggleSelect();
     else onPress();
   };
+
+  const onLongPress = () => {
+    if (!selectionMode || !onTogglePriority) return;
+    if (selected) onTogglePriority();
+  };
+
+  if (staff && staffMeta) {
+    return (
+      <View
+        style={[
+          styles.staffOuter,
+          selectionMode && selected && !prioritySelected && styles.staffOuterSelStd,
+          selectionMode && selected && prioritySelected && styles.staffOuterSelPri,
+          selectionMode && selected && !prioritySelected && styles.staffOuterSelFillStd,
+          selectionMode && selected && prioritySelected && styles.staffOuterSelFillPri,
+        ]}
+      >
+        <StaffLoadsCardShell accentColor={stripColor} style={styles.staffShellFlex} compact>
+          <Pressable
+            style={({ pressed }) => [styles.staffPress, pressed && styles.cardStaffPressed]}
+            onPress={onCardPress}
+            onLongPress={onLongPress}
+            delayLongPress={380}
+            accessibilityRole="button"
+            accessibilityLabel={`Flight ${staffMeta.airlineCode} ${staffMeta.flightNumber || ''}, ${staffMeta.from} to ${staffMeta.to}`}
+            accessibilityState={selectionMode ? { selected: !!selected } : undefined}
+          >
+            <StaffLoadsTileInner
+              airlineCode={staffMeta.airlineCode}
+              flightNumber={staffMeta.flightNumber}
+              fromAirport={staffMeta.from}
+              toAirport={staffMeta.to}
+              travelDate={staffMeta.travelDate}
+              departAt={staffMeta.departAt}
+              arriveAt={staffMeta.arriveAt}
+              aircraftType={staffMeta.aircraft}
+              flightIdForPlaceholder={staffMeta.flightId}
+            />
+          </Pressable>
+        </StaffLoadsCardShell>
+      </View>
+    );
+  }
+
   return (
     <Pressable
-      style={({ pressed }) => [
-        styles.card,
-        pressed && styles.cardPressed,
-        selectionMode && selected && styles.cardSelected,
-        selectionMode && prioritySelected && styles.cardPriority,
-      ]}
-      onPress={onCardPress}
-      onLongPress={selectionMode && selected && onTogglePriority ? () => onTogglePriority() : undefined}
-      delayLongPress={320}
+      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+      onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={`Flight ${flightNumber}, ${route}`}
-      accessibilityState={selectionMode ? { selected: !!selected, disabled: false } : undefined}
     >
       <View style={styles.content}>
         <View style={styles.left}>
-          {selectionMode ? (
-            <View style={[styles.check, selected && styles.checkOn, prioritySelected && styles.checkPriority]}>
-              <Text style={styles.checkMark}>{selected ? (prioritySelected ? '★' : '✓') : ''}</Text>
-            </View>
-          ) : null}
           <View style={styles.flightBadge}>
             {airline ? <Text style={styles.airlineTiny}>{airline}</Text> : null}
             <Text style={styles.flightBadgeText}>{flightNumber}</Text>
@@ -80,16 +144,10 @@ export const FlightCard: React.FC<FlightCardProps> = ({
         </View>
 
         <View style={styles.right}>
-          {selectionMode && reportCount <= 0 ? (
-            <View style={styles.selectHint}>
-              <Text style={styles.selectHintTx}>Tap</Text>
-            </View>
-          ) : (
-            <View style={styles.reportBadge}>
-              <Text style={styles.reportCount}>{reportCount}</Text>
-              <Text style={styles.reportLabel}>reports</Text>
-            </View>
-          )}
+          <View style={styles.reportBadge}>
+            <Text style={styles.reportCount}>{reportCount}</Text>
+            <Text style={styles.reportLabel}>reports</Text>
+          </View>
         </View>
       </View>
     </Pressable>
@@ -146,6 +204,31 @@ export const LoadStatusPill: React.FC<LoadStatusPillProps> = ({ status, size = '
 };
 
 const styles = StyleSheet.create({
+  staffOuter: {
+    marginHorizontal: 16,
+    marginVertical: 5,
+    borderRadius: 22,
+    overflow: 'visible',
+  },
+  staffShellFlex: { flex: 1 },
+  staffPress: { flex: 1 },
+  staffOuterSelStd: {
+    borderColor: colors.headerRed,
+    borderWidth: 2.5,
+  },
+  staffOuterSelPri: {
+    borderColor: '#ca8a04',
+    borderWidth: 2.5,
+  },
+  staffOuterSelFillStd: {
+    backgroundColor: '#fff7f7',
+  },
+  staffOuterSelFillPri: {
+    backgroundColor: '#fffbeb',
+  },
+  cardStaffPressed: {
+    opacity: 0.96,
+  },
   card: {
     marginHorizontal: 16,
     marginVertical: 8,
@@ -155,25 +238,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#eee',
   },
-  cardSelected: { borderColor: colors.headerRed, borderWidth: 2, backgroundColor: '#fff8f8' },
-  cardPriority: { borderColor: '#B8860B', backgroundColor: '#fffdf5' },
   cardPressed: {
     opacity: 0.92,
     backgroundColor: '#fafafa',
   },
-  check: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#ccc',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  checkOn: { borderColor: colors.headerRed, backgroundColor: colors.headerRed },
-  checkPriority: { borderColor: '#B8860B', backgroundColor: '#B8860B' },
-  checkMark: { color: '#fff', fontWeight: '900', fontSize: 14 },
   airlineTiny: { fontSize: 9, fontWeight: '800', color: '#666', marginBottom: 2 },
   ac: { fontSize: 11, color: '#888', marginBottom: 4 },
   content: {
@@ -186,14 +254,16 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   flightBadge: {
-    backgroundColor: '#f5f5f5',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 6,
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   flightBadgeText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#000',
   },
   middle: {
@@ -211,13 +281,14 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   time: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#333',
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
   },
   duration: {
     fontSize: 12,
-    color: '#999',
+    fontWeight: '700',
+    color: '#64748b',
   },
   right: {
     alignItems: 'flex-end',
@@ -236,8 +307,6 @@ const styles = StyleSheet.create({
     color: '#999',
     marginTop: 1,
   },
-  selectHint: { alignItems: 'center', justifyContent: 'center', minWidth: 44 },
-  selectHintTx: { fontSize: 11, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase' },
   pill: {
     borderRadius: 6,
     alignSelf: 'flex-start',

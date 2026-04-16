@@ -29,6 +29,7 @@ import {
   normalizeStaffLoadLevel,
   staffLoadsDetailAccentStrip,
 } from '../../../../src/components/loads/StaffLoadsRequestPresentation';
+import { StaffLoadsRoutePair } from '../../../../src/components/loads/StaffLoadsRoutePair';
 import { useAuth } from '../../../../src/hooks/useAuth';
 import {
   addStaffRequestComment,
@@ -457,38 +458,19 @@ export default function StaffLoadRequestDetailRoute() {
                 <Text style={styles.hAir}>
                   {request.airline_code} {request.flight_number || '—'}
                 </Text>
-                <View style={styles.headerChipRow}>
-                  {request.status === 'answered' ? (
-                    <StaffChip
-                      label="Answered"
-                      backgroundColor={STAFF_LOADS_VISUAL.chip.bgAnswered}
-                      color={STAFF_LOADS_VISUAL.chip.fgAnswered}
-                    />
-                  ) : request.status === 'stale' ? (
-                    <StaffChip
-                      label="Stale"
-                      backgroundColor={STAFF_LOADS_VISUAL.chip.bgStale}
-                      color={STAFF_LOADS_VISUAL.chip.fgStale}
-                    />
-                  ) : (
-                    <StaffChip
-                      label="Open"
-                      backgroundColor={STAFF_LOADS_VISUAL.chip.bgOpen}
-                      color={STAFF_LOADS_VISUAL.chip.fgOpen}
-                    />
-                  )}
-                  {request.request_kind === 'priority' ? (
+                {request.request_kind === 'priority' ? (
+                  <View style={styles.headerChipRow}>
                     <StaffChip
                       label="Priority"
                       backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
                       color={STAFF_LOADS_VISUAL.chip.fgPriority}
                     />
-                  ) : null}
-                </View>
+                  </View>
+                ) : null}
               </View>
-              <Text style={styles.hRoute}>
-                {request.from_airport} → {request.to_airport}
-              </Text>
+              <View style={styles.hRouteWrap}>
+                <StaffLoadsRoutePair from={request.from_airport} to={request.to_airport} size="lg" />
+              </View>
               <View style={styles.headerMetaRow}>
                 <Text style={styles.hDate}>{travelLabel}</Text>
                 <Text style={styles.headerDot}>·</Text>
@@ -497,14 +479,6 @@ export default function StaffLoadRequestDetailRoute() {
                   {blockDur ? ` · ${blockDur}` : ''}
                 </Text>
               </View>
-              {mine ? (
-                <StaffChip
-                  label="Your request"
-                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgMine}
-                  color={STAFF_LOADS_VISUAL.chip.fgMine}
-                  style={{ marginTop: 10 }}
-                />
-              ) : null}
             </View>
           </View>
           {request.request_kind === 'priority' && request.priority_upgraded_at ? (
@@ -994,7 +968,7 @@ const styles = StyleSheet.create({
   headerMetaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   headerDot: { fontSize: 13, color: '#cbd5e1', fontWeight: '700' },
   hAir: { fontWeight: '900', fontSize: 18, color: '#0f172a', letterSpacing: -0.2, flex: 1, minWidth: 120 },
-  hRoute: { fontWeight: '800', fontSize: 16, color: '#334155', marginTop: 4, letterSpacing: 0.2 },
+  hRouteWrap: { marginTop: 8, alignItems: 'stretch' },
   hDate: { color: '#64748b', fontWeight: '700', fontSize: 13 },
   hTime: { color: '#0f172a', fontWeight: '800', fontSize: 13 },
   upgradeMeta: { marginTop: 10, fontSize: 11, fontWeight: '600', color: '#b45309' },

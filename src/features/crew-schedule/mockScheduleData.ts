@@ -39,7 +39,7 @@ export function getMockTripsForMonth(year: number, month: number): CrewScheduleT
       dutyDays: 1,
       creditHours: 12,
       status: 'flying',
-      routeSummary: 'JFK → SFO',
+      routeSummary: 'SFO',
       origin: 'JFK',
       destination: 'SFO',
       layoverCity: 'San Francisco',
@@ -68,7 +68,7 @@ export function getMockTripsForMonth(year: number, month: number): CrewScheduleT
       dutyDays: 1,
       creditHours: 0,
       status: 'continuation',
-      routeSummary: 'SFO → return',
+      routeSummary: 'JFK',
       origin: 'SFO',
       destination: 'JFK',
       legs: [
@@ -113,7 +113,7 @@ export function getMockTripsForMonth(year: number, month: number): CrewScheduleT
       dutyDays: 1,
       creditHours: 3,
       status: 'deadhead',
-      routeSummary: 'DH | BOS → JFK',
+      routeSummary: 'DH · BOS JFK',
       origin: 'BOS',
       destination: 'JFK',
       legs: [

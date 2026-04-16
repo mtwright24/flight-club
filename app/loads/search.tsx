@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -8,7 +8,9 @@ import {
   Platform,
   Pressable,
   RefreshControl,
+  ScrollView,
   Text,
+  TextInput,
   View,
   StyleSheet,
 } from 'react-native';
@@ -17,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { AirportPickerModal } from '../../src/components/loads/AirportAirlinePickers';
 import { FlightCard } from '../../src/components/loads/FlightCard';
+import { StaffLoadsMyActiveRequestCard } from '../../src/components/loads/StaffLoadsMyActiveRequestCard';
 import StaffLoadsSearchOptionsSheet from '../../src/components/loads/StaffLoadsSearchOptionsSheet';
 import { useAuth } from '../../src/hooks/useAuth';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
@@ -31,19 +34,12 @@ import {
 import { searchFlights, type NonRevLoadFlight } from '../../src/lib/supabase/loads';
 import { REFRESH_CONTROL_COLORS, REFRESH_TINT } from '../../src/styles/refreshControl';
 import { colors } from '../../src/styles/theme';
+import { formatTravelDateShort } from '../../src/components/loads/StaffLoadsRequestPresentation';
 import {
   loadStaffLoadRecentSearches,
   persistStaffLoadRecentSearch,
   type StaffLoadRecentSearch,
 } from '../../lib/staffLoadsRecentSearches';
-
-function formatLoadsFlightLabel(item: NonRevLoadFlight): string {
-  const code = (item.airline_code || '').toUpperCase();
-  const num = (item.flight_number || '').trim();
-  if (!num) return code;
-  if (num.toUpperCase().startsWith(code)) return num;
-  return `${code} ${num}`.trim();
-}
 
 function AirportAirlinePickers({
   from,
@@ -56,6 +52,7 @@ function AirportAirlinePickers({
   loading,
   onOpenOptions,
   onOpenRecent,
+  showDisclaimer = true,
 }: {
   from: string;
   setFrom: (s: string) => void;
@@ -67,9 +64,25 @@ function AirportAirlinePickers({
   loading: boolean;
   onOpenOptions: () => void;
   onOpenRecent: () => void;
+  showDisclaimer?: boolean;
 }) {
   const [airportModalVisible, setAirportModalVisible] = React.useState<null | 'from' | 'to'>(null);
   const [showDatePicker, setShowDatePicker] = React.useState(false);
+  const [datePickerValue, setDatePickerValue] = React.useState(() => new Date());
+
+  const openDatePicker = () => {
+    setDatePickerValue(date ? new Date(`${date}T12:00:00`) : new Date());
+    setShowDatePicker(true);
+  };
+
+  const confirmTravelDate = () => {
+    const d = datePickerValue;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    setDate(`${y}-${m}-${day}`);
+    setShowDatePicker(false);
+  };
 
   const handleSwap = () => {
     const temp = from;
@@ -100,31 +113,42 @@ function AirportAirlinePickers({
       </View>
 
       <Text style={[pickerStyles.sectionLabel, { marginTop: 22 }]}>Travel date</Text>
-      <Pressable onPress={() => setShowDatePicker(true)} style={pickerStyles.inputPill}>
+      <Pressable onPress={openDatePicker} style={pickerStyles.inputPill}>
         <Ionicons name="calendar" size={20} color={colors.headerRed} style={{ marginRight: 10 }} />
         <Text style={date ? pickerStyles.inputText : pickerStyles.inputPlaceholder}>{date || 'Select date'}</Text>
       </Pressable>
-      {showDatePicker && (
-        <View style={pickerStyles.datePickerWrap}>
-          <DateTimePicker
-            value={date ? new Date(`${date}T12:00:00`) : new Date()}
-            mode="date"
-            display={Platform.OS === 'ios' ? 'inline' : 'default'}
-            onChange={(_e, d) => {
-              if (Platform.OS === 'android') setShowDatePicker(false);
-              if (d) setDate(d.toISOString().slice(0, 10));
-            }}
-            style={{ backgroundColor: '#fff', borderRadius: 16 }}
-            textColor={Platform.OS === 'ios' ? '#222' : undefined}
-            themeVariant={Platform.OS === 'ios' ? 'light' : undefined}
-          />
-          {Platform.OS === 'ios' ? (
-            <Pressable style={pickerStyles.dateDone} onPress={() => setShowDatePicker(false)}>
-              <Text style={pickerStyles.dateDoneTx}>Done</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      )}
+
+      <Modal
+        visible={showDatePicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDatePicker(false)}
+      >
+        <Pressable style={pickerStyles.dateOverlay} onPress={() => setShowDatePicker(false)}>
+          <Pressable style={pickerStyles.dateSheet} onPress={() => {}}>
+            <Text style={pickerStyles.dateSheetTitle}>Travel date</Text>
+            <DateTimePicker
+              value={datePickerValue}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'inline' : 'default'}
+              onChange={(_event, selected) => {
+                if (selected) setDatePickerValue(selected);
+              }}
+              style={Platform.OS === 'ios' ? pickerStyles.datePickerIos : pickerStyles.datePickerAndroid}
+              textColor={Platform.OS === 'ios' ? '#222' : undefined}
+              themeVariant={Platform.OS === 'ios' ? 'light' : undefined}
+            />
+            <View style={pickerStyles.dateActions}>
+              <Pressable onPress={() => setShowDatePicker(false)} hitSlop={8}>
+                <Text style={pickerStyles.dateActionCancel}>Cancel</Text>
+              </Pressable>
+              <Pressable onPress={confirmTravelDate} hitSlop={8}>
+                <Text style={pickerStyles.dateActionDone}>Done</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <View style={pickerStyles.rowBtns}>
         <Pressable style={pickerStyles.recentBtn} onPress={onOpenRecent}>
@@ -137,12 +161,14 @@ function AirportAirlinePickers({
         </Pressable>
       </View>
 
-      <View style={pickerStyles.disclaimerCard}>
-        <Ionicons name="information-circle-outline" size={18} color={colors.headerRed} style={{ marginRight: 8 }} />
-        <Text style={pickerStyles.disclaimerText}>
-          Community-reported loads. Verify in official airline systems. Flight Club does not access or automate airline systems.
-        </Text>
-      </View>
+      {showDisclaimer ? (
+        <View style={pickerStyles.disclaimerCard}>
+          <Ionicons name="information-circle-outline" size={18} color={colors.headerRed} style={{ marginRight: 8 }} />
+          <Text style={pickerStyles.disclaimerText}>
+            Community-reported loads. Verify in official airline systems.
+          </Text>
+        </View>
+      ) : null}
 
       <Pressable
         style={[pickerStyles.searchCta, !(from && to && date && !loading) && pickerStyles.searchCtaOff]}
@@ -187,10 +213,15 @@ export default function LoadsSearchScreen() {
   const [previewRows, setPreviewRows] = useState<any[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [priority, setPriority] = useState<Record<string, boolean>>({});
-  const [sortBy, setSortBy] = useState<'depart' | 'arrive'>('depart');
+  /** Default order is earliest departure — no separate Depart/Arrive filter controls. */
+  const [sortByDuration, setSortByDuration] = useState(false);
+  const [airlineFilter, setAirlineFilter] = useState('');
+  const [airlineModalOpen, setAirlineModalOpen] = useState(false);
   const [posting, setPosting] = useState(false);
   const [recentOpen, setRecentOpen] = useState(false);
   const [recents, setRecents] = useState<StaffLoadRecentSearch[]>([]);
+  const [searchFormExpanded, setSearchFormExpanded] = useState(true);
+  const listRef = useRef<FlatList<NonRevLoadFlight>>(null);
 
   const openRecentModal = useCallback(async () => {
     const list = await loadStaffLoadRecentSearches();
@@ -221,12 +252,16 @@ export default function LoadsSearchScreen() {
     if (from && to && date && !(res.error || '').trim()) {
       void persistStaffLoadRecentSearch({ from, to, date });
     }
+    return res;
   }, [from, to, date, userId]);
 
   const handleSearch = useCallback(async () => {
     setLoading(true);
     try {
-      await performSearch();
+      const res = await performSearch();
+      if (res.flights.length > 0 && !(res.error || '').trim()) {
+        setSearchFormExpanded(false);
+      }
     } finally {
       setLoading(false);
     }
@@ -234,18 +269,57 @@ export default function LoadsSearchScreen() {
 
   const { refreshing, onRefresh } = usePullToRefresh(async () => {
     await refreshHeader();
-    if (from && to && date) await performSearch();
+    if (from && to && date) void performSearch();
   });
 
   const sortedFlights = useMemo(() => {
     const arr = [...flights];
-    arr.sort((a, b) =>
-      sortBy === 'depart'
-        ? new Date(a.depart_at).getTime() - new Date(b.depart_at).getTime()
-        : new Date(a.arrive_at).getTime() - new Date(b.arrive_at).getTime()
-    );
+    arr.sort((a, b) => {
+      if (sortByDuration) {
+        const da = new Date(a.depart_at).getTime();
+        const db = new Date(b.depart_at).getTime();
+        const aa = new Date(a.arrive_at).getTime();
+        const ab = new Date(b.arrive_at).getTime();
+        return aa - da - (ab - db);
+      }
+      return new Date(a.depart_at).getTime() - new Date(b.depart_at).getTime();
+    });
     return arr;
-  }, [flights, sortBy]);
+  }, [flights, sortByDuration]);
+
+  const visibleFlights = useMemo(() => {
+    const q = airlineFilter.trim().toUpperCase();
+    if (!q) return sortedFlights;
+    return sortedFlights.filter((f) => (f.airline_code || '').toUpperCase().includes(q));
+  }, [sortedFlights, airlineFilter]);
+
+  const selectAllVisible = useCallback(() => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      for (const f of visibleFlights) next[f.id] = true;
+      return next;
+    });
+  }, [visibleFlights]);
+
+  const cycleStops = useCallback(() => {
+    setSearchOptions((prev) => {
+      if (!prev.allowStops) return { ...prev, allowStops: true, maxStops: 1 };
+      if (prev.maxStops === 1) return { ...prev, maxStops: 2 };
+      return { ...prev, allowStops: false, maxStops: 0 };
+    });
+  }, []);
+
+  const stopsPillLabel = !searchOptions.allowStops ? 'Nonstop' : `≤ ${searchOptions.maxStops} stop${searchOptions.maxStops === 1 ? '' : 's'}`;
+
+  const resultsMode = searched && !loading && sortedFlights.length > 0;
+
+  useEffect(() => {
+    if (!resultsMode) return;
+    const id = requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [resultsMode]);
 
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
   const selectedFlights = useMemo(() => sortedFlights.filter((f) => selected[f.id]), [sortedFlights, selected]);
@@ -275,17 +349,6 @@ export default function LoadsSearchScreen() {
     setPriority((p) => ({ ...p, [id]: !p[id] }));
   };
 
-  const selectAll = () => {
-    const next: Record<string, boolean> = {};
-    for (const f of sortedFlights) next[f.id] = true;
-    setSelected(next);
-  };
-
-  const clearSelection = () => {
-    setSelected({});
-    setPriority({});
-  };
-
   const onPostRequests = async () => {
     if (!userId || !selectedFlights.length) return;
     if (costPreview > credits) {
@@ -312,88 +375,153 @@ export default function LoadsSearchScreen() {
       }
       return;
     }
-    clearSelection();
+    setSelected({});
+    setPriority({});
     void refreshHeader();
-    router.push('/loads?tab=requests' as any);
+    Alert.alert('Requests posted', 'Your active requests are listed below on the Loads tab. Check the Requests tab to help other crew.');
   };
 
-  const STICKY_BAR_HEIGHT = userId ? 112 : 88;
+  const STICKY_BAR_HEIGHT = resultsMode ? 56 + insets.bottom + 8 : 72;
   const canSearch = !!from && !!to && !!date && !loading;
-  const selectionMode = searched && sortedFlights.length > 0;
+  const selectionMode = resultsMode;
+
+  const previewCards = useMemo(
+    () =>
+      previewRows.map((r: Record<string, unknown>) => (
+        <StaffLoadsMyActiveRequestCard
+          key={String(r.id)}
+          row={{
+            id: String(r.id),
+            airline_code: String(r.airline_code ?? ''),
+            flight_number: (r.flight_number as string | null) ?? null,
+            from_airport: String(r.from_airport ?? ''),
+            to_airport: String(r.to_airport ?? ''),
+            travel_date: String(r.travel_date ?? ''),
+            request_kind: String(r.request_kind ?? 'standard'),
+            status: String(r.status ?? 'open'),
+            depart_at: (r.depart_at as string | null) ?? null,
+            arrive_at: (r.arrive_at as string | null) ?? null,
+            refresh_requested_at: (r.refresh_requested_at as string | null) ?? null,
+            aircraft_type: (r.aircraft_type as string | null) ?? null,
+            locked_by: (r.locked_by as string | null) ?? null,
+            lock_expires_at: (r.lock_expires_at as string | null) ?? null,
+            latest_answer_load_level: (r.latest_answer_load_level as string | null) ?? null,
+            latest_answer_open_seats_total: (r.latest_answer_open_seats_total as number | null | undefined) ?? null,
+            latest_answer_nonrev_listed_total: (r.latest_answer_nonrev_listed_total as number | null | undefined) ?? null,
+            options: r.options,
+          }}
+        />
+      )),
+    [previewRows]
+  );
 
   const listHeader = useMemo(
     () => (
       <View style={{ paddingHorizontal: 16 }}>
-        <AirportAirlinePickers
-          from={from}
-          setFrom={setFrom}
-          to={to}
-          setTo={setTo}
-          date={date}
-          setDate={setDate}
-          onSearch={handleSearch}
-          loading={loading}
-          onOpenOptions={() => setOptionsSheet(true)}
-          onOpenRecent={() => void openRecentModal()}
-        />
-
-        {previewRows.length > 0 ? (
-          <View style={styles.previewBox}>
-            <Text style={styles.previewTitle}>Active requests</Text>
-            {previewRows.map((r) => (
-              <Pressable key={r.id} onPress={() => router.push(`/loads/request/${r.id}`)} style={styles.previewRow}>
-                <Text style={styles.previewTx} numberOfLines={1}>
-                  {r.airline_code} {r.flight_number || ''} · {r.from_airport}→{r.to_airport} · {r.travel_date}
+        {!resultsMode ? (
+          <>
+            <AirportAirlinePickers
+              from={from}
+              setFrom={setFrom}
+              to={to}
+              setTo={setTo}
+              date={date}
+              setDate={setDate}
+              onSearch={handleSearch}
+              loading={loading}
+              onOpenOptions={() => setOptionsSheet(true)}
+              onOpenRecent={() => void openRecentModal()}
+              showDisclaimer
+            />
+            {previewRows.length > 0 ? (
+              <View style={styles.previewBox}>
+                <Text style={styles.previewTitle}>Your active requests</Text>
+                {previewCards}
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <View style={styles.compactSearchBar}>
+              <View style={styles.compactSearchMain}>
+                <Text style={styles.compactRoute} numberOfLines={1}>
+                  {from} · {to}
                 </Text>
-                {r.request_kind === 'priority' ? <Text style={styles.pri}>P</Text> : null}
+                <Text style={styles.compactDateSub}>{date ? formatTravelDateShort(date) : '—'}</Text>
+              </View>
+              <Pressable
+                style={styles.compactIconBtn}
+                onPress={() => void handleSearch()}
+                accessibilityLabel="Refresh results"
+              >
+                <Ionicons name="refresh" size={22} color={colors.headerRed} />
               </Pressable>
-            ))}
-          </View>
-        ) : null}
+              <Pressable style={styles.compactIconBtn} onPress={() => setOptionsSheet(true)} accessibilityLabel="Search options">
+                <Ionicons name="options-outline" size={22} color={colors.headerRed} />
+              </Pressable>
+              <Pressable
+                style={styles.compactEditBtn}
+                onPress={() => setSearchFormExpanded((v: boolean) => !v)}
+                accessibilityLabel={searchFormExpanded ? 'Done editing search' : 'Edit search'}
+              >
+                <Text style={styles.compactEditTx}>{searchFormExpanded ? 'Done' : 'Edit'}</Text>
+              </Pressable>
+            </View>
+            {searchFormExpanded ? (
+              <AirportAirlinePickers
+                from={from}
+                setFrom={setFrom}
+                to={to}
+                setTo={setTo}
+                date={date}
+                setDate={setDate}
+                onSearch={handleSearch}
+                loading={loading}
+                onOpenOptions={() => setOptionsSheet(true)}
+                onOpenRecent={() => void openRecentModal()}
+                showDisclaimer={false}
+              />
+            ) : null}
+            <View style={styles.resultsToolbar}>
+              <Text style={styles.resultsDateHead}>{date ? formatTravelDateShort(date) : '—'}</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterPillRow}>
+                <Pressable style={styles.filterPill} onPress={cycleStops}>
+                  <Text style={styles.filterPillTx}>Stops · {stopsPillLabel}</Text>
+                </Pressable>
+                <Pressable style={styles.filterPill} onPress={() => setOptionsSheet(true)}>
+                  <Text style={styles.filterPillTx}>Options</Text>
+                </Pressable>
+                <Pressable style={styles.filterPill} onPress={() => setAirlineModalOpen(true)}>
+                  <Text style={styles.filterPillTx}>{airlineFilter.trim() ? `Airlines · ${airlineFilter.trim()}` : 'Airlines'}</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.filterPill, sortByDuration && styles.filterPillOn]}
+                  onPress={() => setSortByDuration((v) => !v)}
+                >
+                  <Text style={[styles.filterPillTx, sortByDuration && styles.filterPillTxOn]}>Duration</Text>
+                </Pressable>
+                <Pressable style={styles.filterPill} onPress={selectAllVisible}>
+                  <Text style={styles.filterPillTx}>Select all</Text>
+                </Pressable>
+              </ScrollView>
+            </View>
+          </>
+        )}
 
-        {loading ? <ActivityIndicator style={{ marginTop: 24 }} size="large" color={colors.headerRed} /> : null}
+        {loading ? <ActivityIndicator style={{ marginTop: 20 }} size="large" color={colors.headerRed} /> : null}
         {searched && !loading && error ? <Text style={styles.errorText}>{error}</Text> : null}
         {searched && !loading && !error && flights.length === 0 ? (
           <View style={styles.emptyState}>
-            <Ionicons name="airplane-outline" size={48} color="#ddd" />
-            <Text style={styles.emptyText}>No flights found for this search.</Text>
-            <Text style={styles.emptySub}>Try another date or nearby airports in Options.</Text>
+            <Ionicons name="airplane-outline" size={40} color="#ddd" />
+            <Text style={styles.emptyText}>No flights found</Text>
+            <Text style={styles.emptySub}>Try another date or Options.</Text>
           </View>
         ) : null}
-
-        {selectionMode ? (
-          <View style={styles.resultsHeader}>
-            <Text style={styles.resultsTitle}>
-              {from} → {to} · {date}
-            </Text>
-            <View style={styles.selectionSummary}>
-              <Text style={styles.selectionSummaryNum}>{selectedIds.length}</Text>
-              <Text style={styles.selectionSummaryTx}>
-                selected · {sortedFlights.filter((f) => selected[f.id] && priority[f.id]).length} priority (2 credits each) ·{' '}
-                {costPreview} credits if posted
-              </Text>
-            </View>
-            <View style={styles.sortRow}>
-              <Pressable style={[styles.sortPill, sortBy === 'depart' && styles.sortPillOn]} onPress={() => setSortBy('depart')}>
-                <Text style={[styles.sortPillTx, sortBy === 'depart' && styles.sortPillTxOn]}>Depart</Text>
-              </Pressable>
-              <Pressable style={[styles.sortPill, sortBy === 'arrive' && styles.sortPillOn]} onPress={() => setSortBy('arrive')}>
-                <Text style={[styles.sortPillTx, sortBy === 'arrive' && styles.sortPillTxOn]}>Arrive</Text>
-              </Pressable>
-              <Pressable style={styles.sortPill} onPress={selectAll}>
-                <Text style={styles.sortPillTx}>Select all</Text>
-              </Pressable>
-              <Pressable style={styles.sortPill} onPress={clearSelection}>
-                <Text style={styles.sortPillTx}>Clear</Text>
-              </Pressable>
-            </View>
-            <Text style={styles.longPressHint}>Tap a row to select. Long-press a selected row for priority (2 credits).</Text>
-            {selectedIds.length > 0 && costPreview > credits ? (
-              <Text style={styles.insufficientCredits}>
-                Not enough credits: you have {credits}, but this selection needs {costPreview}. Open the Wallet tab to add
-                credits.
-              </Text>
-            ) : null}
+        {searched && !loading && !error && flights.length > 0 && visibleFlights.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="funnel-outline" size={36} color="#cbd5e1" />
+            <Text style={styles.emptyText}>No flights match this airline filter</Text>
+            <Text style={styles.emptySub}>Clear the filter in Airlines or change the code.</Text>
           </View>
         ) : null}
       </View>
@@ -407,48 +535,44 @@ export default function LoadsSearchScreen() {
       error,
       flights.length,
       handleSearch,
-      previewRows,
-      router,
-      selectionMode,
-      sortBy,
+      previewRows.length,
+      previewCards,
+      resultsMode,
+      searchFormExpanded,
+      sortByDuration,
       openRecentModal,
-      selectedIds.length,
-      selected,
-      sortedFlights,
-      priority,
-      costPreview,
-      credits,
+      cycleStops,
+      stopsPillLabel,
+      airlineFilter,
+      selectAllVisible,
     ]
   );
 
   const renderItem = useCallback(
     ({ item }: { item: NonRevLoadFlight }) => {
-      const depart = new Date(item.depart_at);
-      const arrive = new Date(item.arrive_at);
-      const durMs = Math.max(0, arrive.getTime() - depart.getTime());
-      const durH = Math.floor(durMs / 3600000);
-      const durM = Math.floor((durMs % 3600000) / 60000);
-      const label = formatLoadsFlightLabel(item);
       const sel = !!selected[item.id];
       const pri = !!priority[item.id];
       return (
-        <View>
-          <FlightCard
-            flightNumber={label}
-            airline={item.airline_code}
-            route={`${item.from_airport} → ${item.to_airport}`}
-            departTime={depart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            arriveTime={arrive.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            duration={`${durH}h ${durM}m`}
-            reportCount={0}
-            selectionMode={selectionMode}
-            selected={sel}
-            prioritySelected={pri}
-            onPress={() => router.push(`/load-details/${encodeURIComponent(item.id)}`)}
-            onToggleSelect={() => toggleSelect(item.id)}
-            onTogglePriority={() => togglePriority(item.id)}
-          />
-        </View>
+        <FlightCard
+          variant="staff"
+          staffMeta={{
+            airlineCode: item.airline_code,
+            flightNumber: item.flight_number,
+            from: item.from_airport,
+            to: item.to_airport,
+            travelDate: item.travel_date,
+            departAt: item.depart_at,
+            arriveAt: item.arrive_at,
+            aircraft: null,
+            flightId: item.id,
+          }}
+          onPress={() => router.push(`/load-details/${encodeURIComponent(item.id)}`)}
+          selectionMode={selectionMode}
+          selected={sel}
+          prioritySelected={pri}
+          onToggleSelect={() => toggleSelect(item.id)}
+          onTogglePriority={() => togglePriority(item.id)}
+        />
       );
     },
     [router, selectionMode, selected, priority]
@@ -463,8 +587,9 @@ export default function LoadsSearchScreen() {
         setOptions={setSearchOptions}
       />
       <FlatList
+        ref={listRef}
         style={{ flex: 1 }}
-        data={selectionMode ? sortedFlights : []}
+        data={selectionMode ? visibleFlights : []}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={listHeader}
         renderItem={renderItem}
@@ -472,54 +597,73 @@ export default function LoadsSearchScreen() {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={REFRESH_CONTROL_COLORS} tintColor={REFRESH_TINT} />
         }
-        ListFooterComponent={
-          selectionMode ? (
-            <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 }}>
-              <Pressable
-                style={[
-                  styles.postCta,
-                  (posting || selectedIds.length === 0 || costPreview > credits) && styles.postCtaOff,
-                ]}
-                disabled={posting || selectedIds.length === 0 || costPreview > credits}
-                onPress={() => void onPostRequests()}
-              >
-                <Text style={styles.postCtaTx}>
-                  {posting
-                    ? 'Posting…'
-                    : selectedIds.length === 0
-                      ? 'Select flights to post'
-                      : costPreview > credits
-                        ? `Need ${costPreview} credits (you have ${credits})`
-                        : `Post ${selectedIds.length} request${selectedIds.length > 1 ? 's' : ''} · ${costPreview} credit${costPreview === 1 ? '' : 's'}`}
-                </Text>
+        contentContainerStyle={{ paddingBottom: STICKY_BAR_HEIGHT }}
+      />
+      <View style={[styles.stickyBar, { paddingBottom: Math.max(insets.bottom, 6) }]}>
+        {resultsMode ? (
+          <>
+            <Pressable
+              style={[
+                styles.primaryButton,
+                (posting || selectedIds.length === 0 || costPreview > credits) && styles.primaryButtonDisabled,
+              ]}
+              disabled={posting || selectedIds.length === 0 || costPreview > credits}
+              onPress={() => void onPostRequests()}
+            >
+              <Text style={styles.primaryButtonText}>
+                {posting
+                  ? 'Posting…'
+                  : selectedIds.length === 0
+                    ? 'Select flights'
+                    : costPreview > credits
+                      ? `Need ${costPreview} credits`
+                      : `Post ${selectedIds.length} request${selectedIds.length === 1 ? '' : 's'}`}
+              </Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <Pressable
+              onPress={() => void handleSearch()}
+              disabled={!canSearch}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                !canSearch && styles.primaryButtonDisabled,
+                pressed && canSearch && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.primaryButtonText}>
+                {!canSearch ? 'Add route & date' : 'Search flights'}
+              </Text>
+            </Pressable>
+          </>
+        )}
+      </View>
+
+      <Modal visible={airlineModalOpen} transparent animationType="fade" onRequestClose={() => setAirlineModalOpen(false)}>
+        <Pressable style={styles.airlineModalOverlay} onPress={() => setAirlineModalOpen(false)}>
+          <Pressable style={styles.airlineModalBox} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.airlineModalTitle}>Airline filter</Text>
+            <Text style={styles.airlineModalHint}>Match carrier code (e.g. DL, B6). Leave empty for all.</Text>
+            <TextInput
+              value={airlineFilter}
+              onChangeText={setAirlineFilter}
+              autoCapitalize="characters"
+              placeholder="e.g. DL"
+              placeholderTextColor="#94a3b8"
+              style={styles.airlineModalInput}
+            />
+            <View style={styles.airlineModalActions}>
+              <Pressable onPress={() => setAirlineFilter('')}>
+                <Text style={styles.airlineModalClear}>Clear</Text>
+              </Pressable>
+              <Pressable style={styles.airlineModalDone} onPress={() => setAirlineModalOpen(false)}>
+                <Text style={styles.airlineModalDoneTx}>Done</Text>
               </Pressable>
             </View>
-          ) : null
-        }
-        contentContainerStyle={{ paddingBottom: STICKY_BAR_HEIGHT + insets.bottom + 24 }}
-      />
-      <View style={[styles.stickyBar, { paddingBottom: 12 + insets.bottom }]}>
-        <Pressable
-          onPress={() => void handleSearch()}
-          disabled={!canSearch}
-          style={({ pressed }) => [styles.primaryButton, !canSearch && styles.primaryButtonDisabled, pressed && canSearch && { opacity: 0.85 }]}
-        >
-          <Text style={styles.primaryButtonText}>
-            {!canSearch
-              ? 'Add route & date'
-              : searched && sortedFlights.length > 0
-                ? 'Refresh results'
-                : 'Search flights'}
-          </Text>
-        </Pressable>
-        {userId ? (
-          <Pressable onPress={() => router.push('/loads?tab=wallet' as any)} hitSlop={8} style={styles.stickyBalWrap}>
-            <Text style={styles.stickyBalText}>
-              Credits: <Text style={styles.stickyBalNum}>{credits}</Text> · Standard 1 · Priority 2
-            </Text>
           </Pressable>
-        ) : null}
-      </View>
+        </Pressable>
+      </Modal>
 
       <Modal visible={recentOpen} animationType="slide" transparent onRequestClose={() => setRecentOpen(false)}>
         <Pressable style={styles.recentOverlay} onPress={() => setRecentOpen(false)}>
@@ -559,49 +703,66 @@ export default function LoadsSearchScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   previewBox: {
+    marginBottom: 8,
+  },
+  previewTitle: { fontWeight: '800', fontSize: 15, color: '#64748b', marginBottom: 8, letterSpacing: 0.3 },
+  compactSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#f8fafc',
     borderRadius: 14,
-    padding: 12,
-    marginBottom: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    gap: 2,
+  },
+  compactSearchMain: { flex: 1, minWidth: 0 },
+  compactRoute: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  compactDateSub: { fontSize: 12, fontWeight: '600', color: '#64748b', marginTop: 2 },
+  compactIconBtn: { padding: 8 },
+  compactEditBtn: { paddingVertical: 8, paddingHorizontal: 10 },
+  compactEditTx: { fontSize: 14, fontWeight: '800', color: colors.headerRed },
+  resultsToolbar: { marginBottom: 6 },
+  resultsDateHead: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94a3b8',
+    marginBottom: 6,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  filterPillRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 4 },
+  filterPill: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  previewTitle: { fontWeight: '800', color: '#0f172a', marginBottom: 8 },
-  previewRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#e2e8f0' },
-  previewTx: { flex: 1, fontWeight: '600', color: '#334155', fontSize: 13 },
-  pri: { fontWeight: '900', color: '#b45309', marginLeft: 8 },
-  resultsHeader: { marginTop: 8, marginBottom: 8 },
-  resultsTitle: { fontWeight: '800', fontSize: 16, color: '#0f172a', marginBottom: 10 },
-  sortRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  sortPill: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: '#f1f5f9' },
-  sortPillOn: { backgroundColor: colors.headerRed },
-  sortPillTx: { fontWeight: '700', fontSize: 13, color: '#334155' },
-  sortPillTxOn: { color: '#fff' },
-  selectionSummary: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
-  selectionSummaryNum: {
-    minWidth: 28,
-    textAlign: 'center',
-    fontWeight: '900',
-    fontSize: 16,
-    color: '#fff',
-    backgroundColor: colors.headerRed,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
+  filterPillOn: { backgroundColor: 'rgba(181, 22, 30, 0.1)', borderColor: colors.headerRed },
+  filterPillTx: { fontWeight: '600', fontSize: 12, color: '#334155' },
+  filterPillTxOn: { color: colors.headerRed },
+  airlineModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 24 },
+  airlineModalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 18 },
+  airlineModalTitle: { fontWeight: '800', fontSize: 17, color: '#0f172a' },
+  airlineModalHint: { color: '#64748b', fontSize: 13, marginTop: 6, marginBottom: 12, lineHeight: 18 },
+  airlineModalInput: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
     borderRadius: 10,
-    overflow: 'hidden',
-  },
-  selectionSummaryTx: { flex: 1, fontSize: 13, fontWeight: '700', color: '#475569', lineHeight: 18 },
-  longPressHint: { fontSize: 12, color: '#64748b', marginTop: 8, fontWeight: '600' },
-  insufficientCredits: {
-    marginTop: 10,
-    fontSize: 13,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
     fontWeight: '700',
-    color: colors.headerRed,
-    lineHeight: 18,
+    color: '#0f172a',
   },
-  postCta: { backgroundColor: colors.headerRed, borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
-  postCtaOff: { opacity: 0.45 },
-  postCtaTx: { color: '#fff', fontWeight: '900', fontSize: 16 },
+  airlineModalActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 },
+  airlineModalClear: { fontSize: 16, fontWeight: '600', color: '#64748b' },
+  airlineModalDone: { backgroundColor: colors.headerRed, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 10 },
+  airlineModalDoneTx: { color: '#fff', fontWeight: '800', fontSize: 15 },
   errorText: { color: colors.headerRed, fontWeight: '700', fontSize: 16, textAlign: 'center', marginTop: 24 },
   emptyState: { alignItems: 'center', marginTop: 32 },
   emptyText: { color: '#888', fontSize: 16, marginTop: 12 },
@@ -628,9 +789,6 @@ const styles = StyleSheet.create({
   },
   primaryButtonDisabled: { backgroundColor: '#D1D5DB' },
   primaryButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
-  stickyBalWrap: { marginTop: 8, alignItems: 'center', paddingVertical: 4 },
-  stickyBalText: { fontSize: 12, fontWeight: '600', color: '#64748b' },
-  stickyBalNum: { fontWeight: '900', color: colors.headerRed },
   recentOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   recentSheet: {
     backgroundColor: '#fff',
@@ -694,13 +852,43 @@ const pickerStyles = StyleSheet.create({
   },
   searchCtaOff: { backgroundColor: '#D1D5DB' },
   searchCtaTx: { color: '#fff', fontWeight: '800', fontSize: 17 },
-  datePickerWrap: { backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', padding: 4, marginTop: 4 },
-  dateDone: {
+  dateOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  dateSheet: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 28,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+  },
+  dateSheetTitle: {
+    fontWeight: '800',
+    fontSize: 17,
+    color: '#0f172a',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  datePickerIos: {
+    alignSelf: 'stretch',
+    height: Platform.OS === 'ios' ? 380 : 216,
+  },
+  datePickerAndroid: {
+    alignSelf: 'stretch',
+    minHeight: 178,
+  },
+  dateActions: {
+    marginTop: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
+    paddingTop: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#e2e8f0',
-    backgroundColor: '#f8fafc',
   },
-  dateDoneTx: { fontWeight: '900', color: colors.headerRed, fontSize: 16 },
+  dateActionCancel: { fontSize: 17, fontWeight: '600', color: '#64748b' },
+  dateActionDone: { fontSize: 17, fontWeight: '800', color: colors.headerRed },
 });

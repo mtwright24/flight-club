@@ -268,6 +268,82 @@ export function buildRouteSummaryFromDuties(
   return collapsed.join('-');
 }
 
+function collapseConsecutiveDuplicateStations(stations: string[]): string[] {
+  const out: string[] = [];
+  for (const s of stations) {
+    if (out.length === 0 || out[out.length - 1] !== s) out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Aviation-style **compact** trip line: layover pattern + return base — not a full leg-by-leg chain.
+ *
+ * - When **multiple duty dates** are present on all legs: one station per duty day = last arrival
+ *   of that day (overnight / release city before the next duty day).
+ * - Otherwise (single duty day or missing dates): strip implied **base** from the front of the
+ *   collapsed station chain, then space-separate (same-day multi-segment trips).
+ *
+ * Does **not** include arrows; use {@link buildRouteSummaryFromDuties} + arrows only in expanded detail.
+ */
+export function formatTripCompactShorthand(
+  legs: Pick<SchedulePairingDutyRow, 'from_airport' | 'to_airport' | 'duty_date'>[],
+  baseCode: string | null | undefined
+): string {
+  if (!legs.length) return '—';
+  const base = (baseCode ?? '').trim().toUpperCase();
+
+  const isoDateOk = (s: string | null | undefined): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s.trim());
+
+  const dated = legs.filter((l) => isoDateOk(l.duty_date));
+  const uniqueDates = [...new Set(dated.map((l) => (l.duty_date as string).trim()))].sort();
+
+  if (dated.length === legs.length && uniqueDates.length >= 2) {
+    const points: string[] = [];
+    for (const d of uniqueDates) {
+      const dayLegs = legs.filter((l) => (l.duty_date ?? '').trim() === d);
+      if (!dayLegs.length) continue;
+      const last = dayLegs[dayLegs.length - 1];
+      const to = (last.to_airport ?? '').trim().toUpperCase();
+      if (to) points.push(to);
+    }
+    const deduped = collapseConsecutiveDuplicateStations(points);
+    return deduped.length ? deduped.join(' ') : '—';
+  }
+
+  const dash = buildRouteSummaryFromDuties(legs);
+  if (dash === '—') return '—';
+  const chain = dash.split('-').map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (!chain.length) return '—';
+  let start = 0;
+  if (base && chain[0] === base) start = 1;
+  else if (!base && chain.length >= 3 && chain[0] === chain[chain.length - 1]) {
+    start = 1;
+  }
+  const slice = chain.slice(start);
+  if (!slice.length) return base || chain[0] || '—';
+  return slice.join(' ');
+}
+
+/** Compact display from a stored dash chain (e.g. parser `routeSummary`) when leg rows are unavailable. */
+export function formatTripCompactFromDashChain(
+  dashChain: string | null | undefined,
+  baseCode: string | null | undefined
+): string {
+  const base = (baseCode ?? '').trim().toUpperCase();
+  const raw = (dashChain ?? '').trim();
+  if (!raw || raw === '—') return '—';
+  const normalized = raw.replace(/\s*→\s*/g, '-').replace(/→/g, '-').trim();
+  const parts = normalized.split('-').map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (parts.length < 2) return '—';
+  let start = 0;
+  if (base && parts[0] === base) start = 1;
+  else if (!base && parts.length >= 3 && parts[0] === parts[parts.length - 1]) start = 1;
+  const slice = parts.slice(start);
+  if (!slice.length) return base || parts[0] || '—';
+  return slice.join(' ');
+}
+
 /**
  * Classic list / apply rows: `schedule_entries.layover` stores the FLICA layover **time** token only
  * (4-digit), not station codes — city lives in `city`. Values from parser `layoverRestDisplay`.

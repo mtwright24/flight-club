@@ -9,20 +9,18 @@ import {
   RefreshControl,
   SectionList,
   StyleSheet,
-  Switch,
   Text,
   View,
 } from 'react-native';
 import LoadsSegmentedControl from '../../src/components/loads/LoadsSegmentedControl';
 import {
-  AirlineMonogram,
   STAFF_LOADS_VISUAL,
   StaffChip,
   StaffLoadsCardShell,
-  formatLocalHm,
-  formatTravelDateShort,
+  formatAnswerLoadPreviewLine,
   staffLoadsListAccentStrip,
 } from '../../src/components/loads/StaffLoadsRequestPresentation';
+import { StaffLoadsTileInner } from '../../src/components/loads/StaffLoadsTileInner';
 import { useAuth } from '../../src/hooks/useAuth';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
 import {
@@ -43,82 +41,56 @@ function lockLabel(r: StaffLoadRequestRow, now: number): string | null {
   return 'Being answered…';
 }
 
-function RequestRow({ r, now, userId }: { r: StaffLoadRequestRow; now: number; userId: string | undefined }) {
+function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
   const router = useRouter();
   const lock = lockLabel(r, now);
-  const mine = r.user_id === userId;
-  const canAnswer = !mine && (r.status === 'open' || r.status === 'answered') && !lock;
+  const canAnswer = (r.status === 'open' || r.status === 'answered') && !lock;
   const accent = staffLoadsListAccentStrip(r, now);
-  const dep = formatLocalHm(r.depart_at);
-  const arr = formatLocalHm(r.arrive_at);
-  const dateLine = formatTravelDateShort(r.travel_date);
 
-  const statusChip =
+  const preview =
     r.status === 'answered'
-      ? { label: 'Answered', bg: STAFF_LOADS_VISUAL.chip.bgAnswered, fg: STAFF_LOADS_VISUAL.chip.fgAnswered }
-      : r.status === 'stale'
-        ? { label: 'Stale', bg: STAFF_LOADS_VISUAL.chip.bgStale, fg: STAFF_LOADS_VISUAL.chip.fgStale }
-        : { label: 'Open', bg: STAFF_LOADS_VISUAL.chip.bgOpen, fg: STAFF_LOADS_VISUAL.chip.fgOpen };
+      ? formatAnswerLoadPreviewLine(r.latest_answer_open_seats_total, r.latest_answer_nonrev_listed_total) ??
+        '— open · — listed'
+      : null;
 
   return (
     <Pressable style={styles.cardOuter} onPress={() => router.push(`/loads/request/${r.id}`)}>
-      <StaffLoadsCardShell accentColor={accent} style={styles.cardShell}>
-        <View style={styles.tileTop}>
-          <AirlineMonogram code={r.airline_code} />
-          <View style={styles.tileMain}>
-            <View style={styles.tileTitleRow}>
-              <Text style={styles.tileFlight}>
-                {r.airline_code} {r.flight_number || '—'}
-              </Text>
-              <View style={styles.tileChipsRight}>
-                <StaffChip label={statusChip.label} backgroundColor={statusChip.bg} color={statusChip.fg} />
-              </View>
-            </View>
-            <Text style={styles.tileRoute}>
-              {r.from_airport} → {r.to_airport}
-            </Text>
-            <View style={styles.tileMetaLine}>
-              <Text style={styles.tileDate}>{dateLine}</Text>
-              <Text style={styles.tileDot}>·</Text>
-              <Text style={styles.tileTimes}>
-                {dep} – {arr}
-              </Text>
-            </View>
-            <View style={styles.tileStateRow}>
-              {r.request_kind === 'priority' ? (
+      <StaffLoadsCardShell accentColor={accent} style={styles.cardShell} compact>
+        <View>
+          <StaffLoadsTileInner
+            airlineCode={r.airline_code}
+            flightNumber={r.flight_number}
+            fromAirport={r.from_airport}
+            toAirport={r.to_airport}
+            travelDate={r.travel_date}
+            departAt={r.depart_at}
+            arriveAt={r.arrive_at}
+            aircraftType={r.aircraft_type ?? null}
+            flightIdForPlaceholder={r.id}
+            previewLine={preview}
+            trailingBadge={
+              r.request_kind === 'priority' ? (
                 <StaffChip
                   label="Priority"
                   backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
                   color={STAFF_LOADS_VISUAL.chip.fgPriority}
                 />
-              ) : null}
-              {mine ? (
-                <StaffChip
-                  label="Your request"
-                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgMine}
-                  color={STAFF_LOADS_VISUAL.chip.fgMine}
-                />
-              ) : null}
-              {r.refresh_requested_at ? (
-                <StaffChip
-                  label="Needs refresh"
-                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgRefresh}
-                  color={STAFF_LOADS_VISUAL.chip.fgRefresh}
-                />
-              ) : null}
-              {lock ? (
-                <StaffChip
-                  label="Being answered"
-                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgLock}
-                  color={STAFF_LOADS_VISUAL.chip.fgLock}
-                />
-              ) : null}
+              ) : null
+            }
+          />
+          {r.refresh_requested_at ? (
+            <View style={styles.refreshChipRow}>
+              <StaffChip
+                label="Needs refresh"
+                backgroundColor={STAFF_LOADS_VISUAL.chip.bgRefresh}
+                color={STAFF_LOADS_VISUAL.chip.fgRefresh}
+              />
             </View>
-          </View>
+          ) : null}
         </View>
-        {!mine && r.requester?.display_name ? (
+        {r.requester?.display_name ? (
           <Text style={styles.reqBySm} numberOfLines={1}>
-            {r.requester.display_name}
+            Requested by {r.requester.display_name}
           </Text>
         ) : null}
         {canAnswer ? (
@@ -133,6 +105,11 @@ function RequestRow({ r, now, userId }: { r: StaffLoadRequestRow; now: number; u
 
 const ALL_AIR_LIST = ['B6', 'AA', 'DL', 'UA', 'WN'] as const;
 const ALL_AIR = [...ALL_AIR_LIST];
+
+function airlineMatchesAccess(code: string, airAccess: string[]): boolean {
+  if (airAccess.length >= ALL_AIR.length && ALL_AIR.every((a) => airAccess.includes(a))) return true;
+  return airAccess.includes(code);
+}
 
 export default function LoadsRequestsScreen() {
   const router = useRouter();
@@ -170,9 +147,17 @@ export default function LoadsRequestsScreen() {
 
   const { refreshing, onRefresh } = usePullToRefresh(load);
 
+  const responderQueue = useMemo(() => {
+    return rows.filter((r) => {
+      if (userId && r.user_id === userId) return false;
+      if (!userId) return true;
+      return airlineMatchesAccess(r.airline_code, airAccess);
+    });
+  }, [rows, userId, airAccess]);
+
   const sections = useMemo(() => {
-    const pri = rows.filter((r) => r.request_kind === 'priority');
-    const rest = rows.filter((r) => r.request_kind !== 'priority');
+    const pri = responderQueue.filter((r) => r.request_kind === 'priority');
+    const rest = responderQueue.filter((r) => r.request_kind !== 'priority');
     const byAirline: Record<string, StaffLoadRequestRow[]> = {};
     for (const r of rest) {
       const k = r.airline_code || 'Other';
@@ -180,13 +165,13 @@ export default function LoadsRequestsScreen() {
       byAirline[k].push(r);
     }
     const out: { title: string; data: StaffLoadRequestRow[] }[] = [];
-    if (pri.length) out.push({ title: 'Priority requests', data: pri });
+    if (pri.length) out.push({ title: 'Priority · needs your help', data: pri });
     const airlines = Object.keys(byAirline).sort();
     for (const a of airlines) {
-      out.push({ title: `${a} · ${tab} requests`, data: byAirline[a] });
+      out.push({ title: `${a} · ${tab} · for you`, data: byAirline[a] });
     }
     return out;
-  }, [rows, tab]);
+  }, [responderQueue, tab]);
 
   const listHeader = (
     <>
@@ -195,8 +180,14 @@ export default function LoadsRequestsScreen() {
         selectedIndex={tab === 'open' ? 0 : 1}
         onTabPress={(i) => setTab(i === 0 ? 'open' : 'answered')}
       />
+      <Text style={styles.queueExplainer}>
+        Other crew members’ requests you can answer — not your own. Your own posts stay on the Loads tab.
+      </Text>
       <Pressable style={styles.airBtn} onPress={() => setAirModal(true)}>
-        <Text style={styles.airBtnTx}>Airlines you can answer for</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.airBtnTx}>Carriers in your queue</Text>
+          <Text style={styles.airBtnSub}>Tap to add or remove airlines you report loads for.</Text>
+        </View>
         <Ionicons name="chevron-forward" size={18} color={colors.headerRed} />
       </Pressable>
       {__DEV__ && isMarshaDemoUser(userId, userEmail) ? (
@@ -223,7 +214,7 @@ export default function LoadsRequestsScreen() {
         </Pressable>
       ) : null}
       {loading ? <ActivityIndicator style={{ marginTop: 20 }} color={colors.headerRed} /> : null}
-      {!loading && error && rows.length > 0 ? <Text style={styles.errorText}>{error}</Text> : null}
+      {!loading && error && responderQueue.length > 0 ? <Text style={styles.errorText}>{error}</Text> : null}
     </>
   );
 
@@ -232,25 +223,29 @@ export default function LoadsRequestsScreen() {
       <Modal visible={airModal} transparent animationType="fade" onRequestClose={() => setAirModal(false)}>
         <Pressable style={styles.modalBg} onPress={() => setAirModal(false)}>
           <Pressable style={styles.modalBox} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Additional airlines</Text>
+            <Text style={styles.modalTitle}>Additional carriers</Text>
             <Text style={styles.modalSub}>
-              Saved airlines control which open requests you see (besides your own). Leave all on to answer any carrier,
-              or turn off carriers you don’t report for.
+              Choose which airlines’ requests appear in your queue. Select all to see every carrier; remove carriers you do not
+              answer for.
             </Text>
-            {ALL_AIR_LIST.map((code) => (
-              <View key={code} style={styles.swRow}>
-                <Text style={styles.swLabel}>{code}</Text>
-                <Switch
-                  value={airAccess.includes(code)}
-                  onValueChange={(v) => {
+            {ALL_AIR_LIST.map((code) => {
+              const on = airAccess.includes(code);
+              return (
+                <Pressable
+                  key={code}
+                  style={styles.airlinePickRow}
+                  onPress={() => {
                     setAirAccess((prev) => {
-                      const next = v ? [...new Set([...prev, code])] : prev.filter((c) => c !== code);
+                      const next = !on ? [...new Set([...prev, code])] : prev.filter((c) => c !== code);
                       return next.length ? next : [...ALL_AIR];
                     });
                   }}
-                />
-              </View>
-            ))}
+                >
+                  <Text style={styles.swLabel}>{code}</Text>
+                  <Ionicons name={on ? 'checkmark-circle' : 'ellipse-outline'} size={26} color={on ? colors.headerRed : '#cbd5e1'} />
+                </Pressable>
+              );
+            })}
             <Pressable
               style={styles.saveAir}
               onPress={async () => {
@@ -267,7 +262,7 @@ export default function LoadsRequestsScreen() {
       <SectionList
         sections={sections.length ? sections : [{ title: '', data: [] }]}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <RequestRow r={item} now={now} userId={userId} />}
+        renderItem={({ item }) => <RequestRow r={item} now={now} />}
         renderSectionHeader={({ section: { title } }) =>
           title ? (
             <View style={styles.sectionHeadWrap} key={title}>
@@ -293,14 +288,15 @@ export default function LoadsRequestsScreen() {
                   <Ionicons name="list-outline" size={48} color="#ddd" />
                   <Text style={styles.emptyText}>No {tab} requests right now.</Text>
                   <Text style={styles.emptySub}>
-                    Search on the Loads tab to post, or widen “Airlines you can answer for” if the list looks empty.
+                    When other crew post requests on carriers you answer for, they’ll show here. Widen “Airlines you can answer
+                    for” if needed. Your own requests stay on the Loads tab.
                   </Text>
                 </>
               )}
             </View>
           ) : null
         }
-        contentContainerStyle={{ paddingBottom: 32, flexGrow: 1 }}
+        contentContainerStyle={{ paddingBottom: 12, flexGrow: 1 }}
         stickySectionHeadersEnabled={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={REFRESH_CONTROL_COLORS} tintColor={REFRESH_TINT} />
@@ -329,17 +325,7 @@ const styles = StyleSheet.create({
   emptySub: { color: '#94a3b8', fontSize: 14, marginTop: 8, textAlign: 'center' },
   cardOuter: { marginVertical: 5, marginHorizontal: 8 },
   cardShell: { marginHorizontal: 0 },
-  tileTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  tileMain: { flex: 1, minWidth: 0 },
-  tileTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  tileFlight: { fontWeight: '900', fontSize: 17, color: '#0f172a', letterSpacing: -0.3 },
-  tileChipsRight: { flexShrink: 0 },
-  tileRoute: { fontWeight: '700', fontSize: 15, color: '#334155', marginTop: 4, letterSpacing: 0.2 },
-  tileMetaLine: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  tileDate: { fontSize: 13, fontWeight: '700', color: '#64748b' },
-  tileDot: { fontSize: 13, color: '#cbd5e1', fontWeight: '700' },
-  tileTimes: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
-  tileStateRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10, alignItems: 'center' },
+  refreshChipRow: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   reqBySm: { marginTop: 10, fontSize: 12, color: '#94a3b8', fontWeight: '600' },
   answerBtn: {
     marginTop: 12,
@@ -350,6 +336,16 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   answerBtnTx: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  queueExplainer: {
+    marginHorizontal: 8,
+    marginTop: 4,
+    marginBottom: 4,
+    paddingHorizontal: 4,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+    lineHeight: 19,
+  },
   airBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -363,6 +359,7 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
   },
   airBtnTx: { fontWeight: '800', color: colors.headerRed, fontSize: 14 },
+  airBtnSub: { fontSize: 12, color: '#64748b', marginTop: 4, fontWeight: '500', lineHeight: 16 },
   devSeedBtn: {
     marginHorizontal: 8,
     marginTop: 8,
@@ -377,7 +374,14 @@ const styles = StyleSheet.create({
   modalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 18 },
   modalTitle: { fontWeight: '900', fontSize: 18, color: '#0f172a' },
   modalSub: { color: '#64748b', marginTop: 8, marginBottom: 12, lineHeight: 20 },
-  swRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e2e8f0' },
+  airlinePickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e2e8f0',
+  },
   swLabel: { fontWeight: '800', fontSize: 16, color: '#334155' },
   saveAir: { marginTop: 16, backgroundColor: colors.headerRed, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   saveAirTx: { color: '#fff', fontWeight: '900', fontSize: 16 },

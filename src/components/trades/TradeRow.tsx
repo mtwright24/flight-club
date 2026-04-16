@@ -116,13 +116,13 @@ export const TradeRow: React.FC<TradeRowProps> = ({
 
 function getRouteDisplay(trade: TradePost): string {
   if (trade.route_from && trade.route_to) {
-    return `${trade.route_from}→${trade.route_to}`;
+    return `${trade.route_from} ${trade.route_to}`;
   }
   if (trade.route_from) {
-    return `${trade.route_from}→?`;
+    return `${trade.route_from} · ?`;
   }
   if (trade.route_to) {
-    return `?→${trade.route_to}`;
+    return `? ${trade.route_to}`;
   }
   return 'Trip TBD';
 }

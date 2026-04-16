@@ -1,6 +1,6 @@
 import type { Session } from "@supabase/supabase-js";
 import { Stack, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Linking, LogBox, View } from "react-native";
 import 'react-native-url-polyfill/auto';
 import { DmBadgeNavigationSync } from '../src/components/DmBadgeNavigationSync';
@@ -20,6 +20,8 @@ export default function RootLayout() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  /** Supabase emits a new `session` object on token refresh; we must not re-run onboarding navigation for the same user. */
+  const lastRoutedUserIdRef = useRef<string | null>(null);
 
   // Extract access_token and refresh_token from deep-link URL
   const handleDeepLink = async (url: string) => {
@@ -130,9 +132,19 @@ export default function RootLayout() {
         }
       }
 
-      // 2. Routing logic
+      // 2. Routing logic — only when auth *identity* changes, not on JWT refresh (same user id).
+      const uid = session?.user?.id ?? null;
+      if (
+        uid != null &&
+        lastRoutedUserIdRef.current != null &&
+        uid === lastRoutedUserIdRef.current
+      ) {
+        return;
+      }
+
       try {
         if (!session || !session.user) {
+          lastRoutedUserIdRef.current = null;
           router.replace("/(auth)/sign-in");
           return;
         }
@@ -143,15 +155,21 @@ export default function RootLayout() {
           .eq("id", userId)
           .maybeSingle();
         if (error) {
+          lastRoutedUserIdRef.current = userId;
           router.replace("/(tabs)");
           return;
         }
         if (!profile || !profile.handle) {
+          lastRoutedUserIdRef.current = userId;
           router.replace("/(auth)/CreateProfileScreen");
         } else {
+          lastRoutedUserIdRef.current = userId;
           router.replace("/(tabs)");
         }
       } catch (err) {
+        if (session?.user?.id) {
+          lastRoutedUserIdRef.current = session.user.id;
+        }
         router.replace("/(tabs)");
       }
     })();
