@@ -1,9 +1,11 @@
+import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,6 +19,7 @@ import {
   invokeImportScheduleOcr,
 } from '../../src/features/crew-schedule/scheduleApi';
 import { buildScheduleUploadBytes } from '../../src/features/crew-schedule/scheduleImportUploadBytes';
+import { scanScheduleDocuments } from '../../src/features/crew-schedule/documentScanSchedule';
 import {
   createScheduleImport,
   createScheduleImportIssue,
@@ -55,6 +58,17 @@ function pad2(n: number) {
 function safeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'upload';
 }
+
+/** One file to upload + OCR in the JetBlue guided import session (screens, PDF, or scanned pages). */
+type JetBlueUploadItem = {
+  uri: string;
+  mime: string;
+  baseName: string;
+  sourceType: 'screenshot' | 'pdf' | 'document_scan';
+  jpegBase64?: string | null;
+  width?: number | null;
+  height?: number | null;
+};
 
 export default function ImportJetBlueUploadScreen() {
   const router = useRouter();
@@ -106,6 +120,169 @@ export default function ImportJetBlueUploadScreen() {
     }
   }, [year, month]);
 
+  const runJetBlueImportPipeline = useCallback(
+    async (items: JetBlueUploadItem[]) => {
+      if (!items.length) return;
+
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (userErr || !userData.user) {
+        Alert.alert('Sign in required', 'Please sign in.');
+        return;
+      }
+      const uid = userData.user.id;
+
+      setBusy(true);
+      const rawChunks: string[] = [];
+      const scores: number[] = [];
+      let firstBatchId: string | null = null;
+      let sid = importId;
+
+      try {
+        if (!sid) {
+          sid = await createScheduleImport({ importMonth: month, importYear: year });
+          setImportId(sid);
+        }
+        await updateScheduleImport(sid, { status: 'processing', needs_review: false });
+
+        let order = 0;
+        for (const it of items) {
+          order += 1;
+          setLogLine(`Processing file ${order} of ${items.length}…`);
+          const safe = safeFileName(it.baseName);
+          const path = `${uid}/jetblue/${sid}/${Date.now()}-${order}-${safe}`;
+
+          let bytes: Uint8Array;
+          try {
+            bytes = await buildScheduleUploadBytes(it.uri, it.mime, it.jpegBase64);
+          } catch (e) {
+            await createScheduleImportIssue({
+              importId: sid,
+              issueType: 'read_error',
+              message: e instanceof Error ? e.message : String(e),
+              severity: 'high',
+            });
+            continue;
+          }
+          if (bytes.length === 0) {
+            await createScheduleImportIssue({
+              importId: sid,
+              issueType: 'empty_file',
+              message: `File ${order} was empty after decode.`,
+              severity: 'medium',
+            });
+            continue;
+          }
+
+          const { error: upErr } = await supabase.storage.from('schedule-imports').upload(path, bytes, {
+            contentType: it.mime,
+            upsert: false,
+          });
+          if (upErr) {
+            await createScheduleImportIssue({
+              importId: sid,
+              issueType: 'storage_error',
+              message: upErr.message,
+              severity: 'high',
+            });
+            continue;
+          }
+
+          let batchId: string;
+          try {
+            batchId = await createImportBatch({
+              monthKey,
+              sourceType: it.sourceType,
+              sourceFilePath: path,
+              scheduleImportId: sid,
+            });
+            await invokeImportScheduleOcr(batchId);
+          } catch (e) {
+            await createScheduleImportIssue({
+              importId: sid,
+              issueType: 'ocr_error',
+              message: e instanceof Error ? e.message : String(e),
+              severity: 'high',
+            });
+            continue;
+          }
+
+          if (!firstBatchId) firstBatchId = batchId;
+
+          const batch = await fetchImportBatch(batchId);
+          const ocr = batch?.raw_extracted_text ?? '';
+          rawChunks.push(ocr);
+          const imgScore = scoreJetBlueFlicaTemplateMatch(ocr);
+          scores.push(imgScore);
+
+          await insertScheduleImportImage({
+            importId: sid,
+            storagePath: path,
+            imageOrder: order,
+            legacyBatchId: batchId,
+            ocrText: ocr.slice(0, 50000),
+            templateDetected: imgScore >= 0.45,
+            imageConfidence: imgScore,
+            width: it.width ?? null,
+            height: it.height ?? null,
+          });
+        }
+
+        const combined = rawChunks.filter(Boolean).join('\n\n---\n\n');
+        const avg =
+          scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100 : null;
+        const low = scores.some((s) => s < 0.6);
+
+        if (rawChunks.length > 0 && sid && firstBatchId) {
+          try {
+            await persistJetBlueFlicaStructuredParse({
+              importId: sid,
+              monthKey,
+              ocrText: combined,
+              primaryBatchId: firstBatchId,
+            });
+            await clearJetBlueCandidateRowsForImport(sid);
+          } catch (e) {
+            await createScheduleImportIssue({
+              importId: sid,
+              issueType: 'parse_error',
+              message: e instanceof Error ? e.message : String(e),
+              severity: 'high',
+            });
+          }
+        }
+
+        await updateScheduleImport(sid, {
+          status: rawChunks.length > 0 ? 'review' : 'partial',
+          raw_ocr_text: combined.slice(0, 100000),
+          overall_confidence: avg,
+          needs_review: low || rawChunks.length === 0,
+        });
+
+        if (rawChunks.length === 0) {
+          Alert.alert(
+            'Nothing parsed yet',
+            'No files completed OCR. You can retry from Manage, or try screenshots / a different PDF. Your import session is saved as partial.'
+          );
+        } else {
+          router.replace({
+            pathname: '/crew-schedule/import-jetblue-review/[importId]',
+            params: { importId: sid },
+          });
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (sid) {
+          await updateScheduleImport(sid, { status: 'failed', needs_review: true }).catch(() => {});
+        }
+        Alert.alert('Import issue', msg + '\n\nPartial progress may still be saved — open review to continue.');
+      } finally {
+        setBusy(false);
+        setLogLine('');
+      }
+    },
+    [importId, month, monthKey, router, year]
+  );
+
   const onUploadScreenshots = useCallback(async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
@@ -124,166 +301,80 @@ export default function ImportJetBlueUploadScreen() {
 
     if (result.canceled || !result.assets?.length) return;
 
-    const { data: userData, error: userErr } = await supabase.auth.getUser();
-    if (userErr || !userData.user) {
-      Alert.alert('Sign in required', 'Please sign in.');
-      return;
-    }
-    const uid = userData.user.id;
+    const items: JetBlueUploadItem[] = result.assets.map((asset, i) => ({
+      uri: asset.uri,
+      mime: asset.mimeType ?? 'image/jpeg',
+      baseName: asset.fileName ?? `shot-${i + 1}.jpg`,
+      sourceType: 'screenshot' as const,
+      jpegBase64: asset.base64,
+      width: asset.width ?? null,
+      height: asset.height ?? null,
+    }));
 
-    setBusy(true);
-    const rawChunks: string[] = [];
-    const scores: number[] = [];
-    let firstBatchId: string | null = null;
-    let sid = importId;
+    await runJetBlueImportPipeline(items);
+  }, [runJetBlueImportPipeline]);
+
+  const onUploadPdf = useCallback(async () => {
     try {
-      if (!sid) {
-        sid = await createScheduleImport({ importMonth: month, importYear: year });
-        setImportId(sid);
-      }
-      await updateScheduleImport(sid, { status: 'processing', needs_review: false });
-
-      let order = 0;
-      for (const asset of result.assets) {
-        order += 1;
-        setLogLine(`Processing image ${order} of ${result.assets.length}…`);
-        const baseName = asset.fileName ?? `shot-${order}.jpg`;
-        const safe = safeFileName(baseName);
-        const path = `${uid}/jetblue/${sid}/${Date.now()}-${order}-${safe}`;
-
-        let bytes: Uint8Array;
-        try {
-          bytes = await buildScheduleUploadBytes(asset.uri, asset.mimeType ?? 'image/jpeg', asset.base64);
-        } catch (e) {
-          await createScheduleImportIssue({
-            importId: sid,
-            issueType: 'read_error',
-            message: e instanceof Error ? e.message : String(e),
-            severity: 'high',
-          });
-          continue;
-        }
-        if (bytes.length === 0) {
-          await createScheduleImportIssue({
-            importId: sid,
-            issueType: 'empty_file',
-            message: `Image ${order} was empty after decode.`,
-            severity: 'medium',
-          });
-          continue;
-        }
-
-        const { error: upErr } = await supabase.storage.from('schedule-imports').upload(path, bytes, {
-          contentType: asset.mimeType ?? 'image/jpeg',
-          upsert: false,
-        });
-        if (upErr) {
-          await createScheduleImportIssue({
-            importId: sid,
-            issueType: 'storage_error',
-            message: upErr.message,
-            severity: 'high',
-          });
-          continue;
-        }
-
-        let batchId: string;
-        try {
-          batchId = await createImportBatch({
-            monthKey,
-            sourceType: 'screenshot',
-            sourceFilePath: path,
-            scheduleImportId: sid,
-          });
-          await invokeImportScheduleOcr(batchId);
-        } catch (e) {
-          await createScheduleImportIssue({
-            importId: sid,
-            issueType: 'ocr_error',
-            message: e instanceof Error ? e.message : String(e),
-            severity: 'high',
-          });
-          continue;
-        }
-
-        const batch = await fetchImportBatch(batchId);
-        const ocr = batch?.raw_extracted_text ?? '';
-        rawChunks.push(ocr);
-        const imgScore = scoreJetBlueFlicaTemplateMatch(ocr);
-        scores.push(imgScore);
-
-        await insertScheduleImportImage({
-          importId: sid,
-          storagePath: path,
-          imageOrder: order,
-          legacyBatchId: batchId,
-          ocrText: ocr.slice(0, 50000),
-          templateDetected: imgScore >= 0.45,
-          imageConfidence: imgScore,
-          width: asset.width ?? null,
-          height: asset.height ?? null,
-        });
-      }
-
-      const combined = rawChunks.filter(Boolean).join('\n\n---\n\n');
-      const avg =
-        scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100 : null;
-      const low = scores.some((s) => s < 0.6);
-
-      if (rawChunks.length > 0 && sid && firstBatchId) {
-        try {
-          await persistJetBlueFlicaStructuredParse({
-            importId: sid,
-            monthKey,
-            ocrText: combined,
-            primaryBatchId: firstBatchId,
-          });
-          await clearJetBlueCandidateRowsForImport(sid);
-        } catch (e) {
-          await createScheduleImportIssue({
-            importId: sid,
-            issueType: 'parse_error',
-            message: e instanceof Error ? e.message : String(e),
-            severity: 'high',
-          });
-        }
-      }
-
-      await updateScheduleImport(sid, {
-        status: rawChunks.length > 0 ? 'review' : 'partial',
-        raw_ocr_text: combined.slice(0, 100000),
-        overall_confidence: avg,
-        needs_review: low || rawChunks.length === 0,
+      const DocumentPicker = await import('expo-document-picker');
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
       });
-
-      if (rawChunks.length === 0) {
-        Alert.alert(
-          'Nothing parsed yet',
-          'No images completed OCR. You can retry from Manage, or pick different screenshots. Your import session is saved as partial.'
-        );
-      } else {
-        router.replace({
-          pathname: '/crew-schedule/import-jetblue-review/[importId]',
-          params: { importId: sid },
-        });
-      }
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      await runJetBlueImportPipeline([
+        {
+          uri: asset.uri,
+          mime: asset.mimeType ?? 'application/pdf',
+          baseName: asset.name ?? 'schedule.pdf',
+          sourceType: 'pdf',
+        },
+      ]);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (sid) {
-        await updateScheduleImport(sid, { status: 'failed', needs_review: true }).catch(() => {});
-      }
-      Alert.alert('Import issue', msg + '\n\nPartial progress may still be saved — open review to continue.');
-    } finally {
-      setBusy(false);
-      setLogLine('');
+      Alert.alert(
+        'PDF picker failed',
+        'Could not open the file picker. On a dev build, ensure expo-document-picker is installed.\n\n' + msg
+      );
     }
-  }, [importId, month, monthKey, router, year]);
+  }, [runJetBlueImportPipeline]);
+
+  const onScanDocuments = useCallback(async () => {
+    try {
+      const r = await scanScheduleDocuments();
+      if (r.kind === 'cancel') return;
+      if (r.kind === 'unavailable') {
+        Alert.alert(
+          'Document scan not available',
+          r.reason === 'module'
+            ? 'Expo Go does not include the native document scanner. Use screenshots or PDF here, or build a development build with react-native-document-scanner-plugin. You can also use Crew schedule → Import schedule → Screenshot for the generic flow.'
+            : 'Could not open the scanner. Try screenshots or PDF.',
+          [
+            { text: 'OK', style: 'cancel' },
+            { text: 'Choose screenshots', onPress: () => void onUploadScreenshots() },
+          ]
+        );
+        return;
+      }
+      const items: JetBlueUploadItem[] = r.filePaths.map((uri, i) => ({
+        uri,
+        mime: 'image/jpeg',
+        baseName: `scan-page-${i + 1}.jpg`,
+        sourceType: 'document_scan' as const,
+      }));
+      await runJetBlueImportPipeline(items);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert('Scan failed', msg);
+    }
+  }, [onUploadScreenshots, runJetBlueImportPipeline]);
 
   return (
     <View style={styles.shell}>
-      <CrewScheduleHeader title="Upload screenshots" />
+      <CrewScheduleHeader title="Import FLICA schedule" />
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
-        <Text style={styles.h1}>Month & images</Text>
+        <Text style={styles.h1}>Month & source files</Text>
         <Text style={styles.meta}>
           Import month: <Text style={styles.metaStrong}>{monthKey}</Text>
         </Text>
@@ -300,8 +391,14 @@ export default function ImportJetBlueUploadScreen() {
         </View>
 
         <Text style={styles.lead}>
-          Pick 1–4 clear screenshots of your FLICA monthly detailed list. Use good light; include the full pairing blocks.
-          We never delete prior OCR when you add more — each image gets its own parse batch.
+          Upload screenshots (1–4), a PDF export, or scanned pages. The server extracts text (OCR for images, text layer +
+          optional embedded images for PDFs) and runs the same JetBlue FLICA pairing pass as the generic Import schedule
+          flow.
+        </Text>
+
+        <Text style={styles.note}>
+          <Text style={styles.noteStrong}>Expo Go:</Text> screenshots and PDF work. The live edge-detection scanner needs a
+          development build with the document-scanner native module.
         </Text>
 
         {busy ? (
@@ -310,9 +407,20 @@ export default function ImportJetBlueUploadScreen() {
             <Text style={styles.muted}>{logLine || 'Working…'}</Text>
           </View>
         ) : (
-          <Pressable style={styles.btn} onPress={() => void onUploadScreenshots()}>
-            <Text style={styles.btnText}>Choose screenshots (1–4)</Text>
-          </Pressable>
+          <View style={styles.btnCol}>
+            <Pressable style={styles.btn} onPress={() => void onUploadScreenshots()}>
+              <Ionicons name="images-outline" size={20} color="#fff" style={styles.btnIcon} />
+              <Text style={styles.btnText}>Choose screenshots (1–4)</Text>
+            </Pressable>
+            <Pressable style={styles.btnSecondary} onPress={() => void onUploadPdf()}>
+              <Ionicons name="document-text-outline" size={20} color={T.accent} style={styles.btnIcon} />
+              <Text style={styles.btnSecondaryText}>Upload PDF</Text>
+            </Pressable>
+            <Pressable style={styles.btnSecondary} onPress={() => void onScanDocuments()}>
+              <Ionicons name="scan-outline" size={20} color={T.accent} style={styles.btnIcon} />
+              <Text style={styles.btnSecondaryText}>Scan documents</Text>
+            </Pressable>
+          </View>
         )}
 
         <Pressable style={styles.ghost} onPress={() => router.back()}>
@@ -339,16 +447,35 @@ const styles = StyleSheet.create({
   arrow: { padding: 8 },
   arrowText: { fontSize: 28, color: T.accent, fontWeight: '300' },
   monthLabel: { fontSize: 17, fontWeight: '800', color: T.text },
-  lead: { fontSize: 14, color: T.textSecondary, lineHeight: 21, marginBottom: 20 },
+  lead: { fontSize: 14, color: T.textSecondary, lineHeight: 21, marginBottom: 12 },
+  note: { fontSize: 12, color: T.textSecondary, lineHeight: 18, marginBottom: 20 },
+  noteStrong: { fontWeight: '800', color: T.text },
   busy: { alignItems: 'center', gap: 12, marginVertical: 20 },
   muted: { fontSize: 13, color: T.textSecondary },
+  btnCol: { gap: 10 },
   btn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     backgroundColor: T.accent,
     paddingVertical: 14,
     borderRadius: 10,
-    alignItems: 'center',
   },
+  btnIcon: { marginRight: 0 },
   btnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  btnSecondary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: T.surface,
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  btnSecondaryText: { color: T.accent, fontWeight: '800', fontSize: 16 },
   ghost: { paddingVertical: 14, alignItems: 'center', marginTop: 8 },
   ghostText: { color: T.textSecondary, fontWeight: '700', fontSize: 15 },
 });

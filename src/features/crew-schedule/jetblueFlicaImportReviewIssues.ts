@@ -12,4 +12,11 @@ export type StoredImportReviewIssue = {
   reason_display: string;
   duty_date_iso: string | null;
   candidates?: { value: string; label?: string }[];
+  /** Disambiguate same-day multi-leg flight_number issues (screenshot / PDF). */
+  leg_route_from?: string;
+  leg_route_to?: string;
+  reconstructed_row_text?: string;
+  candidate_flight_numbers?: string[];
+  row_confidence?: number;
+  suggestion_source?: 'reconstructed_row' | 'external_flight_match' | 'manual';
 };

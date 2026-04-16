@@ -97,11 +97,23 @@ function empty(s: string | null | undefined): boolean {
   return !String(s ?? '').trim();
 }
 
-const OCR_STATION_TYPO = new Set(['JHR', 'SFOX', 'LAXX', 'JAS']); // common OCR slips; expandable
+/** When OCR/parser marked low confidence but the row has a plausible flight #, route, and block times, don’t force flight-number review. */
+function legLooksStructurallyCompleteForConfidenceSkip(leg: SchedulePairingDutyRow): boolean {
+  const fn = String(leg.flight_number ?? '').trim();
+  /** B6 / FLICA numeric flight ids are often 1–4 digits (e.g. 7) but allow longer without treating as invalid. */
+  if (!/^\d{1,6}$/.test(fn)) return false;
+  const a = String(leg.from_airport ?? '').trim().toUpperCase();
+  const b = String(leg.to_airport ?? '').trim().toUpperCase();
+  if (!a || !b || a === b) return false;
+  if (empty(leg.departure_time_local) || empty(leg.arrival_time_local)) return false;
+  return true;
+}
+
+const OCR_STATION_TYPO = new Set(['SFOX', 'LAXX', 'JAS']); // common OCR slips; expandable (JHR → LHR handled in stationField)
 
 /** Likely corrections for known suspicious 3-letter codes (context-free heuristic). */
 function suspiciousStationCandidates(code: string): FieldCandidate[] | undefined {
-  const fix: Record<string, string> = { JHR: 'LHR', SFOX: 'SFO', LAXX: 'LAX', JAS: 'LAS' };
+  const fix: Record<string, string> = { SFOX: 'SFO', LAXX: 'LAX', JAS: 'LAS' };
   const v = fix[code];
   if (v) {
     return [
@@ -113,9 +125,11 @@ function suspiciousStationCandidates(code: string): FieldCandidate[] | undefined
 }
 
 function stationField(raw: string | null | undefined, label: string): FieldStatus {
-  const c = String(raw ?? '')
+  let c = String(raw ?? '')
     .trim()
     .toUpperCase();
+  /** Legacy rows / OCR: LHR misread as JHR (parser normalizer also maps this on import). */
+  if (c === 'JHR') c = 'LHR';
   if (!c) {
     return {
       state: 'missing_required',
@@ -138,10 +152,7 @@ function stationField(raw: string | null | undefined, label: string): FieldStatu
       state: 'needs_review',
       helper: 'This code may be a mistake',
       reasonCode: 'suspicious_code',
-      reasonDisplay:
-        c === 'JHR'
-          ? 'We read JHR, but this may be LHR based on the route and layover context.'
-          : DEFAULT_REASON_COPY.suspicious_code,
+      reasonDisplay: DEFAULT_REASON_COPY.suspicious_code,
       candidates: cands,
     };
   }
@@ -189,11 +200,24 @@ function applyStoredImportReviewIssues(
       if (!(LEG_FIELD_KEYS as readonly string[]).includes(sub)) continue;
       const iso = (is.duty_date_iso ?? '').trim();
       if (!iso) continue;
-      const dayLegs = legs
+      let dayLegs = legs
         .filter((l) => (l.duty_date ?? '').trim() === iso)
         .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      const rFrom = (is.leg_route_from ?? '').trim().toUpperCase();
+      const rTo = (is.leg_route_to ?? '').trim().toUpperCase();
+      if (rFrom && rTo) {
+        const matched = dayLegs.filter(
+          (l) =>
+            (l.from_airport ?? '').trim().toUpperCase() === rFrom &&
+            (l.to_airport ?? '').trim().toUpperCase() === rTo
+        );
+        if (matched.length) dayLegs = matched;
+      }
       const target = sub === 'layover_city' ? dayLegs[dayLegs.length - 1] : dayLegs[0];
       if (!target) continue;
+      if (sub === 'flight_number' && !empty(target.flight_number)) {
+        continue;
+      }
       const lf = { ...(legFields[target.id] ?? {}) };
       lf[sub] = mergeFieldWorst(lf[sub], overlay);
       legFields[target.id] = lf;
@@ -430,13 +454,29 @@ export function validateJetBluePairingImport(
     }
 
     if (empty(leg.flight_number)) {
-      lf.flight_number = {
-        state: 'missing_required',
-        helper: 'Flight number required',
-        reasonCode: 'required_for_save',
-        reasonDisplay:
-          'We found the route and times, but could not confidently read the flight number. Enter it from the pairing line.',
-      };
+      const meta = leg.parser_leg_meta;
+      const sug = (meta?.candidate_flight_numbers ?? []).map((s) => String(s).trim()).filter(Boolean);
+      const rowTxt = (meta?.reconstructed_row_text ?? '').trim();
+      if (sug.length > 0) {
+        lf.flight_number = {
+          state: 'needs_review',
+          helper: 'Confirm flight number',
+          reasonCode: 'low_confidence_match',
+          reasonDisplay: rowTxt
+            ? `OCR reconstructed this table row:\n${rowTxt.slice(0, 220)}${rowTxt.length > 220 ? '…' : ''}\n\nTap a suggestion or type the flight number.`
+            : 'Tap a suggested flight number from the reconstructed OCR row, or enter it manually.',
+          candidates: sug.map((v) => ({ value: v, label: `Use ${v}` })),
+        };
+      } else {
+        lf.flight_number = {
+          state: 'missing_required',
+          helper: 'Flight number required',
+          reasonCode: 'required_for_save',
+          reasonDisplay: rowTxt
+            ? `No flight number was parsed. Reconstructed row:\n${rowTxt.slice(0, 220)}${rowTxt.length > 220 ? '…' : ''}`
+            : 'We found the route and times, but could not read the flight number. Enter it from the pairing line or scan text.',
+        };
+      }
     } else {
       lf.flight_number = { state: 'good' };
     }
@@ -514,7 +554,10 @@ export function validateJetBluePairingImport(
       lf.layover_city = { state: 'good' };
     }
 
-    if (leg.requires_review || (leg.row_confidence != null && leg.row_confidence < 0.65)) {
+    if (
+      (leg.requires_review || (leg.row_confidence != null && leg.row_confidence < 0.65)) &&
+      !legLooksStructurallyCompleteForConfidenceSkip(leg)
+    ) {
       const overlay: FieldStatus = {
         state: 'needs_review',
         reasonCode: 'low_confidence_match',
@@ -523,7 +566,9 @@ export function validateJetBluePairingImport(
             ? 'This leg was flagged for review — confirm flight number, stations, and times against your pairing line.'
             : `Parser confidence on this leg is ${Math.round((leg.row_confidence ?? 0) * 100)}% — confirm all values.`,
       };
-      lf.flight_number = mergeFieldWorst(lf.flight_number, overlay);
+      if (empty(leg.flight_number)) {
+        lf.flight_number = mergeFieldWorst(lf.flight_number, overlay);
+      }
     }
 
     legFields[leg.id] = lf;
@@ -531,12 +576,17 @@ export function validateJetBluePairingImport(
 
   // Merge meta-level flags into concrete field rows (counts roll up with the same sweep).
   if (pairingRow?.pairing_requires_review || pairingRow?.needs_review) {
-    pairingFields.pairing_id = mergeFieldWorst(pairingFields.pairing_id, {
-      state: 'needs_review',
-      reasonCode: 'low_confidence_match',
-      reasonDisplay:
-        'This pairing was flagged for review during import — double-check the pairing ID and header details.',
-    });
+    const legsAllComplete =
+      legs.length > 0 && legs.every((lg) => legLooksStructurallyCompleteForConfidenceSkip(lg));
+    const pidOk = pairingFields.pairing_id?.state === 'good';
+    if (!(legsAllComplete && pidOk)) {
+      pairingFields.pairing_id = mergeFieldWorst(pairingFields.pairing_id, {
+        state: 'needs_review',
+        reasonCode: 'low_confidence_match',
+        reasonDisplay:
+          'This pairing was flagged for review during import — double-check the pairing ID and header details.',
+      });
+    }
   }
   if (pairingRow?.pairing_confidence != null && pairingRow.pairing_confidence < 0.72) {
     pairingFields.operate_start_date = mergeFieldWorst(pairingFields.operate_start_date, {

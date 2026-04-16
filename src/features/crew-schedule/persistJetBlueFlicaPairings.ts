@@ -44,6 +44,14 @@ async function insertLegsForParsedPairing(pairingUuid: string, p: JetBluePairing
         normalized_json: {
           segment_confidence: seg.confidence,
           block_time_local: seg.blockTimeLocal,
+          reconstructed_row_text: seg.reconstructedRowText ?? seg.rawLine,
+          candidate_flight_numbers: seg.candidateFlightNumbers?.length
+            ? seg.candidateFlightNumbers
+            : seg.flightNumber
+              ? [seg.flightNumber]
+              : [],
+          fltno_row_confidence: seg.fltnoRowConfidence ?? null,
+          fltno_suggestion_source: seg.fltnoSuggestionSource ?? null,
           duty_day_index: i,
           is_last_leg_of_duty_day: isLast,
           duty_day: isLast
@@ -142,6 +150,7 @@ export async function persistJetBlueFlicaStructuredParseForGenericBatch(params: 
             layoverRestDisplay: d.layoverRestDisplay,
             legCount: d.segments.length,
           })),
+          import_review_issues: buildStoredImportReviewIssues(p),
           parseDebug: parsed.debug,
           generic_batch: true,
         },

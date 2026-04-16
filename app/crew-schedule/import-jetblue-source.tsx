@@ -18,9 +18,9 @@ export default function ImportJetBlueSourceScreen() {
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
         <Text style={styles.h1}>Flight Attendant · FLICA</Text>
         <Text style={styles.lead}>
-          Monthly detailed list view screenshots (jetblue.flica.net). The next step lets you pick the month and upload
-          1–4 images. We run template detection, OCR, and confidence scoring — then you review before anything is saved
-          to your calendar.
+          Monthly detailed list from jetblue.flica.net. Next, pick the month and upload screenshots (1–4), a PDF export, or
+          scanned pages. We run template detection, OCR / text extraction, and confidence scoring — then you review before
+          anything is saved to your calendar.
         </Text>
         <View style={styles.box}>
           <Text style={styles.boxLabel}>Locked for this flow</Text>
@@ -28,7 +28,7 @@ export default function ImportJetBlueSourceScreen() {
           <Text style={styles.boxLine}>Role: Flight Attendant / IFC</Text>
           <Text style={styles.boxLine}>System: FLICA</Text>
           <Text style={styles.boxLine}>View: Detailed month list</Text>
-          <Text style={styles.boxLine}>Source: Screenshot</Text>
+          <Text style={styles.boxLine}>Source: Screenshot, PDF, or document scan</Text>
         </View>
         <Pressable style={styles.btn} onPress={() => router.push('/crew-schedule/import-jetblue-upload')}>
           <Text style={styles.btnText}>Continue to upload</Text>

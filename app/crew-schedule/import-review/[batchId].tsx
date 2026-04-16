@@ -857,22 +857,14 @@ export default function ImportReviewScreen() {
               const pv = validateJetBluePairingImport(snapshotFromPairingRow(p), legs, p);
               const primary = pairingCardPrimaryLabel(pv);
               const badgeLabel = primary.label;
-              const badgeStyle =
-                primary.severity === 'missing'
-                  ? styles.badgeSmMiss
-                  : primary.severity === 'review'
-                    ? styles.badgeSmWarn
-                    : styles.badgeSmOk;
+              const needsAttention = primary.severity !== 'good';
+              const badgeStyle = needsAttention ? styles.badgeSmWarn : styles.badgeSmOk;
               const routeDisplay = formatTripRouteArrows(legs);
               const attentionSub = pairingCardAttentionSubtext(pv);
               return pairingPrimaryMode ? (
                 <Pressable
                   key={p.id}
-                  style={[
-                    styles.pairingCardPremium,
-                    primary.severity === 'review' && styles.pairingCardPremiumWarn,
-                    primary.severity === 'missing' && styles.pairingCardPremiumMiss,
-                  ]}
+                  style={[styles.pairingCardPremium, needsAttention && styles.pairingCardPremiumWarn]}
                   onPress={() =>
                     router.push({
                       pathname: '/crew-schedule/import-jetblue-pairing/[pairingId]',
@@ -902,11 +894,7 @@ export default function ImportReviewScreen() {
               ) : (
                 <Pressable
                   key={p.id}
-                  style={[
-                    styles.pairingCard,
-                    primary.severity === 'review' && styles.pairingCardWarn,
-                    primary.severity === 'missing' && styles.pairingCardMiss,
-                  ]}
+                  style={[styles.pairingCard, needsAttention && styles.pairingCardWarn]}
                   onPress={() =>
                     router.push({
                       pathname: '/crew-schedule/import-jetblue-pairing/[pairingId]',
@@ -1257,10 +1245,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(245, 158, 11, 0.5)',
     backgroundColor: '#FFFCF5',
   },
-  pairingCardPremiumMiss: {
-    borderColor: 'rgba(248, 113, 113, 0.55)',
-    backgroundColor: '#FFFBFB',
-  },
   pairingCardTitlePremium: { fontSize: 22, fontWeight: '800', color: FC.text, flex: 1, letterSpacing: -0.4 },
   pairingCardDateRow: { fontSize: 15, fontWeight: '600', color: FC.text, marginTop: 6 },
   pairingCardRoutePremium: { fontSize: 15, fontWeight: '600', color: FC.text, marginTop: 10, lineHeight: 22 },
@@ -1497,7 +1481,6 @@ const styles = StyleSheet.create({
     backgroundColor: T.surface,
   },
   pairingCardWarn: { borderColor: '#F59E0B', backgroundColor: '#FFFBEB' },
-  pairingCardMiss: { borderColor: '#F87171', backgroundColor: '#FEF2F2' },
   pairingCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   pairingCardTitle: { fontSize: 16, fontWeight: '800', color: T.text, flex: 1 },
   pairingCardLine: { fontSize: 13, color: T.text, marginTop: 4 },
@@ -1505,7 +1488,6 @@ const styles = StyleSheet.create({
   badgeSm: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   badgeSmOk: { backgroundColor: '#DCFCE7' },
   badgeSmWarn: { backgroundColor: '#FEF3C7' },
-  badgeSmMiss: { backgroundColor: '#FECACA' },
   badgeSmText: { fontSize: 11, fontWeight: '800', color: '#0F172A' },
   noticeText: { fontSize: 13, color: T.textSecondary, lineHeight: 20 },
   muted: { fontSize: 14, color: T.textSecondary },

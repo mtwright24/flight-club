@@ -4,6 +4,15 @@ import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import FlightClubHeader from '../../../../src/components/FlightClubHeader';
+import {
+  STAFF_LOADS_VISUAL,
+  StaffChip,
+  StaffLoadsCardShell,
+  loadLevelChipColors,
+  loadLevelHeadline,
+  loadLevelStripColor,
+  normalizeStaffLoadLevel,
+} from '../../../../src/components/loads/StaffLoadsRequestPresentation';
 import { getStaffLoadRequestDetail, staffLoadsCabinEntries, type StaffAnswerRow } from '../../../../src/lib/supabase/staffLoads';
 import { colors } from '../../../../src/styles/theme';
 
@@ -21,7 +30,7 @@ export default function StaffLoadLoadsHistoryScreen() {
     setAnswers(d.answers || []);
     const r = d.request;
     if (r) {
-      setRouteLabel(`${r.airline_code} ${r.from_airport}→${r.to_airport} · ${r.travel_date}`);
+      setRouteLabel(`${r.airline_code} ${r.flight_number || '—'} · ${r.from_airport} → ${r.to_airport}`);
     }
     setLoading(false);
   }, [id]);
@@ -43,49 +52,73 @@ export default function StaffLoadLoadsHistoryScreen() {
         <ActivityIndicator style={{ marginTop: 32 }} color={colors.headerRed} />
       ) : (
         <ScrollView contentContainerStyle={styles.pad}>
-          <Text style={styles.sub}>{routeLabel}</Text>
-          <Text style={styles.meta}>{answers.length} recorded answer{answers.length === 1 ? '' : 's'} (newest first)</Text>
+          <Text style={styles.routeTitle}>{routeLabel}</Text>
+          <Text style={styles.meta}>{answers.length} snapshot{answers.length === 1 ? '' : 's'} · newest first</Text>
           {answers.length === 0 ? (
             <Text style={styles.muted}>No loads answers yet.</Text>
           ) : (
-            answers.map((a) => (
-              <View key={a.id} style={styles.card}>
-                <View style={styles.cardHead}>
-                  <Text style={styles.badge}>{a.is_latest ? 'Latest' : 'Earlier'}</Text>
-                  <Text style={styles.when}>{new Date(a.as_of || a.created_at).toLocaleString()}</Text>
-                </View>
-                <Text style={styles.by}>
-                  {a.responder?.display_name || 'Crew'} · {a.load_level} · {a.answer_source || 'community'}
-                </Text>
-                <Text style={styles.line}>
-                  Open seats (total): <Text style={styles.val}>{a.open_seats_total ?? '—'}</Text>
-                </Text>
-                {staffLoadsCabinEntries(a.open_seats_by_cabin as Record<string, unknown>).length ? (
-                  <View style={styles.block}>
-                    <Text style={styles.blockHead}>Open by cabin</Text>
-                    {staffLoadsCabinEntries(a.open_seats_by_cabin as Record<string, unknown>).map((c) => (
-                      <Text key={`o-${a.id}-${c.key}`} style={styles.lineSm}>
-                        {c.key}: {c.value}
-                      </Text>
-                    ))}
+            answers.map((a) => {
+              const kind = normalizeStaffLoadLevel(a.load_level);
+              const strip = loadLevelStripColor(kind);
+              const chips = loadLevelChipColors(kind);
+              const hl = loadLevelHeadline(kind);
+              return (
+                <StaffLoadsCardShell key={a.id} accentColor={strip} style={styles.answerCard}>
+                  <View style={styles.answerTop}>
+                    <StaffChip
+                      label={a.is_latest ? 'Latest' : 'Earlier'}
+                      backgroundColor={a.is_latest ? STAFF_LOADS_VISUAL.chip.bgAnswered : STAFF_LOADS_VISUAL.chip.bgStale}
+                      color={a.is_latest ? STAFF_LOADS_VISUAL.chip.fgAnswered : STAFF_LOADS_VISUAL.chip.fgStale}
+                    />
+                    <Text style={styles.when}>{new Date(a.as_of || a.created_at).toLocaleString()}</Text>
                   </View>
-                ) : null}
-                <Text style={styles.line}>
-                  Listed non-rev (total): <Text style={styles.val}>{a.nonrev_listed_total ?? '—'}</Text>
-                </Text>
-                {staffLoadsCabinEntries(a.nonrev_by_cabin as Record<string, unknown>).length ? (
-                  <View style={styles.block}>
-                    <Text style={styles.blockHead}>Non-rev by cabin</Text>
-                    {staffLoadsCabinEntries(a.nonrev_by_cabin as Record<string, unknown>).map((c) => (
-                      <Text key={`n-${a.id}-${c.key}`} style={styles.lineSm}>
-                        {c.key}: {c.value}
-                      </Text>
-                    ))}
+                  <View style={styles.answerHeadlineRow}>
+                    <Text style={styles.answerHeadline}>{hl}</Text>
+                    <StaffChip label={a.load_level} backgroundColor={chips.bg} color={chips.fg} size="md" />
                   </View>
-                ) : null}
-                {a.notes ? <Text style={styles.notes}>{a.notes}</Text> : null}
-              </View>
-            ))
+                  <Text style={styles.byLine}>
+                    {a.responder?.display_name || 'Crew'} · {a.answer_source || 'community'}
+                  </Text>
+                  <View style={styles.statGrid}>
+                    <View style={styles.statCell}>
+                      <Text style={styles.statLab}>Open seats</Text>
+                      <Text style={styles.statNum}>{a.open_seats_total ?? '—'}</Text>
+                    </View>
+                    <View style={styles.statCell}>
+                      <Text style={styles.statLab}>Listed non-rev</Text>
+                      <Text style={styles.statNum}>{a.nonrev_listed_total ?? '—'}</Text>
+                    </View>
+                  </View>
+                  {staffLoadsCabinEntries(a.open_seats_by_cabin as Record<string, unknown>).length ? (
+                    <View style={styles.cabinBlock}>
+                      <Text style={styles.cabinTitle}>Open by cabin</Text>
+                      <View style={styles.cabinWrap}>
+                        {staffLoadsCabinEntries(a.open_seats_by_cabin as Record<string, unknown>).map((c) => (
+                          <View key={`o-${a.id}-${c.key}`} style={styles.cabinChip}>
+                            <Text style={styles.cabinKey}>{c.key}</Text>
+                            <Text style={styles.cabinVal}>{c.value}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
+                  {staffLoadsCabinEntries(a.nonrev_by_cabin as Record<string, unknown>).length ? (
+                    <View style={styles.cabinBlock}>
+                      <Text style={styles.cabinTitle}>Non-rev by cabin</Text>
+                      <View style={styles.cabinWrap}>
+                        {staffLoadsCabinEntries(a.nonrev_by_cabin as Record<string, unknown>).map((c) => (
+                          <View key={`n-${a.id}-${c.key}`} style={styles.cabinChip}>
+                            <Text style={styles.cabinKey}>{c.key}</Text>
+                            <Text style={styles.cabinVal}>{c.value}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
+                  {a.notes ? <Text style={styles.notes}>{a.notes}</Text> : null}
+                </StaffLoadsCardShell>
+              );
+            })
           )}
         </ScrollView>
       )}
@@ -98,34 +131,42 @@ const styles = StyleSheet.create({
   backRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 16, paddingVertical: 8 },
   backTx: { color: colors.headerRed, fontWeight: '800', fontSize: 15 },
   pad: { padding: 16, paddingBottom: 40 },
-  sub: { fontWeight: '900', fontSize: 16, color: '#0f172a' },
-  meta: { color: '#64748b', fontWeight: '600', marginTop: 4, marginBottom: 14 },
+  routeTitle: { fontWeight: '900', fontSize: 17, color: '#0f172a', letterSpacing: -0.2 },
+  meta: { color: '#94a3b8', fontWeight: '700', fontSize: 12, marginTop: 6, marginBottom: 14 },
   muted: { color: '#64748b', fontWeight: '600' },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
+  answerCard: { marginBottom: 12 },
+  answerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  when: { fontSize: 11, color: '#94a3b8', fontWeight: '700' },
+  answerHeadlineRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 },
+  answerHeadline: { fontSize: 22, fontWeight: '900', color: '#0f172a', letterSpacing: -0.4 },
+  byLine: { fontSize: 12, color: '#64748b', fontWeight: '700', marginBottom: 10 },
+  statGrid: { flexDirection: 'row', gap: 8 },
+  statCell: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e2e8f0',
-    marginBottom: 12,
   },
-  cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  badge: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: colors.headerRed,
-    backgroundColor: 'rgba(181,22,30,0.08)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    overflow: 'hidden',
+  statLab: { fontSize: 10, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4 },
+  statNum: { fontSize: 18, fontWeight: '900', color: '#0f172a', marginTop: 2 },
+  cabinBlock: { marginTop: 12 },
+  cabinTitle: { fontSize: 11, fontWeight: '800', color: '#64748b', marginBottom: 6 },
+  cabinWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  cabinChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e2e8f0',
   },
-  when: { fontSize: 12, color: '#64748b', fontWeight: '700' },
-  by: { fontSize: 13, color: '#334155', fontWeight: '700', marginBottom: 8 },
-  line: { fontSize: 14, color: '#334155', marginBottom: 4, fontWeight: '600' },
-  lineSm: { fontSize: 13, color: '#475569', marginBottom: 2 },
-  val: { fontWeight: '900', color: '#0f172a' },
-  block: { marginTop: 6, marginBottom: 4 },
-  blockHead: { fontSize: 11, fontWeight: '800', color: '#94a3b8', marginBottom: 4 },
-  notes: { marginTop: 10, color: '#0f172a', lineHeight: 20 },
+  cabinKey: { fontSize: 11, fontWeight: '800', color: '#475569', textTransform: 'capitalize' },
+  cabinVal: { fontSize: 13, fontWeight: '900', color: '#0f172a' },
+  notes: { marginTop: 12, color: '#334155', lineHeight: 20, fontSize: 14, fontWeight: '600' },
 });

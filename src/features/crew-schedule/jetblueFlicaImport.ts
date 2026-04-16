@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '../../lib/supabaseClient';
+import { tryInferFlightNumberFromLegRaw } from '../schedule-import/parser/jetblueFlicaStructuredParser';
 import { JETBLUE_FLICA_MONTHLY_SOURCE_TYPE } from './jetblueFlicaUnderstanding';
 import { JETBLUE_FLICA_TEMPLATE_KEY } from './jetblueFlicaTemplate';
 
@@ -238,6 +239,13 @@ export type SchedulePairingDutyRow = {
   row_confidence: number | null;
   requires_review: boolean;
   raw_text: string | null;
+  /** From `schedule_pairing_legs.normalized_json` — screenshot table reconstruction + FLTNO candidates. */
+  parser_leg_meta?: {
+    candidate_flight_numbers?: string[];
+    reconstructed_row_text?: string;
+    fltno_suggestion_source?: string;
+    fltno_row_confidence?: number | null;
+  } | null;
 };
 
 export function buildRouteSummaryFromDuties(
@@ -298,11 +306,25 @@ export async function fetchPairingById(pairingUuid: string): Promise<SchedulePai
   return data as SchedulePairingRow | null;
 }
 
+/** Normalize known OCR slips when reading legs (keeps UI/validation aligned without requiring re-import). */
+function coerceLegAirportCode(s: string | null | undefined): string | null {
+  if (s == null) return null;
+  const t = String(s).trim().toUpperCase();
+  if (!t) return null;
+  if (t === 'JHR') return 'LHR';
+  if (t === 'JAS') return 'LAS';
+  return t;
+}
+
 function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
   const nj = l.normalized_json as {
     segment_confidence?: number;
     block_time_local?: string;
     duty_day?: Record<string, unknown>;
+    reconstructed_row_text?: string;
+    candidate_flight_numbers?: unknown;
+    fltno_suggestion_source?: string;
+    fltno_row_confidence?: number | null;
   } | null | undefined;
   const dd = nj?.duty_day;
   const blockNum = l.block_time as number | null | undefined;
@@ -315,17 +337,26 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
   const equip = (l.aircraft_position_code as string) ?? null;
   const layRest =
     typeof dd?.layover_rest_display === 'string' ? (dd.layover_rest_display as string) : null;
+  const fromA = coerceLegAirportCode(l.departure_station as string | null | undefined);
+  const toA = coerceLegAirportCode(l.arrival_station as string | null | undefined);
+  const depL = (l.scheduled_departure_local as string) ?? null;
+  const arrL = (l.scheduled_arrival_local as string) ?? null;
+  let flightNum = ((l.flight_number as string) ?? '').trim() || null;
+  if (!flightNum) {
+    const inferred = tryInferFlightNumberFromLegRaw(l.raw_text as string | null | undefined, fromA, toA, depL, arrL);
+    if (inferred) flightNum = inferred;
+  }
   return {
     id: l.id as string,
     pairing_row_id: l.pairing_id as string,
     duty_date: (l.duty_date as string) ?? null,
-    flight_number: (l.flight_number as string) ?? null,
-    from_airport: (l.departure_station as string) ?? null,
-    to_airport: (l.arrival_station as string) ?? null,
-    departure_time_local: (l.scheduled_departure_local as string) ?? null,
-    arrival_time_local: (l.scheduled_arrival_local as string) ?? null,
+    flight_number: flightNum,
+    from_airport: fromA,
+    to_airport: toA,
+    departure_time_local: depL,
+    arrival_time_local: arrL,
     block_time_local: blockLocal,
-    layover_city: (l.layover_city as string) ?? null,
+    layover_city: coerceLegAirportCode(l.layover_city as string | null | undefined),
     hotel_name: (l.hotel_name as string) ?? null,
     release_time_local: ((l.release_time_local ?? l.release_time) as string) ?? null,
     is_deadhead: (l.is_deadhead as boolean | null | undefined) ?? null,
@@ -335,6 +366,20 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
     row_confidence: (l.row_confidence as number) ?? nj?.segment_confidence ?? null,
     requires_review: Boolean(l.requires_review),
     raw_text: (l.raw_text as string) ?? null,
+    parser_leg_meta: nj
+      ? {
+          candidate_flight_numbers: Array.isArray(nj.candidate_flight_numbers)
+            ? (nj.candidate_flight_numbers as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+            : undefined,
+          reconstructed_row_text:
+            typeof nj.reconstructed_row_text === 'string' && nj.reconstructed_row_text.trim()
+              ? nj.reconstructed_row_text.trim()
+              : undefined,
+          fltno_suggestion_source:
+            typeof nj.fltno_suggestion_source === 'string' ? nj.fltno_suggestion_source : undefined,
+          fltno_row_confidence: nj.fltno_row_confidence ?? null,
+        }
+      : null,
   };
 }
 

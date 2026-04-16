@@ -16,6 +16,19 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import FlightClubHeader from '../../../../src/components/FlightClubHeader';
+import {
+  AirlineMonogram,
+  STAFF_LOADS_VISUAL,
+  StaffChip,
+  StaffLoadsCardShell,
+  formatLocalHm,
+  formatTravelDateShort,
+  loadLevelChipColors,
+  loadLevelHeadline,
+  loadLevelStripColor,
+  normalizeStaffLoadLevel,
+  staffLoadsDetailAccentStrip,
+} from '../../../../src/components/loads/StaffLoadsRequestPresentation';
 import { useAuth } from '../../../../src/hooks/useAuth';
 import {
   addStaffRequestComment,
@@ -416,121 +429,204 @@ export default function StaffLoadRequestDetailRoute() {
 
   const depIso = flight?.depart_at ?? request.depart_at ?? null;
   const arrIso = flight?.arrive_at ?? request.arrive_at ?? null;
-  const dep = depIso ? new Date(depIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
-  const arr = arrIso ? new Date(arrIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+  const dep = formatLocalHm(depIso);
+  const arr = formatLocalHm(arrIso);
   const blockDur = formatDurationLabel(depIso, arrIso);
+  const travelLabel = formatTravelDateShort(request.travel_date);
+  const loadKind = latest ? normalizeStaffLoadLevel(latest.load_level) : 'unknown';
+  const loadHeadline = loadLevelHeadline(loadKind);
+  const loadStrip = latest ? loadLevelStripColor(loadKind) : STAFF_LOADS_VISUAL.strip.waiting;
+  const loadChipColors = loadLevelChipColors(loadKind);
+  const headerAccent = staffLoadsDetailAccentStrip({
+    status: request.status,
+    loadLevel: latest?.load_level,
+    refreshRequested: !!request.refresh_requested_at,
+    lockActive: !!lockActive,
+    latestFlagged: !!latestFlagged,
+  });
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
       <FlightClubHeader title="Load request" showLogo={false} />
       <ScrollView contentContainerStyle={styles.pad}>
-        <View style={styles.headerCard}>
-          <Text style={styles.hAir}>
-            {request.airline_code} {request.flight_number || ''}
-          </Text>
-          <Text style={styles.hRoute}>
-            {request.from_airport} → {request.to_airport}
-          </Text>
-          <Text style={styles.hDate}>{request.travel_date}</Text>
-          <Text style={styles.hTime}>
-            {dep} – {arr}
-            {blockDur ? ` · ${blockDur}` : ''}
-          </Text>
-          <Text style={styles.statusPill}>Status: {request.status.toUpperCase()}</Text>
+        <StaffLoadsCardShell accentColor={headerAccent} style={styles.headerShell}>
+          <View style={styles.headerTopRow}>
+            <AirlineMonogram code={request.airline_code} />
+            <View style={styles.headerMain}>
+              <View style={styles.headerTitleRow}>
+                <Text style={styles.hAir}>
+                  {request.airline_code} {request.flight_number || '—'}
+                </Text>
+                <View style={styles.headerChipRow}>
+                  {request.status === 'answered' ? (
+                    <StaffChip
+                      label="Answered"
+                      backgroundColor={STAFF_LOADS_VISUAL.chip.bgAnswered}
+                      color={STAFF_LOADS_VISUAL.chip.fgAnswered}
+                    />
+                  ) : request.status === 'stale' ? (
+                    <StaffChip
+                      label="Stale"
+                      backgroundColor={STAFF_LOADS_VISUAL.chip.bgStale}
+                      color={STAFF_LOADS_VISUAL.chip.fgStale}
+                    />
+                  ) : (
+                    <StaffChip
+                      label="Open"
+                      backgroundColor={STAFF_LOADS_VISUAL.chip.bgOpen}
+                      color={STAFF_LOADS_VISUAL.chip.fgOpen}
+                    />
+                  )}
+                  {request.request_kind === 'priority' ? (
+                    <StaffChip
+                      label="Priority"
+                      backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
+                      color={STAFF_LOADS_VISUAL.chip.fgPriority}
+                    />
+                  ) : null}
+                </View>
+              </View>
+              <Text style={styles.hRoute}>
+                {request.from_airport} → {request.to_airport}
+              </Text>
+              <View style={styles.headerMetaRow}>
+                <Text style={styles.hDate}>{travelLabel}</Text>
+                <Text style={styles.headerDot}>·</Text>
+                <Text style={styles.hTime}>
+                  {dep} – {arr}
+                  {blockDur ? ` · ${blockDur}` : ''}
+                </Text>
+              </View>
+              {mine ? (
+                <StaffChip
+                  label="Your request"
+                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgMine}
+                  color={STAFF_LOADS_VISUAL.chip.fgMine}
+                  style={{ marginTop: 10 }}
+                />
+              ) : null}
+            </View>
+          </View>
           {request.request_kind === 'priority' && request.priority_upgraded_at ? (
-            <Text style={styles.upgradeMeta}>Priority since {new Date(request.priority_upgraded_at).toLocaleString()}</Text>
+            <Text style={styles.upgradeMeta}>Priority since {new Date(request.priority_upgraded_at).toLocaleDateString()}</Text>
           ) : null}
           {request.refresh_requested_at ? (
-            <View style={styles.refreshBanner}>
-              <Ionicons name="alert-circle-outline" size={16} color="#1d4ed8" />
-              <Text style={styles.refreshBannerTx}>
-                Refresh requested {new Date(request.refresh_requested_at).toLocaleString()}
+            <View style={styles.calloutRefresh}>
+              <Ionicons name="refresh-circle-outline" size={16} color={STAFF_LOADS_VISUAL.chip.fgRefresh} />
+              <Text style={styles.calloutRefreshTx} numberOfLines={2}>
+                Refresh requested · {new Date(request.refresh_requested_at).toLocaleString()}
               </Text>
             </View>
           ) : null}
           {lockActive ? (
-            <View style={styles.lockBanner}>
-              <Ionicons name="hourglass" size={16} color="#92400e" />
-              <Text style={styles.lockBannerTx}>
+            <View style={styles.calloutLock}>
+              <Ionicons name="lock-closed-outline" size={16} color={STAFF_LOADS_VISUAL.chip.fgLock} />
+              <Text style={styles.calloutLockTx} numberOfLines={3}>
                 {lockedByOther
                   ? lockHolderDisplayName
-                    ? `${lockHolderDisplayName} is submitting loads for this flight.`
-                    : 'Someone is submitting loads for this flight.'
-                  : 'You have an active answer lock — finish on the answer screen or wait for it to expire.'}
+                    ? `${lockHolderDisplayName} is answering.`
+                    : 'Another crew member is answering.'
+                  : 'You have the answer lock — finish on the answer screen.'}
               </Text>
             </View>
           ) : null}
-        </View>
+        </StaffLoadsCardShell>
 
-        <Text style={styles.sectionTitle}>Loads summary</Text>
-        <View style={styles.card}>
+        <View style={styles.sectionLabelRow}>
+          <View style={styles.sectionAccentRule} />
+          <Text style={styles.sectionTitle}>Loads summary</Text>
+        </View>
+        <StaffLoadsCardShell accentColor={latest ? loadStrip : STAFF_LOADS_VISUAL.strip.neutral} style={styles.summaryShell}>
           {latest ? (
             <>
-              <Text style={styles.sumLine}>
-                Overall load: <Text style={styles.sumVal}>{latest.load_level}</Text>
-              </Text>
-              <Text style={styles.sumLine}>
-                Open seats (total): <Text style={styles.sumVal}>{latest.open_seats_total ?? '—'}</Text>
-              </Text>
+              <View style={styles.summaryHeadRow}>
+                <Text style={styles.summaryHeadline}>{loadHeadline}</Text>
+                <StaffChip
+                  label={latest.load_level}
+                  backgroundColor={loadChipColors.bg}
+                  color={loadChipColors.fg}
+                  size="md"
+                />
+              </View>
+              <View style={styles.statGrid}>
+                <View style={styles.statCell}>
+                  <Text style={styles.statLabel}>Open seats</Text>
+                  <Text style={styles.statValue}>{latest.open_seats_total ?? '—'}</Text>
+                </View>
+                <View style={styles.statCell}>
+                  <Text style={styles.statLabel}>Listed non-rev</Text>
+                  <Text style={styles.statValue}>{latest.nonrev_listed_total ?? '—'}</Text>
+                </View>
+              </View>
               {openCabinLines.length ? (
-                <View style={styles.cabinBlock}>
-                  <Text style={styles.cabinHead}>Open seats by cabin</Text>
-                  {openCabinLines.map((c) => (
-                    <Text key={`o-${c.key}`} style={styles.cabinLine}>
-                      {c.key}: <Text style={styles.sumVal}>{c.value}</Text>
-                    </Text>
-                  ))}
+                <View style={styles.cabinSection}>
+                  <Text style={styles.cabinSectionTitle}>By cabin · open</Text>
+                  <View style={styles.cabinChipWrap}>
+                    {openCabinLines.map((c) => (
+                      <View key={`o-${c.key}`} style={styles.cabinChip}>
+                        <Text style={styles.cabinChipKey}>{c.key}</Text>
+                        <Text style={styles.cabinChipVal}>{c.value}</Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
               ) : null}
-              <Text style={styles.sumLine}>
-                Listed non-rev (total): <Text style={styles.sumVal}>{latest.nonrev_listed_total ?? '—'}</Text>
-              </Text>
               {nonrevCabinLines.length ? (
-                <View style={styles.cabinBlock}>
-                  <Text style={styles.cabinHead}>Listed non-rev by cabin</Text>
-                  {nonrevCabinLines.map((c) => (
-                    <Text key={`n-${c.key}`} style={styles.cabinLine}>
-                      {c.key}: <Text style={styles.sumVal}>{c.value}</Text>
-                    </Text>
-                  ))}
+                <View style={styles.cabinSection}>
+                  <Text style={styles.cabinSectionTitle}>By cabin · non-rev</Text>
+                  <View style={styles.cabinChipWrap}>
+                    {nonrevCabinLines.map((c) => (
+                      <View key={`n-${c.key}`} style={styles.cabinChip}>
+                        <Text style={styles.cabinChipKey}>{c.key}</Text>
+                        <Text style={styles.cabinChipVal}>{c.value}</Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
               ) : null}
               <Text style={styles.sumMeta}>
-                Updated {new Date(latest.as_of || latest.created_at).toLocaleString()} ·{' '}
-                {latest.responder?.display_name || 'Crew'} · source: {latest.answer_source || 'community'}
+                Updated {new Date(latest.as_of || latest.created_at).toLocaleString()} · {latest.responder?.display_name || 'Crew'} ·{' '}
+                {latest.answer_source || 'community'}
               </Text>
               {latest.notes ? <Text style={styles.notes}>{latest.notes}</Text> : null}
               {latestFlagged ? (
                 <View style={styles.flagBanner}>
-                  <Text style={styles.flagBannerTx}>Latest loads were reported as inaccurate — a refresh helps the community.</Text>
+                  <StaffChip label="Needs refresh" backgroundColor={STAFF_LOADS_VISUAL.chip.bgRefresh} color={STAFF_LOADS_VISUAL.chip.fgRefresh} />
+                  <Text style={styles.flagBannerTx}>Latest answer was flagged inaccurate.</Text>
                 </View>
               ) : null}
             </>
           ) : (
-            <Text style={styles.muted}>No loads submitted yet.</Text>
+            <View style={styles.emptyLoads}>
+              <Text style={styles.emptyLoadsTitle}>Awaiting first answer</Text>
+              <Text style={styles.muted}>No community loads on this request yet.</Text>
+            </View>
           )}
           {answers.length > 0 ? (
             <Pressable style={styles.historyLink} onPress={() => router.push(`/loads/request/${request.id}/history`)}>
               <Text style={styles.historyLinkTx}>
-                View loads history ({loadsUpdatesCount} answer{loadsUpdatesCount === 1 ? '' : 's'})
+                Loads history · {loadsUpdatesCount} update{loadsUpdatesCount === 1 ? '' : 's'}
               </Text>
               <Ionicons name="chevron-forward" size={18} color={colors.headerRed} />
             </Pressable>
           ) : null}
-        </View>
+        </StaffLoadsCardShell>
 
-        <Text style={styles.sectionTitle}>Comments & updates</Text>
-        <Text style={styles.countLine}>
-          Comments {commentsCount} · Loads updates {loadsUpdatesCount} · Status events {statusEventsCount}
+        <View style={styles.sectionLabelRow}>
+          <View style={styles.sectionAccentRule} />
+          <Text style={styles.sectionTitle}>Activity</Text>
+        </View>
+        <Text style={styles.countLineMuted}>
+          {commentsCount} comments · {loadsUpdatesCount} load updates · {statusEventsCount} status
         </Text>
         <View style={styles.chipsRow}>
           {(['all', 'comments', 'loads', 'status'] as StaffActivityFilter[]).map((f) => (
             <Pressable
               key={f}
-              style={[styles.chip, activityFilter === f && styles.chipOn]}
+              style={[styles.filterChip, activityFilter === f && styles.filterChipOn]}
               onPress={() => setActivityFilter(f)}
             >
-              <Text style={[styles.chipTx, activityFilter === f && styles.chipTxOn]}>
+              <Text style={[styles.filterChipTx, activityFilter === f && styles.filterChipTxOn]}>
                 {f === 'all' ? 'All' : f === 'comments' ? 'Comments' : f === 'loads' ? 'Loads' : 'Status'}
               </Text>
             </Pressable>
@@ -548,7 +644,11 @@ export default function StaffLoadRequestDetailRoute() {
             <Text style={styles.sendCtx}>Post comment</Text>
           </Pressable>
           {filteredActivity.length === 0 ? (
-            <Text style={styles.muted}>Nothing in this filter yet.</Text>
+            <View style={styles.activityEmpty}>
+              <Ionicons name="chatbubbles-outline" size={28} color="#cbd5e1" />
+              <Text style={styles.activityEmptyTx}>Nothing in this filter yet.</Text>
+              <Text style={styles.activityEmptySub}>Try All, or post a comment above.</Text>
+            </View>
           ) : (
             filteredActivity.map((it) => {
               const { title, subtitle, body, meta } = renderActivityBody(it);
@@ -566,7 +666,10 @@ export default function StaffLoadRequestDetailRoute() {
           )}
         </View>
 
-        <Text style={styles.sectionTitle}>Flight & status</Text>
+        <View style={styles.sectionLabelRow}>
+          <View style={styles.sectionAccentRule} />
+          <Text style={styles.sectionTitle}>Flight & status</Text>
+        </View>
         <View style={styles.card}>
           <Text style={styles.muted}>
             Scheduled: {depIso ? new Date(depIso).toLocaleString() : '—'} → {arrIso ? new Date(arrIso).toLocaleString() : '—'}
@@ -598,9 +701,10 @@ export default function StaffLoadRequestDetailRoute() {
           )}
         </View>
 
-        <Text style={styles.sectionTitle}>
-          Airline notes for {staffLoadsAirlineDisplayName(request.airline_code)}
-        </Text>
+        <View style={styles.sectionLabelRow}>
+          <View style={styles.sectionAccentRule} />
+          <Text style={styles.sectionTitle}>Airline notes · {staffLoadsAirlineDisplayName(request.airline_code)}</Text>
+        </View>
         <View style={styles.card}>
           {airlineNoteEntries.length === 0 ? (
             <Text style={styles.muted}>No structured airline notes in the library for this carrier yet.</Text>
@@ -635,8 +739,11 @@ export default function StaffLoadRequestDetailRoute() {
           )}
         </View>
 
-        <Text style={styles.sectionTitle}>Good to know</Text>
-        <Text style={styles.knowledgeSub}>Route & destination context (data-backed)</Text>
+        <View style={styles.sectionLabelRow}>
+          <View style={styles.sectionAccentRule} />
+          <Text style={styles.sectionTitle}>Good to know</Text>
+        </View>
+        <Text style={styles.knowledgeSub}>Route & destination context</Text>
         <View style={styles.card}>
           <Pressable style={styles.expandHeader} onPress={() => setGoodToKnowExpanded((e) => !e)} accessibilityRole="button">
             <Text style={styles.expandHeaderTx}>Timezones, weather slots & route tips</Text>
@@ -673,8 +780,11 @@ export default function StaffLoadRequestDetailRoute() {
 
         {travelOfferCards.length > 0 ? (
           <>
-            <Text style={styles.sectionTitle}>Travel add-ons</Text>
-            <Text style={styles.knowledgeSub}>Optional — secondary to loads</Text>
+            <View style={styles.sectionLabelRow}>
+              <View style={styles.sectionAccentRule} />
+              <Text style={styles.sectionTitle}>Travel add-ons</Text>
+            </View>
+            <Text style={styles.knowledgeSub}>Optional extras</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.travelRow}>
               {travelOfferCards.map((o) => (
                 <Pressable
@@ -876,67 +986,137 @@ export default function StaffLoadRequestDetailRoute() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f8fafc' },
   pad: { padding: 16, paddingBottom: 48 },
-  headerCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 16,
+  headerShell: { marginBottom: 14 },
+  headerTopRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  headerMain: { flex: 1, minWidth: 0 },
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  headerChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end', maxWidth: '52%' },
+  headerMetaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  headerDot: { fontSize: 13, color: '#cbd5e1', fontWeight: '700' },
+  hAir: { fontWeight: '900', fontSize: 18, color: '#0f172a', letterSpacing: -0.2, flex: 1, minWidth: 120 },
+  hRoute: { fontWeight: '800', fontSize: 16, color: '#334155', marginTop: 4, letterSpacing: 0.2 },
+  hDate: { color: '#64748b', fontWeight: '700', fontSize: 13 },
+  hTime: { color: '#0f172a', fontWeight: '800', fontSize: 13 },
+  upgradeMeta: { marginTop: 10, fontSize: 11, fontWeight: '600', color: '#b45309' },
+  calloutRefresh: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#fffbeb',
+    borderRadius: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: STAFF_LOADS_VISUAL.strip.caution,
   },
-  hAir: { fontWeight: '900', fontSize: 20, color: '#0f172a' },
-  hRoute: { fontWeight: '800', fontSize: 16, color: '#334155', marginTop: 6 },
-  hDate: { color: '#64748b', marginTop: 6, fontWeight: '600' },
-  hTime: { color: '#0f172a', marginTop: 4, fontWeight: '700' },
-  upgradeMeta: { marginTop: 8, fontSize: 12, fontWeight: '600', color: '#b45309' },
-  refreshBanner: {
+  calloutRefreshTx: { flex: 1, color: '#92400e', fontWeight: '700', fontSize: 12, lineHeight: 17 },
+  calloutLock: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#eff6ff',
+    borderRadius: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: STAFF_LOADS_VISUAL.strip.waiting,
+  },
+  calloutLockTx: { flex: 1, color: '#1e40af', fontWeight: '700', fontSize: 12, lineHeight: 17 },
+  sectionLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginTop: 10,
-    backgroundColor: '#eff6ff',
-    padding: 10,
-    borderRadius: 10,
+    marginTop: 18,
+    marginBottom: 6,
   },
-  refreshBannerTx: { flex: 1, color: '#1e40af', fontWeight: '700', fontSize: 13 },
-  statusPill: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    fontSize: 12,
-    fontWeight: '800',
-    color: colors.headerRed,
-    backgroundColor: 'rgba(181,22,30,0.08)',
+  sectionAccentRule: { width: 3, height: 14, borderRadius: 2, backgroundColor: colors.headerRed, opacity: 0.85 },
+  sectionTitle: { fontWeight: '800', fontSize: 12, color: '#64748b', letterSpacing: 0.6, textTransform: 'uppercase' },
+  countLineMuted: { fontSize: 11, fontWeight: '700', color: '#94a3b8', marginBottom: 8 },
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+  filterChip: {
     paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  lockBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12, backgroundColor: '#fff7ed', padding: 10, borderRadius: 10 },
-  lockBannerTx: { flex: 1, color: '#92400e', fontWeight: '700', fontSize: 13 },
-  sectionTitle: { fontWeight: '900', fontSize: 15, color: colors.headerRed, marginBottom: 8, marginTop: 14, letterSpacing: 0.2 },
-  countLine: { fontSize: 12, fontWeight: '700', color: '#64748b', marginBottom: 8 },
-  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingVertical: 6,
+    borderRadius: 10,
     backgroundColor: '#fff',
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e2e8f0',
   },
-  chipOn: { backgroundColor: 'rgba(181,22,30,0.1)', borderColor: colors.headerRed },
-  chipTx: { fontWeight: '800', fontSize: 13, color: '#64748b' },
-  chipTxOn: { color: colors.headerRed },
-  card: { backgroundColor: '#fff', borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 14 },
-  sumLine: { fontSize: 15, color: '#334155', marginBottom: 6, fontWeight: '600' },
-  sumVal: { fontWeight: '900', color: '#0f172a' },
-  sumMeta: { fontSize: 12, color: '#64748b', marginTop: 8 },
-  cabinBlock: { marginTop: 8, marginBottom: 4 },
+  filterChipOn: { backgroundColor: 'rgba(181,22,30,0.08)', borderColor: colors.headerRed },
+  filterChipTx: { fontWeight: '800', fontSize: 11, color: '#64748b' },
+  filterChipTxOn: { color: colors.headerRed },
+  summaryShell: { marginBottom: 14 },
+  summaryHeadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 12,
+  },
+  summaryHeadline: { fontSize: 26, fontWeight: '900', color: '#0f172a', letterSpacing: -0.5 },
+  statGrid: { flexDirection: 'row', gap: 10 },
+  statCell: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e2e8f0',
+  },
+  statLabel: { fontSize: 11, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4 },
+  statValue: { fontSize: 20, fontWeight: '900', color: '#0f172a', marginTop: 4 },
+  cabinSection: { marginTop: 14 },
+  cabinSectionTitle: { fontSize: 11, fontWeight: '800', color: '#64748b', marginBottom: 8, letterSpacing: 0.3 },
+  cabinChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  cabinChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e2e8f0',
+  },
+  cabinChipKey: { fontSize: 12, fontWeight: '800', color: '#475569', textTransform: 'capitalize' },
+  cabinChipVal: { fontSize: 14, fontWeight: '900', color: '#0f172a' },
+  emptyLoads: { paddingVertical: 8 },
+  emptyLoadsTitle: { fontSize: 16, fontWeight: '900', color: '#334155', marginBottom: 4 },
+  activityEmpty: { alignItems: 'center', paddingVertical: 20 },
+  activityEmptyTx: { marginTop: 8, fontSize: 14, fontWeight: '800', color: '#94a3b8' },
+  activityEmptySub: { marginTop: 4, fontSize: 12, fontWeight: '600', color: '#cbd5e1', textAlign: 'center' },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e2e8f0',
+    marginBottom: 14,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  sumMeta: { fontSize: 11, color: '#94a3b8', marginTop: 12, fontWeight: '600', lineHeight: 16 },
   cabinHead: { fontSize: 12, fontWeight: '800', color: '#64748b', marginBottom: 4 },
-  cabinLine: { fontSize: 14, color: '#334155', marginBottom: 2, fontWeight: '600' },
-  notes: { marginTop: 10, color: '#0f172a', lineHeight: 20 },
-  flagBanner: { marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: '#fef3c7' },
-  flagBannerTx: { color: '#92400e', fontWeight: '700', fontSize: 13, lineHeight: 18 },
+  notes: { marginTop: 12, color: '#334155', lineHeight: 20, fontSize: 14, fontWeight: '600' },
+  flagBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#fffbeb',
+    borderLeftWidth: 3,
+    borderLeftColor: STAFF_LOADS_VISUAL.strip.caution,
+    gap: 8,
+  },
+  flagBannerTx: { color: '#92400e', fontWeight: '700', fontSize: 12, lineHeight: 17, flex: 1, minWidth: 120 },
   historyLink: {
     marginTop: 14,
     flexDirection: 'row',

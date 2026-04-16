@@ -88,12 +88,12 @@ function displayOcrAirportCode(s: string | null | undefined): string {
   const t = (s ?? '').trim().toUpperCase();
   if (!t) return '';
   if (t === 'JAS') return 'LAS';
+  if (t === 'JHR') return 'LHR';
   return t;
 }
 
 function shellColors(state: FieldReviewState | undefined): { border: string; bg: string } {
-  if (state === 'missing_required') return { border: '#DC2626', bg: '#FEF2F2' };
-  if (state === 'needs_review') return { border: '#F59E0B', bg: '#FFFBEB' };
+  if (state === 'missing_required' || state === 'needs_review') return { border: '#F59E0B', bg: '#FFFBEB' };
   if (state === 'good') return { border: '#A7F3D0', bg: '#FFFFFF' };
   return { border: T.line, bg: T.surface };
 }
@@ -723,11 +723,9 @@ export default function ImportJetBluePairingScreen() {
   const legModalFields = legModal ? editorValidation.legFields[legModal.id] : undefined;
 
   const sumBadge =
-    editorValidation.badge === 'missing_info'
-      ? { label: 'Needs attention', bg: FC.badBg, fg: FC.bad }
-      : editorValidation.badge === 'needs_review'
-        ? { label: 'Needs attention', bg: FC.warnBg, fg: FC.warn }
-        : { label: 'Looks good', bg: FC.goodBg, fg: FC.good };
+    editorValidation.badge === 'good'
+      ? { label: 'Looks good', bg: FC.goodBg, fg: FC.good }
+      : { label: 'Needs attention', bg: FC.warnBg, fg: FC.warn };
 
   return (
     <View style={styles.shell}>
@@ -761,10 +759,7 @@ export default function ImportJetBluePairingScreen() {
 
         {issueSummaryText ? (
           <View
-            style={[
-              styles.issueBanner,
-              editorValidation.counts.missing > 0 ? styles.issueBannerBad : styles.issueBannerWarn,
-            ]}
+            style={[styles.issueBanner, styles.issueBannerWarn]}
           >
             <Text style={styles.issueBannerText}>{issueSummaryText}</Text>
           </View>
@@ -783,7 +778,7 @@ export default function ImportJetBluePairingScreen() {
                     onPress={() => onIssueRowPress(row)}
                     style={({ pressed }) => [styles.issueRow, pressed && styles.issueRowPressed]}
                   >
-                    <Ionicons name="close-circle" size={18} color={FC.bad} style={styles.issueRowIcon} />
+                    <Ionicons name="alert-circle" size={18} color={FC.warn} style={styles.issueRowIcon} />
                     <View style={styles.issueRowTextCol}>
                       <Text style={styles.issueRowText}>{row.label}</Text>
                       {row.detail ? (
@@ -870,8 +865,7 @@ export default function ImportJetBluePairingScreen() {
                       key={d.id}
                       style={[
                         styles.legCardPremium,
-                        tier === 'miss' && styles.legCardTierMiss,
-                        tier === 'review' && styles.legCardTierReview,
+                        tier !== 'ok' && styles.legCardTierReview,
                       ]}
                       onPress={() => openLeg(d)}
                     >
@@ -1126,6 +1120,9 @@ export default function ImportJetBluePairingScreen() {
                 pairingId={pairingId}
                 batchId={batchId}
                 legId={legModal.id}
+                scanTextSnippet={legScanSnippet}
+                reconstructedRowText={legModal.parser_leg_meta?.reconstructed_row_text ?? null}
+                onViewImportImage={importPreviewUrl ? () => setImportImageModalVisible(true) : undefined}
                 onApplyCandidate={(val) => applyLegField('flight_number', val)}
                 feedbackSubmitted={!!assistFeedbackDone[`${legModal.id}:flight_number`]}
                 onFeedbackSubmitted={() => markAssistFeedback(`${legModal.id}:flight_number`)}
@@ -1388,10 +1385,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(245, 158, 11, 0.45)',
     backgroundColor: '#FFFCF7',
   },
-  legCardTierMiss: {
-    borderColor: 'rgba(248, 113, 113, 0.5)',
-    backgroundColor: '#FFFBFB',
-  },
   legCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   legFlight: { fontSize: 17, fontWeight: '800', color: FC.text },
   dhPill: {
@@ -1471,7 +1464,6 @@ const styles = StyleSheet.create({
   mutedSmall: { fontSize: 11, color: T.textSecondary, marginBottom: 8, lineHeight: 15 },
   issueBanner: { padding: 12, borderRadius: 10, marginBottom: 12, borderWidth: 1 },
   issueBannerWarn: { backgroundColor: '#FFFBEB', borderColor: '#F59E0B' },
-  issueBannerBad: { backgroundColor: '#FEF2F2', borderColor: '#F87171' },
   issueBannerText: { fontSize: 13, fontWeight: '700', color: T.text, lineHeight: 18 },
   issueListCard: {
     backgroundColor: FC.card,

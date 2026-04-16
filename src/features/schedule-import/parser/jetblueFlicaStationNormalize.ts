@@ -63,7 +63,8 @@ export function normalizeStationCode(code: string | null | undefined, neighbors:
   let u = code.replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 3);
   if (u.length !== 3) return null;
 
-  if (u === 'JHR') return 'JFK';
+  /** OCR often reads LHR (London Heathrow) as JHR — never map to JFK. */
+  if (u === 'JHR') return 'LHR';
   if (u === 'JIK' || u === 'J1K') return 'JFK';
   /** FLICA mobile OCR often reads LAS as JAS (weak L stem). JAS is not a B6 station code. */
   if (u === 'JAS') return 'LAS';

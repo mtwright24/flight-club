@@ -6,6 +6,9 @@
  * this module defines field semantics, obsolete codes, equipment (OAEQP), and the target object
  * hierarchy for import, UI, and downstream features.
  *
+ * Carry-over trips may cross months (e.g. Mar 30–Apr 1); FLICA rows show DD only. The parser rolls
+ * month when DD would go backward in time so legs keep correct ISO dates (see duty-date sequence).
+ *
  * @see airline-docs/contracts/jetblue-inflight-cba.pdf (contract reference; rules engine consumes separately)
  */
 

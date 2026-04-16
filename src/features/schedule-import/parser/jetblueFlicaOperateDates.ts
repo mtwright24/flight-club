@@ -44,13 +44,9 @@ function monthDayToIso(
 /**
  * Priority A: last explicit date in an `Operates: Mar 29-Mar 30` / `Apr 3-Apr 13` style line.
  */
-export function parseOperateWindowEndIso(
-  bodyText: string,
-  scheduleYear: number,
-  scheduleMonth: number
-): string | null {
+function collectOperateMonthDayTokens(bodyText: string): { mon: string; day: number }[] {
   const line = bodyText.match(/Operates\s*:?\s*([^\n]+)/i);
-  if (!line) return null;
+  if (!line) return [];
   const rest = line[1].trim();
   const tokens: { mon: string; day: number }[] = [];
   const re = /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})\b/gi;
@@ -58,9 +54,34 @@ export function parseOperateWindowEndIso(
   while ((m = re.exec(rest)) !== null) {
     tokens.push({ mon: m[1], day: Number(m[2]) });
   }
+  return tokens;
+}
+
+export function parseOperateWindowEndIso(
+  bodyText: string,
+  scheduleYear: number,
+  scheduleMonth: number
+): string | null {
+  const tokens = collectOperateMonthDayTokens(bodyText);
   if (tokens.length === 0) return null;
   const last = tokens[tokens.length - 1];
   return monthDayToIso(last.mon, last.day, scheduleYear, scheduleMonth);
+}
+
+/** First and last calendar dates from `Operates: Apr 26-Apr 27` (PDF/list lines). Used to clamp duty-day inference. */
+export function parseOperateWindowBoundsIso(
+  bodyText: string,
+  scheduleYear: number,
+  scheduleMonth: number
+): { startIso: string | null; endIso: string | null } {
+  const tokens = collectOperateMonthDayTokens(bodyText);
+  if (tokens.length === 0) return { startIso: null, endIso: null };
+  const first = tokens[0];
+  const last = tokens[tokens.length - 1];
+  return {
+    startIso: monthDayToIso(first.mon, first.day, scheduleYear, scheduleMonth),
+    endIso: monthDayToIso(last.mon, last.day, scheduleYear, scheduleMonth),
+  };
 }
 
 /** Max ISO date from sorted string compare works for YYYY-MM-DD. */

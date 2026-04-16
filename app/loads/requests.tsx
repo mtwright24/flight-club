@@ -14,6 +14,15 @@ import {
   View,
 } from 'react-native';
 import LoadsSegmentedControl from '../../src/components/loads/LoadsSegmentedControl';
+import {
+  AirlineMonogram,
+  STAFF_LOADS_VISUAL,
+  StaffChip,
+  StaffLoadsCardShell,
+  formatLocalHm,
+  formatTravelDateShort,
+  staffLoadsListAccentStrip,
+} from '../../src/components/loads/StaffLoadsRequestPresentation';
 import { useAuth } from '../../src/hooks/useAuth';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
 import {
@@ -39,56 +48,85 @@ function RequestRow({ r, now, userId }: { r: StaffLoadRequestRow; now: number; u
   const lock = lockLabel(r, now);
   const mine = r.user_id === userId;
   const canAnswer = !mine && (r.status === 'open' || r.status === 'answered') && !lock;
+  const accent = staffLoadsListAccentStrip(r, now);
+  const dep = formatLocalHm(r.depart_at);
+  const arr = formatLocalHm(r.arrive_at);
+  const dateLine = formatTravelDateShort(r.travel_date);
+
+  const statusChip =
+    r.status === 'answered'
+      ? { label: 'Answered', bg: STAFF_LOADS_VISUAL.chip.bgAnswered, fg: STAFF_LOADS_VISUAL.chip.fgAnswered }
+      : r.status === 'stale'
+        ? { label: 'Stale', bg: STAFF_LOADS_VISUAL.chip.bgStale, fg: STAFF_LOADS_VISUAL.chip.fgStale }
+        : { label: 'Open', bg: STAFF_LOADS_VISUAL.chip.bgOpen, fg: STAFF_LOADS_VISUAL.chip.fgOpen };
 
   return (
-    <Pressable style={styles.card} onPress={() => router.push(`/loads/request/${r.id}`)}>
-      <View style={styles.cardTop}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.airline}>
-            {r.airline_code} {r.flight_number || ''}
-          </Text>
-          <Text style={styles.route}>
-            {r.from_airport} → {r.to_airport}
-          </Text>
-          <Text style={styles.date}>{r.travel_date}</Text>
-          {r.request_kind === 'priority' ? (
-            <View style={styles.priTag}>
-              <Text style={styles.priTagTx}>Priority</Text>
+    <Pressable style={styles.cardOuter} onPress={() => router.push(`/loads/request/${r.id}`)}>
+      <StaffLoadsCardShell accentColor={accent} style={styles.cardShell}>
+        <View style={styles.tileTop}>
+          <AirlineMonogram code={r.airline_code} />
+          <View style={styles.tileMain}>
+            <View style={styles.tileTitleRow}>
+              <Text style={styles.tileFlight}>
+                {r.airline_code} {r.flight_number || '—'}
+              </Text>
+              <View style={styles.tileChipsRight}>
+                <StaffChip label={statusChip.label} backgroundColor={statusChip.bg} color={statusChip.fg} />
+              </View>
             </View>
-          ) : null}
-        </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text
-            style={[
-              styles.status,
-              r.status === 'answered' && styles.statusAns,
-              r.status === 'stale' && styles.statusStale,
-            ]}
-          >
-            {r.status.toUpperCase()}
-          </Text>
-          {lock ? (
-            <View style={styles.lockPill}>
-              <Ionicons name="lock-closed" size={12} color="#92400e" />
-              <Text style={styles.lockTx}>{lock}</Text>
+            <Text style={styles.tileRoute}>
+              {r.from_airport} → {r.to_airport}
+            </Text>
+            <View style={styles.tileMetaLine}>
+              <Text style={styles.tileDate}>{dateLine}</Text>
+              <Text style={styles.tileDot}>·</Text>
+              <Text style={styles.tileTimes}>
+                {dep} – {arr}
+              </Text>
             </View>
-          ) : null}
-        </View>
-      </View>
-      <View style={styles.reqMetaRow}>
-        {mine ? (
-          <View style={styles.yoursPill}>
-            <Text style={styles.yoursPillTx}>Your request</Text>
+            <View style={styles.tileStateRow}>
+              {r.request_kind === 'priority' ? (
+                <StaffChip
+                  label="Priority"
+                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
+                  color={STAFF_LOADS_VISUAL.chip.fgPriority}
+                />
+              ) : null}
+              {mine ? (
+                <StaffChip
+                  label="Your request"
+                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgMine}
+                  color={STAFF_LOADS_VISUAL.chip.fgMine}
+                />
+              ) : null}
+              {r.refresh_requested_at ? (
+                <StaffChip
+                  label="Needs refresh"
+                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgRefresh}
+                  color={STAFF_LOADS_VISUAL.chip.fgRefresh}
+                />
+              ) : null}
+              {lock ? (
+                <StaffChip
+                  label="Being answered"
+                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgLock}
+                  color={STAFF_LOADS_VISUAL.chip.fgLock}
+                />
+              ) : null}
+            </View>
           </View>
-        ) : r.requester?.display_name ? (
-          <Text style={styles.reqBy}>Requested by {r.requester.display_name}</Text>
+        </View>
+        {!mine && r.requester?.display_name ? (
+          <Text style={styles.reqBySm} numberOfLines={1}>
+            {r.requester.display_name}
+          </Text>
         ) : null}
-      </View>
-      {canAnswer ? (
-        <Pressable style={styles.answerBtn} onPress={() => router.push(`/loads/answer/${r.id}`)}>
-          <Text style={styles.answerBtnTx}>Answer</Text>
-        </Pressable>
-      ) : null}
+        {canAnswer ? (
+          <Pressable style={styles.answerBtn} onPress={() => router.push(`/loads/answer/${r.id}`)}>
+            <Text style={styles.answerBtnTx}>Answer</Text>
+          </Pressable>
+        ) : null}
+      </StaffLoadsCardShell>
     </Pressable>
   );
 }
@@ -232,9 +270,10 @@ export default function LoadsRequestsScreen() {
         renderItem={({ item }) => <RequestRow r={item} now={now} userId={userId} />}
         renderSectionHeader={({ section: { title } }) =>
           title ? (
-            <Text style={styles.sectionHead} key={title}>
-              {title}
-            </Text>
+            <View style={styles.sectionHeadWrap} key={title}>
+              <View style={styles.sectionAccent} />
+              <Text style={styles.sectionHead}>{title}</Text>
+            </View>
           ) : (
             <View key="empty-head" />
           )
@@ -272,57 +311,36 @@ export default function LoadsRequestsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingHorizontal: 8 },
-  sectionHead: { fontWeight: '900', fontSize: 14, color: colors.headerRed, marginTop: 12, marginBottom: 6, marginLeft: 8 },
+  container: { flex: 1, backgroundColor: '#f8fafc', paddingHorizontal: 8 },
+  sectionHeadWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    marginBottom: 4,
+    marginLeft: 8,
+    marginRight: 8,
+  },
+  sectionAccent: { width: 3, height: 14, borderRadius: 2, backgroundColor: colors.headerRed, opacity: 0.85 },
+  sectionHead: { fontWeight: '800', fontSize: 12, color: '#64748b', letterSpacing: 0.6, textTransform: 'uppercase' },
   errorText: { color: colors.headerRed, fontWeight: '700', fontSize: 15, textAlign: 'center', marginTop: 16 },
   emptyState: { alignItems: 'center', marginTop: 40, paddingHorizontal: 24 },
   emptyText: { color: '#64748b', fontSize: 16, marginTop: 12, fontWeight: '700' },
   emptySub: { color: '#94a3b8', fontSize: 14, marginTop: 8, textAlign: 'center' },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 14,
-    marginVertical: 6,
-    marginHorizontal: 8,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-  },
-  cardTop: { flexDirection: 'row' },
-  airline: { fontWeight: '900', fontSize: 16, color: '#0f172a' },
-  route: { fontWeight: '700', color: '#334155', marginTop: 4 },
-  date: { color: '#64748b', marginTop: 4, fontWeight: '600' },
-  priTag: { alignSelf: 'flex-start', marginTop: 8, backgroundColor: '#fffbeb', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  priTagTx: { fontWeight: '900', color: '#b45309', fontSize: 11 },
-  status: { fontWeight: '900', fontSize: 12, color: colors.headerRed },
-  statusAns: { color: '#15803d' },
-  statusStale: { color: '#b45309' },
-  lockPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 6,
-    backgroundColor: '#fff7ed',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  lockTx: { fontSize: 11, fontWeight: '700', color: '#92400e' },
-  reqMetaRow: { marginTop: 10 },
-  reqBy: { marginTop: 6, fontSize: 12, color: '#64748b', fontWeight: '600' },
-  yoursPill: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(181,22,30,0.1)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-    marginBottom: 4,
-  },
-  yoursPillTx: { fontSize: 11, fontWeight: '800', color: colors.headerRed },
+  cardOuter: { marginVertical: 5, marginHorizontal: 8 },
+  cardShell: { marginHorizontal: 0 },
+  tileTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  tileMain: { flex: 1, minWidth: 0 },
+  tileTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  tileFlight: { fontWeight: '900', fontSize: 17, color: '#0f172a', letterSpacing: -0.3 },
+  tileChipsRight: { flexShrink: 0 },
+  tileRoute: { fontWeight: '700', fontSize: 15, color: '#334155', marginTop: 4, letterSpacing: 0.2 },
+  tileMetaLine: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  tileDate: { fontSize: 13, fontWeight: '700', color: '#64748b' },
+  tileDot: { fontSize: 13, color: '#cbd5e1', fontWeight: '700' },
+  tileTimes: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
+  tileStateRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10, alignItems: 'center' },
+  reqBySm: { marginTop: 10, fontSize: 12, color: '#94a3b8', fontWeight: '600' },
   answerBtn: {
     marginTop: 12,
     alignSelf: 'flex-start',

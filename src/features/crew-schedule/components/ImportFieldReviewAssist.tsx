@@ -33,6 +33,8 @@ type Props = {
   onApplyCandidate: (value: string, source?: 'suggested_choice') => void;
   /** Raw OCR / parser text for this leg or pairing block — shown in a sheet when the user asks. */
   scanTextSnippet?: string | null;
+  /** FLICA screenshot table reconstruction (normalized segment row) — shown next to scan text. */
+  reconstructedRowText?: string | null;
   /** Opens full import image preview (e.g. pinch-zoom) when attached assets exist. */
   onViewImportImage?: () => void;
   pairingId?: string;
@@ -59,6 +61,7 @@ export default function ImportFieldReviewAssist({
   onExpandedChange,
   onApplyCandidate,
   scanTextSnippet,
+  reconstructedRowText,
   onViewImportImage,
   pairingId,
   batchId,
@@ -85,6 +88,7 @@ export default function ImportFieldReviewAssist({
   const [scanModalOpen, setScanModalOpen] = useState(false);
 
   const scanTrimmed = (scanTextSnippet ?? '').trim();
+  const reconTrimmed = (reconstructedRowText ?? '').trim();
 
   if (!status || status.state === 'good') return null;
 
@@ -140,6 +144,15 @@ export default function ImportFieldReviewAssist({
             <Text style={styles.metaHint}>{reasonCodeHint(status.reasonCode)}</Text>
           ) : null}
 
+          {reconTrimmed ? (
+            <View style={styles.reconBox}>
+              <Text style={styles.reconLabel}>Reconstructed table row</Text>
+              <Text selectable style={styles.reconBody}>
+                {reconTrimmed}
+              </Text>
+            </View>
+          ) : null}
+
           {chips.length > 0 ? (
             <View style={styles.chipGrid}>
               {chips.map((c, i) => (
@@ -160,9 +173,9 @@ export default function ImportFieldReviewAssist({
                 <Text style={styles.refBtnText}>View screenshot reference</Text>
               </Pressable>
             ) : null}
-            {scanTrimmed ? (
+            {scanTrimmed || reconTrimmed ? (
               <Pressable style={styles.refBtn} onPress={() => setScanModalOpen(true)}>
-                <Text style={styles.refBtnText}>Show scan text</Text>
+                <Text style={styles.refBtnText}>Show scan & row text</Text>
               </Pressable>
             ) : null}
           </View>
@@ -186,9 +199,22 @@ export default function ImportFieldReviewAssist({
             <Text style={styles.feedTitle}>Text from scan</Text>
             <Text style={styles.feedSubtitle}>{fieldLabel}</Text>
             <ScrollView style={styles.scanScroll} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-              <Text selectable style={styles.scanBody}>
-                {scanTrimmed}
-              </Text>
+              {reconTrimmed ? (
+                <>
+                  <Text style={styles.scanSectionLabel}>Reconstructed row</Text>
+                  <Text selectable style={styles.scanBody}>
+                    {reconTrimmed}
+                  </Text>
+                </>
+              ) : null}
+              {scanTrimmed ? (
+                <>
+                  <Text style={styles.scanSectionLabel}>Scan text</Text>
+                  <Text selectable style={styles.scanBody}>
+                    {scanTrimmed}
+                  </Text>
+                </>
+              ) : null}
             </ScrollView>
             <Pressable style={styles.feedCancel} onPress={() => setScanModalOpen(false)}>
               <Text style={styles.feedCancelText}>Close</Text>
@@ -282,6 +308,24 @@ const styles = StyleSheet.create({
   },
   reason: { fontSize: 14, color: FC.text, lineHeight: 20, fontWeight: '500' },
   metaHint: { fontSize: 12, color: FC.textMuted, marginTop: 8, lineHeight: 17 },
+  reconBox: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: FC.border,
+  },
+  reconLabel: { fontSize: 11, fontWeight: '800', color: FC.textMuted, marginBottom: 6, letterSpacing: 0.3 },
+  reconBody: { fontSize: 12, color: FC.text, lineHeight: 18, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }) },
+  scanSectionLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: FC.textMuted,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
   chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
   chip: {
     paddingVertical: 8,
@@ -377,7 +421,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   scanBody: {
-    padding: 12,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
     fontSize: 11,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     color: FC.text,
