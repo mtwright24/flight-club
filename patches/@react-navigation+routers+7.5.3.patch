@@ -1,0 +1,47 @@
+diff --git a/node_modules/@react-navigation/routers/lib/module/DrawerRouter.js b/node_modules/@react-navigation/routers/lib/module/DrawerRouter.js
+index 967abd4..0a345bf 100644
+--- a/node_modules/@react-navigation/routers/lib/module/DrawerRouter.js
++++ b/node_modules/@react-navigation/routers/lib/module/DrawerRouter.js
+@@ -85,7 +85,7 @@ export function DrawerRouter({
+       routeParamList,
+       routeGetIdList
+     }) {
+-      if (partialState.stale === false) {
++      if (partialState != null && partialState.stale === false) {
+         return partialState;
+       }
+       let state = router.getRehydratedState(partialState, {
+diff --git a/node_modules/@react-navigation/routers/lib/module/StackRouter.js b/node_modules/@react-navigation/routers/lib/module/StackRouter.js
+index c1459d5..706527b 100644
+--- a/node_modules/@react-navigation/routers/lib/module/StackRouter.js
++++ b/node_modules/@react-navigation/routers/lib/module/StackRouter.js
+@@ -77,6 +77,12 @@ export function StackRouter(options) {
+       routeNames,
+       routeParamList
+     }) {
++      if (partialState == null || !Array.isArray(partialState.routes)) {
++        return router.getInitialState({
++          routeNames,
++          routeParamList
++        });
++      }
+       const state = partialState;
+       if (state.stale === false) {
+         return state;
+diff --git a/node_modules/@react-navigation/routers/lib/module/TabRouter.js b/node_modules/@react-navigation/routers/lib/module/TabRouter.js
+index f3b26a9..7cb7093 100644
+--- a/node_modules/@react-navigation/routers/lib/module/TabRouter.js
++++ b/node_modules/@react-navigation/routers/lib/module/TabRouter.js
+@@ -118,6 +118,12 @@ export function TabRouter({
+       routeNames,
+       routeParamList
+     }) {
++      if (partialState == null || !Array.isArray(partialState.routes)) {
++        return router.getInitialState({
++          routeNames,
++          routeParamList
++        });
++      }
+       const state = partialState;
+       if (state.stale === false) {
+         return state;
