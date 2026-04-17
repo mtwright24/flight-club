@@ -20,9 +20,7 @@ import {
   formatAnswerLoadPreviewLine,
   staffLoadsListAccentStrip,
 } from '../../src/components/loads/StaffLoadsRequestPresentation';
-import { StaffLoadsRequestActionsSheet } from '../../src/components/loads/StaffLoadsRequestActionsSheet';
 import { StaffLoadsTileInner } from '../../src/components/loads/StaffLoadsTileInner';
-import { StaffLoadsTileKebabRow } from '../../src/components/loads/StaffLoadsTileKebabRow';
 import { useAuth } from '../../src/hooks/useAuth';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
 import {
@@ -44,12 +42,8 @@ function lockLabel(r: StaffLoadRequestRow, now: number): string | null {
   return 'Being answered…';
 }
 
-function RequestRow({ r, now, onRefresh }: { r: StaffLoadRequestRow; now: number; onRefresh: () => void }) {
+function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
   const router = useRouter();
-  const { session } = useAuth();
-  const uid = session?.user?.id;
-  const mine = !!(uid && uid === r.user_id);
-  const [sheetOpen, setSheetOpen] = useState(false);
   const lock = lockLabel(r, now);
   const canAnswer = (r.status === 'open' || r.status === 'answered') && !lock;
   const accent = staffLoadsListAccentStrip(r, now);
@@ -64,53 +58,42 @@ function RequestRow({ r, now, onRefresh }: { r: StaffLoadRequestRow; now: number
     r.status === 'answered' ? r.latest_answer_at ?? null : r.created_at
   );
 
-  const goDetail = () => router.push(`/loads/request/${r.id}`);
-
   return (
-    <View style={styles.cardOuter}>
+    <Pressable style={styles.cardOuter} onPress={() => router.push(`/loads/request/${r.id}`)}>
       <StaffLoadsCardShell accentColor={accent} style={styles.cardShell} compact>
         <View>
-          <StaffLoadsTileKebabRow
-            onPressMain={goDetail}
-            onPressKebab={() => setSheetOpen(true)}
-            mainAccessibilityLabel="Open load request"
-            kebabAccessibilityLabel="Request actions"
-          >
-            <View>
-              <StaffLoadsTileInner
-                airlineCode={r.airline_code}
-                flightNumber={r.flight_number}
-                fromAirport={r.from_airport}
-                toAirport={r.to_airport}
-                travelDate={r.travel_date}
-                departAt={r.depart_at}
-                arriveAt={r.arrive_at}
-                aircraftType={r.aircraft_type ?? null}
-                flightIdForPlaceholder={r.id}
-                edgeTimestamp={edgeStamp || null}
-                previewLine={preview}
-                trailingBadge={
-                  r.request_kind === 'priority' ? (
-                    <StaffChip
-                      label="Priority"
-                      backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
-                      color={STAFF_LOADS_VISUAL.chip.fgPriority}
-                      textStyle={{ fontWeight: '600' }}
-                    />
-                  ) : null
-                }
+          <StaffLoadsTileInner
+            airlineCode={r.airline_code}
+            flightNumber={r.flight_number}
+            fromAirport={r.from_airport}
+            toAirport={r.to_airport}
+            travelDate={r.travel_date}
+            departAt={r.depart_at}
+            arriveAt={r.arrive_at}
+            aircraftType={r.aircraft_type ?? null}
+            flightIdForPlaceholder={r.id}
+            edgeTimestamp={edgeStamp || null}
+            previewLine={preview}
+            trailingBadge={
+              r.request_kind === 'priority' ? (
+                <StaffChip
+                  label="Priority"
+                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
+                  color={STAFF_LOADS_VISUAL.chip.fgPriority}
+                  textStyle={{ fontWeight: '600' }}
+                />
+              ) : null
+            }
+          />
+          {r.refresh_requested_at ? (
+            <View style={styles.refreshChipRow}>
+              <StaffChip
+                label="Needs refresh"
+                backgroundColor={STAFF_LOADS_VISUAL.chip.bgRefresh}
+                color={STAFF_LOADS_VISUAL.chip.fgRefresh}
               />
-              {r.refresh_requested_at ? (
-                <View style={styles.refreshChipRow}>
-                  <StaffChip
-                    label="Needs refresh"
-                    backgroundColor={STAFF_LOADS_VISUAL.chip.bgRefresh}
-                    color={STAFF_LOADS_VISUAL.chip.fgRefresh}
-                  />
-                </View>
-              ) : null}
             </View>
-          </StaffLoadsTileKebabRow>
+          ) : null}
         </View>
         {r.requester?.display_name ? (
           <Text style={styles.reqBySm} numberOfLines={1}>
@@ -123,26 +106,7 @@ function RequestRow({ r, now, onRefresh }: { r: StaffLoadRequestRow; now: number
           </Pressable>
         ) : null}
       </StaffLoadsCardShell>
-
-      <StaffLoadsRequestActionsSheet
-        visible={sheetOpen}
-        onClose={() => setSheetOpen(false)}
-        request={{
-          id: r.id,
-          user_id: r.user_id,
-          airline_code: r.airline_code,
-          from_airport: r.from_airport,
-          to_airport: r.to_airport,
-          travel_date: r.travel_date,
-          request_kind: r.request_kind,
-          enable_status_updates: r.enable_status_updates,
-          enable_auto_updates: r.enable_auto_updates,
-          status: r.status,
-        }}
-        mine={mine}
-        onAfterMutation={onRefresh}
-      />
-    </View>
+    </Pressable>
   );
 }
 
@@ -305,7 +269,7 @@ export default function LoadsRequestsScreen() {
       <SectionList
         sections={sections.length ? sections : [{ title: '', data: [] }]}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <RequestRow r={item} now={now} onRefresh={() => void load()} />}
+        renderItem={({ item }) => <RequestRow r={item} now={now} />}
         renderSectionHeader={({ section: { title } }) =>
           title ? (
             <View style={styles.sectionHeadWrap} key={title}>

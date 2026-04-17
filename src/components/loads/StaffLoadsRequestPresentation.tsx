@@ -134,8 +134,7 @@ export function staffLoadsAnsweredAccentStripFromSnapshot(args: {
   if (fromSeats) return fromSeats;
   const kind = normalizeStaffLoadLevel(args.loadLevel);
   if (kind !== 'unknown') return loadLevelStripColor(kind);
-  /** No seat snapshot and no parseable load level — do not imply a favorable load. */
-  return STAFF_LOADS_VISUAL.strip.neutral;
+  return STAFF_LOADS_VISUAL.strip.favorable;
 }
 
 /** Open-seats “highlighter” box on load summary — matches tile strip / HE–Cole green · amber · red rule. */
@@ -214,45 +213,45 @@ export function staffLoadsMyPreviewAccentStrip(
   const opt = p.options && typeof p.options === 'object' ? (p.options as Record<string, unknown>) : null;
   if (opt?.staff_loads_demo === true && code === 'B6') {
     const slot = opt.demo_slot;
-    /** Demo tiles: workflow stripes only; load-quality color comes from real answer fields below. */
-    if (slot === 'open') return STAFF_LOADS_VISUAL.strip.neutral;
-    if (slot === 'locked') return STAFF_LOADS_VISUAL.strip.waiting;
-    /** `answered` demo uses same rules as production (seats / load_level), not a fake orange strip. */
+    if (slot === 'open') return STAFF_LOADS_VISUAL.strip.favorable;
+    if (slot === 'locked') return STAFF_LOADS_VISUAL.strip.risk;
+    if (slot === 'answered') return STAFF_LOADS_VISUAL.strip.caution;
   }
 
   if (p.status === 'stale') return STAFF_LOADS_VISUAL.strip.inactive;
-  /** Until a loads answer exists, edge stays neutral grey (not refresh/lock workflow colors). */
-  if (p.status !== 'answered') {
-    if (p.locked_by && p.lock_expires_at && new Date(p.lock_expires_at).getTime() > now)
-      return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
-    return STAFF_LOADS_VISUAL.strip.neutral;
-  }
   if (p.refresh_requested_at) return STAFF_LOADS_VISUAL.strip.caution;
-  const fromSeats = staffLoadsPreviewStripColorFromSeatCounts(
-    p.latest_answer_open_seats_total,
-    p.latest_answer_nonrev_listed_total
-  );
-  if (fromSeats) return fromSeats;
-  const kind = normalizeStaffLoadLevel(p.latest_answer_load_level);
-  if (kind !== 'unknown') return loadLevelStripColor(kind);
+  if (p.locked_by && p.lock_expires_at && new Date(p.lock_expires_at).getTime() > now)
+    return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
+  if (p.status === 'open') return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
+  if (p.status === 'answered') {
+    const fromSeats = staffLoadsPreviewStripColorFromSeatCounts(
+      p.latest_answer_open_seats_total,
+      p.latest_answer_nonrev_listed_total
+    );
+    if (fromSeats) return fromSeats;
+    const kind = normalizeStaffLoadLevel(p.latest_answer_load_level);
+    if (kind !== 'unknown') return loadLevelStripColor(kind);
+    return STAFF_LOADS_VISUAL.strip.favorable;
+  }
   return STAFF_LOADS_VISUAL.strip.neutral;
 }
 
 /** List cards: left strip = workflow + (when answered) load quality from latest answer. */
 export function staffLoadsListAccentStrip(row: StaffLoadRequestRow, now: number): string {
   if (row.status === 'stale') return STAFF_LOADS_VISUAL.strip.inactive;
-  if (row.status !== 'answered') {
-    if (lockActive(row, now)) return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
-    return STAFF_LOADS_VISUAL.strip.neutral;
-  }
   if (row.refresh_requested_at) return STAFF_LOADS_VISUAL.strip.caution;
-  const fromSeats = staffLoadsPreviewStripColorFromSeatCounts(
-    row.latest_answer_open_seats_total,
-    row.latest_answer_nonrev_listed_total
-  );
-  if (fromSeats) return fromSeats;
-  const kind = normalizeStaffLoadLevel(row.latest_answer_load_level);
-  if (kind !== 'unknown') return loadLevelStripColor(kind);
+  if (lockActive(row, now)) return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
+  if (row.status === 'open') return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
+  if (row.status === 'answered') {
+    const fromSeats = staffLoadsPreviewStripColorFromSeatCounts(
+      row.latest_answer_open_seats_total,
+      row.latest_answer_nonrev_listed_total
+    );
+    if (fromSeats) return fromSeats;
+    const kind = normalizeStaffLoadLevel(row.latest_answer_load_level);
+    if (kind !== 'unknown') return loadLevelStripColor(kind);
+    return STAFF_LOADS_VISUAL.strip.favorable;
+  }
   return STAFF_LOADS_VISUAL.strip.neutral;
 }
 
@@ -269,7 +268,7 @@ export function staffLoadsDetailAccentStrip(args: {
   if (args.lockActive) return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
   const kind = normalizeStaffLoadLevel(args.loadLevel || undefined);
   if (args.loadLevel && kind !== 'unknown') return loadLevelStripColor(kind);
-  if (args.status === 'answered' && kind === 'unknown') return STAFF_LOADS_VISUAL.strip.neutral;
+  if (args.status === 'answered') return STAFF_LOADS_VISUAL.strip.favorable;
   if (args.status === 'open') return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
   return STAFF_LOADS_VISUAL.strip.neutral;
 }
@@ -360,8 +359,7 @@ const styles = StyleSheet.create({
   shellAccent: { width: 5 },
   shellBody: { flex: 1, padding: 16 },
   /** Loads tiles (active + search): shared rhythm — matches StaffLoadsTileInner spacing */
-  /** Slightly tighter horizontal padding so tile text (esp. left column) has room without clipping. */
-  shellBodyCompact: { paddingVertical: 7, paddingHorizontal: 8, paddingRight: 8 },
+  shellBodyCompact: { paddingVertical: 8, paddingHorizontal: 10, paddingRight: 11 },
   chip: {
     borderRadius: 8,
     alignSelf: 'flex-start',

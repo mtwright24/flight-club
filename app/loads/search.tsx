@@ -390,10 +390,8 @@ export default function LoadsSearchScreen() {
       previewRows.map((r: Record<string, unknown>) => (
         <StaffLoadsMyActiveRequestCard
           key={String(r.id)}
-          onRefreshPreview={() => void refreshHeader()}
           row={{
             id: String(r.id),
-            user_id: String(r.user_id ?? userId),
             airline_code: String(r.airline_code ?? ''),
             flight_number: (r.flight_number as string | null) ?? null,
             from_airport: String(r.from_airport ?? ''),
@@ -412,13 +410,11 @@ export default function LoadsSearchScreen() {
             latest_answer_nonrev_listed_total: (r.latest_answer_nonrev_listed_total as number | null | undefined) ?? null,
             created_at: (r.created_at as string | undefined) ?? undefined,
             latest_answer_at: (r.latest_answer_at as string | null | undefined) ?? null,
-            enable_status_updates: (r.enable_status_updates as boolean | undefined) ?? false,
-            enable_auto_updates: (r.enable_auto_updates as boolean | undefined) ?? false,
             options: r.options,
           }}
         />
       )),
-    [previewRows, userId, refreshHeader]
+    [previewRows]
   );
 
   const listHeader = useMemo(

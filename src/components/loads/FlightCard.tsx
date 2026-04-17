@@ -1,9 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../../styles/theme';
 import { StaffLoadsCardShell } from './StaffLoadsRequestPresentation';
-import { StaffLoadsFlightSearchActionsSheet } from './StaffLoadsFlightSearchActionsSheet';
-import { StaffLoadsTileKebabRow } from './StaffLoadsTileKebabRow';
 import { StaffLoadsTileInner } from './StaffLoadsTileInner';
 import { formatStaffLoadsEdgeUntilDeparture } from './staffLoadsDisplay';
 
@@ -62,7 +60,6 @@ export const FlightCard: React.FC<FlightCardProps> = ({
   staffMeta,
 }) => {
   const staff = variant === 'staff';
-  const [flightMenuOpen, setFlightMenuOpen] = useState(false);
 
   const stripColor = !staff
     ? 'transparent'
@@ -98,13 +95,14 @@ export const FlightCard: React.FC<FlightCardProps> = ({
         ]}
       >
         <StaffLoadsCardShell accentColor={stripColor} style={styles.staffShellFlex} compact>
-          <StaffLoadsTileKebabRow
-            onPressMain={onCardPress}
-            onLongPressMain={onLongPress}
-            onPressKebab={() => setFlightMenuOpen(true)}
-            mainAccessibilityLabel={`Flight ${staffMeta.airlineCode} ${staffMeta.flightNumber || ''}, ${staffMeta.from} to ${staffMeta.to}`}
-            mainAccessibilityState={selectionMode ? { selected: !!selected } : undefined}
-            kebabAccessibilityLabel="Flight actions"
+          <Pressable
+            style={({ pressed }) => [styles.staffPress, pressed && styles.cardStaffPressed]}
+            onPress={onCardPress}
+            onLongPress={onLongPress}
+            delayLongPress={380}
+            accessibilityRole="button"
+            accessibilityLabel={`Flight ${staffMeta.airlineCode} ${staffMeta.flightNumber || ''}, ${staffMeta.from} to ${staffMeta.to}`}
+            accessibilityState={selectionMode ? { selected: !!selected } : undefined}
           >
             <StaffLoadsTileInner
               airlineCode={staffMeta.airlineCode}
@@ -118,13 +116,8 @@ export const FlightCard: React.FC<FlightCardProps> = ({
               flightIdForPlaceholder={staffMeta.flightId}
               edgeTimestamp={depStamp || null}
             />
-          </StaffLoadsTileKebabRow>
+          </Pressable>
         </StaffLoadsCardShell>
-        <StaffLoadsFlightSearchActionsSheet
-          visible={flightMenuOpen}
-          onClose={() => setFlightMenuOpen(false)}
-          onViewFlightDetails={onPress}
-        />
       </View>
     );
   }
@@ -227,6 +220,7 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   staffShellFlex: { flex: 1 },
+  staffPress: { flex: 1 },
   staffOuterSelStd: {
     borderColor: 'rgba(181, 22, 30, 0.62)',
   },
@@ -238,6 +232,9 @@ const styles = StyleSheet.create({
   },
   staffOuterSelFillPri: {
     backgroundColor: 'rgba(245, 158, 11, 0.1)',
+  },
+  cardStaffPressed: {
+    opacity: 0.96,
   },
   card: {
     marginHorizontal: 16,
