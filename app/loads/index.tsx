@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
 import LoadsSegmentedControl from '../../src/components/loads/LoadsSegmentedControl';
@@ -6,6 +6,23 @@ import LoadsSearchScreen from './search';
 import LoadsRequestsScreen from './requests';
 import LoadsWalletScreen from './wallet';
 import FlightClubHeader from '../../src/components/FlightClubHeader';
+import { useDmUnreadBadge } from '../../src/hooks/useDmUnreadBadge';
+import { useNotificationsBadge } from '../../src/hooks/useNotificationsBadge';
+
+function StaffLoadsHeaderNav() {
+  const router = useRouter();
+  const unread = useNotificationsBadge();
+  const { count: dmUnread } = useDmUnreadBadge();
+  return (
+    <FlightClubHeader
+      title="Staff Loads"
+      bellCount={unread}
+      dmCount={dmUnread}
+      onPressBell={() => router.push('/notifications')}
+      onPressMessage={() => router.push('/messages-inbox')}
+    />
+  );
+}
 
 export default function LoadsScreen() {
   const { tab: tabParam } = useLocalSearchParams<{ tab?: string | string[] }>();
@@ -21,7 +38,7 @@ export default function LoadsScreen() {
   return (
     <View style={styles.safe}>
       <View style={styles.stickyHeader}>
-        <FlightClubHeader title="Staff Loads" />
+        <StaffLoadsHeaderNav />
         <LoadsSegmentedControl
           tabs={['Loads', 'Requests', 'Wallet']}
           selectedIndex={tab === 'loads' ? 0 : tab === 'requests' ? 1 : 2}

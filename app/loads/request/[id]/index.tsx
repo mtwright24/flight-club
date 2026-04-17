@@ -23,6 +23,7 @@ import {
   staffLoadsAnsweredAccentStripFromSnapshot,
   staffLoadsOpenSeatsHighlightBox,
 } from '../../../../src/components/loads/StaffLoadsRequestPresentation';
+import { StaffLoadsFlightStatusSection } from '../../../../src/components/loads/StaffLoadsFlightStatusSection';
 import { StaffLoadsTileInner } from '../../../../src/components/loads/StaffLoadsTileInner';
 import { useAuth } from '../../../../src/hooks/useAuth';
 import {
@@ -64,7 +65,14 @@ import {
   type StaffTimelineRow,
 } from '../../../../src/lib/supabase/staffLoads';
 import type { NonRevLoadFlight } from '../../../../src/lib/supabase/loads';
+import { buildFlightKey } from '../../../../src/lib/supabase/flightTracker';
 import { colors } from '../../../../src/styles/theme';
+
+function normalizeFlightNumberForTracker(raw: string | null | undefined): string {
+  const s = (raw || '').trim().toUpperCase();
+  const m = s.match(/(\d+[A-Z]?)$/);
+  return m ? m[1] : s.replace(/\D/g, '') || '1';
+}
 
 function formatDurationLabel(depIso: string | null | undefined, arrIso: string | null | undefined): string | null {
   if (!depIso || !arrIso) return null;
@@ -471,6 +479,33 @@ export default function StaffLoadRequestDetailRoute() {
     } else Alert.alert('Comment', r.error || 'Failed');
   };
 
+  const openFlightTracker = useCallback(() => {
+    if (!request) return;
+    const fn = normalizeFlightNumberForTracker(request.flight_number);
+    if (!fn || !request.travel_date) {
+      router.push('/flight-tracker' as any);
+      return;
+    }
+    const key = buildFlightKey({
+      airlineCode: request.airline_code,
+      flightNumber: fn,
+      serviceDate: request.travel_date,
+      origin: request.from_airport,
+      destination: request.to_airport,
+    });
+    router.push(`/flight-tracker/flight/${encodeURIComponent(key)}` as any);
+  }, [request, router]);
+
+  const onToggleFlightStatusPush = useCallback(
+    async (next: boolean) => {
+      if (!mine || !request) return;
+      const r = await updateStaffRequestSettings(request.id, { enable_auto_updates: next });
+      if (!r.ok) Alert.alert('Settings', r.error || 'Could not update');
+      else void load();
+    },
+    [mine, request, load]
+  );
+
   if (loading || !request) {
     return (
       <SafeAreaView style={styles.safe} edges={['bottom']}>
@@ -482,6 +517,7 @@ export default function StaffLoadRequestDetailRoute() {
 
   const depIso = flight?.depart_at ?? request.depart_at ?? null;
   const arrIso = flight?.arrive_at ?? request.arrive_at ?? null;
+  const flightStatusLastUpdated = latest?.as_of ?? latest?.created_at ?? request.created_at ?? flight?.created_at ?? null;
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
@@ -675,6 +711,48 @@ export default function StaffLoadRequestDetailRoute() {
           )}
         </StaffLoadsCardShell>
 
+        <StaffLoadsFlightStatusSection
+          airlineCode={request.airline_code}
+          flightNumber={request.flight_number}
+          fromAirport={request.from_airport}
+          toAirport={request.to_airport}
+          travelDate={request.travel_date}
+          departAt={depIso}
+          arriveAt={arrIso}
+          aircraftType={(flight as { aircraft_type?: string } | null)?.aircraft_type ?? request.aircraft_type ?? null}
+          lastUpdatedIso={flightStatusLastUpdated}
+          enableFlightStatusPush={!!request.enable_auto_updates}
+          onToggleFlightStatusPush={onToggleFlightStatusPush}
+          canEditPush={!!mine}
+          onOpenFlightTracker={openFlightTracker}
+        />
+
+        <View style={styles.card}>
+          <Text style={styles.toggleMeta}>
+            Community status notes on this request: {request.enable_status_updates ? 'On' : 'Off'}
+          </Text>
+          {!mine && !request.enable_status_updates ? (
+            <Text style={styles.mutedSmall}>The requester has not enabled community status notes on this request.</Text>
+          ) : null}
+          {canAddStructuredStatus ? (
+            <Pressable style={styles.outlineBtn} onPress={() => openTextModal('status')}>
+              <Text style={styles.outlineBtnTx}>Add gate / status note</Text>
+            </Pressable>
+          ) : null}
+          {reportSummary && reportSummary.count > 0 ? (
+            <View style={{ marginTop: 10 }}>
+              <Text style={styles.cabinHead}>Recent community load reports ({reportSummary.count})</Text>
+              {reportSummary.recent.slice(0, 6).map((r, i) => (
+                <Text key={`${r.created_at}-${i}`} style={styles.reportLine}>
+                  {r.status} · {new Date(r.created_at).toLocaleString()}
+                </Text>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.mutedSmall}>No separate flight-level load reports yet. Loads above are from this Staff Loads request.</Text>
+          )}
+        </View>
+
         <View style={styles.sectionLabelRow}>
           <View style={styles.sectionAccentRule} />
           <Text style={styles.sectionTitle}>Activity</Text>
@@ -683,14 +761,14 @@ export default function StaffLoadRequestDetailRoute() {
           {commentsCount} comments · {loadsUpdatesCount} load updates · {statusEventsCount} status
         </Text>
         <View style={styles.chipsRow}>
-          {(['all', 'comments', 'loads', 'status'] as StaffActivityFilter[]).map((f) => (
+          {(['all', 'loads', 'comments', 'status'] as StaffActivityFilter[]).map((f) => (
             <Pressable
               key={f}
               style={[styles.filterChip, activityFilter === f && styles.filterChipOn]}
               onPress={() => setActivityFilter(f)}
             >
               <Text style={[styles.filterChipTx, activityFilter === f && styles.filterChipTxOn]}>
-                {f === 'all' ? 'All' : f === 'comments' ? 'Comments' : f === 'loads' ? 'Loads' : 'Status'}
+                {f === 'all' ? 'All' : f === 'loads' ? 'Loads' : f === 'comments' ? 'Comments' : 'Status'}
               </Text>
             </Pressable>
           ))}

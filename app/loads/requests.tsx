@@ -58,42 +58,57 @@ function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
     r.status === 'answered' ? r.latest_answer_at ?? null : r.created_at
   );
 
+  const goDetail = () => router.push(`/loads/request/${r.id}`);
+
   return (
-    <Pressable style={styles.cardOuter} onPress={() => router.push(`/loads/request/${r.id}`)}>
+    <View style={styles.cardOuter}>
       <StaffLoadsCardShell accentColor={accent} style={styles.cardShell} compact>
-        <View>
-          <StaffLoadsTileInner
-            airlineCode={r.airline_code}
-            flightNumber={r.flight_number}
-            fromAirport={r.from_airport}
-            toAirport={r.to_airport}
-            travelDate={r.travel_date}
-            departAt={r.depart_at}
-            arriveAt={r.arrive_at}
-            aircraftType={r.aircraft_type ?? null}
-            flightIdForPlaceholder={r.id}
-            edgeTimestamp={edgeStamp || null}
-            previewLine={preview}
-            trailingBadge={
-              r.request_kind === 'priority' ? (
-                <StaffChip
-                  label="Priority"
-                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
-                  color={STAFF_LOADS_VISUAL.chip.fgPriority}
-                  textStyle={{ fontWeight: '600' }}
-                />
-              ) : null
-            }
-          />
-          {r.refresh_requested_at ? (
-            <View style={styles.refreshChipRow}>
-              <StaffChip
-                label="Needs refresh"
-                backgroundColor={STAFF_LOADS_VISUAL.chip.bgRefresh}
-                color={STAFF_LOADS_VISUAL.chip.fgRefresh}
+        <View style={styles.tileRow}>
+          <Pressable style={styles.tileMain} onPress={goDetail} accessibilityRole="button" accessibilityLabel="Open load request">
+            <View>
+              <StaffLoadsTileInner
+                airlineCode={r.airline_code}
+                flightNumber={r.flight_number}
+                fromAirport={r.from_airport}
+                toAirport={r.to_airport}
+                travelDate={r.travel_date}
+                departAt={r.depart_at}
+                arriveAt={r.arrive_at}
+                aircraftType={r.aircraft_type ?? null}
+                flightIdForPlaceholder={r.id}
+                edgeTimestamp={edgeStamp || null}
+                previewLine={preview}
+                trailingBadge={
+                  r.request_kind === 'priority' ? (
+                    <StaffChip
+                      label="Priority"
+                      backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
+                      color={STAFF_LOADS_VISUAL.chip.fgPriority}
+                      textStyle={{ fontWeight: '600' }}
+                    />
+                  ) : null
+                }
               />
+              {r.refresh_requested_at ? (
+                <View style={styles.refreshChipRow}>
+                  <StaffChip
+                    label="Needs refresh"
+                    backgroundColor={STAFF_LOADS_VISUAL.chip.bgRefresh}
+                    color={STAFF_LOADS_VISUAL.chip.fgRefresh}
+                  />
+                </View>
+              ) : null}
             </View>
-          ) : null}
+          </Pressable>
+          <Pressable
+            style={styles.kebabCol}
+            onPress={goDetail}
+            hitSlop={{ top: 10, bottom: 10, left: 6, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Request actions"
+          >
+            <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+          </Pressable>
         </View>
         {r.requester?.display_name ? (
           <Text style={styles.reqBySm} numberOfLines={1}>
@@ -106,7 +121,7 @@ function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
           </Pressable>
         ) : null}
       </StaffLoadsCardShell>
-    </Pressable>
+    </View>
   );
 }
 
@@ -331,6 +346,15 @@ const styles = StyleSheet.create({
   emptyText: { color: '#64748b', fontSize: 16, marginTop: 12, fontWeight: '700' },
   emptySub: { color: '#94a3b8', fontSize: 14, marginTop: 8, textAlign: 'center' },
   cardOuter: { marginVertical: 5, marginHorizontal: 8 },
+  tileRow: { flexDirection: 'row', alignItems: 'stretch' },
+  tileMain: { flex: 1, minWidth: 0 },
+  kebabCol: {
+    width: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    marginRight: -2,
+  },
   cardShell: { marginHorizontal: 0 },
   refreshChipRow: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   reqBySm: { marginTop: 10, fontSize: 12, color: '#94a3b8', fontWeight: '600' },

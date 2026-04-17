@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -10,6 +11,7 @@ import {
 } from './StaffLoadsRequestPresentation';
 import { StaffLoadsTileInner } from './StaffLoadsTileInner';
 import { formatStaffLoadsEdgeAge } from './staffLoadsDisplay';
+
 export type MyActiveRequestPreview = {
   id: string;
   airline_code: string;
@@ -58,39 +60,63 @@ export function StaffLoadsMyActiveRequestCard({ row }: { row: MyActiveRequestPre
     row.status === 'answered' ? row.latest_answer_at ?? null : row.created_at ?? null
   );
 
+  const go = () => router.push(`/loads/request/${row.id}`);
+
   return (
-    <Pressable style={styles.outer} onPress={() => router.push(`/loads/request/${row.id}`)}>
+    <View style={styles.outer}>
       <StaffLoadsCardShell accentColor={accent} style={styles.shell} compact>
-        <StaffLoadsTileInner
-          airlineCode={row.airline_code}
-          flightNumber={row.flight_number}
-          fromAirport={row.from_airport}
-          toAirport={row.to_airport}
-          travelDate={row.travel_date}
-          departAt={row.depart_at}
-          arriveAt={row.arrive_at}
-          aircraftType={row.aircraft_type ?? null}
-          flightIdForPlaceholder={row.id}
-          edgeTimestamp={edgeStamp || null}
-          previewLine={preview}
-          trailingBadge={
-            row.request_kind === 'priority' ? (
-              <StaffChip
-                size="sm"
-                label="Priority"
-                backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
-                color={STAFF_LOADS_VISUAL.chip.fgPriority}
-                textStyle={{ fontWeight: '600' }}
-              />
-            ) : null
-          }
-        />
+        <View style={styles.tileRow}>
+          <Pressable style={styles.tileMain} onPress={go} accessibilityRole="button" accessibilityLabel="Open load request">
+            <StaffLoadsTileInner
+              airlineCode={row.airline_code}
+              flightNumber={row.flight_number}
+              fromAirport={row.from_airport}
+              toAirport={row.to_airport}
+              travelDate={row.travel_date}
+              departAt={row.depart_at}
+              arriveAt={row.arrive_at}
+              aircraftType={row.aircraft_type ?? null}
+              flightIdForPlaceholder={row.id}
+              edgeTimestamp={edgeStamp || null}
+              previewLine={preview}
+              trailingBadge={
+                row.request_kind === 'priority' ? (
+                  <StaffChip
+                    size="sm"
+                    label="Priority"
+                    backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
+                    color={STAFF_LOADS_VISUAL.chip.fgPriority}
+                    textStyle={{ fontWeight: '600' }}
+                  />
+                ) : null
+              }
+            />
+          </Pressable>
+          <Pressable
+            style={styles.kebabCol}
+            onPress={go}
+            hitSlop={{ top: 10, bottom: 10, left: 6, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Request actions"
+          >
+            <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+          </Pressable>
+        </View>
       </StaffLoadsCardShell>
-    </Pressable>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   outer: { marginBottom: 6 },
   shell: { marginHorizontal: 0 },
+  tileRow: { flexDirection: 'row', alignItems: 'stretch' },
+  tileMain: { flex: 1, minWidth: 0 },
+  kebabCol: {
+    width: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    marginRight: -2,
+  },
 });
