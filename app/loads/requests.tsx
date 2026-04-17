@@ -20,7 +20,9 @@ import {
   formatAnswerLoadPreviewLine,
   staffLoadsListAccentStrip,
 } from '../../src/components/loads/StaffLoadsRequestPresentation';
+import { StaffLoadsRequestActionsSheet } from '../../src/components/loads/StaffLoadsRequestActionsSheet';
 import { StaffLoadsTileInner } from '../../src/components/loads/StaffLoadsTileInner';
+import { StaffLoadsTileKebabRow } from '../../src/components/loads/StaffLoadsTileKebabRow';
 import { useAuth } from '../../src/hooks/useAuth';
 import { usePullToRefresh } from '../../src/hooks/usePullToRefresh';
 import {
@@ -42,8 +44,12 @@ function lockLabel(r: StaffLoadRequestRow, now: number): string | null {
   return 'Being answered…';
 }
 
-function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
+function RequestRow({ r, now, onRefresh }: { r: StaffLoadRequestRow; now: number; onRefresh: () => void }) {
   const router = useRouter();
+  const { session } = useAuth();
+  const uid = session?.user?.id;
+  const mine = !!(uid && uid === r.user_id);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const lock = lockLabel(r, now);
   const canAnswer = (r.status === 'open' || r.status === 'answered') && !lock;
   const accent = staffLoadsListAccentStrip(r, now);
@@ -63,8 +69,13 @@ function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
   return (
     <View style={styles.cardOuter}>
       <StaffLoadsCardShell accentColor={accent} style={styles.cardShell} compact>
-        <View style={styles.tileRow}>
-          <Pressable style={styles.tileMain} onPress={goDetail} accessibilityRole="button" accessibilityLabel="Open load request">
+        <View>
+          <StaffLoadsTileKebabRow
+            onPressMain={goDetail}
+            onPressKebab={() => setSheetOpen(true)}
+            mainAccessibilityLabel="Open load request"
+            kebabAccessibilityLabel="Request actions"
+          >
             <View>
               <StaffLoadsTileInner
                 airlineCode={r.airline_code}
@@ -99,16 +110,7 @@ function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
                 </View>
               ) : null}
             </View>
-          </Pressable>
-          <Pressable
-            style={styles.kebabCol}
-            onPress={goDetail}
-            hitSlop={{ top: 10, bottom: 10, left: 6, right: 10 }}
-            accessibilityRole="button"
-            accessibilityLabel="Request actions"
-          >
-            <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
-          </Pressable>
+          </StaffLoadsTileKebabRow>
         </View>
         {r.requester?.display_name ? (
           <Text style={styles.reqBySm} numberOfLines={1}>
@@ -121,6 +123,25 @@ function RequestRow({ r, now }: { r: StaffLoadRequestRow; now: number }) {
           </Pressable>
         ) : null}
       </StaffLoadsCardShell>
+
+      <StaffLoadsRequestActionsSheet
+        visible={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        request={{
+          id: r.id,
+          user_id: r.user_id,
+          airline_code: r.airline_code,
+          from_airport: r.from_airport,
+          to_airport: r.to_airport,
+          travel_date: r.travel_date,
+          request_kind: r.request_kind,
+          enable_status_updates: r.enable_status_updates,
+          enable_auto_updates: r.enable_auto_updates,
+          status: r.status,
+        }}
+        mine={mine}
+        onAfterMutation={onRefresh}
+      />
     </View>
   );
 }
@@ -284,7 +305,7 @@ export default function LoadsRequestsScreen() {
       <SectionList
         sections={sections.length ? sections : [{ title: '', data: [] }]}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <RequestRow r={item} now={now} />}
+        renderItem={({ item }) => <RequestRow r={item} now={now} onRefresh={() => void load()} />}
         renderSectionHeader={({ section: { title } }) =>
           title ? (
             <View style={styles.sectionHeadWrap} key={title}>
@@ -346,15 +367,6 @@ const styles = StyleSheet.create({
   emptyText: { color: '#64748b', fontSize: 16, marginTop: 12, fontWeight: '700' },
   emptySub: { color: '#94a3b8', fontSize: 14, marginTop: 8, textAlign: 'center' },
   cardOuter: { marginVertical: 5, marginHorizontal: 8 },
-  tileRow: { flexDirection: 'row', alignItems: 'stretch' },
-  tileMain: { flex: 1, minWidth: 0 },
-  kebabCol: {
-    width: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-    alignSelf: 'stretch',
-    marginRight: -2,
-  },
   cardShell: { marginHorizontal: 0 },
   refreshChipRow: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   reqBySm: { marginTop: 10, fontSize: 12, color: '#94a3b8', fontWeight: '600' },

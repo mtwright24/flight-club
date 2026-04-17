@@ -134,7 +134,8 @@ export function staffLoadsAnsweredAccentStripFromSnapshot(args: {
   if (fromSeats) return fromSeats;
   const kind = normalizeStaffLoadLevel(args.loadLevel);
   if (kind !== 'unknown') return loadLevelStripColor(kind);
-  return STAFF_LOADS_VISUAL.strip.favorable;
+  /** No seat snapshot and no parseable load level — do not imply a favorable load. */
+  return STAFF_LOADS_VISUAL.strip.neutral;
 }
 
 /** Open-seats “highlighter” box on load summary — matches tile strip / HE–Cole green · amber · red rule. */
@@ -213,10 +214,10 @@ export function staffLoadsMyPreviewAccentStrip(
   const opt = p.options && typeof p.options === 'object' ? (p.options as Record<string, unknown>) : null;
   if (opt?.staff_loads_demo === true && code === 'B6') {
     const slot = opt.demo_slot;
-    /** Demo tiles: no “fake” green/red on unanswered — match production grey rule. */
+    /** Demo tiles: workflow stripes only; load-quality color comes from real answer fields below. */
     if (slot === 'open') return STAFF_LOADS_VISUAL.strip.neutral;
-    if (slot === 'locked') return STAFF_LOADS_VISUAL.strip.risk;
-    if (slot === 'answered') return STAFF_LOADS_VISUAL.strip.caution;
+    if (slot === 'locked') return STAFF_LOADS_VISUAL.strip.waiting;
+    /** `answered` demo uses same rules as production (seats / load_level), not a fake orange strip. */
   }
 
   if (p.status === 'stale') return STAFF_LOADS_VISUAL.strip.inactive;
@@ -234,7 +235,7 @@ export function staffLoadsMyPreviewAccentStrip(
   if (fromSeats) return fromSeats;
   const kind = normalizeStaffLoadLevel(p.latest_answer_load_level);
   if (kind !== 'unknown') return loadLevelStripColor(kind);
-  return STAFF_LOADS_VISUAL.strip.favorable;
+  return STAFF_LOADS_VISUAL.strip.neutral;
 }
 
 /** List cards: left strip = workflow + (when answered) load quality from latest answer. */
@@ -252,7 +253,7 @@ export function staffLoadsListAccentStrip(row: StaffLoadRequestRow, now: number)
   if (fromSeats) return fromSeats;
   const kind = normalizeStaffLoadLevel(row.latest_answer_load_level);
   if (kind !== 'unknown') return loadLevelStripColor(kind);
-  return STAFF_LOADS_VISUAL.strip.favorable;
+  return STAFF_LOADS_VISUAL.strip.neutral;
 }
 
 /** Detail header / summary card: prefer load snapshot when present. */
@@ -268,7 +269,7 @@ export function staffLoadsDetailAccentStrip(args: {
   if (args.lockActive) return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
   const kind = normalizeStaffLoadLevel(args.loadLevel || undefined);
   if (args.loadLevel && kind !== 'unknown') return loadLevelStripColor(kind);
-  if (args.status === 'answered') return STAFF_LOADS_VISUAL.strip.favorable;
+  if (args.status === 'answered' && kind === 'unknown') return STAFF_LOADS_VISUAL.strip.neutral;
   if (args.status === 'open') return STAFF_LOADS_VISUAL.strip.awaitingNeutral;
   return STAFF_LOADS_VISUAL.strip.neutral;
 }

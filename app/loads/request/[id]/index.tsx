@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -206,7 +206,13 @@ function renderActivityBody(it: StaffActivityItem): { title: string; subtitle?: 
 }
 
 export default function StaffLoadRequestDetailRoute() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, focusReport: focusReportParam, focusRefresh: focusRefreshParam } = useLocalSearchParams<{
+    id: string;
+    focusReport?: string | string[];
+    focusRefresh?: string | string[];
+  }>();
+  const focusReport = Array.isArray(focusReportParam) ? focusReportParam[0] : focusReportParam;
+  const focusRefresh = Array.isArray(focusRefreshParam) ? focusRefreshParam[0] : focusRefreshParam;
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user?.id;
@@ -406,6 +412,24 @@ export default function StaffLoadRequestDetailRoute() {
     }
   };
 
+  useEffect(() => {
+    if (focusReport !== '1' || !request || loading) return;
+    const latestA = answers.find((a) => a.is_latest) ?? answers[0];
+    if (!latestA) {
+      Alert.alert('Nothing to report', 'There is no loads answer on this request yet.');
+      router.setParams({ focusReport: undefined } as never);
+      return;
+    }
+    openTextModal('report');
+    router.setParams({ focusReport: undefined } as never);
+  }, [focusReport, request, loading, answers, router]);
+
+  useEffect(() => {
+    if (focusRefresh !== '1' || !request || !mine || loading) return;
+    openTextModal('refresh');
+    router.setParams({ focusRefresh: undefined } as never);
+  }, [focusRefresh, request, mine, loading, router]);
+
   const onMore = async (action: string) => {
     if (!request || !userId) return;
     setMoreOpen(false);
@@ -541,6 +565,17 @@ export default function StaffLoadRequestDetailRoute() {
               aircraftType={(flight as { aircraft_type?: string } | null)?.aircraft_type ?? request.aircraft_type ?? null}
               flightIdForPlaceholder={request.id}
               previewLine={null}
+              edgeAction={
+                <Pressable
+                  style={styles.stEdgeKebab}
+                  onPress={() => setMoreOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="More actions"
+                  hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+                >
+                  <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+                </Pressable>
+              }
               trailingBadge={
                 request.request_kind === 'priority' ? (
                   <StaffChip

@@ -951,7 +951,7 @@ export async function listMyOpenStaffRequestsPreview(userId: string, limit = 5) 
   const { data } = await supabase
     .from('load_requests')
     .select(
-      'id, airline_code, from_airport, to_airport, travel_date, flight_number, request_kind, status, depart_at, arrive_at, aircraft_type, refresh_requested_at, created_at, latest_answer_at, options, locked_by, lock_expires_at'
+      'id, user_id, airline_code, from_airport, to_airport, travel_date, flight_number, request_kind, status, depart_at, arrive_at, aircraft_type, refresh_requested_at, created_at, latest_answer_at, options, locked_by, lock_expires_at, enable_status_updates, enable_auto_updates'
     )
     .eq('user_id', userId)
     .in('status', ['open', 'stale', 'answered'])

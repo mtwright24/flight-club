@@ -94,6 +94,14 @@ export default function MenuScreen() {
           </Pressable>
         ) : null}
 
+        {__DEV__ ? (
+          <Pressable style={styles.menuItem} onPress={() => router.push('/flica-test')}>
+            <Ionicons name="airplane-outline" size={24} color={colors.textPrimary} />
+            <Text style={styles.menuText}>FLICA web test (dev, PoC)</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </Pressable>
+        ) : null}
+
         <Pressable style={styles.menuItem} onPress={() => router.push('/help-support')}>
           <Ionicons name="help-circle-outline" size={24} color={colors.textPrimary} />
           <Text style={styles.menuText}>Help & Support</Text>

@@ -1,7 +1,6 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import React, { useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import {
   STAFF_LOADS_VISUAL,
   StaffChip,
@@ -9,11 +8,14 @@ import {
   formatAnswerLoadPreviewLine,
   staffLoadsMyPreviewAccentStrip,
 } from './StaffLoadsRequestPresentation';
+import { StaffLoadsRequestActionsSheet } from './StaffLoadsRequestActionsSheet';
 import { StaffLoadsTileInner } from './StaffLoadsTileInner';
+import { StaffLoadsTileKebabRow } from './StaffLoadsTileKebabRow';
 import { formatStaffLoadsEdgeAge } from './staffLoadsDisplay';
 
 export type MyActiveRequestPreview = {
   id: string;
+  user_id?: string;
   airline_code: string;
   flight_number: string | null;
   from_airport: string;
@@ -32,11 +34,21 @@ export type MyActiveRequestPreview = {
   latest_answer_load_level?: string | null;
   latest_answer_open_seats_total?: number | null;
   latest_answer_nonrev_listed_total?: number | null;
+  /** Defaults applied in search.tsx if missing */
+  enable_status_updates?: boolean;
+  enable_auto_updates?: boolean;
   options?: unknown;
 };
 
-export function StaffLoadsMyActiveRequestCard({ row }: { row: MyActiveRequestPreview }) {
+export function StaffLoadsMyActiveRequestCard({
+  row,
+  onRefreshPreview,
+}: {
+  row: MyActiveRequestPreview;
+  onRefreshPreview?: () => void;
+}) {
   const router = useRouter();
+  const [sheetOpen, setSheetOpen] = useState(false);
   const accent = staffLoadsMyPreviewAccentStrip({
     status: row.status as 'open' | 'answered' | 'closed' | 'stale',
     refresh_requested_at: row.refresh_requested_at,
@@ -62,47 +74,67 @@ export function StaffLoadsMyActiveRequestCard({ row }: { row: MyActiveRequestPre
 
   const go = () => router.push(`/loads/request/${row.id}`);
 
+  const requestSheetPayload =
+    row.user_id != null
+      ? {
+          id: row.id,
+          user_id: row.user_id,
+          airline_code: row.airline_code,
+          from_airport: row.from_airport,
+          to_airport: row.to_airport,
+          travel_date: row.travel_date,
+          request_kind: (row.request_kind === 'priority' ? 'priority' : 'standard') as 'standard' | 'priority',
+          enable_status_updates: row.enable_status_updates ?? false,
+          enable_auto_updates: row.enable_auto_updates ?? false,
+          status: row.status,
+        }
+      : null;
+
   return (
     <View style={styles.outer}>
       <StaffLoadsCardShell accentColor={accent} style={styles.shell} compact>
-        <View style={styles.tileRow}>
-          <Pressable style={styles.tileMain} onPress={go} accessibilityRole="button" accessibilityLabel="Open load request">
-            <StaffLoadsTileInner
-              airlineCode={row.airline_code}
-              flightNumber={row.flight_number}
-              fromAirport={row.from_airport}
-              toAirport={row.to_airport}
-              travelDate={row.travel_date}
-              departAt={row.depart_at}
-              arriveAt={row.arrive_at}
-              aircraftType={row.aircraft_type ?? null}
-              flightIdForPlaceholder={row.id}
-              edgeTimestamp={edgeStamp || null}
-              previewLine={preview}
-              trailingBadge={
-                row.request_kind === 'priority' ? (
-                  <StaffChip
-                    size="sm"
-                    label="Priority"
-                    backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
-                    color={STAFF_LOADS_VISUAL.chip.fgPriority}
-                    textStyle={{ fontWeight: '600' }}
-                  />
-                ) : null
-              }
-            />
-          </Pressable>
-          <Pressable
-            style={styles.kebabCol}
-            onPress={go}
-            hitSlop={{ top: 10, bottom: 10, left: 6, right: 10 }}
-            accessibilityRole="button"
-            accessibilityLabel="Request actions"
-          >
-            <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
-          </Pressable>
-        </View>
+        <StaffLoadsTileKebabRow
+          onPressMain={go}
+          onPressKebab={() => setSheetOpen(true)}
+          mainAccessibilityLabel="Open load request"
+          kebabAccessibilityLabel="Request actions"
+        >
+          <StaffLoadsTileInner
+            airlineCode={row.airline_code}
+            flightNumber={row.flight_number}
+            fromAirport={row.from_airport}
+            toAirport={row.to_airport}
+            travelDate={row.travel_date}
+            departAt={row.depart_at}
+            arriveAt={row.arrive_at}
+            aircraftType={row.aircraft_type ?? null}
+            flightIdForPlaceholder={row.id}
+            edgeTimestamp={edgeStamp || null}
+            previewLine={preview}
+            trailingBadge={
+              row.request_kind === 'priority' ? (
+                <StaffChip
+                  size="sm"
+                  label="Priority"
+                  backgroundColor={STAFF_LOADS_VISUAL.chip.bgPriority}
+                  color={STAFF_LOADS_VISUAL.chip.fgPriority}
+                  textStyle={{ fontWeight: '600' }}
+                />
+              ) : null
+            }
+          />
+        </StaffLoadsTileKebabRow>
       </StaffLoadsCardShell>
+
+      {requestSheetPayload ? (
+        <StaffLoadsRequestActionsSheet
+          visible={sheetOpen}
+          onClose={() => setSheetOpen(false)}
+          request={requestSheetPayload}
+          mine
+          onAfterMutation={onRefreshPreview}
+        />
+      ) : null}
     </View>
   );
 }
@@ -110,13 +142,4 @@ export function StaffLoadsMyActiveRequestCard({ row }: { row: MyActiveRequestPre
 const styles = StyleSheet.create({
   outer: { marginBottom: 6 },
   shell: { marginHorizontal: 0 },
-  tileRow: { flexDirection: 'row', alignItems: 'stretch' },
-  tileMain: { flex: 1, minWidth: 0 },
-  kebabCol: {
-    width: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-    alignSelf: 'stretch',
-    marginRight: -2,
-  },
 });

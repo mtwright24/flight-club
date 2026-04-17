@@ -20,6 +20,7 @@ function StaffLoadsHeaderNav() {
       dmCount={dmUnread}
       onPressBell={() => router.push('/notifications')}
       onPressMessage={() => router.push('/messages-inbox')}
+      onPressMenu={() => router.push('/menu')}
     />
   );
 }
