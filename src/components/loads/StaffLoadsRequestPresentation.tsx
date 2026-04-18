@@ -209,15 +209,6 @@ export function staffLoadsMyPreviewAccentStrip(
   },
   now: number = Date.now()
 ): string {
-  const code = (p.airline_code || '').toUpperCase();
-  const opt = p.options && typeof p.options === 'object' ? (p.options as Record<string, unknown>) : null;
-  if (opt?.staff_loads_demo === true && code === 'B6') {
-    const slot = opt.demo_slot;
-    if (slot === 'open') return STAFF_LOADS_VISUAL.strip.favorable;
-    if (slot === 'locked') return STAFF_LOADS_VISUAL.strip.risk;
-    if (slot === 'answered') return STAFF_LOADS_VISUAL.strip.caution;
-  }
-
   if (p.status === 'stale') return STAFF_LOADS_VISUAL.strip.inactive;
   if (p.refresh_requested_at) return STAFF_LOADS_VISUAL.strip.caution;
   if (p.locked_by && p.lock_expires_at && new Date(p.lock_expires_at).getTime() > now)
@@ -231,7 +222,8 @@ export function staffLoadsMyPreviewAccentStrip(
     if (fromSeats) return fromSeats;
     const kind = normalizeStaffLoadLevel(p.latest_answer_load_level);
     if (kind !== 'unknown') return loadLevelStripColor(kind);
-    return STAFF_LOADS_VISUAL.strip.favorable;
+    /** Answered but no seat snapshot and no load-level text — no load-quality signal yet (same grey as detail with no snapshot). */
+    return STAFF_LOADS_VISUAL.strip.neutral;
   }
   return STAFF_LOADS_VISUAL.strip.neutral;
 }
@@ -250,7 +242,7 @@ export function staffLoadsListAccentStrip(row: StaffLoadRequestRow, now: number)
     if (fromSeats) return fromSeats;
     const kind = normalizeStaffLoadLevel(row.latest_answer_load_level);
     if (kind !== 'unknown') return loadLevelStripColor(kind);
-    return STAFF_LOADS_VISUAL.strip.favorable;
+    return STAFF_LOADS_VISUAL.strip.neutral;
   }
   return STAFF_LOADS_VISUAL.strip.neutral;
 }
