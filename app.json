@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.flight-club",
+      "bundleIdentifier": "com.marcuswright.flightclub",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -49,13 +49,14 @@
       ],
       "expo-secure-store",
       "@react-native-community/datetimepicker",
+      "./plugins/stripIosPushEntitlement",
       [
         "expo-notifications",
         {
           "icon": "./assets/images/icon.png",
           "color": "#B5161E",
           "sounds": [],
-          "enableBackgroundRemoteNotifications": true
+          "enableBackgroundRemoteNotifications": false
         }
       ],
       "expo-video",
