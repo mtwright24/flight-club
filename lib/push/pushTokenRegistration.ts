@@ -22,67 +22,72 @@ function nowIso(): string {
  * Idempotent: repeated calls with the same `(user_id, push_token)` update the same row via `onConflict`.
  */
 export async function registerPushTokenForSignedInUser(userId: string): Promise<PushTokenRegistrationResult> {
-  if (!expoDeviceSafe.getIsDevice()) {
-    if (__DEV__ && !devLoggedSkipNotPhysicalDevice) {
-      devLoggedSkipNotPhysicalDevice = true;
-      console.log('[Push] Skipping push registration — not a physical device (simulator/emulator).');
-    }
-    return { ok: true, skipped: true };
-  }
-
-  const reg = await registerExpoPushTokenAsync();
-  if (!reg.ok) {
-    if (reg.reason === 'not_physical_device') {
+  try {
+    if (!expoDeviceSafe.getIsDevice()) {
       if (__DEV__ && !devLoggedSkipNotPhysicalDevice) {
         devLoggedSkipNotPhysicalDevice = true;
-        console.log('[Push] Skipping push registration — not a physical device.');
+        console.log('[Push] Skipping push registration — not a physical device (simulator/emulator).');
       }
       return { ok: true, skipped: true };
     }
-    if (reg.reason === 'permission_denied') {
-      if (__DEV__) {
-        console.log('[Push] Notification permission denied — push disabled until enabled in Settings.');
+
+    const reg = await registerExpoPushTokenAsync();
+    if (!reg.ok) {
+      if (reg.reason === 'not_physical_device') {
+        if (__DEV__ && !devLoggedSkipNotPhysicalDevice) {
+          devLoggedSkipNotPhysicalDevice = true;
+          console.log('[Push] Skipping push registration — not a physical device.');
+        }
+        return { ok: true, skipped: true };
       }
-      return { ok: false, error: 'permission_denied' };
+      if (reg.reason === 'permission_denied') {
+        if (__DEV__) {
+          console.log('[Push] Notification permission denied — push disabled until enabled in Settings.');
+        }
+        return { ok: false, error: 'permission_denied' };
+      }
+      if (reg.reason === 'missing_project_id') {
+        console.error(
+          '[Push] Missing EAS projectId — set `expo.extra.eas.projectId` in app config (EAS project ID).',
+          reg.message ?? ''
+        );
+        return { ok: false, error: 'missing_project_id' };
+      }
+      console.warn('[Push] Push token registration failed:', reg.message ?? reg.reason);
+      return { ok: false, error: reg.message ?? 'registration_failed' };
     }
-    if (reg.reason === 'missing_project_id') {
-      console.error(
-        '[Push] Missing EAS projectId — set `expo.extra.eas.projectId` in app config (EAS project ID).',
-        reg.message ?? ''
-      );
-      return { ok: false, error: 'missing_project_id' };
+
+    const deviceName = getDeviceLabelForSync();
+    const ts = nowIso();
+
+    const { error } = await supabase.from('user_push_tokens').upsert(
+      {
+        user_id: userId,
+        push_token: reg.token,
+        platform: Platform.OS,
+        device_name: deviceName,
+        is_active: true,
+        last_seen_at: ts,
+        updated_at: ts,
+      },
+      { onConflict: 'user_id,push_token' }
+    );
+
+    if (error) {
+      console.warn('[Push] user_push_tokens upsert failed:', error.message, error);
+      return { ok: false, error: error.message };
     }
-    console.warn('[Push] Push token registration failed:', reg.message ?? reg.reason);
-    return { ok: false, error: reg.message ?? 'registration_failed' };
+
+    lastRegisteredUserId = userId;
+    lastRegisteredPushToken = reg.token;
+    if (__DEV__) {
+      console.log('[Push] Registered / refreshed push token for user', userId.slice(0, 8) + '…');
+    }
+    return { ok: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: message };
   }
-
-  const deviceName = getDeviceLabelForSync();
-  const ts = nowIso();
-
-  const { error } = await supabase.from('user_push_tokens').upsert(
-    {
-      user_id: userId,
-      push_token: reg.token,
-      platform: Platform.OS,
-      device_name: deviceName,
-      is_active: true,
-      last_seen_at: ts,
-      updated_at: ts,
-    },
-    { onConflict: 'user_id,push_token' }
-  );
-
-  if (error) {
-    console.warn('[Push] user_push_tokens upsert failed:', error.message, error);
-    return { ok: false, error: error.message };
-  }
-
-  lastRegisteredUserId = userId;
-  lastRegisteredPushToken = reg.token;
-  if (__DEV__) {
-    console.log('[Push] Registered / refreshed push token for user', userId.slice(0, 8) + '…');
-  }
-  return { ok: true };
 }
 
 /**
@@ -90,27 +95,33 @@ export async function registerPushTokenForSignedInUser(userId: string): Promise<
  * Call on app foreground when the user is signed in.
  */
 export async function touchPushTokenLastSeen(userId: string): Promise<void> {
-  if (!expoDeviceSafe.getIsDevice()) return;
+  try {
+    if (!expoDeviceSafe.getIsDevice()) return;
 
-  const token = lastRegisteredPushToken;
-  if (!token || lastRegisteredUserId !== userId) {
-    await registerPushTokenForSignedInUser(userId);
-    return;
-  }
+    const token = lastRegisteredPushToken;
+    if (!token || lastRegisteredUserId !== userId) {
+      await registerPushTokenForSignedInUser(userId);
+      return;
+    }
 
-  const ts = nowIso();
-  const { error } = await supabase
-    .from('user_push_tokens')
-    .update({
-      is_active: true,
-      last_seen_at: ts,
-      updated_at: ts,
-    })
-    .eq('user_id', userId)
-    .eq('push_token', token);
+    const ts = nowIso();
+    const { error } = await supabase
+      .from('user_push_tokens')
+      .update({
+        is_active: true,
+        last_seen_at: ts,
+        updated_at: ts,
+      })
+      .eq('user_id', userId)
+      .eq('push_token', token);
 
-  if (error && __DEV__) {
-    console.warn('[Push] last_seen_at touch failed:', error.message);
+    if (error && __DEV__) {
+      console.warn('[Push] last_seen_at touch failed:', error.message);
+    }
+  } catch (e) {
+    if (__DEV__) {
+      console.warn('[Push] last_seen touch threw (non-fatal):', e);
+    }
   }
 }
 

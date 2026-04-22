@@ -10,6 +10,22 @@ export type NativeCookieJar = Record<string, { value?: string; name?: string } |
 /** Exact WebView URL when mainmenu.cgi loads (includes nocache, GOHM, junk, etc.). */
 export const FLICA_LAST_MAINMENU_URL_KEY = 'flica_last_mainmenu_url';
 
+export const FLICA_USERNAME_KEY = 'flica_username';
+export const FLICA_PASSWORD_KEY = 'flica_password';
+
+export async function saveFlicaCredentials(userId: string, password: string): Promise<void> {
+  await SecureStore.setItemAsync(FLICA_USERNAME_KEY, userId.trim());
+  await SecureStore.setItemAsync(FLICA_PASSWORD_KEY, password);
+}
+
+export async function loadFlicaCredentials(): Promise<{ userId: string | null; password: string | null }> {
+  const [u, p] = await Promise.all([
+    SecureStore.getItemAsync(FLICA_USERNAME_KEY),
+    SecureStore.getItemAsync(FLICA_PASSWORD_KEY),
+  ]);
+  return { userId: u, password: p };
+}
+
 export const FLICA_SECURE_KEYS = {
   session: 'flica_session',
   service: 'flica_service',
@@ -57,6 +73,25 @@ export function mergeFlicaCookies(
 
 export function parseDocumentCookieString(cookieStr: string): Record<string, string> {
   return parseCookieHeaderString(cookieStr);
+}
+
+/**
+ * CookieManager.get(url) only returns cookies for that URL’s store; FLICA often lands on `http://` first
+ * then redirects to `https://`. Read both and merge so session cookies are not “missing”.
+ */
+export const FLICA_COOKIE_MANAGER_GET_URLS = [
+  'http://jetblue.flica.net',
+  'https://jetblue.flica.net',
+] as const;
+
+/** Prefer `b` over `a` for each FLICA cookie key (Charles-style overlay). */
+export function mergeFlicaStoredCookiesPreferRight(a: FlicaStoredCookies, b: FlicaStoredCookies): FlicaStoredCookies {
+  return {
+    FLiCASession: b.FLiCASession ?? a.FLiCASession,
+    FLiCAService: b.FLiCAService ?? a.FLiCAService,
+    AWSALB: b.AWSALB ?? a.AWSALB,
+    AWSALBCORS: b.AWSALBCORS ?? a.AWSALBCORS,
+  };
 }
 
 /** Map CookieManager.get() result into FLICA fields (FLiCASession, FLiCAService, AWSALB, AWSALBCORS). */
@@ -122,6 +157,19 @@ export async function loadFlicaLastMainmenuUrl(): Promise<string | null> {
 
 export async function clearFlicaCookiesFromSecureStore(): Promise<void> {
   await Promise.all([
+    ...Object.values(FLICA_SECURE_KEYS).map((k) => SecureStore.deleteItemAsync(k).catch(() => {})),
+    SecureStore.deleteItemAsync(FLICA_LAST_MAINMENU_URL_KEY).catch(() => {}),
+  ]);
+}
+
+/**
+ * Remove FLICA username/password and all cached session / ALB cookies (full logout from device).
+ * Keys: flica_username, flica_password, flica_session, flica_service, flica_awsalb, flica_awsalbcors, last main menu URL.
+ */
+export async function removeFlicaLoginAndSessionsFromDevice(): Promise<void> {
+  await Promise.all([
+    SecureStore.deleteItemAsync(FLICA_USERNAME_KEY).catch(() => {}),
+    SecureStore.deleteItemAsync(FLICA_PASSWORD_KEY).catch(() => {}),
     ...Object.values(FLICA_SECURE_KEYS).map((k) => SecureStore.deleteItemAsync(k).catch(() => {})),
     SecureStore.deleteItemAsync(FLICA_LAST_MAINMENU_URL_KEY).catch(() => {}),
   ]);

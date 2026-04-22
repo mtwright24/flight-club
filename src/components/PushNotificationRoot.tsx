@@ -85,12 +85,24 @@ export function PushNotificationRoot() {
     if (authLoading || !userId) return;
 
     void (async () => {
-      console.log('[Push] register attempt for user', userId.slice(0, 8) + '…');
-      const res = await registerPushTokenForSignedInUser(userId);
-      if (res.ok) {
-        console.log('[Push] register result', res.skipped ? { ok: true, skipped: true } : { ok: true });
-      } else {
-        console.log('[Push] register failed', res.error);
+      try {
+        if (__DEV__) {
+          console.log('[Push] register attempt for user', userId.slice(0, 8) + '…');
+        }
+        const res = await registerPushTokenForSignedInUser(userId);
+        if (res.ok) {
+          if (__DEV__) {
+            console.log('[Push] register result', res.skipped ? { ok: true, skipped: true } : { ok: true });
+          }
+        } else {
+          if (__DEV__) {
+            console.log('[Push] register failed', res.error);
+          }
+        }
+      } catch (e) {
+        if (__DEV__) {
+          console.warn('[Push] register unexpected error (non-fatal):', e);
+        }
       }
     })();
   }, [authLoading, userId]);

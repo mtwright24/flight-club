@@ -139,6 +139,36 @@ export default function FlicaReviewScreen() {
                 </Text>
               </>
             ) : null}
+
+            {isFetch && scratch.multiMonthSchedule && scratch.multiMonthSchedule.length > 0 ? (
+              <>
+                <Text style={styles.section}>GO=1 multi-month (Mar / Apr / May)</Text>
+                {scratch.multiMonthSchedule.map((row) => (
+                  <View key={row.blockDate} style={styles.mmRow}>
+                    <Text style={styles.mono} selectable>
+                      {row.monthLabel} BlockDate={row.blockDate} — HTTP {row.httpStatus}
+                      {'\n'}
+                      PAIRING: {row.hints.PAIRING ? 'yes' : 'no'} · REPORT: {row.hints.REPORT ? 'yes' : 'no'} · JFK:{' '}
+                      {row.hints.JFK ? 'yes' : 'no'} · LHR: {row.hints.LHR ? 'yes' : 'no'}
+                      {'\n'}
+                      {row.finalUrl}
+                    </Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
+
+            {isFetch && scratch.aprilPreview3000 && scratch.aprilPreview3000.length > 0 ? (
+              <>
+                <Text style={styles.section}>April (0426) — first 3000 chars of schedule HTML</Text>
+                <Text style={styles.raw} selectable>
+                  {scratch.aprilPreview3000.length >= RAW_PREVIEW_LEN
+                    ? `${scratch.aprilPreview3000.slice(0, RAW_PREVIEW_LEN)}…`
+                    : scratch.aprilPreview3000}
+                </Text>
+              </>
+            ) : null}
+
             {scratch.extractionErrors && scratch.extractionErrors.length > 0 ? (
               <>
                 <Text style={styles.section}>Notes</Text>
@@ -236,6 +266,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   line: { fontSize: 13, color: colors.textPrimary, marginBottom: 4 },
+  mmRow: { marginTop: spacing.xs },
   mono: { fontFamily: 'Menlo', fontSize: 11, color: colors.textSecondary },
   monoSmall: { fontFamily: 'Menlo', fontSize: 11, color: colors.textPrimary },
   muted: { fontSize: 13, color: colors.textSecondary, fontStyle: 'italic' },
