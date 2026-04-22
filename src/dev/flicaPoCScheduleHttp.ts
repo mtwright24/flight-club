@@ -227,7 +227,8 @@ async function runScheduledetailGo1MultiMonth(
   step1Res: Response,
   step1RequestUrl: string,
   refererUrl?: string,
-  onMonthProgress?: (message: string) => void
+  onMonthProgress?: (message: string) => void,
+  fetchOpts?: { scheduleDetailBaseUrl?: string; cookieHeaderOverride?: string }
 ): Promise<
   | {
       ok: true;
@@ -251,7 +252,10 @@ async function runScheduledetailGo1MultiMonth(
     };
   }
 
-  const cookieH = buildCookieHeader(session);
+  const cookieH =
+    fetchOpts?.cookieHeaderOverride?.trim() && fetchOpts.cookieHeaderOverride.trim().length > 0
+      ? fetchOpts.cookieHeaderOverride.trim()
+      : buildCookieHeader(session);
   const base: Record<string, string> = { ...baseGetHeaders(cookieH) };
   const ref =
     (refererUrl ?? '').trim() ||
@@ -261,7 +265,8 @@ async function runScheduledetailGo1MultiMonth(
   const multiMonthSchedule: FlicaScheduleMonthResult[] = [];
   let aprilHtml = '';
   let aprilUrl = '';
-  const baseSched = 'https://jetblue.flica.net/full/scheduledetail.cgi';
+  const baseSched =
+    fetchOpts?.scheduleDetailBaseUrl?.trim() || `${FLICA_ORIGIN.replace(/\/$/, '')}/full/scheduledetail.cgi`;
 
   for (const { blockDate, monthLabel } of MULTI_MONTH_BLOCKS) {
     onMonthProgress?.(`Downloading ${monthLabel}...`);
@@ -387,7 +392,15 @@ export async function runFlicaFcvHttpScheduleWithCookies(session: FlicaStoredCoo
     };
   }
 
-  const pipe = await runScheduledetailGo1MultiMonth(session, scheduleHtml, schedRes, scheduleUrl, undefined, undefined);
+  const pipe = await runScheduledetailGo1MultiMonth(
+    session,
+    scheduleHtml,
+    schedRes,
+    scheduleUrl,
+    undefined,
+    undefined,
+    { scheduleDetailBaseUrl: `${FLICA_ORIGIN.replace(/\/$/, '')}/full/scheduledetail.cgi` }
+  );
   if (!pipe.ok) {
     return { ok: false, captchaRequired: pipe.captchaRequired ?? false, error: pipe.error };
   }
@@ -410,15 +423,26 @@ export async function runFlicaFcvHttpScheduleWithCookies(session: FlicaStoredCoo
 export async function runFlicaFcvHttpScheduledetailOnly(
   session: FlicaStoredCookies,
   token: string,
-  options?: { refererUrl?: string; onProgress?: (message: string) => void }
+  options?: {
+    refererUrl?: string;
+    onProgress?: (message: string) => void;
+    /** e.g. https://yourairline.flica.net */
+    flicaBaseOrigin?: string;
+    /** Full Cookie header from native CookieManager (any names). */
+    cookieHeaderOverride?: string;
+  }
 ): Promise<FlicaFcvHttpResult> {
-  if (!session.FLiCASession && !session.FLiCAService) {
-    return { ok: false, captchaRequired: false, error: 'Missing FLiCASession/FLiCAService for schedule fetch.' };
+  const override = options?.cookieHeaderOverride?.trim();
+  if (!override && !session.FLiCASession && !session.FLiCAService) {
+    return { ok: false, captchaRequired: false, error: 'Missing FLICA session cookies for schedule fetch.' };
   }
   await saveFlicaCookiesToSecureStore(session);
 
-  const scheduleUrl = `https://jetblue.flica.net/full/scheduledetail.cgi?BlockDate=0426&token=${encodeURIComponent(token)}`;
-  const base = baseGetHeaders(buildCookieHeader(session)) as Record<string, string>;
+  const origin = (options?.flicaBaseOrigin ?? FLICA_ORIGIN).replace(/\/$/, '');
+  const scheduleDetailBaseUrl = `${origin}/full/scheduledetail.cgi`;
+  const scheduleUrl = `${scheduleDetailBaseUrl}?BlockDate=0426&token=${encodeURIComponent(token)}`;
+  const cookieForGet = override && override.length > 0 ? override : buildCookieHeader(session);
+  const base = baseGetHeaders(cookieForGet) as Record<string, string>;
   const ref = options?.refererUrl?.trim();
   if (ref) {
     base.Referer = ref;
@@ -451,7 +475,8 @@ export async function runFlicaFcvHttpScheduledetailOnly(
     schedRes,
     scheduleUrl,
     ref,
-    options?.onProgress
+    options?.onProgress,
+    { scheduleDetailBaseUrl, cookieHeaderOverride: override }
   );
   if (!pipe.ok) {
     return { ok: false, captchaRequired: pipe.captchaRequired ?? false, error: pipe.error };

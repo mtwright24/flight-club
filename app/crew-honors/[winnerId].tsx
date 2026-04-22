@@ -297,13 +297,15 @@ const styles = StyleSheet.create({
   cycle: { color: CH.mutedLight, fontWeight: '700', marginTop: 14, fontSize: 13 },
   reactionPanel: {
     backgroundColor: '#fff',
-    borderRadius: 14,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: CH.line,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    minHeight: 64,
     marginBottom: 14,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   section: {
     marginTop: 14,

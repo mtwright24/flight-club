@@ -706,19 +706,14 @@ export default function ImportScheduleScreen() {
 
         <Pressable
           style={styles.jetblueFlicaCard}
-          onPress={() => router.push('/crew-schedule/import-jetblue-source')}
+          onPress={() => router.push('/crew-schedule/import-flica-direct')}
           accessibilityRole="button"
-          accessibilityLabel="JetBlue FLICA: direct sync or upload"
+          accessibilityLabel="FLICA sync: open browser sign-in"
         >
-          <View style={styles.jetblueBadge}>
-            <Text style={styles.jetblueBadgeText}>JETBLUE · FLICA</Text>
-          </View>
           <View style={styles.jetblueFlicaRow}>
             <View style={styles.jetblueFlicaTextCol}>
-              <Text style={styles.jetblueFlicaTitle}>Import from FLICA</Text>
-              <Text style={styles.jetblueFlicaSub}>
-                Direct browser sync (recommended) or monthly screenshot / PDF upload
-              </Text>
+              <Text style={styles.jetblueFlicaTitle}>FLICA Sync</Text>
+              <Text style={styles.jetblueFlicaSub}>Direct browser sync from your airline FLICA</Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={T.accent} style={styles.jetblueFlicaChevron} />
           </View>

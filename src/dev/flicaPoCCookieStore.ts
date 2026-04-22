@@ -85,6 +85,75 @@ export const FLICA_COOKIE_MANAGER_GET_URLS = [
   'https://jetblue.flica.net',
 ] as const;
 
+function nativeJarEntryValue(entry: { value?: string; name?: string } | undefined): string {
+  if (entry == null || typeof entry !== 'object') return '';
+  const v = 'value' in entry && entry.value != null ? String(entry.value) : '';
+  return v.trim();
+}
+
+/**
+ * Name=value pairs for all non-empty entries (any cookie names — for Cookie: header after native capture).
+ */
+export function flicaNativeJarToFullCookieHeader(jar: NativeCookieJar): string {
+  const parts: string[] = [];
+  for (const k of Object.keys(jar).sort()) {
+    const v = nativeJarEntryValue(jar[k]);
+    if (v === '') continue;
+    parts.push(`${k}=${v}`);
+  }
+  return parts.join('; ');
+}
+
+/**
+ * After WebView onPageFinished: Android flush, then getCookie(loadedUrl) and getCookie(https://host/).
+ * Merges WebKit + default CookieManager on iOS. Returns full header string (not only FLiCA* names).
+ */
+export async function flicaAfterFlushGetCookieStringsForPageUrl(
+  pageUrl: string,
+): Promise<{ forPage: string; forBase: string; host: string; jarMerged: NativeCookieJar }> {
+  if (Platform.OS === 'web') {
+    return { forPage: '', forBase: '', host: '', jarMerged: {} };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const CookieManager = require('@react-native-community/cookies').default;
+  if (Platform.OS === 'android' && typeof CookieManager.flush === 'function') {
+    try {
+      await CookieManager.flush();
+    } catch {
+      /* */
+    }
+  }
+  let host = '';
+  try {
+    host = new URL(pageUrl).host;
+  } catch {
+    return { forPage: '', forBase: '', host: '', jarMerged: {} };
+  }
+  const baseHttps = `https://${host}/`;
+  const merged: NativeCookieJar = {};
+  const merge = (j: NativeCookieJar) => {
+    for (const k of Object.keys(j)) {
+      const e = j[k];
+      if (e == null) continue;
+      (merged as Record<string, (typeof j)[string]>)[k] = e;
+    }
+  };
+  for (const useWk of [true, false] as const) {
+    try {
+      merge((await CookieManager.get(pageUrl, useWk)) as NativeCookieJar);
+    } catch {
+      /* */
+    }
+    try {
+      merge((await CookieManager.get(baseHttps, useWk)) as NativeCookieJar);
+    } catch {
+      /* */
+    }
+  }
+  const forPage = flicaNativeJarToFullCookieHeader(merged);
+  return { forPage, forBase: forPage, host, jarMerged: merged };
+}
+
 /** Prefer `b` over `a` for each FLICA cookie key (Charles-style overlay). */
 export function mergeFlicaStoredCookiesPreferRight(a: FlicaStoredCookies, b: FlicaStoredCookies): FlicaStoredCookies {
   return {
@@ -115,14 +184,17 @@ export function flicaStoredCookiesFromNativeJar(jar: NativeCookieJar): FlicaStor
  * Read FLICA cookies from the native cookie jar. Returns `{}` on web.
  * Uses require() so Metro does not load `@react-native-community/cookies` on web (it throws Invalid platform).
  */
-export async function flicaSessionFromNativeCookieManagerMerged(): Promise<FlicaStoredCookies> {
+export async function flicaSessionFromNativeCookieManagerMerged(options?: {
+  extraGetBases?: readonly string[];
+}): Promise<FlicaStoredCookies> {
   if (Platform.OS === 'web') {
     return {};
   }
   let merged: FlicaStoredCookies = {};
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const CookieManager = require('@react-native-community/cookies').default;
-  for (const base of FLICA_COOKIE_MANAGER_GET_URLS) {
+  const bases: string[] = [...FLICA_COOKIE_MANAGER_GET_URLS, ...(options?.extraGetBases ?? [])];
+  for (const base of bases) {
     try {
       const jar = await CookieManager.get(base, true);
       merged = mergeFlicaStoredCookiesPreferRight(merged, flicaStoredCookiesFromNativeJar(jar));

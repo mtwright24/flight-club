@@ -49,15 +49,15 @@ export default function CrewHonorMiniCard({ winner: w, onPress, layout, cardWidt
       <View style={[styles.engageRow, layout === 'home' && styles.engageRowHome]}>
         <View style={[styles.engageCluster, layout === 'home' && styles.engageClusterHome]}>
           {w.total_reactions > 0 ? (
-            <View style={styles.engageItem}>
-              <Ionicons name="heart" size={13} color={layout === 'home' ? CH.red : CH.muted} />
+            <View style={[styles.engageItem, layout === 'home' && styles.engageItemHome]}>
+              <Ionicons name="heart" size={layout === 'home' ? 16 : 13} color={layout === 'home' ? CH.red : CH.muted} />
               <Text style={[styles.engageNum, layout === 'home' && styles.engageNumHome]}>{w.total_reactions}</Text>
             </View>
           ) : null}
-          {w.total_reactions > 0 && w.comments_count > 0 ? <View style={styles.engageBetweenRule} /> : null}
+          {w.total_reactions > 0 && w.comments_count > 0 ? <View style={[styles.engageBetweenRule, layout === 'home' && styles.engageBetweenRuleHome]} /> : null}
           {w.comments_count > 0 ? (
-            <View style={styles.engageItem}>
-              <Ionicons name="chatbubble-outline" size={13} color={CH.muted} />
+            <View style={[styles.engageItem, layout === 'home' && styles.engageItemHome]}>
+              <Ionicons name="chatbubble-outline" size={layout === 'home' ? 16 : 13} color={CH.muted} />
               <Text style={[styles.engageNum, layout === 'home' && styles.engageNumHome]}>{w.comments_count}</Text>
             </View>
           ) : null}
@@ -298,17 +298,19 @@ const styles = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 0,
     borderTopWidth: 0,
-    backgroundColor: 'rgba(255, 252, 248, 0.52)',
+    backgroundColor: 'rgba(255, 252, 248, 0.72)',
     borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(180, 140, 50, 0.28)',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(180, 140, 50, 0.4)',
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
     shadowColor: '#2d1f0a',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
   },
   engageCluster: {
     flexDirection: 'row',
@@ -325,7 +327,14 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     backgroundColor: 'rgba(148, 163, 184, 0.32)',
   },
+  engageBetweenRuleHome: {
+    width: 1,
+    height: 20,
+    marginHorizontal: 14,
+    backgroundColor: 'rgba(148, 163, 184, 0.4)',
+  },
   engageItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  engageItemHome: { gap: 6, minHeight: 24, justifyContent: 'center' },
   engageNum: { color: CH.mutedLight, fontWeight: '800', fontSize: 11 },
-  engageNumHome: { fontSize: 11.5 },
+  engageNumHome: { fontSize: 14, color: CH.navySoft },
 });

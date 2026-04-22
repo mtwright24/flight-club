@@ -1,5 +1,6 @@
 /**
- * Production FLICA (JetBlue) integration: SecureStore credentials/cookies, URL constants, token helpers, multi-month schedule fetch.
+ * Production FLICA integration: SecureStore credentials/cookies, URL builders, token helpers, multi-month schedule fetch.
+ * Airline host is `https://[subdomain].flica.net` — use `loadFlicaAirlineSubdomain` + `buildFlicaUrls` in product flows.
  */
 import * as SecureStore from 'expo-secure-store';
 
@@ -7,32 +8,69 @@ import * as SecureStore from 'expo-secure-store';
 
 const KEY_USER = 'flica_username';
 const KEY_PASS = 'flica_password';
+const KEY_SUB = 'flica_airline_subdomain';
 const KEY_SESSION = 'flica_session';
 const KEY_SERVICE = 'flica_service';
 const KEY_AWSALB = 'flica_awsalb';
 const KEY_AWSALBCORS = 'flica_awsalbcors';
 
-export const FLICA_URLS = {
-  LOGIN: 'https://jetblue.flica.net/ui/public/login/index.html',
-  LOGON_CGI: 'https://jetblue.flica.net/public/flicalogon.cgi',
-  MAINMENU: 'https://jetblue.flica.net/online/mainmenu.cgi',
-  MAINMENU_LOADSCHEDULE:
-    'https://jetblue.flica.net/online/mainmenu.cgi?LoadSchedule=true&IsMobile=false',
-  LEFTMENU: 'https://jetblue.flica.net/online/leftmenu.cgi?whosepage=Crewmember',
-  SCHEDULE_DETAIL: 'https://jetblue.flica.net/full/scheduledetail.cgi',
-  OPENTIME_FRAME: 'https://jetblue.flica.net/full/otframe.cgi?BCID=029.054&ViewOT=1',
-  OPENTIME_POT: 'https://jetblue.flica.net/full/otopentimepot.cgi',
-  TRADEBOARD_FRAME: 'https://jetblue.flica.net/online/tb_frame.cgi?BCID=002.000&dp=mr',
-  TRADEBOARD_ALL: 'https://jetblue.flica.net/online/tb_otherrequests.cgi?bcid=002.000',
-  TRADEBOARD_FAVORITES: 'https://jetblue.flica.net/online/tb_myfavorites.cgi?bcid=002.000',
-  TRADEBOARD_RESPONSES: 'https://jetblue.flica.net/online/tb_myresponses.cgi?bcid=002.000',
-  TRADEBOARD_POST: 'https://jetblue.flica.net/online/tb_postrequest.cgi?bcid=002.000',
-  TRADEBOARD_SUBMIT: 'https://jetblue.flica.net/online/TB_postrequest.cgi?BCID=002.000',
-  OT_REQUEST: 'https://jetblue.flica.net/full/otrequest.cgi',
-  OT_DROP: 'https://jetblue.flica.net/full/otdrop.cgi',
-  OT_SWAP: 'https://jetblue.flica.net/full/otswap2.cgi',
-  REQUEST_STATUS: 'https://jetblue.flica.net/full/otrequest.cgi',
-} as const;
+export function normalizeFlicaSubdomainInput(raw: string): string {
+  let s = (raw ?? '').trim().toLowerCase();
+  s = s.replace(/^https?:\/\//, '');
+  s = s.replace(/\.flica\.net.*$/, '');
+  s = s.replace(/\/.*$/, '');
+  s = s.replace(/[^a-z0-9-]+/g, '');
+  return s;
+}
+
+/**
+ * All FLICA UI + fetch URLs for a given airline subdomain (e.g. `jetblue` → jetblue.flica.net).
+ * Login uses `/ui/login/index.html` (not legacy /public/ paths).
+ */
+export function buildFlicaUrls(subdomain: string) {
+  const s = normalizeFlicaSubdomainInput(subdomain);
+  const host = s ? `${s}.flica.net` : 'flica.net';
+  const origin = `https://${host}`;
+  return {
+    ORIGIN: origin,
+    LOGIN: `${origin}/ui/login/index.html`,
+    HOME: `${origin}/ui/home/index.html`,
+    LOGON_CGI: `${origin}/public/flicalogon.cgi`,
+    MAINMENU: `${origin}/online/mainmenu.cgi`,
+    MAINMENU_LOADSCHEDULE: `${origin}/online/mainmenu.cgi?LoadSchedule=true&IsMobile=false`,
+    LEFTMENU: `${origin}/online/leftmenu.cgi?whosepage=Crewmember`,
+    SCHEDULE_DETAIL: `${origin}/full/scheduledetail.cgi`,
+    OPENTIME_FRAME: `${origin}/full/otframe.cgi?BCID=029.054&ViewOT=1`,
+    OPENTIME_POT: `${origin}/full/otopentimepot.cgi`,
+    TRADEBOARD_FRAME: `${origin}/online/tb_frame.cgi?BCID=002.000&dp=mr`,
+    TRADEBOARD_ALL: `${origin}/online/tb_otherrequests.cgi?bcid=002.000`,
+    TRADEBOARD_FAVORITES: `${origin}/online/tb_myfavorites.cgi?bcid=002.000`,
+    TRADEBOARD_RESPONSES: `${origin}/online/tb_myresponses.cgi?bcid=002.000`,
+    TRADEBOARD_POST: `${origin}/online/tb_postrequest.cgi?bcid=002.000`,
+    TRADEBOARD_SUBMIT: `${origin}/online/TB_postrequest.cgi?BCID=002.000`,
+    OT_REQUEST: `${origin}/full/otrequest.cgi`,
+    OT_DROP: `${origin}/full/otdrop.cgi`,
+    OT_SWAP: `${origin}/full/otswap2.cgi`,
+    REQUEST_STATUS: `${origin}/full/otrequest.cgi`,
+  } as const;
+}
+
+/** Legacy default host for dev/test call sites; product screens should use `buildFlicaUrls` + saved subdomain. */
+export const FLICA_URLS = buildFlicaUrls('jetblue');
+
+export async function loadFlicaAirlineSubdomain(): Promise<string | null> {
+  const v = await SecureStore.getItemAsync(KEY_SUB);
+  const n = normalizeFlicaSubdomainInput(v ?? '');
+  return n.length > 0 ? n : null;
+}
+
+export async function saveFlicaAirlineSubdomain(raw: string): Promise<void> {
+  const s = normalizeFlicaSubdomainInput(raw);
+  if (!s) {
+    throw new Error('Enter your airline FLICA host (e.g. jetblue for jetblue.flica.net).');
+  }
+  await SecureStore.setItemAsync(KEY_SUB, s);
+}
 
 export const FLICA_CONSTANTS = {
   BCID_OPENTIME: '029.054',

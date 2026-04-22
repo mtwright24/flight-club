@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   LogBox,
   Platform,
   Pressable,
@@ -11,6 +12,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  ToastAndroid,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,16 +22,20 @@ import { Ionicons } from '@expo/vector-icons';
 
 import {
   type FlicaStoredCookies,
+  flicaAfterFlushGetCookieStringsForPageUrl,
   flicaSessionFromNativeCookieManagerMerged,
+  flicaStoredCookiesFromNativeJar,
   mergeFlicaStoredCookiesPreferRight,
   saveFlicaLastMainmenuUrl,
 } from '../../src/dev/flicaPoCCookieStore';
 import {
+  buildFlicaUrls,
   extractToken1FromHtml,
   FLICA_CONSTANTS,
-  FLICA_URLS,
+  loadFlicaAirlineSubdomain,
   loadFlicaCookies,
   loadFlicaCredentials,
+  saveFlicaAirlineSubdomain,
   saveFlicaCookies,
   saveFlicaCredentials,
 } from '../../src/services/flicaScheduleService';
@@ -43,9 +49,25 @@ import { persistFlicaDirectImport } from '../../src/features/crew-schedule/persi
 import { scheduleTheme as T } from '../../src/features/crew-schedule/scheduleTheme';
 import CrewScheduleHeader from '../../src/features/crew-schedule/components/CrewScheduleHeader';
 
-const INJECT_NAV_TO_LOAD_SCHEDULE = `(function(){
-  window.location.href = ${JSON.stringify(FLICA_URLS.MAINMENU_LOADSCHEDULE)};
-})(); true;`;
+function flicaPathLooksSignedIn(url: string): boolean {
+  const low = (url ?? '').toLowerCase();
+  if (!low.includes('flica.net')) return false;
+  if (low.includes('login')) return false;
+  return (
+    low.includes('home') ||
+    low.includes('schedules') ||
+    low.includes('/full/') ||
+    low.includes('mainmenu') ||
+    low.includes('leftmenu') ||
+    low.includes('scheduledetail') ||
+    /flica\.net\/ui\/#/.test(low)
+  );
+}
+
+function flicaMonthHtmlLooksValid(html: string): boolean {
+  const t = (html ?? '').toUpperCase();
+  return t.includes('FLTNO') || t.includes('DPS-ARS') || t.includes('SCHEDULEDETAIL');
+}
 
 const INJECT_POST_LOADSCHEDULE_HTML = `(function(){
   var p = {
@@ -185,11 +207,6 @@ function resetFlowNav(refs: { current: FlowNav }): void {
   refs.current = { loadScheduleInjected: false, htmlAttempt: 0 };
 }
 
-function isFcvPostCaptchaMainmenuUrl(url: string): boolean {
-  const u = (url ?? '').toLowerCase();
-  return u.includes('mainmenu.cgi') && u.includes('gohm=1');
-}
-
 function isMainmenuAwaitingCaptcha(url: string): boolean {
   const u = (url ?? '').toLowerCase();
   if (!u.includes('mainmenu.cgi')) return false;
@@ -208,8 +225,15 @@ export default function ImportFlicaDirectScreen() {
   const fcvPhaseRef = useRef<'idle' | 'await_loadschedule_page' | 'await_token'>('idle');
   const scheduleExtractTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webLoadPassRef = useRef(0);
+  const lastNavUrlRef = useRef('');
+  const pageLoadCountRef = useRef(0);
+  const pageFinishDedupeKeyRef = useRef('');
+  const pageFinishDedupeAtRef = useRef(0);
+  const capturedCookieHeaderRef = useRef<string | null>(null);
 
   const [credsLoading, setCredsLoading] = useState(true);
+  const [storedAirlineSub, setStoredAirlineSub] = useState<string | null>(null);
+  const [formSub, setFormSub] = useState('');
   const [storedUser, setStoredUser] = useState<string | null>(null);
   const [formUser, setFormUser] = useState('');
   const [formPass, setFormPass] = useState('');
@@ -227,7 +251,19 @@ export default function ImportFlicaDirectScreen() {
   const [httpImporting, setHttpImporting] = useState(false);
   const [overlayMessage, setOverlayMessage] = useState('');
 
+  const flicaUrls = useMemo(
+    () => (storedAirlineSub?.trim() ? buildFlicaUrls(storedAirlineSub) : null),
+    [storedAirlineSub],
+  );
+
+  const injectNavToLoadSchedule = useMemo(() => {
+    if (!flicaUrls) return '';
+    return `(function(){ window.location.href = ${JSON.stringify(flicaUrls.MAINMENU_LOADSCHEDULE)}; })(); true;`;
+  }, [flicaUrls]);
+
   const hasCredentials = !!storedUser?.trim();
+  const hasAirline = !!storedAirlineSub?.trim();
+  const canSync = hasAirline && hasCredentials;
 
   useEffect(() => {
     LogBox.ignoreLogs([/\d+\s*ms\s*timeout\s*exceeded/i]);
@@ -250,7 +286,9 @@ export default function ImportFlicaDirectScreen() {
   const loadCreds = useCallback(async () => {
     setCredsLoading(true);
     try {
-      const c = await loadFlicaCredentials();
+      const [sub, c] = await Promise.all([loadFlicaAirlineSubdomain(), loadFlicaCredentials()]);
+      setStoredAirlineSub(sub);
+      setFormSub(sub ?? '');
       if (!c) {
         setStoredUser(null);
         setFormUser('');
@@ -268,6 +306,18 @@ export default function ImportFlicaDirectScreen() {
       setCredsLoading(false);
     }
   }, []);
+
+  const onSaveAirline = useCallback(async () => {
+    setLastError(null);
+    try {
+      await saveFlicaAirlineSubdomain(formSub);
+      const n = await loadFlicaAirlineSubdomain();
+      setStoredAirlineSub(n);
+      setStatusLine('Airline saved');
+    } catch (e) {
+      setLastError(e instanceof Error ? e.message : String(e));
+    }
+  }, [formSub]);
 
   useEffect(() => {
     void loadCreds();
@@ -288,6 +338,9 @@ export default function ImportFlicaDirectScreen() {
     completingRef.current = false;
     postCaptchaFiredRef.current = false;
     fcvPhaseRef.current = 'idle';
+    pageLoadCountRef.current = 0;
+    pageFinishDedupeKeyRef.current = '';
+    capturedCookieHeaderRef.current = null;
     resetFlowNav(flowNavRef);
   }, []);
 
@@ -334,45 +387,61 @@ export default function ImportFlicaDirectScreen() {
     }, 2000);
   }, []);
 
-  const runPostCaptchaCookieCaptureAndNavigate = useCallback(async (fullMainmenuUrl: string) => {
-    if (postCaptchaFiredRef.current) return;
-    postCaptchaFiredRef.current = true;
-    setPostCaptchaFired(true);
-    setHideWebForSync(true);
-    setCaptchaWebVisible(false);
-    setOverlayMessage('Syncing schedule…');
-    if (fullMainmenuUrl) {
+  const runPostCaptchaCookieCaptureAndNavigate = useCallback(
+    async (pageUrl: string) => {
+      if (postCaptchaFiredRef.current || !flicaUrls || !injectNavToLoadSchedule) return;
+      postCaptchaFiredRef.current = true;
+      setPostCaptchaFired(true);
+      setHideWebForSync(true);
+      setCaptchaWebVisible(false);
+      setOverlayMessage('Downloading schedule…');
+      setStatusLine('Downloading schedule…');
+      if (pageUrl) {
+        try {
+          await saveFlicaLastMainmenuUrl(pageUrl);
+        } catch {
+          /* non-fatal */
+        }
+      }
       try {
-        await saveFlicaLastMainmenuUrl(fullMainmenuUrl);
-      } catch {
-        /* non-fatal */
-      }
-    }
-    try {
-      await new Promise((r) => setTimeout(r, 1500));
-      let session = await flicaSessionFromNativeCookieManagerMerged();
-      if (!session.FLiCASession && !session.FLiCAService) {
-        await new Promise((r) => setTimeout(r, 450));
-        session = await flicaSessionFromNativeCookieManagerMerged();
-      }
-      if (!session.FLiCASession && !session.FLiCAService) {
-        setLastError('No FLICA cookies after sign-in. Try again.');
+        await new Promise((r) => setTimeout(r, 400));
+        const effectiveUrl = pageUrl || lastNavUrlRef.current;
+        let header = '';
+        if (Platform.OS !== 'web' && effectiveUrl.startsWith('http')) {
+          const pair = await flicaAfterFlushGetCookieStringsForPageUrl(effectiveUrl);
+          header = pair.forPage || pair.forBase;
+          capturedCookieHeaderRef.current = header.length > 0 ? header : null;
+          await saveFlicaCookies(flicaStoredCookiesFromNativeJar(pair.jarMerged));
+        }
+        if (!header?.trim()) {
+          const extra = [flicaUrls.ORIGIN + '/', flicaUrls.MAINMENU];
+          const session = await flicaSessionFromNativeCookieManagerMerged({ extraGetBases: extra });
+          await saveFlicaCookies(session);
+          const h = await loadFlicaCookies();
+          if (h?.trim()) {
+            header = h;
+            capturedCookieHeaderRef.current = h;
+          }
+        }
+        if (!header?.trim()) {
+          setLastError('No FLICA cookies after sign-in. Try again.');
+          stopSync();
+          return;
+        }
+        fcvPhaseRef.current = 'await_loadschedule_page';
+        flowNavRef.current.loadScheduleInjected = true;
+        webViewRef.current?.injectJavaScript(injectNavToLoadSchedule);
+      } catch (e) {
+        setLastError(e instanceof Error ? e.message : String(e));
         stopSync();
-        return;
       }
-      await saveFlicaCookies(session);
-      fcvPhaseRef.current = 'await_loadschedule_page';
-      flowNavRef.current.loadScheduleInjected = true;
-      webViewRef.current?.injectJavaScript(INJECT_NAV_TO_LOAD_SCHEDULE);
-    } catch (e) {
-      setLastError(e instanceof Error ? e.message : String(e));
-      stopSync();
-    }
-  }, [stopSync]);
+    },
+    [flicaUrls, injectNavToLoadSchedule, stopSync],
+  );
 
   const runHttpImport = useCallback(
     async (token: string, mainmenuPageUrl: string) => {
-      if (completingRef.current) return;
+      if (completingRef.current || !flicaUrls) return;
       completingRef.current = true;
       setHttpImporting(true);
       setPostCaptchaFired(true);
@@ -380,7 +449,8 @@ export default function ImportFlicaDirectScreen() {
       setLastError(null);
       try {
         const session = await mergedFlicaSessionForHttp();
-        if (!session.FLiCASession && !session.FLiCAService) {
+        const cookieOverride = capturedCookieHeaderRef.current?.trim();
+        if (!cookieOverride && !session.FLiCASession && !session.FLiCAService) {
           setLastError('Missing FLICA session for HTTP import.');
           return;
         }
@@ -393,7 +463,9 @@ export default function ImportFlicaDirectScreen() {
           return;
         }
         const result = await runFlicaFcvHttpScheduledetailOnly(session, token, {
-          refererUrl: mainmenuPageUrl,
+          refererUrl: flicaUrls.HOME,
+          flicaBaseOrigin: flicaUrls.ORIGIN,
+          cookieHeaderOverride: cookieOverride || undefined,
           onProgress: (msg) => {
             const raw = (msg ?? '').replace(/^Downloading /, 'Syncing ');
             const t = raw.endsWith('...') ? raw : raw.replace(/\.$/, '...');
@@ -414,8 +486,18 @@ export default function ImportFlicaDirectScreen() {
           stopSync();
           return;
         }
+        if (!flicaMonthHtmlLooksValid(m) || !flicaMonthHtmlLooksValid(a) || !flicaMonthHtmlLooksValid(y)) {
+          setLastError('FLICA schedule response did not look like a valid schedule page.');
+          stopSync();
+          return;
+        }
         setOverlayMessage('Saving schedule…');
         await persistFlicaDirectImport(m, a, y);
+        if (Platform.OS === 'android') {
+          ToastAndroid.show('Schedule synced ✓', ToastAndroid.LONG);
+        } else {
+          Alert.alert('', 'Schedule synced ✓');
+        }
         stopSync();
         router.replace('/crew-schedule/(tabs)' as Href);
       } catch (e) {
@@ -428,7 +510,7 @@ export default function ImportFlicaDirectScreen() {
         fcvPhaseRef.current = 'idle';
       }
     },
-    [router, stopSync]
+    [flicaUrls, router, stopSync]
   );
 
   const onMessage = useCallback(
@@ -482,17 +564,39 @@ export default function ImportFlicaDirectScreen() {
       if (completingRef.current) return;
       const url = nav.url ?? '';
       const low = url.toLowerCase();
-      if (isMainmenuAwaitingCaptcha(url)) {
+      lastNavUrlRef.current = url;
+      if (low.includes('captcha')) {
         setCaptchaWebVisible(true);
-        setOverlayMessage('Sign in to FLICA');
+        setOverlayMessage("Complete the verification, then we'll continue automatically.");
+        setStatusLine("Complete the verification, then we'll continue automatically.");
         setHideWebForSync(false);
       }
-      if (isFcvPostCaptchaMainmenuUrl(url) && nav.loading === false) {
-        if (!postCaptchaFiredRef.current) {
-          setOverlayMessage('Syncing schedule…');
-          setCaptchaWebVisible(false);
+      if (isMainmenuAwaitingCaptcha(url)) {
+        setCaptchaWebVisible(true);
+        setOverlayMessage('');
+        setHideWebForSync(false);
+      }
+      if (nav.loading === false) {
+        const now = Date.now();
+        if (pageFinishDedupeKeyRef.current !== url || now - pageFinishDedupeAtRef.current > 600) {
+          pageFinishDedupeKeyRef.current = url;
+          pageFinishDedupeAtRef.current = now;
+          pageLoadCountRef.current += 1;
         }
-        void runPostCaptchaCookieCaptureAndNavigate(url);
+        void (async () => {
+          if (Platform.OS === 'web') return;
+          const pair = await flicaAfterFlushGetCookieStringsForPageUrl(url);
+          const h = (pair.forPage || pair.forBase).trim();
+          const onLogin = low.includes('login');
+          if (!onLogin && pageLoadCountRef.current > 3 && !h) {
+            setLastError('No FLICA cookies after sign-in. Try again.');
+            stopSync();
+            return;
+          }
+          if (!postCaptchaFiredRef.current && flicaPathLooksSignedIn(url) && h.length > 0) {
+            void runPostCaptchaCookieCaptureAndNavigate(url);
+          }
+        })();
       }
       if (low.includes('mainmenu.cgi') && low.includes('loadschedule=true') && nav.loading === false) {
         if (fcvPhaseRef.current === 'await_loadschedule_page') {
@@ -503,7 +607,7 @@ export default function ImportFlicaDirectScreen() {
         }
       }
     },
-    [runPostCaptchaCookieCaptureAndNavigate, schedulePostLoadscheduleHtml]
+    [runPostCaptchaCookieCaptureAndNavigate, schedulePostLoadscheduleHtml, stopSync]
   );
 
   const runLoginInject = useCallback(() => {
@@ -547,6 +651,10 @@ export default function ImportFlicaDirectScreen() {
     completingRef.current = false;
     postCaptchaFiredRef.current = false;
     fcvPhaseRef.current = 'idle';
+    pageLoadCountRef.current = 0;
+    pageFinishDedupeKeyRef.current = '';
+    pageFinishDedupeAtRef.current = 0;
+    capturedCookieHeaderRef.current = null;
     resetFlowNav(flowNavRef);
     setCaptchaWebVisible(false);
     setPostCaptchaFired(false);
@@ -558,7 +666,8 @@ export default function ImportFlicaDirectScreen() {
     setStatusLine('Starting sync…');
   }, []);
 
-  const blockingOverlay = syncActive && (captchaWebVisible || postCaptchaFired || httpImporting);
+  /** Full white overlay only after login handoff — never cover the WebView during CAPTCHA / manual sign-in. */
+  const blockingOverlay = syncActive && (postCaptchaFired || httpImporting);
 
   const overlayTitle = useMemo(() => {
     if (overlayMessage.trim().length) return overlayMessage;
@@ -570,7 +679,7 @@ export default function ImportFlicaDirectScreen() {
     return (
       <View style={styles.shell}>
         <Stack.Screen options={{ headerShown: false }} />
-        <CrewScheduleHeader title="FLICA direct sync" />
+        <CrewScheduleHeader title="FLICA Sync" />
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={T.accent} />
         </View>
@@ -581,20 +690,39 @@ export default function ImportFlicaDirectScreen() {
   return (
     <View style={styles.shell}>
       <Stack.Screen options={{ headerShown: false }} />
-      <CrewScheduleHeader title="FLICA direct sync" />
+      <CrewScheduleHeader title="FLICA Sync" />
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.h1}>Import from FLICA</Text>
+        <Text style={styles.h1}>FLICA sync</Text>
         <Text style={styles.lead}>
-          Your credentials stay on this device. We open FLICA in a private WebView, then download March–May 2026 in the
-          background.
+          Direct browser sync from your airline&apos;s FLICA portal. Credentials stay on this device. We download
+          March–May 2026 in the background after you sign in.
         </Text>
 
-        {!hasCredentials ? (
+        {!hasAirline ? (
           <>
-            <Text style={styles.label}>FLICA username</Text>
+            <Text style={styles.label}>Airline FLICA host</Text>
+            <Text style={styles.hint}>
+              The subdomain only (e.g. <Text style={styles.hintMono}>jetblue</Text> for jetblue.flica.net)
+            </Text>
+            <TextInput
+              value={formSub}
+              onChangeText={setFormSub}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.input}
+              placeholder="e.g. jetblue"
+              placeholderTextColor={T.textSecondary}
+            />
+            <Pressable style={styles.primaryBtn} onPress={() => void onSaveAirline()}>
+              <Text style={styles.primaryBtnText}>Save airline</Text>
+            </Pressable>
+          </>
+        ) : !hasCredentials ? (
+          <>
+            <Text style={styles.label}>Employee ID (FLICA login)</Text>
             <TextInput
               value={formUser}
               onChangeText={setFormUser}
@@ -604,7 +732,7 @@ export default function ImportFlicaDirectScreen() {
               placeholder="UserId"
               placeholderTextColor={T.textSecondary}
             />
-            <Text style={styles.label}>FLICA password</Text>
+            <Text style={styles.label}>Password</Text>
             <TextInput
               value={formPass}
               onChangeText={setFormPass}
@@ -621,6 +749,10 @@ export default function ImportFlicaDirectScreen() {
           <>
             {editingCreds ? (
               <>
+                <Text style={styles.label}>Airline host</Text>
+                <Text style={styles.maskedCreds} selectable>
+                  {storedAirlineSub}.flica.net
+                </Text>
                 <Text style={styles.label}>FLICA username</Text>
                 <TextInput
                   value={editUser}
@@ -647,17 +779,17 @@ export default function ImportFlicaDirectScreen() {
             ) : (
               <>
                 <Text style={styles.maskedCreds} selectable>
-                  {storedUser}/******
+                  {storedAirlineSub}.flica.net · {storedUser}/******
                 </Text>
                 <Pressable
-                  style={[styles.primaryBtn, (syncActive || httpImporting) && styles.btnDisabled]}
+                  style={[styles.primaryBtn, (syncActive || httpImporting || !canSync) && styles.btnDisabled]}
                   onPress={startSync}
-                  disabled={syncActive || httpImporting}
+                  disabled={syncActive || httpImporting || !canSync}
                 >
-                  <Text style={styles.primaryBtnText}>Sync Schedule</Text>
+                  <Text style={styles.primaryBtnText}>Sync schedule</Text>
                 </Pressable>
                 <Pressable style={styles.link} onPress={() => setEditingCreds(true)} hitSlop={8}>
-                  <Text style={styles.linkText}>Update credentials</Text>
+                  <Text style={styles.linkText}>Update airline or credentials</Text>
                 </Pressable>
               </>
             )}
@@ -670,20 +802,13 @@ export default function ImportFlicaDirectScreen() {
         </Text>
       </ScrollView>
 
-      {syncActive ? (
-        <View style={styles.wvHost} pointerEvents={blockingOverlay || captchaWebVisible ? 'auto' : 'box-none'}>
-          <View
-            style={[
-              captchaWebVisible && !hideWebForSync
-                ? StyleSheet.absoluteFill
-                : { position: 'absolute', width: 0, height: 0, overflow: 'hidden', opacity: 0, bottom: 0, right: 0 },
-            ]}
-            pointerEvents={captchaWebVisible && !hideWebForSync ? 'auto' : 'none'}
-          >
+      {syncActive && flicaUrls ? (
+        <View style={styles.wvHost} pointerEvents="box-none">
+          <View style={StyleSheet.absoluteFill} pointerEvents="auto">
             <WebView
               key={webViewKey}
               ref={webViewRef}
-              source={{ uri: FLICA_URLS.LOGIN }}
+              source={{ uri: flicaUrls.LOGIN }}
               style={styles.web}
               userAgent={FLICA_CONSTANTS.USER_AGENT}
               injectedJavaScriptBeforeContentLoaded={FLICA_POC_INJECT_BEFORE_CONTENT}
@@ -705,15 +830,15 @@ export default function ImportFlicaDirectScreen() {
               cacheEnabled={false}
             />
           </View>
+          {!blockingOverlay ? (
+            <View style={styles.captchaTopBar} pointerEvents="box-none">
+              <Pressable onPress={stopSync} hitSlop={12} style={styles.closeBtn} accessibilityLabel="Close FLICA">
+                <Ionicons name="close" size={26} color={T.text} />
+              </Pressable>
+            </View>
+          ) : null}
           {blockingOverlay ? (
             <SafeAreaView style={styles.syncOverlay} edges={['top', 'bottom']}>
-              {captchaWebVisible && !postCaptchaFired ? (
-                <View style={styles.captchaTopBar}>
-                  <Pressable onPress={stopSync} hitSlop={12} style={styles.closeBtn}>
-                    <Ionicons name="close" size={26} color={T.text} />
-                  </Pressable>
-                </View>
-              ) : null}
               <ActivityIndicator size="large" color={T.accent} />
               <Text style={styles.overlayTitle}>{overlayTitle}</Text>
             </SafeAreaView>
@@ -729,6 +854,8 @@ const styles = StyleSheet.create({
   content: { padding: 16, gap: 6 },
   h1: { fontSize: 20, fontWeight: '800', color: T.text, marginBottom: 8 },
   lead: { fontSize: 14, color: T.textSecondary, lineHeight: 21, marginBottom: 12 },
+  hint: { fontSize: 13, color: T.textSecondary, marginBottom: 8, lineHeight: 19 },
+  hintMono: { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 13, color: T.text },
   label: { fontSize: 12, fontWeight: '700', color: T.textSecondary, marginTop: 10, marginBottom: 4 },
   input: {
     borderWidth: 1,

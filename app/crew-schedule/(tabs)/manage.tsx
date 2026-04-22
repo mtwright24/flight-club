@@ -158,9 +158,9 @@ export default function ManageTabScreen() {
         <Hairline />
         <ActionRow
           icon="airplane-outline"
-          title="JetBlue FLICA"
-          subtitle="Direct sync or upload from jetblue.flica.net"
-          onPress={() => router.push('/crew-schedule/import-jetblue-source')}
+          title="FLICA"
+          subtitle="Direct sync from your airline's FLICA portal"
+          onPress={() => router.push('/crew-schedule/import-flica-direct')}
         />
         <Hairline />
         <ActionRow

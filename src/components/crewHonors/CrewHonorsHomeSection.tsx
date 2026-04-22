@@ -327,14 +327,14 @@ export default function CrewHonorsHomeSection({ userId }: { userId: string | nul
                       <View style={styles.heroEngagePill}>
                         {detail.total_reactions > 0 ? (
                           <View style={styles.heroEngageItem}>
-                            <Ionicons name="heart" size={16} color={CH.red} />
+                            <Ionicons name="heart" size={19} color={CH.red} />
                             <Text style={styles.heroEngageNum}>{detail.total_reactions}</Text>
                           </View>
                         ) : null}
                         {detail.total_reactions > 0 && detail.comments_count > 0 ? <View style={styles.heroEngageRule} /> : null}
                         {detail.comments_count > 0 ? (
                           <View style={styles.heroEngageItem}>
-                            <Ionicons name="chatbubble-outline" size={16} color={CH.muted} />
+                            <Ionicons name="chatbubble-outline" size={19} color={CH.muted} />
                             <Text style={styles.heroEngageNum}>{detail.comments_count}</Text>
                           </View>
                         ) : null}
@@ -548,26 +548,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 0,
     marginTop: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 22,
+    minHeight: 48,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
     borderRadius: 999,
     backgroundColor: 'rgba(255, 252, 248, 0.88)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(180, 140, 50, 0.38)',
+    borderWidth: 1,
+    borderColor: 'rgba(180, 140, 50, 0.42)',
     shadowColor: '#2d1f0a',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOpacity: 0.07,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  heroEngageItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  heroEngageItem: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 32, justifyContent: 'center' },
   heroEngageRule: {
-    width: StyleSheet.hairlineWidth,
-    height: 16,
-    marginHorizontal: 18,
-    backgroundColor: 'rgba(148, 163, 184, 0.35)',
+    width: 1,
+    height: 22,
+    marginHorizontal: 20,
+    backgroundColor: 'rgba(148, 163, 184, 0.4)',
   },
-  heroEngageNum: { color: CH.navySoft, fontWeight: '800', fontSize: 15 },
+  heroEngageNum: { color: CH.navySoft, fontWeight: '800', fontSize: 16, minWidth: 14 },
   inBadgeDivider: {
     alignSelf: 'stretch',
     height: StyleSheet.hairlineWidth,
@@ -577,20 +578,22 @@ const styles = StyleSheet.create({
   },
   reactionPanelInBadge: {
     alignSelf: 'stretch',
-    backgroundColor: 'rgba(255, 252, 248, 0.55)',
+    backgroundColor: 'rgba(255, 252, 248, 0.7)',
     borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(180, 140, 50, 0.35)',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(180, 140, 50, 0.4)',
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    minHeight: 64,
     marginTop: 10,
     marginBottom: 4,
     alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: '#2d1f0a',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
+    shadowOpacity: 0.07,
     shadowRadius: 3,
-    elevation: 1,
+    elevation: 2,
   },
   inBadgeSectionLabel: {
     alignSelf: 'stretch',
