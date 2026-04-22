@@ -704,6 +704,26 @@ export default function ImportScheduleScreen() {
 
         <Text style={styles.helper}>Choose how you want to import your schedule.</Text>
 
+        <Pressable
+          style={styles.jetblueFlicaCard}
+          onPress={() => router.push('/crew-schedule/import-jetblue-source')}
+          accessibilityRole="button"
+          accessibilityLabel="JetBlue FLICA: direct sync or upload"
+        >
+          <View style={styles.jetblueBadge}>
+            <Text style={styles.jetblueBadgeText}>JETBLUE · FLICA</Text>
+          </View>
+          <View style={styles.jetblueFlicaRow}>
+            <View style={styles.jetblueFlicaTextCol}>
+              <Text style={styles.jetblueFlicaTitle}>Import from FLICA</Text>
+              <Text style={styles.jetblueFlicaSub}>
+                Direct browser sync (recommended) or monthly screenshot / PDF upload
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={T.accent} style={styles.jetblueFlicaChevron} />
+          </View>
+        </Pressable>
+
         <View style={styles.options}>
           {(
             [
@@ -832,6 +852,28 @@ const styles = StyleSheet.create({
     marginTop: 12,
     lineHeight: 22,
   },
+  jetblueFlicaCard: {
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: T.accent,
+    backgroundColor: T.surface,
+    padding: 14,
+    marginBottom: 20,
+  },
+  jetblueBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: T.accent,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 8,
+  },
+  jetblueBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+  jetblueFlicaRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  jetblueFlicaTextCol: { flex: 1, minWidth: 0 },
+  jetblueFlicaTitle: { fontSize: 17, fontWeight: '800', color: T.text, marginBottom: 6 },
+  jetblueFlicaSub: { fontSize: 14, color: T.textSecondary, lineHeight: 21 },
+  jetblueFlicaChevron: { marginTop: 2 },
   options: { gap: 10 },
   opt: {
     padding: 14,

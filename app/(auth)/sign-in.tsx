@@ -1,6 +1,6 @@
 // app/(auth)/sign-in.tsx
 import React, { useRef, useState } from 'react';
-import { Text, TouchableOpacity, Alert, StyleSheet, TextInput } from 'react-native';
+import { Text, TouchableOpacity, Alert, StyleSheet, TextInput, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { authTheme } from '../../src/styles/authTheme';
 import { supabase } from '../../src/lib/supabaseClient';
@@ -39,6 +39,14 @@ export default function SignInScreen() {
         return;
       }
       // Let auth gate/root layout handle navigation
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[SignIn] signInWithPassword threw:', e);
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(`Sign in failed\n\n${msg}`);
+      } else {
+        Alert.alert('Sign in failed', msg);
+      }
     } finally {
       setLoading(false);
     }

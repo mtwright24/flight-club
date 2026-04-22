@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   LogBox,
   Modal,
   Platform,
@@ -13,21 +14,20 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  ToastAndroid,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
-import CookieManager from '@react-native-community/cookies';
 import * as SecureStore from 'expo-secure-store';
 
 import {
   type FlicaStoredCookies,
-  FLICA_COOKIE_MANAGER_GET_URLS,
   FLICA_LAST_MAINMENU_URL_KEY,
   clearFlicaCookiesFromSecureStore,
-  flicaStoredCookiesFromNativeJar,
+  flicaSessionFromNativeCookieManagerMerged,
   mergeFlicaStoredCookiesPreferRight,
   saveFlicaLastMainmenuUrl,
 } from '../src/dev/flicaPoCCookieStore';
@@ -42,13 +42,13 @@ import {
   saveFlicaCredentials,
 } from '../src/services/flicaScheduleService';
 import {
-  computeScheduleKeywordHints,
   extractScheduleTokenFromMainmenuHtml,
   type FlicaFcvHttpResult,
   runFlicaFcvHttpScheduleWithCookies,
   runFlicaFcvHttpScheduledetailOnly,
 } from '../src/dev/flicaPoCScheduleHttp';
-import { setFlicaPoCScratch } from '../src/dev/flicaPoCScratch';
+import { supabase } from '../src/lib/supabaseClient';
+import { persistFlicaMultiMonthToCrewSchedule } from '../src/services/crewScheduleFlicaImport';
 import { FLICA_POC_INJECT_BEFORE_CONTENT } from '../src/dev/flicaPoCWebFontShim';
 import { colors, radius, spacing } from '../src/styles/theme';
 
@@ -174,19 +174,6 @@ function buildFlicaUiLoginInjectScript(username: string, password: string): stri
 
 const mergeSession = mergeFlicaStoredCookiesPreferRight;
 
-async function flicaSessionFromNativeCookieManagerMerged(): Promise<FlicaStoredCookies> {
-  let merged: FlicaStoredCookies = {};
-  for (const base of FLICA_COOKIE_MANAGER_GET_URLS) {
-    try {
-      const jar = await CookieManager.get(base, true);
-      merged = mergeSession(merged, flicaStoredCookiesFromNativeJar(jar));
-    } catch {
-      /* non-fatal */
-    }
-  }
-  return merged;
-}
-
 function extractTokenFromWebViewHtml(html: string): string | null {
   const t = html ?? '';
   const t1 = extractToken1FromHtml(t);
@@ -264,66 +251,6 @@ function shouldRevealAutoWebView(url: string): boolean {
 }
 
 type FcvAutoPhase = 'idle' | 'ui_login' | 'await_loadschedule_page' | 'await_token_from_webview';
-
-function applyFlicaScratchAndGoReview(router: ReturnType<typeof useRouter>, result: Extract<FlicaFcvHttpResult, { ok: true }>) {
-  const raw = result.scheduleHtml ?? '';
-  setFlicaPoCScratch({
-    rawText: raw,
-    lastUrl: result.scheduleUrl,
-    capturedAt: Date.now(),
-    documentTitle: 'scheduledetail.cgi (FCV HTTP)',
-    textLength: raw.length,
-    extractionStrategy: 'fcv_stored_cookies_loadschedule_go1_multimonth',
-    pageKind: 'fetch_schedule',
-    httpStatus: 200,
-    responseFinalUrl: result.scheduleUrl,
-    scheduleKeywordHints: computeScheduleKeywordHints(raw),
-    step1ScheduledetailHtml: result.step1ScheduledetailHtml,
-    multiMonthSchedule: result.multiMonthSchedule?.map((m) => ({
-      blockDate: m.blockDate,
-      monthLabel: m.monthLabel,
-      httpStatus: m.httpStatus,
-      finalUrl: m.finalUrl,
-      html: m.html,
-      hints: m.hints,
-    })),
-    aprilPreview3000: result.aprilPreview3000,
-    extractionErrors: [
-      'FCV: mainmenu token → scheduledetail step1 → GO=1&token regex → Mar/Apr/May scheduledetail.cgi',
-    ],
-  });
-  router.push('/flica-review');
-}
-
-function applyFlicaScratchFromWebView(router: ReturnType<typeof useRouter>, result: Extract<FlicaFcvHttpResult, { ok: true }>) {
-  const raw = result.scheduleHtml ?? '';
-  setFlicaPoCScratch({
-    rawText: raw,
-    lastUrl: result.scheduleUrl,
-    capturedAt: Date.now(),
-    documentTitle: 'scheduledetail.cgi (WebView token + HTTP)',
-    textLength: raw.length,
-    extractionStrategy: 'fcv_webview_mainmenu_loadschedule_go1_multimonth',
-    pageKind: 'fetch_schedule',
-    httpStatus: 200,
-    responseFinalUrl: result.scheduleUrl,
-    scheduleKeywordHints: computeScheduleKeywordHints(raw),
-    step1ScheduledetailHtml: result.step1ScheduledetailHtml,
-    multiMonthSchedule: result.multiMonthSchedule?.map((m) => ({
-      blockDate: m.blockDate,
-      monthLabel: m.monthLabel,
-      httpStatus: m.httpStatus,
-      finalUrl: m.finalUrl,
-      html: m.html,
-      hints: m.hints,
-    })),
-    aprilPreview3000: result.aprilPreview3000,
-    extractionErrors: [
-      'FCV: WebView HTML token → scheduledetail step1 → GO=1&token → Mar/Apr/May',
-    ],
-  });
-  router.push('/flica-review');
-}
 
 type WebNav = { loadScheduleInjected: boolean; htmlAttempt: number };
 
@@ -436,6 +363,49 @@ export default function FlicaTestScreen() {
       setStatusLine('stalled');
     }, AUTO_REFRESH_STALL_MS);
   }, [clearAutoRefreshStallTimer]);
+
+  const showScheduleImportedToast = useCallback(() => {
+    const msg = 'Schedule imported successfully';
+    if (Platform.OS === 'android') {
+      ToastAndroid.show(msg, ToastAndroid.LONG);
+    } else {
+      Alert.alert('Imported', msg);
+    }
+  }, []);
+
+  const finalizeFlicaImportSuccess = useCallback(
+    async (result: Extract<FlicaFcvHttpResult, { ok: true }>): Promise<boolean> => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user?.id) {
+        setLastError('Sign in to save your schedule to Flight Club.');
+        setStatusLine('import_failed');
+        return false;
+      }
+      if (result.multiMonthSchedule?.length) {
+        const { error } = await persistFlicaMultiMonthToCrewSchedule(
+          supabase,
+          user.id,
+          result.multiMonthSchedule
+        );
+        if (error) {
+          setLastError(error.message);
+          setStatusLine('import_failed');
+          return false;
+        }
+      }
+      showScheduleImportedToast();
+      setAutoRefreshOpen(false);
+      setAutoImportHideWebView(false);
+      setIsImportingSchedule(false);
+      setCaptchaLayerVisible(false);
+      fcvAutoPhaseRef.current = 'idle';
+      router.replace('/crew-schedule/(tabs)');
+      return true;
+    },
+    [router, showScheduleImportedToast, setAutoRefreshOpen],
+  );
 
   const loadCreds = useCallback(async () => {
     const c = await loadFlicaCredentials();
@@ -572,6 +542,10 @@ export default function FlicaTestScreen() {
         if (fromRef === 'auto') {
           session = (await loadFlicaStoredCookiesObject()) ?? {};
           if (!session.FLiCASession && !session.FLiCAService) {
+            const jar = await flicaSessionFromNativeCookieManagerMerged();
+            session = mergeSession(session, jar);
+          }
+          if (!session.FLiCASession && !session.FLiCAService) {
             setLastError(
               'No FLICA session in secure storage. After CAPTCHA, cookies should have been saved — try Backup refresh or Refresh again.',
             );
@@ -609,14 +583,11 @@ export default function FlicaTestScreen() {
           onProgress: fromRef === 'auto' ? (msg) => setStatusLine(msg) : undefined,
         });
         if (result.ok) {
-          importSucceeded = true;
-          setStatusLine('Opening review…');
-          applyFlicaScratchFromWebView(router, result);
-          setAutoRefreshOpen(false);
-          setAutoImportHideWebView(false);
-          setIsImportingSchedule(false);
-          setCaptchaLayerVisible(false);
-          fcvAutoPhaseRef.current = 'idle';
+          setStatusLine('Saving schedule…');
+          const saved = await finalizeFlicaImportSuccess(result);
+          if (saved) {
+            importSucceeded = true;
+          }
           return;
         }
         if (result.captchaRequired) {
@@ -655,7 +626,7 @@ export default function FlicaTestScreen() {
         }
       }
     },
-    [clearAutoRefreshStallTimer, flowRefs, router, setAutoRefreshOpen],
+    [clearAutoRefreshStallTimer, finalizeFlicaImportSuccess, flowRefs, setAutoRefreshOpen],
   );
 
   /** After main menu (GOHM=1 or CAPTCHA skipped): overlay → 1500ms → CookieManager.get once → LoadSchedule inject. */
@@ -1050,8 +1021,8 @@ export default function FlicaTestScreen() {
       }
       const result = await runFlicaFcvHttpScheduleWithCookies(session);
       if (result.ok) {
-        setStatusLine('ok → review');
-        applyFlicaScratchAndGoReview(router, result);
+        setStatusLine('Saving schedule…');
+        await finalizeFlicaImportSuccess(result);
         return;
       }
       if (result.captchaRequired) {
@@ -1067,7 +1038,7 @@ export default function FlicaTestScreen() {
     } finally {
       setBusy(false);
     }
-  }, [router]);
+  }, [finalizeFlicaImportSuccess, router]);
 
   const onClearSessionOnly = useCallback(async () => {
     setLastError(null);

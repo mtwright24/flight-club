@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,8 +13,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import type { FlicaMonthStats, FlicaPairing } from '../../../services/flicaScheduleHtmlParser';
+import FlicaCrewScheduleSection from '../components/FlicaCrewScheduleSection';
 import { useScheduleTripsForMonth } from '../hooks/useScheduleTripsForMonth';
-import { removeMonthScheduleAndImports } from '../scheduleApi';
+import {
+  fetchCrewScheduleFlicaForMonth,
+  type CrewScheduleFlicaRow,
+  removeMonthScheduleAndImports,
+} from '../scheduleApi';
 import {
   loadLastMonthCursor,
   loadScheduleViewMode,
@@ -49,6 +55,7 @@ export default function ScheduleTabScreen() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [viewMode, setViewMode] = useState<ScheduleViewMode>('classic');
   const [removingMonth, setRemovingMonth] = useState(false);
+  const [flicaRow, setFlicaRow] = useState<CrewScheduleFlicaRow | null>(null);
 
   const monthKey = useMemo(
     () => `${year}-${String(month).padStart(2, '0')}`,
@@ -66,11 +73,25 @@ export default function ScheduleTabScreen() {
 
   const { trips, monthMetrics, refreshing, refresh, refreshSilent } = useScheduleTripsForMonth(year, month);
 
+  const loadFlicaRow = useCallback(async () => {
+    try {
+      const row = await fetchCrewScheduleFlicaForMonth(year, month);
+      setFlicaRow(row);
+    } catch {
+      setFlicaRow(null);
+    }
+  }, [year, month]);
+
+  useEffect(() => {
+    void loadFlicaRow();
+  }, [loadFlicaRow]);
+
   useFocusEffect(
     useCallback(() => {
       void loadScheduleViewMode().then(setViewMode);
       void refreshSilent();
-    }, [refreshSilent])
+      void loadFlicaRow();
+    }, [loadFlicaRow, refreshSilent])
   );
 
   const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
@@ -150,6 +171,22 @@ export default function ScheduleTabScreen() {
     }
   }, [monthKey, refresh]);
 
+  const flicaPairings = useMemo(
+    () => (Array.isArray(flicaRow?.pairings) ? (flicaRow.pairings as FlicaPairing[]) : []),
+    [flicaRow]
+  );
+
+  const flicaStats: FlicaMonthStats = useMemo(() => {
+    const raw = (flicaRow?.stats ?? {}) as Partial<FlicaMonthStats>;
+    return {
+      block: raw.block ?? '',
+      credit: raw.credit ?? '',
+      tafb: raw.tafb ?? '',
+      ytd: raw.ytd ?? '',
+      daysOff: typeof raw.daysOff === 'number' ? raw.daysOff : 0,
+    };
+  }, [flicaRow]);
+
   const onRemoveMonthFromSchedule = useCallback(() => {
     const title = `Delete imported schedule for ${monthLabel}?`;
     const message =
@@ -221,6 +258,13 @@ export default function ScheduleTabScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={T.accent} />}
       >
         <View style={styles.readingArea}>
+          {flicaPairings.length > 0 ? (
+            <FlicaCrewScheduleSection
+              stats={flicaStats}
+              pairings={flicaPairings}
+              importedAt={flicaRow?.imported_at}
+            />
+          ) : null}
           {viewMode === 'classic' && (
             <ClassicListView
               trips={trips}

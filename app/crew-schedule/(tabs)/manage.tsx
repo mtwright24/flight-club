@@ -157,6 +157,13 @@ export default function ManageTabScreen() {
         />
         <Hairline />
         <ActionRow
+          icon="airplane-outline"
+          title="JetBlue FLICA"
+          subtitle="Direct sync or upload from jetblue.flica.net"
+          onPress={() => router.push('/crew-schedule/import-jetblue-source')}
+        />
+        <Hairline />
+        <ActionRow
           icon="calendar-outline"
           title="Replace Month"
           subtitle="Overwrite a month with new data"

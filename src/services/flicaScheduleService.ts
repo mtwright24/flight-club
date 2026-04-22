@@ -111,8 +111,16 @@ export async function loadFlicaCookies(): Promise<string | null> {
     SecureStore.getItemAsync(KEY_AWSALB),
     SecureStore.getItemAsync(KEY_AWSALBCORS),
   ]);
-  if (!session || !service || !alb || !cors) return null;
-  return `FLiCASession=${session}; FLiCAService=${service}; AWSALB=${alb}; AWSALBCORS=${cors}`;
+  const hasSession = session != null && session.length > 0;
+  const hasService = service != null && service.length > 0;
+  if (!hasSession && !hasService) return null;
+
+  const parts: string[] = [];
+  if (hasSession) parts.push(`FLiCASession=${session}`);
+  if (hasService) parts.push(`FLiCAService=${service}`);
+  if (alb != null && alb.length > 0) parts.push(`AWSALB=${alb}`);
+  if (cors != null && cors.length > 0) parts.push(`AWSALBCORS=${cors}`);
+  return parts.join('; ');
 }
 
 export async function fetchFlicaScheduleAllMonths(

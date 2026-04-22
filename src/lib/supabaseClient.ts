@@ -1,8 +1,18 @@
 // src/lib/supabaseClient.ts
 import { createClient } from "@supabase/supabase-js";
+import type { LockFunc } from "@supabase/auth-js";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import "react-native-url-polyfill/auto";
+
+/**
+ * Web: default auth uses the Web Locks API with a "steal" recovery path; concurrent OAuth
+ * (e.g. Google/Apple) + token refresh can surface "Lock broken by another request with the 'steal' option."
+ * A simple in-process lock avoids `navigator.locks` (cross-tab sync is a tradeoff on web only).
+ * Native: keep Supabase's default (in-process / RN-appropriate) locking.
+ */
+const webInProcessLock: LockFunc = async <R,>(_name: string, _acquireTimeout: number, fn: () => Promise<R>) =>
+  await fn();
 
 // Read Expo public env vars
 let rawUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -102,5 +112,6 @@ export const supabase = createClient(SUPABASE_URL, supabaseAnonKey ?? "", {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
+    ...(Platform.OS === "web" ? { lock: webInProcessLock } : {}),
   },
 });

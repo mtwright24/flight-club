@@ -81,6 +81,41 @@ export type ScheduleImportCandidateRow = {
   raw_row_text: string | null;
 };
 
+/** JetBlue FLICA HTML import snapshot (`crew_schedule` table). */
+export type CrewScheduleFlicaRow = {
+  id: string;
+  month_key: string;
+  pairings: unknown;
+  stats: unknown;
+  raw_html: string | null;
+  imported_at: string;
+};
+
+export async function fetchCrewScheduleFlicaForMonth(
+  year: number,
+  month: number,
+  airline: string = 'jetblue'
+): Promise<CrewScheduleFlicaRow | null> {
+  const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData.user) return null;
+
+  const { data, error } = await supabase
+    .from('crew_schedule')
+    .select('id,month_key,pairings,stats,raw_html,imported_at')
+    .eq('user_id', userData.user.id)
+    .eq('airline', airline)
+    .eq('month_key', monthKey)
+    .maybeSingle();
+
+  if (error) {
+    const msg = error.message?.toLowerCase() ?? '';
+    if (msg.includes('does not exist') || msg.includes('schema cache')) return null;
+    throw error;
+  }
+  return (data ?? null) as CrewScheduleFlicaRow | null;
+}
+
 export async function fetchScheduleEntriesForMonth(
   year: number,
   month: number

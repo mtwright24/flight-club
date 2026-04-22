@@ -3,11 +3,9 @@
  * Charles / Mobile Safari style headers.
  * iOS: Set-Cookie is often not visible to fetch(); session cookies are merged from CookieManager (native store).
  */
-import CookieManager from '@react-native-community/cookies';
 import {
   type FlicaStoredCookies,
-  FLICA_COOKIE_MANAGER_GET_URLS,
-  flicaStoredCookiesFromNativeJar,
+  flicaSessionFromNativeCookieManagerMerged,
   loadFlicaCredentials,
   loadFlicaCookiesFromSecureStore,
   mergeFlicaStoredCookiesPreferRight,
@@ -297,10 +295,6 @@ async function runScheduledetailGo1MultiMonth(
       aprilUrl = finalUrl;
     }
   }
-
-  console.log('[APRIL HTML START]');
-  console.log(aprilHtml);
-  console.log('[APRIL HTML END]');
 
   return {
     ok: true,
@@ -621,22 +615,7 @@ export async function runFlicaFcvHttpImport(overrides?: { userId: string; passwo
   }
 
   const fromSetCookie = sessionCookiesFromSetCookieResponse(loginRes);
-  let fromNativeJar: FlicaStoredCookies = {};
-  try {
-    for (const base of FLICA_COOKIE_MANAGER_GET_URLS) {
-      try {
-        const jar = await CookieManager.get(base, true);
-        fromNativeJar = mergeFlicaStoredCookiesPreferRight(
-          fromNativeJar,
-          flicaStoredCookiesFromNativeJar(jar),
-        );
-      } catch {
-        /* per-origin read may fail */
-      }
-    }
-  } catch {
-    /* CookieManager may fail in rare cases; still use Set-Cookie / SecureStore if present */
-  }
+  const fromNativeJar = await flicaSessionFromNativeCookieManagerMerged();
   const stored = await loadFlicaCookiesFromSecureStore();
   let session: FlicaStoredCookies = mergeCookies(mergeCookies(stored, fromSetCookie), fromNativeJar);
   if (!session.FLiCASession && !session.FLiCAService) {

@@ -2,6 +2,7 @@
  * TEMP PoC — FLICA session cookies in SecureStore (no credentials).
  * Native path: values from @react-native-community/cookies CookieManager.get (includes HttpOnly).
  */
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 /** Shape returned by CookieManager.get (cookie name → { name, value, ... }). */
@@ -108,6 +109,28 @@ export function flicaStoredCookiesFromNativeJar(jar: NativeCookieJar): FlicaStor
     AWSALB: pick('AWSALB'),
     AWSALBCORS: pick('AWSALBCORS'),
   };
+}
+
+/**
+ * Read FLICA cookies from the native cookie jar. Returns `{}` on web.
+ * Uses require() so Metro does not load `@react-native-community/cookies` on web (it throws Invalid platform).
+ */
+export async function flicaSessionFromNativeCookieManagerMerged(): Promise<FlicaStoredCookies> {
+  if (Platform.OS === 'web') {
+    return {};
+  }
+  let merged: FlicaStoredCookies = {};
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const CookieManager = require('@react-native-community/cookies').default;
+  for (const base of FLICA_COOKIE_MANAGER_GET_URLS) {
+    try {
+      const jar = await CookieManager.get(base, true);
+      merged = mergeFlicaStoredCookiesPreferRight(merged, flicaStoredCookiesFromNativeJar(jar));
+    } catch {
+      /* per-origin read may fail */
+    }
+  }
+  return merged;
 }
 
 export async function saveFlicaCookiesToSecureStore(c: FlicaStoredCookies): Promise<void> {

@@ -30,6 +30,17 @@ export default function ImportJetBlueSourceScreen() {
           <Text style={styles.boxLine}>View: Detailed month list</Text>
           <Text style={styles.boxLine}>Source: Screenshot, PDF, or document scan</Text>
         </View>
+
+        <Pressable style={styles.optionCard} onPress={() => router.push('/crew-schedule/import-flica-direct')}>
+          <View style={styles.badgeRec}>
+            <Text style={styles.badgeRecText}>RECOMMENDED</Text>
+          </View>
+          <Text style={styles.optionTitle}>FLICA Direct Sync</Text>
+          <Text style={styles.optionSub}>
+            Automatically import directly from FLICA — faster and more accurate than screenshots
+          </Text>
+        </Pressable>
+
         <Pressable style={styles.btn} onPress={() => router.push('/crew-schedule/import-jetblue-upload')}>
           <Text style={styles.btnText}>Continue to upload</Text>
         </Pressable>
@@ -46,6 +57,25 @@ const styles = StyleSheet.create({
   content: { padding: 16 },
   h1: { fontSize: 20, fontWeight: '800', color: T.text, marginBottom: 10 },
   lead: { fontSize: 14, color: T.textSecondary, lineHeight: 21, marginBottom: 16 },
+  optionCard: {
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: T.accent,
+    backgroundColor: T.surface,
+    padding: 14,
+    marginBottom: 16,
+  },
+  badgeRec: {
+    alignSelf: 'flex-start',
+    backgroundColor: T.accent,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 8,
+  },
+  badgeRecText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+  optionTitle: { fontSize: 17, fontWeight: '800', color: T.text, marginBottom: 6 },
+  optionSub: { fontSize: 14, color: T.textSecondary, lineHeight: 21 },
   box: {
     borderRadius: 10,
     borderWidth: 1,
