@@ -1,7 +1,7 @@
 /**
- * FLICA Schedule HTML parser — **canonical** JetBlue `scheduledetail.cgi` import blueprint.
+ * FLICA Schedule HTML parser — canonical `scheduledetail.cgi` import blueprint.
  *
- * Parses jetblue.flica.net HTML into `FlicaPairing` / `FlicaLeg` / stats for direct HTTP import,
+ * Parses FLICA multi-airline `*.flica.net` HTML into `FlicaPairing` / `FlicaLeg` / stats for direct HTTP import,
  * `crew_schedule` snapshots, and structured handoffs from the OCR/screenshot path.
  * Fetch + token flow: see `FLICA_INTEGRATION_SPEC.md` (repo root). Do not duplicate parsing
  * rules elsewhere without updating this file first.

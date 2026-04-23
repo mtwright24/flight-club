@@ -143,32 +143,36 @@ function buildFlicaUiLoginInjectScript(username: string, password: string): stri
       try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (y) {}
       try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (z) {}
     }
-    var uidEl = pickUserEl();
-    var pwdEl = pickPassEl();
-    postJson({
-      type: 'flica_diag',
-      url: String((typeof location !== 'undefined' && location.href) || ''),
-      ready: (typeof document !== 'undefined' && document.readyState) || '',
-      hasUser: !!uidEl,
-      hasPass: !!pwdEl,
-    });
     if (window.__flicaUiLoginDidSubmit) { return; }
-    if (!uidEl || !pwdEl) {
-      postJson({ type: 'flica_no_login_form' });
-      return;
-    }
-    setInputVal(uidEl, ${u});
-    setInputVal(pwdEl, ${p});
     setTimeout(function(){
-      var btn = pickSubmitEl();
-      if (btn) {
-        try { btn.click(); } catch (e3) {}
-        window.__flicaUiLoginDidSubmit = true;
-        postJson({ type: 'flica_login_submitted' });
-      } else {
+      if (window.__flicaUiLoginDidSubmit) { return; }
+      var uidEl = pickUserEl();
+      var pwdEl = pickPassEl();
+      postJson({
+        type: 'flica_diag',
+        url: String((typeof location !== 'undefined' && location.href) || ''),
+        ready: (typeof document !== 'undefined' && document.readyState) || '',
+        hasUser: !!uidEl,
+        hasPass: !!pwdEl,
+      });
+      if (!uidEl || !pwdEl) {
         postJson({ type: 'flica_no_login_form' });
+        return;
       }
-    }, 500);
+      setInputVal(uidEl, ${u});
+      setInputVal(pwdEl, ${p});
+      setTimeout(function(){
+        if (window.__flicaUiLoginDidSubmit) { return; }
+        var btn = pickSubmitEl();
+        if (btn) {
+          try { btn.click(); } catch (e3) {}
+          window.__flicaUiLoginDidSubmit = true;
+          postJson({ type: 'flica_login_submitted' });
+        } else {
+          postJson({ type: 'flica_no_login_form' });
+        }
+      }, 500);
+    }, 2000);
   })(); true;`;
 }
 

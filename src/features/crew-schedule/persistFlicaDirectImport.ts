@@ -153,27 +153,30 @@ export async function persistFlicaDirectImport(
 
       const { data: pIns, error: pErr } = await supabase
         .from('schedule_pairings')
-        .insert({
-          user_id: uid,
-          import_id: batchId,
-          schedule_import_id: importId,
-          pairing_id: pairing.id,
-          pairing_start_date: pairing.startDate,
-          operate_start_date: pairing.startDate,
-          operate_end_date: pairing.endDate,
-          report_time_local: pairing.baseReport,
-          pairing_report_time: pairing.baseReport,
-          base_code: 'JFK',
-          equipment_code: pairing.equipment,
-          pairing_total_tafb: pTafbMin,
-          pairing_total_block: pBlock,
-          pairing_total_credit: pCredit,
-          pairing_confidence: 1.0,
-          needs_review: false,
-          pairing_requires_review: false,
-          raw_text: '',
-          normalized_json: { flica_direct: true, month: cfg.monthKey },
-        })
+        .upsert(
+          {
+            user_id: uid,
+            import_id: batchId,
+            schedule_import_id: importId,
+            pairing_id: pairing.id,
+            pairing_start_date: pairing.startDate,
+            operate_start_date: pairing.startDate,
+            operate_end_date: pairing.endDate,
+            report_time_local: pairing.baseReport,
+            pairing_report_time: pairing.baseReport,
+            base_code: 'JFK',
+            equipment_code: pairing.equipment,
+            pairing_total_tafb: pTafbMin,
+            pairing_total_block: pBlock,
+            pairing_total_credit: pCredit,
+            pairing_confidence: 1.0,
+            needs_review: false,
+            pairing_requires_review: false,
+            raw_text: '',
+            normalized_json: { flica_direct: true, month: cfg.monthKey },
+          },
+          { onConflict: 'user_id,import_id,pairing_id' }
+        )
         .select('id')
         .single();
       if (pErr || !pIns) throw pErr ?? new Error('pairing insert failed');

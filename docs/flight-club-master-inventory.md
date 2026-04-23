@@ -313,7 +313,7 @@ This is the **bottom-navigation** tools ecosystem (**official product / screen n
 ### Schedule / calendar / reminders
 
 - Crew schedule
-- Schedule sync / import
+- Schedule sync / import — **FLICA direct import (locked 13-step blueprint):** [flica-import-blueprint.md](flica-import-blueprint.md) (source of truth: WebView login → post-captcha finalization → cookies → WebView LoadSchedule → token1 from capture → HTTP scheduledetail → token2 → months → upsert)
 - Monthly calendar
 - Weekly agenda
 - Export calendar

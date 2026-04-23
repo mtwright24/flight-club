@@ -713,7 +713,9 @@ export default function ImportScheduleScreen() {
           <View style={styles.jetblueFlicaRow}>
             <View style={styles.jetblueFlicaTextCol}>
               <Text style={styles.jetblueFlicaTitle}>FLICA Sync</Text>
-              <Text style={styles.jetblueFlicaSub}>Direct browser sync from your airline FLICA</Text>
+              <Text style={styles.jetblueFlicaSub}>
+                Direct browser sync from your airline&apos;s FLICA
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={T.accent} style={styles.jetblueFlicaChevron} />
           </View>

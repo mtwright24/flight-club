@@ -1,0 +1,16 @@
+---
+description: FLICA direct-import architecture and UX — non-negotiable product constraints
+globs: "**/*flica*"
+alwaysApply: false
+---
+
+# FLICA integration (hard requirements)
+
+- **Locked blueprint (read first on any change):** `docs/flica-import-blueprint.md` — 13-step confirmed working flow, hard rules, success signals, and debugging order. Do not drift from it casually.
+- **Source of truth for behavior**: the Settings FLICA test flow (`flica-test` / `import-flica-direct`): WebView → login (manual) → **post-captcha finalization (not on first `mainmenu?nocache` alone)** → post-login handoff → native cookie read (flush, then current URL + base host) → **WebView `MAINMENU_LOADSCHEDULE` (never replace with HTTP fetch)** → deep capture for token1 → HTTP `scheduledetail.cgi` (same cookies) → `flicaScheduleHtmlParser` → `persistFlicaDirectImport` → Schedule tab. Do not add review screens, PDF/screenshot/scan steps, or alternate “month & source” pickers inside the FLICA path.
+- **No airline host hardcoding in product UI**: use `loadFlicaAirlineSubdomain` + `buildFlicaUrls` / `flicaBaseOrigin` for `[airline].flica.net`. A dev default may exist only for legacy `FLICA_URLS` in `flicaScheduleService`—do not add new `jetblue` URLs in new code.
+- **WebView**: never place an opaque full-screen layer over the WebView during sign-in or CAPTCHA; use progress overlay only *after* session handoff when downloading/saving. Cookie capture: `flush` then read cookies for the **loaded** URL and for `https://<host>/`; do not require a specific cookie name; only show “no cookies” after **>3** load finishes, URL no longer on login, and cookie string still empty.
+- **Persistence**: `persistFlicaDirectImport` writes the app’s existing `schedule_pairings` / `schedule_pairing_legs` + calendar apply. Do not introduce new DB tables in app code; schema changes belong in `supabase/migrations/` and must match RLS.
+- **Copy**: use “FLICA” / “your airline’s FLICA portal”, not a single-carrier name in import/manage strings.
+
+When changing anything under this glob, re-check `import-flica-direct.tsx`, `flicaScheduleService.ts`, `flicaPoCScheduleHttp.ts`, `flicaPoCCookieStore.ts`, and `persistFlicaDirectImport.ts` for consistency with the above.

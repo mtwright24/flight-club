@@ -18,20 +18,16 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Stack, useRouter, type Href } from 'expo-router';
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
+import CookieManager from '@react-native-community/cookies';
 import { Ionicons } from '@expo/vector-icons';
 
-import {
-  type FlicaStoredCookies,
-  flicaAfterFlushGetCookieStringsForPageUrl,
-  flicaSessionFromNativeCookieManagerMerged,
-  flicaStoredCookiesFromNativeJar,
-  mergeFlicaStoredCookiesPreferRight,
-  saveFlicaLastMainmenuUrl,
-} from '../../src/dev/flicaPoCCookieStore';
+import { saveFlicaLastMainmenuUrl } from '../../src/dev/flicaPoCCookieStore';
 import {
   buildFlicaUrls,
   extractToken1FromHtml,
+  fetchFlicaScheduleAllMonths,
   FLICA_CONSTANTS,
+  FLICA_URLS,
   loadFlicaAirlineSubdomain,
   loadFlicaCookies,
   loadFlicaCredentials,
@@ -39,52 +35,144 @@ import {
   saveFlicaCookies,
   saveFlicaCredentials,
 } from '../../src/services/flicaScheduleService';
-import {
-  extractScheduleTokenFromMainmenuHtml,
-  runFlicaFcvHttpScheduledetailOnly,
-} from '../../src/dev/flicaPoCScheduleHttp';
+import { parseFlicaScheduledetailHtml } from '../../src/services/flicaScheduleHtmlParser';
 import { FLICA_POC_INJECT_BEFORE_CONTENT } from '../../src/dev/flicaPoCWebFontShim';
 import { supabase } from '../../src/lib/supabaseClient';
 import { persistFlicaDirectImport } from '../../src/features/crew-schedule/persistFlicaDirectImport';
 import { scheduleTheme as T } from '../../src/features/crew-schedule/scheduleTheme';
 import CrewScheduleHeader from '../../src/features/crew-schedule/components/CrewScheduleHeader';
 
-function flicaPathLooksSignedIn(url: string): boolean {
-  const low = (url ?? '').toLowerCase();
-  if (!low.includes('flica.net')) return false;
-  if (low.includes('login')) return false;
-  return (
-    low.includes('home') ||
-    low.includes('schedules') ||
-    low.includes('/full/') ||
-    low.includes('mainmenu') ||
-    low.includes('leftmenu') ||
-    low.includes('scheduledetail') ||
-    /flica\.net\/ui\/#/.test(low)
-  );
-}
-
 function flicaMonthHtmlLooksValid(html: string): boolean {
   const t = (html ?? '').toUpperCase();
   return t.includes('FLTNO') || t.includes('DPS-ARS') || t.includes('SCHEDULEDETAIL');
 }
 
-const INJECT_POST_LOADSCHEDULE_HTML = `(function(){
-  var p = {
-    type: 'loadschedule_html',
-    html: document.documentElement.outerHTML,
-    url: (window.location && window.location.href) || ''
-  };
-  if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-    window.ReactNativeWebView.postMessage(JSON.stringify(p));
+function flicaTextHasTokenHint(s: string | undefined | null): boolean {
+  if (s == null || !s.trim().length) return false;
+  if (/scheduledetail\.cgi/i.test(s)) return true;
+  if (s.includes('token=')) return true;
+  if (/GO=1&token=/i.test(s)) return true;
+  if (/BlockDate=/i.test(s)) return true;
+  return false;
+}
+
+type FlicaLoadscheduleDeepCapture = {
+  type: 'loadschedule_deep_capture';
+  url: string;
+  title: string;
+  topOuterHtml: string;
+  topBodyHtml: string;
+  frameHtmlList: string[];
+  iframeHtmlList: string[];
+  frameSrcs: string[];
+  iframeSrcs: string[];
+  scriptSnippets: string[];
+};
+
+function pickFirstFlicaTokenText(cap: FlicaLoadscheduleDeepCapture): { text: string; label: string } | null {
+  const pairs: { text: string; label: string }[] = [
+    { text: cap.topOuterHtml ?? '', label: 'topOuterHtml' },
+    { text: cap.topBodyHtml ?? '', label: 'topBodyHtml' },
+  ];
+  (cap.frameHtmlList ?? []).forEach((h, i) => pairs.push({ text: h ?? '', label: `frame[${i}]` }));
+  (cap.iframeHtmlList ?? []).forEach((h, i) => pairs.push({ text: h ?? '', label: `iframe[${i}]` }));
+  (cap.scriptSnippets ?? []).forEach((h, i) => pairs.push({ text: h ?? '', label: `script[${i}]` }));
+  for (const { text, label } of pairs) {
+    if (flicaTextHasTokenHint(text)) return { text, label };
   }
+  return null;
+}
+
+/** Step 3: one delay, then same-origin deep capture → `loadschedule_deep_capture`. */
+const FLICA_LOADSCHEDULE_POST_MS = 600;
+function buildInjectLoadScheduleDeepCaptureScript(): string {
+  return `(function(){
+  setTimeout(function(){
+    try {
+      var p = {
+        type: 'loadschedule_deep_capture',
+        url: (window.location && window.location.href) || '',
+        title: (document && document.title) || '',
+        topOuterHtml: document.documentElement ? document.documentElement.outerHTML : '',
+        topBodyHtml: document.body ? document.body.innerHTML : '',
+        frameSrcs: [],
+        iframeSrcs: [],
+        frameHtmlList: [],
+        iframeHtmlList: [],
+        scriptSnippets: []
+      };
+      var i, el, fdoc, src, w;
+      if (typeof window.length === 'number') {
+        for (i = 0; i < window.length; i++) {
+          try {
+            w = window.frames[i];
+            src = w && w.location && w.location.href ? String(w.location.href) : '';
+            p.frameSrcs.push(src);
+            if (w && w.document && w.document.documentElement) {
+              p.frameHtmlList.push(String(w.document.documentElement.outerHTML));
+            } else { p.frameHtmlList.push(''); }
+          } catch (e) {
+            p.frameSrcs.push('(inaccessible window.frames[' + i + '])');
+            p.frameHtmlList.push('');
+          }
+        }
+      }
+      var n = document.getElementsByTagName('frame');
+      for (i = 0; i < n.length; i++) {
+        el = n[i];
+        src = el.src || el.getAttribute('src') || '';
+        p.frameSrcs.push('htmlframe:' + String(src));
+        try {
+          fdoc = el.contentDocument;
+          if (fdoc && fdoc.documentElement) p.frameHtmlList.push(String(fdoc.documentElement.outerHTML));
+          else p.frameHtmlList.push('');
+        } catch (e) { p.frameHtmlList.push(''); }
+      }
+      n = document.querySelectorAll('iframe');
+      for (i = 0; i < n.length; i++) {
+        el = n[i];
+        src = el.src || el.getAttribute('src') || '';
+        p.iframeSrcs.push(String(src));
+        try {
+          fdoc = el.contentDocument;
+          if (fdoc && fdoc.documentElement) {
+            p.iframeHtmlList.push(String(fdoc.documentElement.outerHTML));
+          } else {
+            w = el.contentWindow;
+            if (w && w.document && w.document.documentElement) {
+              p.iframeHtmlList.push(String(w.document.documentElement.outerHTML));
+            } else { p.iframeHtmlList.push(''); }
+          }
+        } catch (e) { p.iframeHtmlList.push(''); }
+      }
+      var sc = document.getElementsByTagName('script');
+      for (i = 0; i < sc.length; i++) {
+        var tx = (sc[i] && (sc[i].textContent || sc[i].innerText || sc[i].innerHTML)) || '';
+        if (tx && /scheduledetail|token=|GO=1|BlockDate/i.test(tx)) p.scriptSnippets.push(String(tx));
+      }
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(p));
+      }
+    } catch (e) {}
+  }, ${FLICA_LOADSCHEDULE_POST_MS});
 })(); true;`;
+}
+
+const INJECT_POST_LOADSCHEDULE_HTML = buildInjectLoadScheduleDeepCaptureScript();
 
 const INJECT_FLICA_BRIDGE_PING = `(function(){
   try {
     var u = (typeof location !== 'undefined' && location.href) ? String(location.href) : '';
+    var rec = 0;
+    try {
+      var ifr = document.querySelectorAll('iframe');
+      for (var j = 0; j < ifr.length; j++) {
+        var s = (ifr[j].src || (ifr[j].getAttribute && ifr[j].getAttribute('src')) || '').toLowerCase();
+        if (s.indexOf('recaptcha') >= 0) rec += 1;
+      }
+    } catch (e2) {}
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'flica_bridge_ping', url: u }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'flica_bridge_ping', url: u, recaptchaFrameCount: rec }));
     }
   } catch (e) {}
 })(); true;`;
@@ -139,72 +227,43 @@ function buildFlicaUiLoginInjectScript(username: string, password: string): stri
       try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (y) {}
       try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (z) {}
     }
-    var uidEl = pickUserEl();
-    var pwdEl = pickPassEl();
-    postJson({
-      type: 'flica_diag',
-      url: String((typeof location !== 'undefined' && location.href) || ''),
-      ready: (typeof document !== 'undefined' && document.readyState) || '',
-      hasUser: !!uidEl,
-      hasPass: !!pwdEl,
-    });
     if (window.__flicaUiLoginDidSubmit) { return; }
-    if (!uidEl || !pwdEl) {
-      postJson({ type: 'flica_no_login_form' });
-      return;
-    }
-    setInputVal(uidEl, ${u});
-    setInputVal(pwdEl, ${p});
     setTimeout(function(){
-      var btn = pickSubmitEl();
-      if (btn) {
-        try { btn.click(); } catch (e3) {}
-        window.__flicaUiLoginDidSubmit = true;
-        postJson({ type: 'flica_login_submitted' });
-      } else {
+      if (window.__flicaUiLoginDidSubmit) { return; }
+      var uidEl = pickUserEl();
+      var pwdEl = pickPassEl();
+      postJson({
+        type: 'flica_diag',
+        url: String((typeof location !== 'undefined' && location.href) || ''),
+        ready: (typeof document !== 'undefined' && document.readyState) || '',
+        hasUser: !!uidEl,
+        hasPass: !!pwdEl,
+      });
+      if (!uidEl || !pwdEl) {
         postJson({ type: 'flica_no_login_form' });
+        return;
       }
-    }, 500);
+      setInputVal(uidEl, ${u});
+      setInputVal(pwdEl, ${p});
+      setTimeout(function(){
+        if (window.__flicaUiLoginDidSubmit) { return; }
+        var btn = pickSubmitEl();
+        if (btn) {
+          try { btn.click(); } catch (e3) {}
+          window.__flicaUiLoginDidSubmit = true;
+          postJson({ type: 'flica_login_submitted' });
+        } else {
+          postJson({ type: 'flica_no_login_form' });
+        }
+      }, 500);
+    }, 2000);
   })(); true;`;
 }
 
-const mergeSession = mergeFlicaStoredCookiesPreferRight;
-
-function parseFlicaCookieHeader(header: string): FlicaStoredCookies {
-  const out: FlicaStoredCookies = {};
-  for (const segment of header.split(';')) {
-    const part = segment.trim();
-    if (!part) continue;
-    const eq = part.indexOf('=');
-    if (eq < 0) continue;
-    const name = part.slice(0, eq).trim();
-    const value = part.slice(eq + 1).trim();
-    if (name === 'FLiCASession') out.FLiCASession = value;
-    else if (name === 'FLiCAService') out.FLiCAService = value;
-    else if (name === 'AWSALB') out.AWSALB = value;
-    else if (name === 'AWSALBCORS') out.AWSALBCORS = value;
-  }
-  return out;
-}
-
-async function mergedFlicaSessionForHttp(): Promise<FlicaStoredCookies> {
-  const h = await loadFlicaCookies();
-  let session: FlicaStoredCookies = h ? parseFlicaCookieHeader(h) : {};
-  const jar = await flicaSessionFromNativeCookieManagerMerged();
-  session = mergeSession(session, jar);
-  return session;
-}
-
-function extractTokenFromWebViewHtml(html: string): string | null {
-  const t1 = extractToken1FromHtml(html);
-  if (t1) return t1;
-  return extractScheduleTokenFromMainmenuHtml(html);
-}
-
-type FlowNav = { loadScheduleInjected: boolean; htmlAttempt: number };
+type FlowNav = { loadScheduleInjected: boolean };
 
 function resetFlowNav(refs: { current: FlowNav }): void {
-  refs.current = { loadScheduleInjected: false, htmlAttempt: 0 };
+  refs.current = { loadScheduleInjected: false };
 }
 
 function isMainmenuAwaitingCaptcha(url: string): boolean {
@@ -219,10 +278,11 @@ export default function ImportFlicaDirectScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const webViewRef = useRef<InstanceType<typeof WebView> | null>(null);
-  const flowNavRef = useRef<FlowNav>({ loadScheduleInjected: false, htmlAttempt: 0 });
+  const flowNavRef = useRef<FlowNav>({ loadScheduleInjected: false });
   const completingRef = useRef(false);
-  const postCaptchaFiredRef = useRef(false);
-  const fcvPhaseRef = useRef<'idle' | 'await_loadschedule_page' | 'await_token'>('idle');
+  /** Prevents double-firing the same mainmenu handoff (onLoadEnd + onNavigation) within one "Sync schedule" session. */
+  const mainmenuHandoffStartedThisSyncRef = useRef(false);
+  const mainmenuHandoffInFlightRef = useRef(false);
   const scheduleExtractTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webLoadPassRef = useRef(0);
   const lastNavUrlRef = useRef('');
@@ -230,6 +290,10 @@ export default function ImportFlicaDirectScreen() {
   const pageFinishDedupeKeyRef = useRef('');
   const pageFinishDedupeAtRef = useRef(0);
   const capturedCookieHeaderRef = useRef<string | null>(null);
+  /** Set after Charles-order post-captcha signals (GOHM=1, leftmenu crew, or reCAPTCHA cleared on main menu). */
+  const postCaptchaFinalizedRef = useRef(false);
+  /** Avoid DOM-only finalize before a reCAPTCHA iframe has been observed on this session’s main menu. */
+  const sawFlicaRecaptchaIframeOnMainmenuRef = useRef(false);
 
   const [credsLoading, setCredsLoading] = useState(true);
   const [storedAirlineSub, setStoredAirlineSub] = useState<string | null>(null);
@@ -256,8 +320,11 @@ export default function ImportFlicaDirectScreen() {
     [storedAirlineSub],
   );
 
+  /** WebView must load this URL (not HTTP fetch) — same path as `FLICA_URLS.MAINMENU_LOADSCHEDULE` for the saved airline. */
   const injectNavToLoadSchedule = useMemo(() => {
-    if (!flicaUrls) return '';
+    if (!flicaUrls) {
+      return `(function(){ window.location.href = ${JSON.stringify(FLICA_URLS.MAINMENU_LOADSCHEDULE)}; })(); true;`;
+    }
     return `(function(){ window.location.href = ${JSON.stringify(flicaUrls.MAINMENU_LOADSCHEDULE)}; })(); true;`;
   }, [flicaUrls]);
 
@@ -268,20 +335,6 @@ export default function ImportFlicaDirectScreen() {
   useEffect(() => {
     LogBox.ignoreLogs([/\d+\s*ms\s*timeout\s*exceeded/i]);
   }, []);
-
-  useEffect(() => {
-    if (!syncActive) return;
-    const id = setInterval(() => {
-      if (completingRef.current) return;
-      void (async () => {
-        const creds = await loadFlicaCredentials();
-        if (!creds) return;
-        const script = buildFlicaUiLoginInjectScript(creds.username.trim(), creds.password);
-        webViewRef.current?.injectJavaScript(script);
-      })();
-    }, 1500);
-    return () => clearInterval(id);
-  }, [syncActive, webViewKey]);
 
   const loadCreds = useCallback(async () => {
     setCredsLoading(true);
@@ -323,6 +376,25 @@ export default function ImportFlicaDirectScreen() {
     void loadCreds();
   }, [loadCreds]);
 
+  const markPostCaptchaFinalizedFromUrl = useCallback((rawUrl: string) => {
+    if (postCaptchaFinalizedRef.current) return;
+    const u = (rawUrl ?? '').toLowerCase();
+    if (u.includes('gohm=1')) {
+      postCaptchaFinalizedRef.current = true;
+      console.log('[FLICA] post-captcha candidate url', rawUrl);
+      console.log('[FLICA] GOHM detected', rawUrl);
+      console.log('[FLICA] handoff allowed');
+      return;
+    }
+    if (u.includes('leftmenu.cgi') && u.includes('whosepage=crewmember')) {
+      postCaptchaFinalizedRef.current = true;
+      console.log('[FLICA] post-captcha candidate url', rawUrl);
+      console.log('[FLICA] leftmenu detected', rawUrl);
+      console.log('[FLICA] handoff allowed');
+      return;
+    }
+  }, []);
+
   const stopSync = useCallback(() => {
     if (scheduleExtractTimerRef.current) {
       clearTimeout(scheduleExtractTimerRef.current);
@@ -336,11 +408,14 @@ export default function ImportFlicaDirectScreen() {
     setStatusLine('idle');
     setOverlayMessage('');
     completingRef.current = false;
-    postCaptchaFiredRef.current = false;
-    fcvPhaseRef.current = 'idle';
+    mainmenuHandoffInFlightRef.current = false;
     pageLoadCountRef.current = 0;
     pageFinishDedupeKeyRef.current = '';
+    pageFinishDedupeAtRef.current = 0;
     capturedCookieHeaderRef.current = null;
+    mainmenuHandoffStartedThisSyncRef.current = false;
+    postCaptchaFinalizedRef.current = false;
+    sawFlicaRecaptchaIframeOnMainmenuRef.current = false;
     resetFlowNav(flowNavRef);
   }, []);
 
@@ -376,130 +451,156 @@ export default function ImportFlicaDirectScreen() {
     }
   }, [editPass, editUser]);
 
-  const schedulePostLoadscheduleHtml = useCallback(() => {
-    if (completingRef.current) return;
-    if (scheduleExtractTimerRef.current) clearTimeout(scheduleExtractTimerRef.current);
-    flowNavRef.current.htmlAttempt = 0;
-    scheduleExtractTimerRef.current = setTimeout(() => {
-      scheduleExtractTimerRef.current = null;
-      if (completingRef.current) return;
-      webViewRef.current?.injectJavaScript(INJECT_POST_LOADSCHEDULE_HTML);
-    }, 2000);
-  }, []);
-
-  const runPostCaptchaCookieCaptureAndNavigate = useCallback(
+  const beginMainmenuHandoff = useCallback(
     async (pageUrl: string) => {
-      if (postCaptchaFiredRef.current || !flicaUrls || !injectNavToLoadSchedule) return;
-      postCaptchaFiredRef.current = true;
-      setPostCaptchaFired(true);
-      setHideWebForSync(true);
-      setCaptchaWebVisible(false);
-      setOverlayMessage('Downloading schedule…');
-      setStatusLine('Downloading schedule…');
-      if (pageUrl) {
-        try {
-          await saveFlicaLastMainmenuUrl(pageUrl);
-        } catch {
-          /* non-fatal */
-        }
+      if (completingRef.current || !flicaUrls) return;
+      if (mainmenuHandoffInFlightRef.current) return;
+      if (flowNavRef.current.loadScheduleInjected) return;
+      const low = pageUrl.toLowerCase();
+      if (!low.includes('mainmenu.cgi') || low.includes('loadschedule=true')) return;
+      if (Platform.OS === 'web') return;
+      if (mainmenuHandoffStartedThisSyncRef.current) return;
+      if (!postCaptchaFinalizedRef.current) {
+        console.log('[FLICA] handoff blocked: post-captcha not finalized', pageUrl);
+        return;
       }
+
+      mainmenuHandoffStartedThisSyncRef.current = true;
+      console.log('[FLICA] mainmenu detected', pageUrl);
+      mainmenuHandoffInFlightRef.current = true;
       try {
-        await new Promise((r) => setTimeout(r, 400));
-        const effectiveUrl = pageUrl || lastNavUrlRef.current;
-        let header = '';
-        if (Platform.OS !== 'web' && effectiveUrl.startsWith('http')) {
-          const pair = await flicaAfterFlushGetCookieStringsForPageUrl(effectiveUrl);
-          header = pair.forPage || pair.forBase;
-          capturedCookieHeaderRef.current = header.length > 0 ? header : null;
-          await saveFlicaCookies(flicaStoredCookiesFromNativeJar(pair.jarMerged));
-        }
-        if (!header?.trim()) {
-          const extra = [flicaUrls.ORIGIN + '/', flicaUrls.MAINMENU];
-          const session = await flicaSessionFromNativeCookieManagerMerged({ extraGetBases: extra });
-          await saveFlicaCookies(session);
-          const h = await loadFlicaCookies();
-          if (h?.trim()) {
-            header = h;
-            capturedCookieHeaderRef.current = h;
+        try {
+          if (pageUrl) {
+            try {
+              await saveFlicaLastMainmenuUrl(pageUrl);
+            } catch {
+              /* non-fatal */
+            }
           }
+          {
+            const cm = CookieManager as unknown as { flush?: () => Promise<void> };
+            if (typeof cm.flush === 'function') {
+              await cm.flush();
+            }
+          }
+          await new Promise((r) => setTimeout(r, 400));
+          const baseOrigin = flicaUrls.ORIGIN;
+          const mainmenuPath = `${flicaUrls.ORIGIN}/online/mainmenu.cgi`;
+          const cookies = await CookieManager.get(baseOrigin);
+          console.log('[FLICA] CookieManager.get result', JSON.stringify(cookies));
+          const cookieParts = Object.entries(cookies ?? {})
+            .map(([name, c]) => `${name}=${(c as { value: string }).value}`)
+            .join('; ');
+          console.log('[FLICA] cookie string', cookieParts);
+          const cookies2 = await CookieManager.get(mainmenuPath);
+          console.log('[FLICA] CookieManager mainmenu', JSON.stringify(cookies2));
+          const pickFlica = (jar: Record<string, { value?: string } | undefined> | null | undefined) => {
+            const o: { FLiCASession?: string; FLiCAService?: string; AWSALB?: string; AWSALBCORS?: string } = {};
+            if (!jar) return o;
+            for (const k of ['FLiCASession', 'FLiCAService', 'AWSALB', 'AWSALBCORS'] as const) {
+              const row = jar[k];
+              if (row && typeof row === 'object' && 'value' in row && String((row as { value: string }).value).length) {
+                o[k] = (row as { value: string }).value;
+              }
+            }
+            return o;
+          };
+          const jar1 = (cookies ?? {}) as Record<string, { value?: string }>;
+          const jar2 = (cookies2 ?? {}) as Record<string, { value?: string }>;
+          await saveFlicaCookies({ ...pickFlica(jar1), ...pickFlica(jar2) });
+          const hAfterSave = await loadFlicaCookies();
+          console.log('[FLICA] loadFlicaCookies result', hAfterSave);
+          let cookieHeader = cookieParts;
+          if (!cookieHeader?.trim() && hAfterSave?.trim()) {
+            cookieHeader = hAfterSave;
+          }
+          capturedCookieHeaderRef.current = cookieHeader.length > 0 ? cookieHeader : null;
+          if (!cookieHeader?.trim()) {
+            mainmenuHandoffStartedThisSyncRef.current = false;
+            if (pageLoadCountRef.current > 4) {
+              setLastError('No FLICA cookies after sign-in. Try again.');
+              stopSync();
+            }
+            return;
+          }
+          console.log('[FLICA] cookies captured', cookieHeader);
+          flowNavRef.current.loadScheduleInjected = true;
+          setHttpImporting(true);
+          setLastError(null);
+          setOverlayMessage('Loading schedule page…');
+          setStatusLine('Loading schedule page…');
+          const targetLoadScheduleUrl = flicaUrls.MAINMENU_LOADSCHEDULE;
+          console.log('[FLICA] injecting loadschedule url', targetLoadScheduleUrl);
+          if (injectNavToLoadSchedule.trim().length) {
+            webViewRef.current?.injectJavaScript(injectNavToLoadSchedule);
+          }
+        } catch (e) {
+          console.log('[FLICA] beginMainmenuHandoff ERROR', e);
+          throw e;
         }
-        if (!header?.trim()) {
-          setLastError('No FLICA cookies after sign-in. Try again.');
-          stopSync();
-          return;
-        }
-        fcvPhaseRef.current = 'await_loadschedule_page';
-        flowNavRef.current.loadScheduleInjected = true;
-        webViewRef.current?.injectJavaScript(injectNavToLoadSchedule);
       } catch (e) {
         setLastError(e instanceof Error ? e.message : String(e));
+        flowNavRef.current.loadScheduleInjected = false;
         stopSync();
+      } finally {
+        mainmenuHandoffInFlightRef.current = false;
       }
     },
     [flicaUrls, injectNavToLoadSchedule, stopSync],
   );
 
-  const runHttpImport = useCallback(
-    async (token: string, mainmenuPageUrl: string) => {
+  const runServiceScheduleImport = useCallback(
+    async (loadSchedulePageHtml: string) => {
       if (completingRef.current || !flicaUrls) return;
       completingRef.current = true;
       setHttpImporting(true);
-      setPostCaptchaFired(true);
-      setOverlayMessage('Syncing schedule…');
       setLastError(null);
+      setOverlayMessage('Downloading schedule…');
+      setStatusLine('Downloading schedule…');
       try {
-        const session = await mergedFlicaSessionForHttp();
-        const cookieOverride = capturedCookieHeaderRef.current?.trim();
-        if (!cookieOverride && !session.FLiCASession && !session.FLiCAService) {
-          setLastError('Missing FLICA session for HTTP import.');
-          return;
-        }
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user?.id) {
-          setLastError('Sign in to Flight Club to save your schedule.');
+        const token1 = extractToken1FromHtml(loadSchedulePageHtml);
+        console.log('[FLICA] token1', token1);
+        if (!token1) {
+          setLastError('FLICA did not return schedule data from the WebView. Please try “Sync schedule” again.');
           stopSync();
           return;
         }
-        const result = await runFlicaFcvHttpScheduledetailOnly(session, token, {
-          refererUrl: flicaUrls.HOME,
-          flicaBaseOrigin: flicaUrls.ORIGIN,
-          cookieHeaderOverride: cookieOverride || undefined,
-          onProgress: (msg) => {
-            const raw = (msg ?? '').replace(/^Downloading /, 'Syncing ');
-            const t = raw.endsWith('...') ? raw : raw.replace(/\.$/, '...');
-            setOverlayMessage(t);
-            setStatusLine(t);
-          },
-        });
-        if (!result.ok) {
-          setLastError(result.error);
+        const cookieHeader = (capturedCookieHeaderRef.current?.trim() || (await loadFlicaCookies())?.trim()) ?? '';
+        if (!cookieHeader) {
+          setLastError('No FLICA cookies for schedule download. Try again.');
           stopSync();
           return;
         }
-        const m = result.multiMonthSchedule?.find((x) => x.blockDate === '0326')?.html ?? '';
-        const a = result.multiMonthSchedule?.find((x) => x.blockDate === '0426')?.html ?? '';
-        const y = result.multiMonthSchedule?.find((x) => x.blockDate === '0526')?.html ?? '';
-        if (!m || !a || !y) {
-          setLastError('FLICA returned incomplete months (expected March, April, May).');
-          stopSync();
-          return;
-        }
-        if (!flicaMonthHtmlLooksValid(m) || !flicaMonthHtmlLooksValid(a) || !flicaMonthHtmlLooksValid(y)) {
+        const { march, april, may } = await fetchFlicaScheduleAllMonths(cookieHeader, token1);
+        console.log('[FLICA] march html length', march?.length);
+        console.log('[FLICA] april html length', april?.length);
+        console.log('[FLICA] may html length', may?.length);
+        parseFlicaScheduledetailHtml(march, '2026-03');
+        parseFlicaScheduledetailHtml(april, '2026-04');
+        parseFlicaScheduledetailHtml(may, '2026-05');
+        if (!flicaMonthHtmlLooksValid(march) || !flicaMonthHtmlLooksValid(april) || !flicaMonthHtmlLooksValid(may)) {
           setLastError('FLICA schedule response did not look like a valid schedule page.');
           stopSync();
           return;
         }
+        const { data: u } = await supabase.auth.getUser();
+        if (!u.user?.id) {
+          setLastError('Sign in to Flight Club to save your schedule.');
+          stopSync();
+          return;
+        }
         setOverlayMessage('Saving schedule…');
-        await persistFlicaDirectImport(m, a, y);
+        await persistFlicaDirectImport(march, april, may);
+        setPostCaptchaFired(true);
+        setHideWebForSync(true);
+        setCaptchaWebVisible(false);
         if (Platform.OS === 'android') {
           ToastAndroid.show('Schedule synced ✓', ToastAndroid.LONG);
         } else {
           Alert.alert('', 'Schedule synced ✓');
         }
-        stopSync();
         router.replace('/crew-schedule/(tabs)' as Href);
+        stopSync();
       } catch (e) {
         setLastError(e instanceof Error ? e.message : String(e));
         stopSync();
@@ -507,23 +608,47 @@ export default function ImportFlicaDirectScreen() {
         setHttpImporting(false);
         completingRef.current = false;
         resetFlowNav(flowNavRef);
-        fcvPhaseRef.current = 'idle';
       }
     },
-    [flicaUrls, router, stopSync]
+    [flicaUrls, router, stopSync],
   );
 
   const onMessage = useCallback(
     (event: WebViewMessageEvent) => {
       if (completingRef.current) return;
+      const raw = event.nativeEvent.data ?? '';
+      const payloadLen = raw.length;
+      const payloadPreview = raw.slice(0, 300);
       let data: { type?: string; html?: string; url?: string };
       try {
-        data = JSON.parse(event.nativeEvent.data) as { type?: string; html?: string; url?: string };
+        data = JSON.parse(raw) as { type?: string; html?: string; url?: string };
       } catch {
+        console.log('[FLICA] onMessage parse error', { payloadLen, payloadPreview });
         return;
       }
+      console.log('[FLICA] onMessage', { type: data.type, payloadLen, payloadPreview });
       if (data.type === 'flica_bridge_ping') {
-        const u = (data as { url?: string }).url ?? '';
+        const u = (data as { url?: string; recaptchaFrameCount?: number }).url ?? '';
+        const rec = (data as { recaptchaFrameCount?: number }).recaptchaFrameCount;
+        if (u) {
+          markPostCaptchaFinalizedFromUrl(u);
+        }
+        if (u && isMainmenuAwaitingCaptcha(u) && typeof rec === 'number') {
+          if (rec > 0) {
+            sawFlicaRecaptchaIframeOnMainmenuRef.current = true;
+          } else if (sawFlicaRecaptchaIframeOnMainmenuRef.current) {
+            if (!postCaptchaFinalizedRef.current) {
+              postCaptchaFinalizedRef.current = true;
+              console.log('[FLICA] post-captcha candidate url', u);
+              console.log(
+                '[FLICA] reCAPTCHA iframe no longer present on mainmenu (after challenge was shown)',
+                u,
+                { rec },
+              );
+              console.log('[FLICA] handoff allowed');
+            }
+          }
+        }
         if (u && isMainmenuAwaitingCaptcha(u)) {
           setCaptchaWebVisible(true);
           setOverlayMessage('Sign in to FLICA');
@@ -537,26 +662,36 @@ export default function ImportFlicaDirectScreen() {
       if (data.type === 'flica_diag' || data.type === 'flica_no_login_form') {
         return;
       }
-      if (data.type !== 'loadschedule_html' || data.html == null) return;
-      const token = extractToken1FromHtml(data.html);
-      const pageUrl = (data.url ?? '').trim();
-      if (token) {
-        void runHttpImport(token, pageUrl);
+      if (data.type !== 'loadschedule_deep_capture') {
         return;
       }
-      const n = flowNavRef.current.htmlAttempt;
-      if (n < 1) {
-        flowNavRef.current.htmlAttempt = n + 1;
-        setTimeout(() => {
-          if (completingRef.current) return;
-          webViewRef.current?.injectJavaScript(INJECT_POST_LOADSCHEDULE_HTML);
-        }, 2000);
+      if (!flowNavRef.current.loadScheduleInjected) {
+        console.log('[FLICA] loadschedule_deep_capture ignored (loadScheduleInjected false)');
         return;
       }
-      setLastError('Could not find a schedule token on the Load Schedule page. Try again.');
-      stopSync();
+      const cap = data as FlicaLoadscheduleDeepCapture;
+      console.log('[FLICA] loadschedule deep capture received', {
+        url: cap.url,
+        title: cap.title,
+        topOuterLen: cap.topOuterHtml?.length ?? 0,
+        topBodyLen: cap.topBodyHtml?.length ?? 0,
+        frameSrcs: cap.frameSrcs,
+        iframeSrcs: cap.iframeSrcs,
+        frameHtmlCount: cap.frameHtmlList?.length ?? 0,
+        iframeHtmlCount: cap.iframeHtmlList?.length ?? 0,
+        scriptSnippetCount: cap.scriptSnippets?.length ?? 0,
+      });
+      const picked = pickFirstFlicaTokenText(cap);
+      if (!picked) {
+        console.log('[FLICA] no token-bearing source found in deep capture');
+        return;
+      }
+      const preview = picked.text.slice(0, 1500);
+      console.log('[FLICA] loadschedule source used for token1:', picked.label);
+      console.log('[FLICA] candidate preview', preview);
+      void runServiceScheduleImport(picked.text);
     },
-    [runHttpImport, stopSync]
+    [markPostCaptchaFinalizedFromUrl, runServiceScheduleImport]
   );
 
   const onNavigation = useCallback(
@@ -583,31 +718,39 @@ export default function ImportFlicaDirectScreen() {
           pageFinishDedupeAtRef.current = now;
           pageLoadCountRef.current += 1;
         }
-        void (async () => {
-          if (Platform.OS === 'web') return;
-          const pair = await flicaAfterFlushGetCookieStringsForPageUrl(url);
-          const h = (pair.forPage || pair.forBase).trim();
-          const onLogin = low.includes('login');
-          if (!onLogin && pageLoadCountRef.current > 3 && !h) {
-            setLastError('No FLICA cookies after sign-in. Try again.');
-            stopSync();
-            return;
-          }
-          if (!postCaptchaFiredRef.current && flicaPathLooksSignedIn(url) && h.length > 0) {
-            void runPostCaptchaCookieCaptureAndNavigate(url);
-          }
-        })();
-      }
-      if (low.includes('mainmenu.cgi') && low.includes('loadschedule=true') && nav.loading === false) {
-        if (fcvPhaseRef.current === 'await_loadschedule_page') {
-          fcvPhaseRef.current = 'await_token';
+        markPostCaptchaFinalizedFromUrl(url);
+        if (low.includes('mainmenu.cgi') && low.includes('nocache') && !postCaptchaFinalizedRef.current) {
+          console.log(
+            '[FLICA] mainmenu nocache: waiting for post-captcha (GOHM / leftmenu / reCAPTCHA cleared)',
+            url,
+          );
         }
-        if (flowNavRef.current.loadScheduleInjected) {
-          schedulePostLoadscheduleHtml();
+        if (low.includes('mainmenu.cgi')) {
+          if (low.includes('loadschedule')) {
+            console.log('[FLICA] loadschedule nav detected', url);
+          } else {
+            console.log('[FLICA] mainmenu post-detect url (onNavigation)', url);
+          }
+        }
+        if (low.includes('mainmenu.cgi') && low.includes('loadschedule=true') && flowNavRef.current.loadScheduleInjected) {
+          if (scheduleExtractTimerRef.current) {
+            clearTimeout(scheduleExtractTimerRef.current);
+            scheduleExtractTimerRef.current = null;
+          }
+          scheduleExtractTimerRef.current = setTimeout(() => {
+            scheduleExtractTimerRef.current = null;
+            if (completingRef.current) return;
+            console.log(
+              '[FLICA] Step3: inject loadschedule deep capture (2s after nav) + in-page ' + String(FLICA_LOADSCHEDULE_POST_MS) + 'ms',
+            );
+            webViewRef.current?.injectJavaScript(INJECT_POST_LOADSCHEDULE_HTML);
+          }, 2000);
+        } else if (low.includes('mainmenu.cgi') && !low.includes('loadschedule=true')) {
+          void beginMainmenuHandoff(url);
         }
       }
     },
-    [runPostCaptchaCookieCaptureAndNavigate, schedulePostLoadscheduleHtml, stopSync]
+    [beginMainmenuHandoff, markPostCaptchaFinalizedFromUrl]
   );
 
   const runLoginInject = useCallback(() => {
@@ -629,7 +772,25 @@ export default function ImportFlicaDirectScreen() {
   const onLoadEnd = useCallback(() => {
     webViewRef.current?.injectJavaScript(INJECT_FLICA_BRIDGE_PING);
     runLoginInject();
-  }, [runLoginInject]);
+    const u = lastNavUrlRef.current;
+    if (u) {
+      markPostCaptchaFinalizedFromUrl(u);
+    }
+    const low = (u ?? '').toLowerCase();
+    if (u && low.includes('mainmenu.cgi') && low.includes('nocache') && !postCaptchaFinalizedRef.current) {
+      console.log('[FLICA] mainmenu nocache: waiting for post-captcha (GOHM / leftmenu / reCAPTCHA cleared)', u);
+    }
+    if (u && low.includes('mainmenu.cgi')) {
+      if (low.includes('loadschedule')) {
+        console.log('[FLICA] loadschedule nav detected', u);
+      } else {
+        console.log('[FLICA] mainmenu post-detect url (onLoadEnd)', u);
+      }
+    }
+    if (u && low.includes('mainmenu.cgi') && !low.includes('loadschedule=true')) {
+      void beginMainmenuHandoff(u);
+    }
+  }, [beginMainmenuHandoff, markPostCaptchaFinalizedFromUrl, runLoginInject]);
 
   const onLoadProgress = useCallback(
     (e: { nativeEvent: { progress: number } }) => {
@@ -647,14 +808,29 @@ export default function ImportFlicaDirectScreen() {
   }, []);
 
   const startSync = useCallback(() => {
+    const urlBeingLoaded = flicaUrls?.LOGIN;
+    console.log('[FLICA URL]', urlBeingLoaded);
+    void (async () => {
+      const fromStore = await loadFlicaAirlineSubdomain();
+      const subdomain = fromStore ?? '';
+      console.log('[FLICA SUBDOMAIN from SecureStore]', JSON.stringify(fromStore), {
+        hasLeadingOrTrailingSpace: fromStore != null && fromStore !== fromStore.trim(),
+        hasQuotes: fromStore != null && /['"]/.test(fromStore),
+        hasUppercase: fromStore != null && fromStore !== fromStore.toLowerCase(),
+        hasSpaceOrWeird: fromStore != null && /[^a-z0-9-]/i.test(fromStore.replace(/[a-z0-9-]/g, '')),
+      });
+      console.log('[FLICA FULL URL]', `https://${subdomain}.flica.net/ui/login/index.html`);
+    })();
     setLastError(null);
     completingRef.current = false;
-    postCaptchaFiredRef.current = false;
-    fcvPhaseRef.current = 'idle';
+    mainmenuHandoffInFlightRef.current = false;
+    mainmenuHandoffStartedThisSyncRef.current = false;
     pageLoadCountRef.current = 0;
     pageFinishDedupeKeyRef.current = '';
     pageFinishDedupeAtRef.current = 0;
     capturedCookieHeaderRef.current = null;
+    postCaptchaFinalizedRef.current = false;
+    sawFlicaRecaptchaIframeOnMainmenuRef.current = false;
     resetFlowNav(flowNavRef);
     setCaptchaWebVisible(false);
     setPostCaptchaFired(false);
@@ -664,7 +840,7 @@ export default function ImportFlicaDirectScreen() {
     setWebViewKey((k) => k + 1);
     setSyncActive(true);
     setStatusLine('Starting sync…');
-  }, []);
+  }, [flicaUrls]);
 
   /** Full white overlay only after login handoff — never cover the WebView during CAPTCHA / manual sign-in. */
   const blockingOverlay = syncActive && (postCaptchaFired || httpImporting);
@@ -808,7 +984,7 @@ export default function ImportFlicaDirectScreen() {
             <WebView
               key={webViewKey}
               ref={webViewRef}
-              source={{ uri: flicaUrls.LOGIN }}
+              source={{ uri: flicaUrls.ORIGIN }}
               style={styles.web}
               userAgent={FLICA_CONSTANTS.USER_AGENT}
               injectedJavaScriptBeforeContentLoaded={FLICA_POC_INJECT_BEFORE_CONTENT}
