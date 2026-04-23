@@ -5,7 +5,14 @@ import {
   fetchTripMetadataForTripGroups,
   mergeTripMetadataIntoTrips,
 } from '../scheduleApi';
-import { entriesToTrips } from '../tripMapper';
+import type { ScheduleEntryRow } from '../scheduleApi';
+import { enrichTripsWithLedgerContext } from '../ledgerContext';
+import { mergeLedgerPairingBlocks } from '../pairingBlockMerge';
+import {
+  entriesToTrips,
+  mergeCarryInTripsByContiguousPairing,
+  mergeTripsWithPriorMonthRows,
+} from '../tripMapper';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 
 export function useScheduleTripsForMonth(year: number, month: number) {
@@ -25,14 +32,31 @@ export function useScheduleTripsForMonth(year: number, month: number) {
       }
       setError(null);
       try {
-        const rows = await fetchScheduleEntriesForMonth(year, month);
+        const prevM = month === 1 ? 12 : month - 1;
+        const prevY = month === 1 ? year - 1 : year;
+        const nextM = month === 12 ? 1 : month + 1;
+        const nextY = month === 12 ? year + 1 : year;
+        const [rows, prevRows, nextRows] = await Promise.all([
+          fetchScheduleEntriesForMonth(year, month),
+          fetchScheduleEntriesForMonth(prevY, prevM).catch(() => [] as ScheduleEntryRow[]),
+          fetchScheduleEntriesForMonth(nextY, nextM).catch(() => [] as ScheduleEntryRow[]),
+        ]);
         const tripGroups = [...new Set(rows.map((r) => r.trip_group_id))];
         const [metrics, meta] = await Promise.all([
           fetchScheduleMonthMetrics(year, month).catch(() => null),
           tripGroups.length > 0 ? fetchTripMetadataForTripGroups(tripGroups).catch(() => []) : Promise.resolve([]),
         ]);
         setMonthMetrics(metrics);
-        setTrips(mergeTripMetadataIntoTrips(entriesToTrips(rows), meta));
+        const baseTrips = entriesToTrips(rows);
+        const idMerged = mergeTripsWithPriorMonthRows(baseTrips, rows, prevRows, year, month);
+        const mergedCarry = mergeCarryInTripsByContiguousPairing(idMerged, rows, prevRows, year, month);
+        const mergedBlocks = mergeLedgerPairingBlocks(mergedCarry, 1);
+        const withLedger = enrichTripsWithLedgerContext(mergedBlocks, prevRows, nextRows, {
+          currentMonthRows: rows,
+          viewYear: year,
+          viewMonth: month,
+        });
+        setTrips(mergeTripMetadataIntoTrips(withLedger, meta));
       } catch (e) {
         setError(e instanceof Error ? e : new Error(String(e)));
         setTrips([]);

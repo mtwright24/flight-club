@@ -458,6 +458,15 @@ function digitsTime(raw: string | null | undefined): string | null {
   return digits.length >= 3 ? digits.slice(0, 4) : null;
 }
 
+/** Calendar month before `YYYY-MM` (e.g. 2026-04 → 2026-03) for carry-in head days on apply rows. */
+function previousYyyyMm(mk: string): string {
+  const y = parseInt(mk.slice(0, 4), 10);
+  const m = parseInt(mk.slice(5, 7), 10);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return '';
+  const d = new Date(y, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 /**
  * Builds calendar apply rows from stored pairings + legs (schedule_pairings / schedule_pairing_legs).
  * One row per duty date per pairing so merge/replace can assign trip_group_id for consecutive trip days.
@@ -504,6 +513,10 @@ export async function buildApplyRowsFromPairingBatch(
     for (const dateStr of sortedDates) {
       const dayLegs = byDate.get(dateStr)!;
       const segs = dayLegs.map((l) => {
+        const fr = l.flica_route?.trim();
+        if (fr && fr.length >= 5) {
+          return fr.replace(/[–—]/g, '-');
+        }
         const a = (l.from_airport ?? '?').trim() || '?';
         const b = (l.to_airport ?? '?').trim() || '?';
         return `${a}-${b}`;
@@ -512,6 +525,7 @@ export async function buildApplyRowsFromPairingBatch(
       const firstDay = Boolean(startIso && dateStr === startIso);
       const lastLeg = dayLegs[dayLegs.length - 1];
       const departFirst = dayLegs[0]?.departure_time_local ?? null;
+      const fcvStn = (lastLeg?.layover_city ?? '').trim();
       out.push({
         date: dateStr,
         day_of_week: isoToDowThreeLetter(dateStr),
@@ -524,6 +538,8 @@ export async function buildApplyRowsFromPairingBatch(
         arrive_local: lastLeg?.arrival_time_local ?? null,
         status_code: 'TRIP',
         source_type: 'import',
+        /** Ledger FCV: Crewline city column = layover station, threaded into `CrewScheduleTrip.layoverStationByDate`. */
+        notes: fcvStn ? `fcv_lo:${fcvStn.toUpperCase()}` : null,
       });
     }
   }
@@ -532,8 +548,17 @@ export async function buildApplyRowsFromPairingBatch(
 
   const mk = monthKey?.trim();
   const monthPrefix = mk && mk.length >= 7 ? mk.slice(0, 7) : mk;
+  /**
+   * Never drop prior-calendar-month head days: `schedule_import_replace_month` stores with `p_month_key`
+   * (e.g. 2026-04) and `date` (e.g. 2026-03-30) so April view can show M 30 / T 31 for carry-overs. A
+   * same-month YYYY-MM filter would strip those rows and the trip disappears from the top of the ledger.
+   */
   if (monthPrefix) {
-    return out.filter((r) => r.date.slice(0, 7) === monthPrefix);
+    const prior = previousYyyyMm(monthPrefix);
+    return out.filter((r) => {
+      const rp = r.date.slice(0, 7);
+      return rp === monthPrefix || (prior ? rp === prior : false);
+    });
   }
   return out;
 }
@@ -641,6 +666,26 @@ export async function fetchScheduleMonthMetrics(year: number, month: number): Pr
     layoverTotalMinutes: data.layover_total_minutes != null ? Number(data.layover_total_minutes) : null,
     updatedAt: data.updated_at ?? null,
   };
+}
+
+/**
+ * True when this month was populated by FLICA direct (WebView) import — at least one `flica_direct` batch exists.
+ * Used to route pull-to-refresh to the full FLICA re-auth + token + download flow instead of a silent refetch.
+ */
+export async function hasFlicaDirectImportForMonth(year: number, month: number): Promise<boolean> {
+  const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+  const { data: u, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !u.user) return false;
+  const { data, error } = await supabase
+    .from('schedule_import_batches')
+    .select('id')
+    .eq('user_id', u.user.id)
+    .eq('month_key', monthKey)
+    .eq('source_type', 'flica_direct')
+    .limit(1)
+    .maybeSingle();
+  if (error) return false;
+  return data != null;
 }
 
 export async function fetchTripMetadataForTripGroups(tripGroupIds: string[]): Promise<ScheduleTripMetadataRow[]> {

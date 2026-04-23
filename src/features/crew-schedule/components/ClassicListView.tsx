@@ -1,11 +1,19 @@
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
-import { formatLayoverColumnDisplay, mergeLayoverOntoLegDates, parseScheduleTimeMinutes } from '../scheduleTime';
+import { addIsoDays } from '../ledgerContext';
+import {
+  buildFcvPairingCityColumn,
+  isFcvClassicContinuationRow,
+  shouldShowPairingInLedger,
+} from '../ledgerDisplay';
+import { mergeLayoverOntoLegDates, parseScheduleTimeMinutes, resolveClassicLayoverColumn } from '../scheduleTime';
+import { mergeLedgerPairingBlocks } from '../pairingBlockMerge';
 import { scheduleTheme as T } from '../scheduleTheme';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+/** Crewline carry-in: month title is still “April” but the first rows are Mon 30 / Tue 31 (same letter + two-digit day as in-month). */
 
 type RowKind =
   | 'trip'
@@ -135,8 +143,18 @@ function buildRowForTrip(
 ): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
   const d = parseLocalNoon(dateIso);
   const dayIdx = d.getDay();
-  const kind = isProxyContinuation ? 'continuation' : statusToKind(trip);
-  const legForDay = trip.legs.find((l) => l.dutyDate === dateIso);
+  const ptvEveryDay = trip.status === 'pto' && String(trip.pairingCode || '').trim().toUpperCase() === 'PTV';
+  const baseKind = statusToKind(trip);
+  const useLedger = (baseKind === 'trip' || baseKind === 'deadhead') && !ptvEveryDay;
+
+  if (useLedger) {
+    return buildRowFlyingLedger(dateIso, trip, d, dayIdx);
+  }
+
+  const kind = isProxyContinuation ? 'continuation' : baseKind;
+  const legsOnDate = trip.legs.filter((l) => l.dutyDate === dateIso);
+  const legForDay = legsOnDate.length ? legsOnDate[legsOnDate.length - 1] : undefined;
+  const firstLegOnDate = legsOnDate[0];
   const leg = legForDay ?? (!isProxyContinuation && trip.legs.length ? trip.legs[0] : undefined);
   let pairingText = kind === 'continuation' ? '' : buildRowLabel(trip);
   if (
@@ -154,7 +172,7 @@ function buildRowForTrip(
   const reportText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
-      : toCompactTime(leg?.reportLocal || leg?.departLocal);
+      : toCompactTime(firstLegOnDate?.reportLocal || firstLegOnDate?.departLocal || leg?.reportLocal || leg?.departLocal);
   const cityText =
     kind === 'off' || kind === 'pto'
       ? ''
@@ -168,9 +186,8 @@ function buildRowForTrip(
   const dEndText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
-      : toCompactTime(leg?.releaseLocal);
-  /** Layover column: time token only (city stripped for display; DB still stores full FLICA text). */
-  const layoverText = formatLayoverColumnDisplay(trip.layoverByDate?.[dateIso] ?? '');
+      : toCompactTime(legsOnDate.length ? legsOnDate[legsOnDate.length - 1]?.releaseLocal : leg?.releaseLocal);
+  const layoverText = resolveClassicLayoverColumn(trip, dateIso);
   const wxText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special'
       ? ''
@@ -208,6 +225,82 @@ function buildRowForTrip(
   };
 }
 
+function buildRowFlyingLedger(
+  dateIso: string,
+  trip: CrewScheduleTrip,
+  d: Date,
+  dayIdx: number,
+): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
+  const legsOnDate = trip.legs.filter((l) => l.dutyDate === dateIso);
+  const cityText = buildFcvPairingCityColumn(trip, dateIso);
+  const showPairing = shouldShowPairingInLedger(trip, dateIso);
+  const base = statusToKind(trip);
+  /** FCV: dash row = strict interior calendar day with no duty legs in the pairing block. */
+  const isContLike = isFcvClassicContinuationRow(trip, dateIso);
+  const kind: RowKind = isContLike ? 'continuation' : base;
+
+  const firstLegOnDate = legsOnDate[0];
+  const lastLegOnDate = legsOnDate.length ? legsOnDate[legsOnDate.length - 1] : undefined;
+  const legForTime = firstLegOnDate ?? (trip.legs.length ? trip.legs[0] : undefined);
+
+  let pairingText = showPairing ? buildRowLabel(trip) : '';
+  if (
+    pairingText &&
+    dateIso === trip.startDate &&
+    trip.pairingTafbHours != null &&
+    kind !== 'off' &&
+    kind !== 'pto' &&
+    kind !== 'reserve' &&
+    kind !== 'unavailable'
+  ) {
+    pairingText = `${pairingText}  ${formatPairingTafbSameLine(trip.pairingTafbHours)}`;
+  }
+  const reportText =
+    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
+      ? ''
+      : toCompactTime(firstLegOnDate?.reportLocal || firstLegOnDate?.departLocal || legForTime?.reportLocal || legForTime?.departLocal);
+  const dEndText =
+    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
+      ? ''
+      : toCompactTime(legsOnDate.length ? lastLegOnDate?.releaseLocal : legForTime?.releaseLocal);
+  const layoverText = resolveClassicLayoverColumn(trip, dateIso);
+  const wxText =
+    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
+      ? ''
+      : '☀︎';
+  const statusText =
+    kind === 'continuation'
+      ? 'CONT'
+      : kind === 'off'
+        ? 'OFF'
+        : kind === 'pto'
+          ? 'PTO'
+          : kind === 'reserve'
+            ? 'RSV'
+            : '';
+  const reportMinutes = parseScheduleTimeMinutes(legForTime?.reportLocal || legForTime?.departLocal);
+  const releaseMinutes = parseScheduleTimeMinutes(legForTime?.releaseLocal);
+
+  return {
+    id: `${trip.id}:${dateIso}:ledger`,
+    dateIso,
+    kind,
+    trip,
+    dayCode: DOW[dayIdx],
+    dayNum: d.getDate(),
+    isWeekend: dayIdx === 0 || dayIdx === 6,
+    pairingText,
+    reportText,
+    cityText,
+    dEndText,
+    layoverText,
+    wxText,
+    statusText,
+    reportMinutes,
+    releaseMinutes,
+  };
+}
+
 function enumerateMonthDates(year: number, month: number): string[] {
   const last = new Date(year, month, 0).getDate();
   const out: string[] = [];
@@ -218,21 +311,34 @@ function enumerateMonthDates(year: number, month: number): string[] {
   return out;
 }
 
+/** ISO dates in `trip` that fall in calendar months before `monthStartIso` (e.g. Mar 30–31 when viewing April). */
+function priorMonthDaysBeforeView(trip: CrewScheduleTrip, monthStartIso: string): string[] {
+  if (trip.startDate >= monthStartIso) return [];
+  const lastBeforeView = addIsoDays(monthStartIso, -1);
+  const spanEnd = trip.endDate < lastBeforeView ? trip.endDate : lastBeforeView;
+  if (spanEnd < trip.startDate) return [];
+  const out: string[] = [];
+  for (let d = trip.startDate; d <= spanEnd; d = addIsoDays(d, 1)) {
+    out.push(d);
+  }
+  return out;
+}
+
 function isTripLikeKind(kind: RowKind): boolean {
   return kind === 'trip' || kind === 'continuation' || kind === 'deadhead';
 }
 
-function rowsFromTrips(trips: CrewScheduleTrip[]): DayRow[] {
+function rowsFromTrips(trips: CrewScheduleTrip[], viewYear: number, viewMonth: number): DayRow[] {
   if (!trips.length) return [];
 
-  const sorted = [...trips]
-    .map((t) => {
+  const viewMonthStart = `${viewYear}-${String(viewMonth).padStart(2, '0')}-01`;
+  const sorted = mergeLedgerPairingBlocks(
+    [...trips].map((t) => {
       const merged = mergeLayoverOntoLegDates(t);
       return merged ? { ...t, layoverByDate: merged } : t;
-    })
-    .sort((a, b) => a.startDate.localeCompare(b.startDate));
-  const year = sorted[0].year;
-  const month = sorted[0].month;
+    }),
+    1,
+  ).sort((a, b) => a.startDate.localeCompare(b.startDate));
   const dateRows = new Map<string, Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'>[]>();
 
   for (const trip of sorted) {
@@ -249,9 +355,18 @@ function rowsFromTrips(trips: CrewScheduleTrip[]): DayRow[] {
     }
   }
 
+  const leading = new Set<string>();
+  for (const t of sorted) {
+    for (const d of priorMonthDaysBeforeView(t, viewMonthStart)) {
+      leading.add(d);
+    }
+  }
+  const inMonth = enumerateMonthDates(viewYear, viewMonth);
+  const fullDateList = [...Array.from(leading).sort(), ...inMonth];
+
   const todayIso = toIsoDate(new Date());
   const rows: DayRow[] = [];
-  for (const dateIso of enumerateMonthDates(year, month)) {
+  for (const dateIso of fullDateList) {
     const entries = (dateRows.get(dateIso) || []).sort((a, b) => {
       if (!a.trip || !b.trip) return 0;
       return a.trip.startDate.localeCompare(b.trip.startDate);
@@ -490,6 +605,8 @@ function EmptyMonth({ onOpenManage }: { onOpenManage?: () => void }) {
 
 type Props = {
   trips: CrewScheduleTrip[];
+  year: number;
+  month: number;
   /** Month header strip: stored metrics only (import/screenshot), never derived in the client. */
   monthMetrics?: ScheduleMonthMetrics | null;
   onPressTrip: (trip: CrewScheduleTrip) => void;
@@ -497,7 +614,7 @@ type Props = {
   onOpenManage?: () => void;
 };
 
-export default function ClassicListView({ trips, monthMetrics, onPressTrip, onOpenManage }: Props) {
+export default function ClassicListView({ trips, year, month, monthMetrics, onPressTrip, onOpenManage }: Props) {
   const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
   const onLongPressTrip = useCallback((t: CrewScheduleTrip) => setPreviewTrip(t), []);
   const closePreview = useCallback(() => setPreviewTrip(null), []);
@@ -507,7 +624,7 @@ export default function ClassicListView({ trips, monthMetrics, onPressTrip, onOp
     if (t) onPressTrip(t);
   }, [previewTrip, onPressTrip]);
 
-  const rows = useMemo(() => rowsFromTrips(trips), [trips]);
+  const rows = useMemo(() => rowsFromTrips(trips, year, month), [trips, year, month]);
   const summary = useMemo(() => buildSummaryStrip(monthMetrics ?? null), [monthMetrics]);
 
   if (!trips.length) {

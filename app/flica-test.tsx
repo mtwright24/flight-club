@@ -18,7 +18,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Stack, useRouter } from 'expo-router';
+import { Stack, useRouter, type Href } from 'expo-router';
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
@@ -405,7 +405,7 @@ export default function FlicaTestScreen() {
       setIsImportingSchedule(false);
       setCaptchaLayerVisible(false);
       fcvAutoPhaseRef.current = 'idle';
-      router.replace('/crew-schedule/(tabs)');
+      router.replace('/crew-schedule/(tabs)/index' as Href);
       return true;
     },
     [router, showScheduleImportedToast, setAutoRefreshOpen],

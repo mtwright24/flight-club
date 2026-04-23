@@ -7,8 +7,10 @@ const ACTIVE = '#B5161E';
 const INACTIVE = '#6B7280';
 
 export default function CrewScheduleTabsLayout() {
+  // Default tab is Schedule (`index`); without this, file order can favor `alerts` first alphabetically.
   return (
     <Tabs
+      initialRouteName="index"
       screenOptions={{
         headerShown: true,
         header: () => <CrewScheduleHeader />,
@@ -27,6 +29,13 @@ export default function CrewScheduleTabsLayout() {
       }}
     >
       <Tabs.Screen
+        name="index"
+        options={{
+          title: 'Schedule',
+          tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size ?? 17} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="alerts"
         options={{
           title: 'Alerts',
@@ -38,13 +47,6 @@ export default function CrewScheduleTabsLayout() {
         options={{
           title: 'Tradeboard',
           tabBarIcon: ({ color, size }) => <Ionicons name="swap-horizontal" size={size ?? 17} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Schedule',
-          tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size ?? 17} color={color} />,
         }}
       />
       <Tabs.Screen

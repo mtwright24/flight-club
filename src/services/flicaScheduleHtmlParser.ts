@@ -266,16 +266,36 @@ function extractRows(html: string): string[] {
  * From a "nowrap" leg row, extract layover city and time.
  * The last <td> may contain an <a> with onclick code=XXX and text "XXX 1547".
  */
-function parseLayover(row: string): { city: string; time: string } {
-  // Look for onclick with airport code
-  const codeMatch = row.match(/code=([A-Z]{3}).*?['"][^>]*>(.*?)<\/a>/is);
-  if (!codeMatch) return { city: "", time: "" };
+function isPlausibleLayoverRestFour(s: string): boolean {
+  if (!/^\d{4}$/.test(s)) return false;
+  const h = parseInt(s.slice(0, 2), 10);
+  const m = parseInt(s.slice(2), 10);
+  return h <= 47 && m <= 59;
+}
 
-  const city = codeMatch[1];
-  const text = stripHtml(codeMatch[2]); // e.g. "SFO 1547"
+/**
+ * Layover city + rest (4-digit) from the leg row; link text is usually `LAS 1236` but sometimes only `1236`.
+ */
+function parseLayover(row: string): { city: string; time: string } {
+  const textFull = stripHtml(row);
+  const codeMatch = row.match(/code=([A-Z]{3}).*?['"][^>]*>(.*?)<\/a>/is);
+  if (!codeMatch) {
+    /**
+     * Without the FLICA `code=XXX` anchor we cannot reliably distinguish DEPL/ARRL times from
+     * layover rest in the same `<tr>`.
+     */
+    return { city: '', time: '' };
+  }
+
+  const city = codeMatch[1]!;
+  const text = stripHtml(codeMatch[2]);
   const timeMatch = text.match(/[A-Z]{3}\s+(\d{4})/);
-  const time = timeMatch ? timeMatch[1] : "";
-  return { city, time };
+  if (timeMatch) return { city, time: timeMatch[1]! };
+  const tail = text.match(/\b(\d{4})\b/);
+  if (tail && isPlausibleLayoverRestFour(tail[1]!)) return { city, time: tail[1]! };
+  const inRow = textFull.match(new RegExp(`\\b${city}\\s+(\\d{4})\\b`, 'i'));
+  if (inRow && isPlausibleLayoverRestFour(inRow[1]!)) return { city, time: inRow[1]! };
+  return { city, time: '' };
 }
 
 /**
@@ -479,22 +499,36 @@ function parseCrew(block: string): FlicaCrew[] {
 // Month-level stats parser
 // ─────────────────────────────────────────────
 
+function pickStatDecimal(plain: string, labelRe: RegExp): string {
+  const m = plain.match(labelRe);
+  return m && m[1] ? m[1] : "";
+}
+
 function parseMonthStats(html: string): FlicaMonthStats {
-  // The stats live in a summary table, typically containing labels like
-  // "BLOCK", "CREDIT", "TAFB", "YTD", "DAYS OFF"
-  // These may not be present in the fragment — return empty defaults.
+  // The stats live in a summary table (label cell / value cell) or as plain text after strip.
   const blockMatch = html.match(/BLOCK[^<]*<\/td>\s*<td[^>]*>([\d.]+)/i);
   const creditMatch = html.match(/CREDIT[^<]*<\/td>\s*<td[^>]*>([\d.]+)/i);
   const tafbMatch = html.match(/TAFB[^<]*<\/td>\s*<td[^>]*>([\d.]+)/i);
   const ytdMatch = html.match(/YTD[^<]*<\/td>\s*<td[^>]*>([\d.]+)/i);
   const daysOffMatch = html.match(/DAYS\s+OFF[^<]*<\/td>\s*<td[^>]*>(\d+)/i);
 
+  const plain = stripHtml(html).replace(/\s+/g, " ");
+
+  // Fallback: scheduledetail often uses a single-line or stacked labels — match after keyword.
+  const block = blockMatch?.[1] ?? pickStatDecimal(plain, /BLOCK[^0-9A-Z]{0,24}(\d{2,3}\.\d{2})/i);
+  const credit = creditMatch?.[1] ?? pickStatDecimal(plain, /CREDIT[^0-9A-Z]{0,24}(\d{2,3}\.\d{2})/i);
+  const tafb = tafbMatch?.[1] ?? pickStatDecimal(plain, /T\.?\s*A\.?\s*F\.?\s*B[^0-9A-Z]{0,24}(\d{2,3}\.\d{2})/i);
+  const tafbAlt = tafb || pickStatDecimal(plain, /TAFB[^0-9A-Z]{0,24}(\d{2,3}\.\d{2})/i);
+  const ytd = ytdMatch?.[1] ?? pickStatDecimal(plain, /YTD[^0-9A-Z]{0,24}(\d{2,3}\.\d{2})/i);
+  const daysOffStr = daysOffMatch?.[1] ?? pickStatDecimal(plain, /DAYS?\s*OFF[^0-9A-Z]{0,24}(\d{1,2})/i);
+  const daysOff = daysOffStr ? parseInt(daysOffStr, 10) : 0;
+
   return {
-    block: blockMatch ? blockMatch[1] : "",
-    credit: creditMatch ? creditMatch[1] : "",
-    tafb: tafbMatch ? tafbMatch[1] : "",
-    ytd: ytdMatch ? ytdMatch[1] : "",
-    daysOff: daysOffMatch ? parseInt(daysOffMatch[1], 10) : 0,
+    block,
+    credit,
+    tafb: tafbAlt,
+    ytd,
+    daysOff: Number.isFinite(daysOff) ? daysOff : 0,
   };
 }
 

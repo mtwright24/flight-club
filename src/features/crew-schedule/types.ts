@@ -73,6 +73,18 @@ export interface CrewScheduleTrip {
    * Per calendar day: `schedule_entries.layover` from import (FLICA-style e.g. city + HHMM after each leg).
    */
   layoverByDate?: Record<string, string>;
+  /**
+   * Crewline “CITY” = overnight layover station (from pairing leg `layover_city` / fcv import notes), not
+   * always the last sector arrival on that duty day.
+   */
+  layoverStationByDate?: Record<string, string>;
+  /**
+   * Monthly ledger: cross-month hints from adjacent `schedule_entries` fetches (display-only; no import change).
+   */
+  ledgerContext?: {
+    carryInFromPriorMonth: boolean;
+    carryOutToNextMonth: boolean;
+  };
   crewMembers?: ScheduleCrewMember[];
   postedToTradeboardId?: string | null;
   tripChatThreadId?: string | null;

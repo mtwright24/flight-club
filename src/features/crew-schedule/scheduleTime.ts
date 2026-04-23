@@ -1,3 +1,4 @@
+import { addIsoDays } from './ledgerContext';
 import type { CrewScheduleTrip } from './types';
 
 /**
@@ -64,19 +65,60 @@ export function parseScheduleTimeMinutes(raw?: string | null): number | null {
 }
 
 /**
- * Classic list layover column: show the time/duration token only (strip FLICA city prefix).
- * e.g. `DUB 2430` → `2430`; `2430` unchanged.
- * Plain station lists (`LAS`, `LAS, MCO`) have no rest token — show nothing (avoid duplicating the route city).
+ * Classic list layover column: show the time/rest **4-digit** token (FLICA-style), not the station list.
+ * Strips a leading city; finds the first valid HHMM 4-digit block (same rules as `parseScheduleTimeMinutes`).
+ * Plain station lists (`LAS`, `LAS, MCO`) with no time token return ''.
  */
 export function formatLayoverColumnDisplay(raw: string | undefined | null): string {
   const s = String(raw ?? '').trim();
   if (!s) return '';
+  if (/^\d{4}$/.test(s) && parseScheduleTimeMinutes(s) != null) return s;
+  const noSpace = s.match(/^([A-Z]{3,4})(\d{4})$/i);
+  if (noSpace && parseScheduleTimeMinutes(noSpace[2]!) != null) return noSpace[2]!;
   const cityThenDigits = s.match(/^[A-Z]{3,4}\s+(\d{4})\s*$/i);
-  if (cityThenDigits) return cityThenDigits[1];
-  if (/^\d{4}$/.test(s)) return s;
+  if (cityThenDigits && parseScheduleTimeMinutes(cityThenDigits[1]!) != null) return cityThenDigits[1]!;
   const tail = s.match(/(\d{4})\s*$/);
-  if (tail && /[A-Za-z]/.test(s)) return tail[1];
+  if (tail && /[A-Za-z]/.test(s) && parseScheduleTimeMinutes(tail[1]!) != null) return tail[1]!;
+  for (const m of s.matchAll(/\b(\d{4})\b/g)) {
+    const token = m[1]!;
+    if (parseScheduleTimeMinutes(token) != null) return token;
+  }
   const compact = s.replace(/\s+/g, ' ');
   if (/^[A-Z]{3}(?:\s*,\s*[A-Z]{3})*$/i.test(compact)) return '';
-  return s;
+  /** Never show route text (JFK-LHR) as layover; digits should have been picked up above. */
+  if (/[A-Z]{3}\s*[-–]\s*[A-Z]{3}/i.test(s)) return '';
+  return '';
+}
+
+/**
+ * First valid FLICA-style **rest** HHMM (4 digits) from a duty’s layover line — used when apply rows only
+ * stored free text (e.g. `LHR 21:00` → `2100`).
+ */
+export function extractLayoverRestFourDigits(raw: string | null | undefined): string | null {
+  const display = formatLayoverColumnDisplay(raw);
+  if (display && /^\d{4}$/.test(display) && parseScheduleTimeMinutes(display) != null) return display;
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  const colon = s.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+  if (colon) {
+    const hh = String(colon[1]).padStart(2, '0');
+    const mm = colon[2]!;
+    const four = `${hh}${mm}`;
+    if (parseScheduleTimeMinutes(four) != null) return four;
+  }
+  return null;
+}
+
+/**
+ * Classic ledger: `schedule_entries.layover` is often missing on the flying row but present on an
+ * adjacent calendar day (CONT / next-day line). Resolve a 4-digit token for this `dateIso`.
+ */
+export function resolveClassicLayoverColumn(trip: CrewScheduleTrip, dateIso: string): string {
+  const by = trip.layoverByDate;
+  if (!by || Object.keys(by).length === 0) return '';
+  const own = formatLayoverColumnDisplay(by[dateIso]);
+  if (own) return own;
+  const prev = formatLayoverColumnDisplay(by[addIsoDays(dateIso, -1)]);
+  if (prev) return prev;
+  return formatLayoverColumnDisplay(by[addIsoDays(dateIso, 1)]) || '';
 }

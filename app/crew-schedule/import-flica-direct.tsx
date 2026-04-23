@@ -16,7 +16,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Stack, useRouter, type Href } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import CookieManager from '@react-native-community/cookies';
 import { Ionicons } from '@expo/vector-icons';
@@ -319,6 +319,11 @@ export default function ImportFlicaDirectScreen() {
     () => (storedAirlineSub?.trim() ? buildFlicaUrls(storedAirlineSub) : null),
     [storedAirlineSub],
   );
+  const searchParams = useLocalSearchParams<{ autoSync?: string }>();
+  const autoSyncParam =
+    searchParams?.autoSync === '1' ||
+    String(searchParams?.autoSync ?? '').toLowerCase() === 'true';
+  const autoSyncStartedRef = useRef(false);
 
   /** WebView must load this URL (not HTTP fetch) — same path as `FLICA_URLS.MAINMENU_LOADSCHEDULE` for the saved airline. */
   const injectNavToLoadSchedule = useMemo(() => {
@@ -599,7 +604,7 @@ export default function ImportFlicaDirectScreen() {
         } else {
           Alert.alert('', 'Schedule synced ✓');
         }
-        router.replace('/crew-schedule/(tabs)' as Href);
+        router.replace('/crew-schedule' as Href);
         stopSync();
       } catch (e) {
         setLastError(e instanceof Error ? e.message : String(e));
@@ -841,6 +846,16 @@ export default function ImportFlicaDirectScreen() {
     setSyncActive(true);
     setStatusLine('Starting sync…');
   }, [flicaUrls]);
+
+  /** Schedule tab pull-to-refresh (FLICA months) opens this screen with `autoSync=1` — start the same flow as “Sync schedule”. */
+  useEffect(() => {
+    if (credsLoading) return;
+    if (!autoSyncParam) return;
+    if (autoSyncStartedRef.current) return;
+    if (!canSync) return;
+    autoSyncStartedRef.current = true;
+    startSync();
+  }, [autoSyncParam, canSync, credsLoading, startSync]);
 
   /** Full white overlay only after login handoff — never cover the WebView during CAPTCHA / manual sign-in. */
   const blockingOverlay = syncActive && (postCaptchaFired || httpImporting);

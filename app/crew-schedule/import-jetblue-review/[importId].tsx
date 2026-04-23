@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -255,7 +255,7 @@ export default function ImportJetBlueReviewScreen() {
           );
         })}
 
-        <Pressable style={styles.ghost} onPress={() => router.replace('/crew-schedule/(tabs)')}>
+        <Pressable style={styles.ghost} onPress={() => router.replace('/crew-schedule/(tabs)/index' as Href)}>
           <Text style={styles.ghostText}>Back to schedule</Text>
         </Pressable>
       </ScrollView>

@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -412,7 +412,7 @@ export default function ImportReviewScreen() {
         } else {
           await applyReplaceMonth(payload.monthKey, batchId, payload.rows);
         }
-        router.replace('/crew-schedule/(tabs)');
+        router.replace('/crew-schedule/(tabs)/index' as Href);
       } catch (e) {
         Alert.alert('Save failed', e instanceof Error ? e.message : String(e));
       } finally {

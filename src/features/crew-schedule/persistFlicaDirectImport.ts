@@ -8,9 +8,11 @@ import {
   parseFlicaScheduleHtml,
   type FlicaLeg,
   type FlicaPairing,
+  type FlicaMonthStats,
 } from '../../services/flicaScheduleHtmlParser';
 import { buildApplyRowsFromPairingBatch, applyReplaceMonth, type ApplyRow } from './scheduleApi';
 import { createScheduleImport } from './jetblueFlicaImport';
+import { extractLayoverRestFourDigits } from './scheduleTime';
 
 const YEAR = 2026;
 
@@ -38,27 +40,116 @@ function flicaHhmmToMinutes(hhmm: string | null | undefined): number | null {
   return h * 60 + m;
 }
 
-function dutyDateIso(pairing: FlicaPairing, leg: FlicaLeg, monthKey: string): string {
-  const y = monthKey.slice(0, 4);
-  const m = monthKey.slice(5, 7);
-  const d = String(leg.date).padStart(2, '0');
-  const startDay = parseInt(pairing.startDate.slice(8, 10), 10);
-  if (Number.isFinite(startDay) && leg.date < startDay) {
-    const mi = parseInt(m, 10) + 1;
-    if (mi > 12) {
-      return `${parseInt(y, 10) + 1}-01-${d}`;
-    }
-    return `${y}-${String(mi).padStart(2, '0')}-${d}`;
+/** YYYY-MM-DD in local calendar, or null if day invalid for that month. */
+function calendarIsoInMonth(year: number, month1to12: number, day: number): string | null {
+  const d = new Date(year, month1to12 - 1, day);
+  if (d.getFullYear() !== year || d.getMonth() !== month1to12 - 1 || d.getDate() !== day) {
+    return null;
   }
-  return `${y}-${m}-${d}`;
+  return `${year}-${String(month1to12).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function routeEndpoints(route: string): { dep: string; arr: string } {
-  const p = (route ?? '').split('-').map((s) => s.trim()).filter(Boolean);
-  if (p.length < 2) {
-    return { dep: p[0] ?? '', arr: p[1] ?? '' };
+/**
+ * Resolves a leg’s calendar day. FLICA’s page `monthKey` is the *file* month, but a pairing can start
+ * in the previous calendar month; naively doing `fileMonth + leg.date` can misfile Mar 30 as Apr 30
+ * and break ordering / carry-in head days. We pick the ISO in [pairing.startDate, pairing.endDate] from
+ * file month ±1. When more than one day-of-month matches (rare), `prev` keeps legs ordered (same
+ * `leg.date` on two **calendar** days is resolved to the first strictly after the previous leg).
+ */
+function dutyDateIso(
+  pairing: FlicaPairing,
+  leg: FlicaLeg,
+  monthKey: string,
+  prevResolvedIso: string | null
+): string {
+  const y = parseInt(monthKey.slice(0, 4), 10);
+  const fileM = parseInt(monthKey.slice(5, 7), 10);
+  const d = String(leg.date).padStart(2, '0');
+  const start = pairing.startDate;
+  const end = pairing.endDate;
+  if (!Number.isFinite(y) || !Number.isFinite(fileM) || !start || !end) {
+    return `${monthKey.slice(0, 4)}-${monthKey.slice(5, 7)}-${d}`;
   }
-  return { dep: p[0] ?? '', arr: p[p.length - 1] ?? '' };
+  const inRange: string[] = [];
+  for (const delta of [-1, 0, 1] as const) {
+    const dt = new Date(y, fileM - 1 + delta, 1);
+    const cy = dt.getFullYear();
+    const cm = dt.getMonth() + 1;
+    const iso = calendarIsoInMonth(cy, cm, leg.date);
+    if (iso && iso >= start && iso <= end) {
+      inRange.push(iso);
+    }
+  }
+  inRange.sort();
+  if (inRange.length > 0) {
+    if (prevResolvedIso == null) return inRange[0]!;
+    const after = inRange.find((iso) => iso > prevResolvedIso);
+    if (after) return after;
+    const sameOrAfter = inRange.find((iso) => iso >= prevResolvedIso);
+    if (sameOrAfter) return sameOrAfter;
+    return inRange[0]!;
+  }
+  const mStr = String(fileM).padStart(2, '0');
+  const yStr = String(y);
+  const startDay = parseInt(start.slice(8, 10), 10);
+  if (Number.isFinite(startDay) && leg.date < startDay) {
+    const mi = fileM + 1;
+    if (mi > 12) {
+      return `${y + 1}-01-${d}`;
+    }
+    return `${yStr}-${String(mi).padStart(2, '0')}-${d}`;
+  }
+  return `${yStr}-${mStr}-${d}`;
+}
+
+/**
+ * FLICA "DPS-ARS" route cell can use hyphen, en dash, or odd splits; a naive split on "-"
+ * can turn `JFK-LAS` into J / FK / LAS and produce bogus dep/arr. Prefer a single IATA–IATA match first.
+ */
+function flicaRouteToAirports(route: string): { dep: string; arr: string } {
+  const raw = (route ?? '').trim();
+  if (!raw) return { dep: '', arr: '' };
+  const n = raw.replace(/[–—−]/g, '-').replace(/\s+/g, '');
+  const pair = n.match(/^([A-Z]{3,4})-([A-Z]{3,4})$/i);
+  if (pair) {
+    return { dep: pair[1].toUpperCase(), arr: pair[2].toUpperCase() };
+  }
+  const parts = n.split('-').map((s) => s.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    return {
+      dep: (parts[0] ?? '').toUpperCase(),
+      arr: (parts[parts.length - 1] ?? '').toUpperCase(),
+    };
+  }
+  if (parts.length === 1 && /^[A-Z]{6}$/i.test(parts[0]!)) {
+    const p0 = parts[0]!.toUpperCase();
+    return { dep: p0.slice(0, 3), arr: p0.slice(3, 6) };
+  }
+  return { dep: (parts[0] ?? '').toUpperCase(), arr: (parts[1] ?? '').toUpperCase() };
+}
+
+/** D-END next report e.g. 0600L → 4-digit string for apply row / release_time_local. */
+function flicaNextReportToDigits(s: string | null | undefined): string | null {
+  if (s == null || !String(s).trim()) return null;
+  const d = String(s).replace(/\D/g, '');
+  if (d.length >= 4) return d.slice(0, 4);
+  return null;
+}
+
+function parseStatNumber(raw: string | null | undefined): number | null {
+  if (raw == null || !String(raw).trim()) return null;
+  const n = parseFloat(String(raw).trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function flicaStatsToMonthMetricsRow(stats: FlicaMonthStats) {
+  return {
+    block_hours: parseStatNumber(stats.block),
+    credit_hours: parseStatNumber(stats.credit),
+    monthly_tafb_hours: parseStatNumber(stats.tafb),
+    ytd_credit_hours: parseStatNumber(stats.ytd),
+    days_off: stats.daysOff > 0 ? stats.daysOff : null,
+  };
 }
 
 async function findOrCreateFlicaDirectImportId(userId: string, importMonth: number): Promise<string> {
@@ -182,10 +273,15 @@ export async function persistFlicaDirectImport(
       if (pErr || !pIns) throw pErr ?? new Error('pairing insert failed');
       const pairingUuid = pIns.id as string;
 
+      let prevLegDutyIso: string | null = null;
       for (const leg of pairing.legs) {
-        const duty = dutyDateIso(pairing, leg, cfg.monthKey);
-        const { dep, arr } = routeEndpoints(leg.route);
+        const duty = dutyDateIso(pairing, leg, cfg.monthKey, prevLegDutyIso);
+        prevLegDutyIso = duty;
+        const { dep, arr } = flicaRouteToAirports(leg.route);
         const blk = flicaHhmmToDecimal(leg.blockTime);
+        const releaseLocal = flicaNextReportToDigits(leg.nextReportTime);
+        const lot = (leg.layoverTime ?? '').trim();
+        const layoverRest = extractLayoverRestFourDigits(lot) ?? (/^\d{4}$/.test(lot) ? lot : undefined);
         const { error: lErr } = await supabase.from('schedule_pairing_legs').insert({
           pairing_id: pairingUuid,
           duty_date: duty,
@@ -195,6 +291,7 @@ export async function persistFlicaDirectImport(
           arrival_station: arr || null,
           scheduled_departure_local: leg.departLocal,
           scheduled_arrival_local: leg.arriveLocal,
+          release_time_local: releaseLocal,
           block_time: blk,
           layover_city: leg.layoverCity?.trim() ? leg.layoverCity.trim() : null,
           hotel_name: leg.hotel?.trim() ? leg.hotel.trim() : null,
@@ -203,7 +300,11 @@ export async function persistFlicaDirectImport(
           row_confidence: 1.0,
           requires_review: false,
           raw_text: null,
-          normalized_json: { flica_direct: true },
+          normalized_json: {
+            flica_direct: true,
+            flica_route: leg.route?.trim() || undefined,
+            layover_rest_display: layoverRest,
+          },
         });
         if (lErr) throw lErr;
       }
@@ -225,6 +326,31 @@ export async function persistFlicaDirectImport(
     }
     if (applyRows.length) {
       await applyReplaceMonth(cfg.monthKey, batchId, applyRows);
+    }
+
+    const mRow = flicaStatsToMonthMetricsRow(parsed.stats);
+    const hasMonthMetrics =
+      mRow.block_hours != null ||
+      mRow.credit_hours != null ||
+      mRow.monthly_tafb_hours != null ||
+      mRow.ytd_credit_hours != null ||
+      mRow.days_off != null;
+    if (hasMonthMetrics) {
+      const { error: mmErr } = await supabase.from('schedule_month_metrics').upsert(
+        {
+          user_id: uid,
+          month_key: cfg.monthKey,
+          block_hours: mRow.block_hours,
+          credit_hours: mRow.credit_hours,
+          monthly_tafb_hours: mRow.monthly_tafb_hours,
+          ytd_credit_hours: mRow.ytd_credit_hours,
+          days_off: mRow.days_off,
+          source: 'flica_direct',
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,month_key' }
+      );
+      if (mmErr) throw mmErr;
     }
   }
 }

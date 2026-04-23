@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -18,6 +19,7 @@ import FlicaCrewScheduleSection from '../components/FlicaCrewScheduleSection';
 import { useScheduleTripsForMonth } from '../hooks/useScheduleTripsForMonth';
 import {
   fetchCrewScheduleFlicaForMonth,
+  hasFlicaDirectImportForMonth,
   type CrewScheduleFlicaRow,
   removeMonthScheduleAndImports,
 } from '../scheduleApi';
@@ -72,6 +74,11 @@ export default function ScheduleTabScreen() {
   }, []);
 
   const { trips, monthMetrics, refreshing, refresh, refreshSilent } = useScheduleTripsForMonth(year, month);
+  const [flicaDirectForMonth, setFlicaDirectForMonth] = useState(false);
+
+  const loadFlicaDirectFlag = useCallback(() => {
+    void hasFlicaDirectImportForMonth(year, month).then(setFlicaDirectForMonth);
+  }, [year, month]);
 
   const loadFlicaRow = useCallback(async () => {
     try {
@@ -86,12 +93,17 @@ export default function ScheduleTabScreen() {
     void loadFlicaRow();
   }, [loadFlicaRow]);
 
+  useEffect(() => {
+    loadFlicaDirectFlag();
+  }, [loadFlicaDirectFlag]);
+
   useFocusEffect(
     useCallback(() => {
       void loadScheduleViewMode().then(setViewMode);
       void refreshSilent();
       void loadFlicaRow();
-    }, [loadFlicaRow, refreshSilent])
+      loadFlicaDirectFlag();
+    }, [loadFlicaDirectFlag, loadFlicaRow, refreshSilent])
   );
 
   const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
@@ -102,15 +114,45 @@ export default function ScheduleTabScreen() {
     void saveLastMonthCursor(y, m);
   }, []);
 
-  const goPrevMonth = () => {
+  const goPrevMonth = useCallback(() => {
+    if (removingMonth) return;
     if (month === 1) persistMonth(year - 1, 12);
     else persistMonth(year, month - 1);
-  };
+  }, [month, year, persistMonth, removingMonth]);
 
-  const goNextMonth = () => {
+  const goNextMonth = useCallback(() => {
+    if (removingMonth) return;
     if (month === 12) persistMonth(year + 1, 1);
     else persistMonth(year, month + 1);
-  };
+  }, [month, year, persistMonth, removingMonth]);
+
+  /**
+   * Swipe to change month — **must** use JS-thread `PanResponder` here, not `Gesture.Pan().onEnd`
+   * from react-native-gesture-handler: that path runs on the native/UI worklet and calling
+   * `setState` (month) crashes the app / kills Expo. PanResponder is safe.
+   * Horizontal drags only (vertical scroll is left to `ScrollView`).
+   */
+  const monthSwipePan = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponder: (_, g) => {
+          return Math.abs(g.dx) > 28 && Math.abs(g.dx) > Math.abs(g.dy) + 12;
+        },
+        onPanResponderTerminationRequest: () => true,
+        onPanResponderRelease: (_, g) => {
+          if (removingMonth) return;
+          const minDist = 56;
+          const minVel = 0.4;
+          if (g.dx < -minDist || g.vx < -minVel) {
+            goNextMonth();
+          } else if (g.dx > minDist || g.vx > minVel) {
+            goPrevMonth();
+          }
+        },
+      }),
+    [goNextMonth, goPrevMonth, removingMonth]
+  );
 
   const openTrip = useCallback(
     (trip: CrewScheduleTrip) => {
@@ -149,6 +191,7 @@ export default function ScheduleTabScreen() {
     setRemovingMonth(true);
     try {
       const r = await removeMonthScheduleAndImports(monthKey);
+      setFlicaDirectForMonth(false);
       await refresh();
       const doneMsg =
         r.entriesRemoved > 0 || r.batchesRemoved > 0
@@ -187,6 +230,18 @@ export default function ScheduleTabScreen() {
     };
   }, [flicaRow]);
 
+  /** Non-FLICA months: refetch `schedule_entries`. FLICA direct months: full WebView + cookie + token + month download. */
+  const onSchedulePullToRefresh = useCallback(() => {
+    if (flicaDirectForMonth) {
+      router.push({
+        pathname: '/crew-schedule/import-flica-direct',
+        params: { autoSync: '1' },
+      });
+      return;
+    }
+    void refresh();
+  }, [flicaDirectForMonth, refresh, router]);
+
   const onRemoveMonthFromSchedule = useCallback(() => {
     const title = `Delete imported schedule for ${monthLabel}?`;
     const message =
@@ -208,8 +263,8 @@ export default function ScheduleTabScreen() {
   }, [monthLabel, runRemoveMonthConfirmed]);
 
   return (
-    <View style={styles.screenRoot}>
-      <View style={styles.monthRow}>
+    <View style={styles.screenRoot} {...monthSwipePan.panHandlers}>
+      <View style={styles.monthRow} accessibilityLabel="Month header — swipe left or right to change month">
         <Pressable
           onPress={goPrevMonth}
           style={styles.iconHit}
@@ -255,7 +310,13 @@ export default function ScheduleTabScreen() {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         nestedScrollEnabled
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={T.accent} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={flicaDirectForMonth ? false : refreshing}
+            onRefresh={onSchedulePullToRefresh}
+            tintColor={T.accent}
+          />
+        }
       >
         <View style={styles.readingArea}>
           {flicaPairings.length > 0 ? (
@@ -267,6 +328,8 @@ export default function ScheduleTabScreen() {
           ) : null}
           {viewMode === 'classic' && (
             <ClassicListView
+              year={year}
+              month={month}
               trips={trips}
               monthMetrics={monthMetrics}
               onPressTrip={openTrip}

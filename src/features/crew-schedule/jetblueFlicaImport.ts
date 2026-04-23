@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '../../lib/supabaseClient';
+import { extractLayoverRestFourDigits } from './scheduleTime';
 import { tryInferFlightNumberFromLegRaw } from '../schedule-import/parser/jetblueFlicaStructuredParser';
 import { JETBLUE_FLICA_MONTHLY_SOURCE_TYPE } from './jetblueFlicaUnderstanding';
 import { JETBLUE_FLICA_TEMPLATE_KEY } from './jetblueFlicaTemplate';
@@ -236,6 +237,8 @@ export type SchedulePairingDutyRow = {
   layover_rest_display?: string | null;
   /** Parsed duty-day bundle (JSON) for D-END / layover context. */
   duty_day?: Record<string, unknown> | null;
+  /** FLICA `DPS-ARS` string from `normalized_json.flica_route` — preferred for apply-row city. */
+  flica_route?: string | null;
   row_confidence: number | null;
   requires_review: boolean;
   raw_text: string | null;
@@ -349,11 +352,19 @@ export function formatTripCompactFromDashChain(
  * (4-digit), not station codes — city lives in `city`. Values from parser `layoverRestDisplay`.
  */
 export function buildLayoverSummaryFromDuties(
-  legs: Pick<SchedulePairingDutyRow, 'layover_rest_display'>[]
+  legs: Pick<SchedulePairingDutyRow, 'layover_rest_display' | 'layover_city' | 'raw_text'>[]
 ): string | null {
   for (const l of legs) {
     const r = (l.layover_rest_display ?? '').trim();
-    if (/^\d{4}$/.test(r)) return r;
+    let x = extractLayoverRestFourDigits(r);
+    if (x) return x;
+    const withCity = `${(l.layover_city ?? '').trim()} ${r}`.trim();
+    x = extractLayoverRestFourDigits(withCity);
+    if (x) return x;
+    if (l.raw_text) {
+      x = extractLayoverRestFourDigits(String(l.raw_text));
+      if (x) return x;
+    }
   }
   return null;
 }
@@ -401,6 +412,8 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
     candidate_flight_numbers?: unknown;
     fltno_suggestion_source?: string;
     fltno_row_confidence?: number | null;
+    flica_route?: string;
+    layover_rest_display?: string;
   } | null | undefined;
   const dd = nj?.duty_day;
   const blockNum = l.block_time as number | null | undefined;
@@ -411,8 +424,11 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
     blockLocal = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
   const equip = (l.aircraft_position_code as string) ?? null;
+  const rawNj = typeof nj?.layover_rest_display === 'string' ? nj.layover_rest_display.trim() : '';
+  const rawDd = typeof dd?.layover_rest_display === 'string' ? String(dd.layover_rest_display).trim() : '';
+  const rawLay = rawNj || rawDd;
   const layRest =
-    typeof dd?.layover_rest_display === 'string' ? (dd.layover_rest_display as string) : null;
+    extractLayoverRestFourDigits(rawLay) || (/^\d{4}$/.test(rawLay) ? rawLay : null);
   const fromA = coerceLegAirportCode(l.departure_station as string | null | undefined);
   const toA = coerceLegAirportCode(l.arrival_station as string | null | undefined);
   const depL = (l.scheduled_departure_local as string) ?? null;
@@ -438,6 +454,7 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
     is_deadhead: (l.is_deadhead as boolean | null | undefined) ?? null,
     equipment_code: equip,
     layover_rest_display: layRest ?? null,
+    flica_route: typeof nj?.flica_route === 'string' && nj.flica_route.trim() ? nj.flica_route.trim() : null,
     duty_day: dd ?? null,
     row_confidence: (l.row_confidence as number) ?? nj?.segment_confidence ?? null,
     requires_review: Boolean(l.requires_review),
