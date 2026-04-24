@@ -8,6 +8,8 @@
     "start:tunnel": "expo start --go --tunnel",
     "start:dev-client": "expo start",
     "start:dev-client:tunnel": "expo start --tunnel",
+    "start:dev-client:native": "EXPO_START_NATIVE_ONLY=1 expo start --dev-client",
+    "start:dev-client:native:tunnel": "EXPO_START_NATIVE_ONLY=1 expo start --dev-client --tunnel",
     "start:offline": "expo start --go --offline",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",

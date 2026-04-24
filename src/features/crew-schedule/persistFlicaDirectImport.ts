@@ -128,8 +128,8 @@ function flicaRouteToAirports(route: string): { dep: string; arr: string } {
   return { dep: (parts[0] ?? '').toUpperCase(), arr: (parts[1] ?? '').toUpperCase() };
 }
 
-/** D-END next report e.g. 0600L → 4-digit string for apply row / release_time_local. */
-function flicaNextReportToDigits(s: string | null | undefined): string | null {
+/** FLICA time token e.g. 0600L, 1413L → 4-digit string. */
+function flicaTimeTokenToDigits(s: string | null | undefined): string | null {
   if (s == null || !String(s).trim()) return null;
   const d = String(s).replace(/\D/g, '');
   if (d.length >= 4) return d.slice(0, 4);
@@ -279,7 +279,8 @@ export async function persistFlicaDirectImport(
         prevLegDutyIso = duty;
         const { dep, arr } = flicaRouteToAirports(leg.route);
         const blk = flicaHhmmToDecimal(leg.blockTime);
-        const releaseLocal = flicaNextReportToDigits(leg.nextReportTime);
+        const dEndLocal = flicaTimeTokenToDigits(leg.dEndLocal);
+        const reptLocal = flicaTimeTokenToDigits(leg.nextReportTime);
         const lot = (leg.layoverTime ?? '').trim();
         const layoverRest = extractLayoverRestFourDigits(lot) ?? (/^\d{4}$/.test(lot) ? lot : undefined);
         const { error: lErr } = await supabase.from('schedule_pairing_legs').insert({
@@ -291,7 +292,7 @@ export async function persistFlicaDirectImport(
           arrival_station: arr || null,
           scheduled_departure_local: leg.departLocal,
           scheduled_arrival_local: leg.arriveLocal,
-          release_time_local: releaseLocal,
+          release_time_local: dEndLocal,
           block_time: blk,
           layover_city: leg.layoverCity?.trim() ? leg.layoverCity.trim() : null,
           hotel_name: leg.hotel?.trim() ? leg.hotel.trim() : null,
@@ -304,6 +305,8 @@ export async function persistFlicaDirectImport(
             flica_direct: true,
             flica_route: leg.route?.trim() || undefined,
             layover_rest_display: layoverRest,
+            flica_rept_local: reptLocal,
+            flica_d_end_local: dEndLocal,
           },
         });
         if (lErr) throw lErr;

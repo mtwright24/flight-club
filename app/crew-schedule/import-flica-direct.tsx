@@ -576,7 +576,10 @@ export default function ImportFlicaDirectScreen() {
           stopSync();
           return;
         }
-        const { march, april, may } = await fetchFlicaScheduleAllMonths(cookieHeader, token1);
+        const { march, april, may } = await fetchFlicaScheduleAllMonths(cookieHeader, token1, {
+          scheduleDetailBaseUrl: flicaUrls.SCHEDULE_DETAIL,
+          refererUrl: flicaUrls.MAINMENU_LOADSCHEDULE,
+        });
         console.log('[FLICA] march html length', march?.length);
         console.log('[FLICA] april html length', april?.length);
         console.log('[FLICA] may html length', may?.length);

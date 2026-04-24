@@ -235,6 +235,10 @@ export type SchedulePairingDutyRow = {
   equipment_code?: string | null;
   /** Layover rest duration display (duty-day metadata on last leg). */
   layover_rest_display?: string | null;
+  /** From FLICA D-END row `REPT:` — next report (Crewline REPORT on the following duty day). */
+  flica_rept_local?: string | null;
+  /** From FLICA `D-END:` line (same row as REPT), if also in `normalized_json`. */
+  flica_d_end_local?: string | null;
   /** Parsed duty-day bundle (JSON) for D-END / layover context. */
   duty_day?: Record<string, unknown> | null;
   /** FLICA `DPS-ARS` string from `normalized_json.flica_route` — preferred for apply-row city. */
@@ -403,7 +407,8 @@ function coerceLegAirportCode(s: string | null | undefined): string | null {
   return t;
 }
 
-function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
+/** Maps a `schedule_pairing_legs` row to the duty DTO (also used by canonical pairing-day builder). */
+export function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
   const nj = l.normalized_json as {
     segment_confidence?: number;
     block_time_local?: string;
@@ -414,6 +419,8 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
     fltno_row_confidence?: number | null;
     flica_route?: string;
     layover_rest_display?: string;
+    flica_rept_local?: string;
+    flica_d_end_local?: string;
   } | null | undefined;
   const dd = nj?.duty_day;
   const blockNum = l.block_time as number | null | undefined;
@@ -429,6 +436,10 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
   const rawLay = rawNj || rawDd;
   const layRest =
     extractLayoverRestFourDigits(rawLay) || (/^\d{4}$/.test(rawLay) ? rawLay : null);
+  const fr = typeof nj?.flica_rept_local === 'string' ? nj.flica_rept_local.replace(/\D/g, '').slice(0, 4) : '';
+  const fd = typeof nj?.flica_d_end_local === 'string' ? nj.flica_d_end_local.replace(/\D/g, '').slice(0, 4) : '';
+  const flicaRept = /^\d{3,4}$/.test(fr) ? fr : null;
+  const flicaDend = /^\d{3,4}$/.test(fd) ? fd : null;
   const fromA = coerceLegAirportCode(l.departure_station as string | null | undefined);
   const toA = coerceLegAirportCode(l.arrival_station as string | null | undefined);
   const depL = (l.scheduled_departure_local as string) ?? null;
@@ -454,6 +465,8 @@ function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDutyRow {
     is_deadhead: (l.is_deadhead as boolean | null | undefined) ?? null,
     equipment_code: equip,
     layover_rest_display: layRest ?? null,
+    flica_rept_local: flicaRept,
+    flica_d_end_local: flicaDend,
     flica_route: typeof nj?.flica_route === 'string' && nj.flica_route.trim() ? nj.flica_route.trim() : null,
     duty_day: dd ?? null,
     row_confidence: (l.row_confidence as number) ?? nj?.segment_confidence ?? null,

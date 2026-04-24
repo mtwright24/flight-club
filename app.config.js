@@ -6,6 +6,10 @@ const appJson = require('./app.json');
 
 const googleMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
+/** When set, use SPA-style web config so Metro does not hammer SSG/λ (`render.js`) graphs during iOS/Android-only dev. See app.json `web.output: static` for production web exports. */
+const startNativeOnly =
+  process.env.EXPO_START_NATIVE_ONLY === '1' || process.env.EXPO_START_NATIVE_ONLY === 'true';
+
 module.exports = {
   expo: {
     ...appJson.expo,
@@ -22,6 +26,10 @@ module.exports = {
         ...(appJson.expo.android?.config || {}),
         googleMaps: { apiKey: googleMapsKey },
       },
+    },
+    web: {
+      ...(appJson.expo.web || {}),
+      ...(startNativeOnly ? { output: 'single' } : {}),
     },
     extra: {
       ...(appJson.expo.extra || {}),

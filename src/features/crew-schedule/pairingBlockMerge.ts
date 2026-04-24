@@ -45,6 +45,7 @@ function mergeTwoTrips(a: CrewScheduleTrip, b: CrewScheduleTrip): CrewScheduleTr
   const legs: CrewScheduleLeg[] = [...a.legs, ...b.legs].sort((x, y) => legSortKey(x).localeCompare(legSortKey(y)));
   const lay: Record<string, string> = { ...a.layoverByDate, ...b.layoverByDate };
   const stn: Record<string, string> = { ...a.layoverStationByDate, ...b.layoverStationByDate };
+  const canon = { ...a.canonicalPairingDays, ...b.canonicalPairingDays };
   // Caller only merges `b` when it is the calendar day after `a`'s `endDate`, so the block is [a.start, b.end].
   const startDate = a.startDate;
   const endDate = b.endDate;
@@ -63,6 +64,7 @@ function mergeTwoTrips(a: CrewScheduleTrip, b: CrewScheduleTrip): CrewScheduleTr
     destination: last?.arrivalAirport ?? b.destination,
     layoverByDate: Object.keys(lay).length > 0 ? lay : a.layoverByDate,
     layoverStationByDate: Object.keys(stn).length > 0 ? stn : a.layoverStationByDate,
+    ...(Object.keys(canon).length > 0 ? { canonicalPairingDays: canon } : {}),
     ledgerContext: {
       carryInFromPriorMonth: Boolean(a.ledgerContext?.carryInFromPriorMonth || b.ledgerContext?.carryInFromPriorMonth),
       carryOutToNextMonth: Boolean(a.ledgerContext?.carryOutToNextMonth || b.ledgerContext?.carryOutToNextMonth),

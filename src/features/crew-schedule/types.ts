@@ -2,6 +2,8 @@
  * Crew Schedule domain types — future-proof for import pipeline, tradeboard, chat, hotels, alerts.
  */
 
+import type { PairingDay } from './pairingDayModel';
+
 export type ScheduleDutyStatus =
   | 'flying'
   | 'deadhead'
@@ -78,6 +80,11 @@ export interface CrewScheduleTrip {
    * always the last sector arrival on that duty day.
    */
   layoverStationByDate?: Record<string, string>;
+  /**
+   * Canonical duty days from `schedule_pairings` + `schedule_pairing_legs` (FLICA); when set, classic
+   * ledger prefers this over `schedule_entries`-derived legs and display heuristics.
+   */
+  canonicalPairingDays?: Record<string, PairingDay>;
   /**
    * Monthly ledger: cross-month hints from adjacent `schedule_entries` fetches (display-only; no import change).
    */

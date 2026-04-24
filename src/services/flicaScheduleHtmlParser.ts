@@ -25,7 +25,9 @@ export interface FlicaLeg {
   layoverTime: string;    // "1547" or ""
   hotel: string;          // "Pullman San Francisco Bay"
   hotelPhone: string;     // "(650)598-9000"
-  nextReportTime: string; // "0600L" from D-END line
+  nextReportTime: string; // "0600L" from REPT: on the D-END line
+  /** "1413L" from D-END: on the same row — true duty end (Crewline D-END column). */
+  dEndLocal: string;
 }
 
 export interface FlicaCrew {
@@ -288,6 +290,15 @@ function parseLayover(row: string): { city: string; time: string } {
   }
 
   const city = codeMatch[1]!;
+  /**
+   * FLICA layover cell: `<a ...code=SFO...>SFO</a> 1547` — the 4-digit rest is often **after** `</a>`,
+   * not inside the anchor text (stripHtml would only see `SFO`).
+   */
+  const anchorEnd = codeMatch.index! + codeMatch[0].length;
+  const afterA = row.slice(anchorEnd).match(/^\s*(\d{4})/);
+  if (afterA && isPlausibleLayoverRestFour(afterA[1]!)) {
+    return { city, time: afterA[1]! };
+  }
   const text = stripHtml(codeMatch[2]);
   const timeMatch = text.match(/[A-Z]{3}\s+(\d{4})/);
   if (timeMatch) return { city, time: timeMatch[1]! };
@@ -359,6 +370,7 @@ function parseLegsTable(tableHtml: string): FlicaLeg[] {
         hotel: "",
         hotelPhone: "",
         nextReportTime: "",
+        dEndLocal: "",
       };
 
       legs.push(leg);
@@ -366,10 +378,15 @@ function parseLegsTable(tableHtml: string): FlicaLeg[] {
       continue;
     }
 
-    // ── D-END row — contains REPT and optionally hotel in same <tr> ──────
+    // ── D-END row — D-END: (duty end) and REPT: (next report) on the same <tr> ─
     // e.g.: D-END: 1413L (NR  900) REPT: 0600L | Pullman San Francisco Bay | (650)598-9000
     if (/D-END/i.test(row) && pendingLegIndex >= 0) {
       const text = stripHtml(row);
+
+      const dendMatch = text.match(/D-END:\s*(\d{4}[A-Z]?)/i);
+      if (dendMatch) {
+        legs[pendingLegIndex].dEndLocal = dendMatch[1] ?? '';
+      }
 
       // Next report time — match "REPT:" followed by a time token like "0600L"
       // The time token is digits optionally followed by a single letter (L/Z)

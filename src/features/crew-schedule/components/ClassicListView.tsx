@@ -7,7 +7,13 @@ import {
   isFcvClassicContinuationRow,
   shouldShowPairingInLedger,
 } from '../ledgerDisplay';
-import { mergeLayoverOntoLegDates, parseScheduleTimeMinutes, resolveClassicLayoverColumn } from '../scheduleTime';
+import type { PairingDay } from '../pairingDayModel';
+import {
+  formatLayoverColumnDisplay,
+  mergeLayoverOntoLegDates,
+  parseScheduleTimeMinutes,
+  resolveClassicLayoverColumn,
+} from '../scheduleTime';
 import { mergeLedgerPairingBlocks } from '../pairingBlockMerge';
 import { scheduleTheme as T } from '../scheduleTheme';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
@@ -135,6 +141,21 @@ function compactToken(raw?: string): string {
   return cleaned || v.slice(0, 3).toUpperCase();
 }
 
+/**
+ * LAYOVER column: FLICA layover rest (4 digits from last leg’s layover cell / `layover_rest_display`),
+ * not the first departure of the day.
+ */
+function layoverColumnForFlyingLedger(
+  trip: CrewScheduleTrip,
+  dateIso: string,
+  canon: PairingDay | undefined,
+): string {
+  if (canon) {
+    return formatLayoverColumnDisplay(canon.layoverRestDisplay) || '';
+  }
+  return resolveClassicLayoverColumn(trip, dateIso);
+}
+
 function buildRowForTrip(
   dateIso: string,
   trip: CrewScheduleTrip,
@@ -231,17 +252,30 @@ function buildRowFlyingLedger(
   d: Date,
   dayIdx: number,
 ): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
-  const legsOnDate = trip.legs.filter((l) => l.dutyDate === dateIso);
-  const cityText = buildFcvPairingCityColumn(trip, dateIso);
+  const canon = trip.canonicalPairingDays?.[dateIso];
+  const legsOnDate = trip.legs
+    .filter((l) => l.dutyDate === dateIso)
+    .sort((a, b) => (a.departLocal ?? '').localeCompare(b.departLocal ?? ''));
+  const cityText = canon
+    ? canon.displayCityLedger
+    : buildFcvPairingCityColumn(trip, dateIso);
   const showPairing = shouldShowPairingInLedger(trip, dateIso);
   const base = statusToKind(trip);
-  /** FCV: dash row = strict interior calendar day with no duty legs in the pairing block. */
-  const isContLike = isFcvClassicContinuationRow(trip, dateIso);
+  /** Prefer canonical `schedule_pairing_legs` when present; else FCV on synthetic legs. */
+  const isContLike = canon ? canon.continuationDay : isFcvClassicContinuationRow(trip, dateIso);
   const kind: RowKind = isContLike ? 'continuation' : base;
 
   const firstLegOnDate = legsOnDate[0];
   const lastLegOnDate = legsOnDate.length ? legsOnDate[legsOnDate.length - 1] : undefined;
   const legForTime = firstLegOnDate ?? (trip.legs.length ? trip.legs[0] : undefined);
+  const priorDateIso = addIsoDays(dateIso, -1);
+  const prevDayLegs =
+    !canon && dateIso > trip.startDate
+      ? trip.legs
+          .filter((l) => l.dutyDate === priorDateIso)
+          .sort((a, b) => (a.departLocal ?? '').localeCompare(b.departLocal ?? ''))
+      : [];
+  const lastLegPrevDay = prevDayLegs.length ? prevDayLegs[prevDayLegs.length - 1] : undefined;
 
   let pairingText = showPairing ? buildRowLabel(trip) : '';
   if (
@@ -258,12 +292,22 @@ function buildRowFlyingLedger(
   const reportText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
-      : toCompactTime(firstLegOnDate?.reportLocal || firstLegOnDate?.departLocal || legForTime?.reportLocal || legForTime?.departLocal);
+      : canon
+        ? toCompactTime(canon.reportTimeDisplay ?? undefined)
+        : toCompactTime(
+            dateIso === trip.startDate
+              ? firstLegOnDate?.reportLocal || firstLegOnDate?.departLocal
+              : firstLegOnDate?.reportLocal ||
+                  lastLegPrevDay?.releaseLocal ||
+                  firstLegOnDate?.departLocal,
+          );
   const dEndText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
-      : toCompactTime(legsOnDate.length ? lastLegOnDate?.releaseLocal : legForTime?.releaseLocal);
-  const layoverText = resolveClassicLayoverColumn(trip, dateIso);
+      : canon
+        ? toCompactTime(canon.dEndTimeDisplay ?? undefined)
+        : toCompactTime(legsOnDate.length ? lastLegOnDate?.arriveLocal : legForTime?.arriveLocal);
+  const layoverText = layoverColumnForFlyingLedger(trip, dateIso, canon);
   const wxText =
     kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
@@ -278,8 +322,12 @@ function buildRowFlyingLedger(
           : kind === 'reserve'
             ? 'RSV'
             : '';
-  const reportMinutes = parseScheduleTimeMinutes(legForTime?.reportLocal || legForTime?.departLocal);
-  const releaseMinutes = parseScheduleTimeMinutes(legForTime?.releaseLocal);
+  const reportMinutes = parseScheduleTimeMinutes(
+    canon ? canon.reportTimeDisplay : firstLegOnDate?.reportLocal || firstLegOnDate?.departLocal,
+  );
+  const releaseMinutes = parseScheduleTimeMinutes(
+    canon ? canon.dEndTimeDisplay : lastLegOnDate?.arriveLocal,
+  );
 
   return {
     id: `${trip.id}:${dateIso}:ledger`,

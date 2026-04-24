@@ -101,6 +101,12 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
     byDate.set(d, arr);
   }
   const dates = [...byDate.keys()].sort((x, y) => x.localeCompare(y));
+  for (const d of dates) {
+    const row = byDate.get(d);
+    if (row && row.length > 1) {
+      row.sort((a, b) => (a.departLocal ?? '').localeCompare(b.departLocal ?? ''));
+    }
+  }
   if (dates.length === 0) {
     return [
       {

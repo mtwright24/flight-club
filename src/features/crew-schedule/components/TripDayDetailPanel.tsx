@@ -44,8 +44,6 @@ export default function TripDayDetailPanel({ day, legStatuses, trackingLegId, on
             </View>
             {leg.flightNumber ? <Text style={styles.fn}>Flight {leg.flightNumber}</Text> : null}
             <View style={styles.timeGrid}>
-              <Row k="Report" v={leg.reportLocal} />
-              <Row k="D-END" v={leg.releaseLocal} />
               <Row k="Departure" v={leg.departLocal} />
               <Row k="Arrival" v={leg.arriveLocal} />
             </View>

@@ -91,16 +91,23 @@ export type FlicaCookiesInput = Partial<{
 const TOKEN1_RE = /scheduledetail\.cgi[^'"]*token=([0-9A-Fa-f]+)/i;
 const TOKEN2_RE = /GO=1&token=([0-9A-Fa-f]+)/;
 
-function buildFetchHeaders(cookieHeader: string): Record<string, string> {
-  return {
+/**
+ * FLICA schedule GETs — same header shape as `baseGetHeaders` in `flicaPoCScheduleHttp` (no `sec-fetch-*`);
+ * those nav-only hints are not part of the proven Charles / Mobile Safari string set for this CGI.
+ */
+function buildFlicaScheduledetailFetchHeaders(
+  cookieHeader: string,
+  refererUrl?: string
+): Record<string, string> {
+  const h: Record<string, string> = {
     Cookie: cookieHeader,
     'User-Agent': FLICA_CONSTANTS.USER_AGENT,
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
-    'sec-fetch-site': 'none',
-    'sec-fetch-dest': 'document',
-    'sec-fetch-mode': 'navigate',
   };
+  const ref = (refererUrl ?? '').trim();
+  if (ref.length > 0) h.Referer = ref;
+  return h;
 }
 
 export async function saveFlicaCredentials(username: string, password: string): Promise<void> {
@@ -163,10 +170,18 @@ export async function loadFlicaCookies(): Promise<string | null> {
 
 export async function fetchFlicaScheduleAllMonths(
   cookieHeader: string,
-  token1: string
+  token1: string,
+  options?: {
+    /** Must match the WebView airline host (same as `buildFlicaUrls(…).SCHEDULE_DETAIL`); default is legacy `FLICA_URLS`. */
+    scheduleDetailBaseUrl?: string;
+    /** e.g. `…/mainmenu.cgi?LoadSchedule=true&IsMobile=false` — matches PoC `runFlicaFcvHttpScheduledetailOnly` WebView path. */
+    refererUrl?: string;
+  }
 ): Promise<{ march: string; april: string; may: string }> {
-  const headers = buildFetchHeaders(cookieHeader);
-  const step2Url = `${FLICA_URLS.SCHEDULE_DETAIL}?BlockDate=0426&token=${encodeURIComponent(token1)}`;
+  const detailBase = (options?.scheduleDetailBaseUrl?.trim() || FLICA_URLS.SCHEDULE_DETAIL).replace(/\/$/, '');
+  const referer = options?.refererUrl;
+  const headers = buildFlicaScheduledetailFetchHeaders(cookieHeader, referer);
+  const step2Url = `${detailBase}?BlockDate=0426&token=${encodeURIComponent(token1)}`;
   let step2Res: Response;
   try {
     step2Res = await fetch(step2Url, { method: 'GET', headers: headers as HeadersInit, redirect: 'follow' });
@@ -182,6 +197,11 @@ export async function fetchFlicaScheduleAllMonths(
     throw new Error('FLICA: no GO=1 token in scheduledetail step1 HTML');
   }
 
+  /** Same as PoC `runScheduledetailGo1MultiMonth`: GO=1 fetches use step-1 scheduledetail as Referer. */
+  const go1Referer =
+    (typeof step2Res.url === 'string' && step2Res.url.length > 0 ? step2Res.url : step2Url) || step2Url;
+  const goHeaders = buildFlicaScheduledetailFetchHeaders(cookieHeader, go1Referer);
+
   const blocks = [
     { key: 'march' as const, blockDate: '0326' },
     { key: 'april' as const, blockDate: '0426' },
@@ -191,10 +211,10 @@ export async function fetchFlicaScheduleAllMonths(
 
   for (const { key, blockDate } of blocks) {
     const junk = Date.now();
-    const u = `${FLICA_URLS.SCHEDULE_DETAIL}?GO=1&token=${encodeURIComponent(token2)}&BlockDate=${blockDate}&JUNK=${junk}`;
+    const u = `${detailBase}?GO=1&token=${encodeURIComponent(token2)}&BlockDate=${blockDate}&JUNK=${junk}`;
     let r: Response;
     try {
-      r = await fetch(u, { method: 'GET', headers: headers as HeadersInit, redirect: 'follow' });
+      r = await fetch(u, { method: 'GET', headers: goHeaders as HeadersInit, redirect: 'follow' });
     } catch (e) {
       throw new Error(`FLICA scheduledetail ${key} failed: ${String(e)}`);
     }

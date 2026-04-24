@@ -13,6 +13,9 @@ import {
   mergeCarryInTripsByContiguousPairing,
   mergeTripsWithPriorMonthRows,
 } from '../tripMapper';
+import { attachCanonicalPairingDaysToTrips } from '../pairingDayApply';
+import { fetchPairingCalendarBlocksForBatchIds, uniqueBatchIdsFromEntryRows } from '../pairingDayFetch';
+import { supabase } from '../../../lib/supabaseClient';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 
 export function useScheduleTripsForMonth(year: number, month: number) {
@@ -51,7 +54,21 @@ export function useScheduleTripsForMonth(year: number, month: number) {
         const idMerged = mergeTripsWithPriorMonthRows(baseTrips, rows, prevRows, year, month);
         const mergedCarry = mergeCarryInTripsByContiguousPairing(idMerged, rows, prevRows, year, month);
         const mergedBlocks = mergeLedgerPairingBlocks(mergedCarry, 1);
-        const withLedger = enrichTripsWithLedgerContext(mergedBlocks, prevRows, nextRows, {
+        const batchIds = uniqueBatchIdsFromEntryRows([rows, prevRows, nextRows]);
+        let withCanon: CrewScheduleTrip[] = mergedBlocks;
+        if (batchIds.length) {
+          const { data: auth } = await supabase.auth.getUser();
+          const uid = auth.user?.id;
+          if (uid) {
+            try {
+              const blocks = await fetchPairingCalendarBlocksForBatchIds(uid, batchIds, year, month);
+              withCanon = attachCanonicalPairingDaysToTrips(mergedBlocks, blocks);
+            } catch {
+              withCanon = mergedBlocks;
+            }
+          }
+        }
+        const withLedger = enrichTripsWithLedgerContext(withCanon, prevRows, nextRows, {
           currentMonthRows: rows,
           viewYear: year,
           viewMonth: month,
