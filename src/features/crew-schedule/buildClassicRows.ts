@@ -50,13 +50,24 @@ export type SchedulePairing = {
   /** FLICA public id e.g. J3H95 */
   pairing_id: string;
   base_code: string | null;
+  operate_start_date?: string | null;
+  pairing_start_date?: string | null;
   operate_end_date?: string | null;
   pairing_end_date?: string | null;
 };
 
 export type SchedulePairingLegLite = {
+  id?: string;
   pairing_id: string;
   duty_date: string | null;
+  flight_number?: string | null;
+  segment_type?: string | null;
+  departure_station?: string | null;
+  arrival_station?: string | null;
+  scheduled_departure_local?: string | null;
+  scheduled_arrival_local?: string | null;
+  release_time_local?: string | null;
+  is_deadhead?: boolean | null;
   normalized_json: Record<string, unknown>;
   created_at?: string | null;
 };
@@ -73,6 +84,34 @@ function pairingEndDateIso(pairing: SchedulePairing | undefined): string | null 
   const raw = pairing.operate_end_date ?? pairing.pairing_end_date;
   if (raw == null || typeof raw !== 'string') return null;
   return sliceDutyIso(raw);
+}
+
+function pairingStartDateIso(pairing: SchedulePairing | undefined): string | null {
+  if (!pairing) return null;
+  const raw = pairing.operate_start_date ?? pairing.pairing_start_date;
+  if (raw == null || typeof raw !== 'string') return null;
+  return sliceDutyIso(raw);
+}
+
+function monthFirstIso(year: number, month1to12: number): string {
+  const m = String(month1to12).padStart(2, '0');
+  return `${year}-${m}-01`;
+}
+
+function monthLastIso(year: number, month1to12: number): string {
+  const m = String(month1to12).padStart(2, '0');
+  const lastDom = new Date(year, month1to12, 0).getDate();
+  return `${year}-${m}-${String(lastDom).padStart(2, '0')}`;
+}
+
+/** Trip window overlaps [monthFirst, monthLast]. Used by trip list filters (tripMapper). */
+export function pairingOverlapsCalendarMonth(p: SchedulePairing, year: number, month1to12: number): boolean {
+  const ms = monthFirstIso(year, month1to12);
+  const me = monthLastIso(year, month1to12);
+  const st = pairingStartDateIso(p);
+  const en = pairingEndDateIso(p);
+  if (!st || !en) return true;
+  return st <= me && en >= ms;
 }
 
 /**
@@ -423,7 +462,9 @@ export async function fetchScheduleDutiesAndPairingsForMonth(
 
   const { data: pRows, error: pErr } = await supabase
     .from('schedule_pairings')
-    .select('id, import_id, pairing_id, base_code, operate_end_date, pairing_end_date')
+    .select(
+      'id, import_id, pairing_id, base_code, operate_start_date, pairing_start_date, operate_end_date, pairing_end_date',
+    )
     .eq('user_id', uid)
     .eq('import_id', latestImportId);
 
@@ -436,7 +477,9 @@ export async function fetchScheduleDutiesAndPairingsForMonth(
   if (pairingUuidList.length) {
     const { data: legRows, error: legErr } = await supabase
       .from('schedule_pairing_legs')
-      .select('pairing_id, duty_date, normalized_json, created_at')
+      .select(
+        'id,pairing_id,duty_date,flight_number,segment_type,departure_station,arrival_station,scheduled_departure_local,scheduled_arrival_local,release_time_local,is_deadhead,normalized_json,created_at',
+      )
       .in('pairing_id', pairingUuidList)
       .order('created_at', { ascending: true });
     if (!legErr && legRows) {

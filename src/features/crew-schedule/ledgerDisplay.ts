@@ -2,8 +2,12 @@
  * FCV / Crewline monthly **pairing block** display — city column comes from a **per-pairing day sequence**
  * (not naive per-row leg heuristics that produced MCO/JFK for J4173 or dropped dash days for J3H95).
  */
-import { parseScheduleTimeMinutes } from './scheduleTime';
+import { addIsoDays } from './ledgerContext';
+import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
+import { isOvernightArrivalInRow } from './overnightArrivalInRow';
 import type { CrewScheduleLeg, CrewScheduleTrip } from './types';
+
+export { isOvernightArrivalInRow };
 
 function compactToken(raw?: string): string {
   const v = String(raw || '').trim();
@@ -18,14 +22,6 @@ function normCode(s: string): string {
   return compactToken(s).toUpperCase();
 }
 
-/** Local clock: arrival "before" departure ⇒ lands the next calendar morning (overnight / dash day). */
-export function isOvernightArrivalInRow(dep?: string, arr?: string): boolean {
-  const d = dep ? parseScheduleTimeMinutes(dep) : null;
-  const a = arr ? parseScheduleTimeMinutes(arr) : null;
-  if (d == null || a == null) return false;
-  return a < d;
-}
-
 function legsOnDate(trip: CrewScheduleTrip, dateIso: string): CrewScheduleLeg[] {
   return trip.legs.filter((l) => l.dutyDate === dateIso);
 }
@@ -33,7 +29,10 @@ function legsOnDate(trip: CrewScheduleTrip, dateIso: string): CrewScheduleLeg[] 
 function lastLegChronological(trip: CrewScheduleTrip): CrewScheduleLeg | undefined {
   if (!trip.legs.length) return undefined;
   const sorted = [...trip.legs].sort(
-    (a, b) => (a.dutyDate ?? '').localeCompare(b.dutyDate ?? '') || (a.id ?? '').localeCompare(b.id ?? ''),
+    (a, b) =>
+      (a.dutyDate ?? '').localeCompare(b.dutyDate ?? '') ||
+      departureTimeForDutyDaySortKey(a.departLocal).localeCompare(departureTimeForDutyDaySortKey(b.departLocal)) ||
+      (a.id ?? '').localeCompare(b.id ?? ''),
   );
   return sorted[sorted.length - 1];
 }
@@ -89,11 +88,29 @@ export function buildFcvPairingCityColumn(trip: CrewScheduleTrip, dateIso: strin
   if (dateIso === trip.startDate) {
     const fcv = trip.layoverStationByDate?.[dateIso];
     if (fcv) return compactToken(fcv);
-    if (legs.length) {
-      if (hasOvernightLeg(legs)) return compactToken(legs[legs.length - 1]!.arrivalAirport) || '';
-      return compactToken(legs[legs.length - 1]!.arrivalAirport) || '';
+    let dayLegs = legs;
+    if (dayLegs.length === 0) {
+      const nextIso = addIsoDays(dateIso, 1);
+      const next = legsOnDate(trip, nextIso);
+      const bl = next[0];
+      const base = normCode(trip.base || 'JFK');
+      if (
+        bl &&
+        isOvernightArrivalInRow(bl.departLocal, bl.arriveLocal) &&
+        normCode(bl.departureAirport) === base
+      ) {
+        dayLegs = [bl];
+      }
+    }
+    if (dayLegs.length) {
+      if (hasOvernightLeg(dayLegs)) return compactToken(dayLegs[dayLegs.length - 1]!.arrivalAirport) || '';
+      return compactToken(dayLegs[dayLegs.length - 1]!.arrivalAirport) || '';
     }
     return '';
+  }
+
+  if (dateIso > trip.startDate && dateIso < trip.endDate) {
+    return DASH;
   }
 
   if (legs.length === 0) return DASH;
@@ -112,8 +129,37 @@ export function isFcvClassicContinuationRow(trip: CrewScheduleTrip, dateIso: str
   return legsOnDate(trip, dateIso).length === 0;
 }
 
-/** First calendar day of the (possibly merged) trip block: show pairing. */
-export function shouldShowPairingInLedger(trip: CrewScheduleTrip, dateIso: string): boolean {
-  if (String(trip.pairingCode || '').toUpperCase() === 'PTV') return true;
-  return dateIso === trip.startDate;
+/** First rendered day where this trip shows pairing id in Classic (carry-in ⇒ first calendar day inside the viewed month, not March-only `trip.startDate`). */
+export function firstClassicLedgerPairingShowDate(
+  trip: CrewScheduleTrip,
+  fullDateList: readonly string[],
+  viewMonthStart: string,
+  viewMonthEnd: string,
+): string | null {
+  const lo = trip.startDate;
+  const hi = trip.endDate;
+  const inTrip = (iso: string) => iso >= lo && iso <= hi;
+  const inViewed = (iso: string) => iso >= viewMonthStart && iso <= viewMonthEnd;
+
+  if (lo < viewMonthStart && hi >= viewMonthStart) {
+    for (const iso of fullDateList) {
+      if (!inTrip(iso)) continue;
+      if (inViewed(iso)) return iso;
+    }
+  }
+  for (const iso of fullDateList) {
+    if (inTrip(iso)) return iso;
+  }
+  return null;
+}
+
+export function shouldShowPairingInClassicLedgerMonth(
+  trip: CrewScheduleTrip,
+  dateIso: string,
+  fullDateList: readonly string[],
+  viewMonthStart: string,
+  viewMonthEnd: string,
+): boolean {
+  const d = firstClassicLedgerPairingShowDate(trip, fullDateList, viewMonthStart, viewMonthEnd);
+  return d !== null && dateIso === d;
 }

@@ -363,23 +363,6 @@ export async function persistFlicaDirectImport(
         const lot = (leg.layoverTime ?? '').trim();
         const layoverRest = extractLayoverRestFourDigits(lot) ?? (/^\d{4}$/.test(lot) ? lot : undefined);
         const storedDep = leg.departLocal;
-        console.log(
-          '[PERSIST LEG]',
-          'pairing:',
-          pairing.id,
-          'flicaDay:',
-          leg.dayOfWeek,
-          'flicaDate:',
-          leg.date,
-          'route:',
-          leg.route,
-          'dep:',
-          leg.departLocal,
-          'resolvedDate:',
-          duty,
-          'storedDep:',
-          storedDep,
-        );
         const { error: lErr } = await supabase.from('schedule_pairing_legs').insert({
           pairing_id: pairingUuid,
           duty_date: duty,

@@ -15,8 +15,6 @@ type ExpoDeviceNativeModule = {
 };
 
 let cached: DeviceSnapshot | null = null;
-/** Dev: log missing native module at most once (avoids spam when effects re-run or Fast Refresh resets). */
-let devWarnedMissingExpoDevice = false;
 
 /**
  * Resolves device info via `requireOptionalNativeModule` — does **not** import `expo-device/build/Device`,
@@ -31,12 +29,6 @@ function load(): DeviceSnapshot {
 
   const native = requireOptionalNativeModule<ExpoDeviceNativeModule>('ExpoDevice');
   if (!native) {
-    if (__DEV__ && !devWarnedMissingExpoDevice) {
-      devWarnedMissingExpoDevice = true;
-      console.log(
-        '[expo-device] ExpoDevice native module not linked — cannot detect simulator vs phone. Attempting push registration anyway; add expo-device to the dev client for reliable device checks.'
-      );
-    }
     // If the native module is missing (common until dev client is rebuilt with expo-device), we used to
     // assume "not a physical device" and skipped Supabase entirely — real phones then never got a row.
     // Prefer attempting registration; Expo push APIs still fail on simulators when appropriate.

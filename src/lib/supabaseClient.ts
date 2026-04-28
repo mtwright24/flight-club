@@ -51,15 +51,6 @@ rawUrl = rewriteLocalhostForAndroidEmulator(rawUrl);
 export const SUPABASE_URL = rawUrl;
 /** Public anon key (same as createClient second arg). Edge Functions need `apikey` + `Authorization` on raw fetch. */
 export const SUPABASE_ANON_KEY = supabaseAnonKey;
-if (__DEV__) {
-  console.log('[Supabase] URL host:', (() => {
-    try {
-      return new URL(SUPABASE_URL).host;
-    } catch {
-      return '(invalid URL)';
-    }
-  })());
-}
 
 // Supabase session blobs can exceed SecureStore's ~2048 byte limit.
 // Native: AsyncStorage. Web: localStorage (AsyncStorage web impl can throw when `window` is missing, e.g. Node/SSR).

@@ -5,6 +5,7 @@
  * Display-only — does not change Supabase.
  */
 import { addIsoDays } from './ledgerContext';
+import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
 import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus } from './types';
 
 function calendarSpanDays(startIso: string, endIso: string): number {
@@ -20,13 +21,16 @@ function isRealPairing(p: string): boolean {
 
 function isMergeableDuty(t: CrewScheduleTrip): boolean {
   if (!isRealPairing(t.pairingCode)) return false;
-  if (t.status === 'off' || t.status === 'pto' || t.status === 'rsv' || t.status === 'training') return false;
+  if (t.status === 'off' || t.status === 'pto' || t.status === 'ptv' || t.status === 'rsv' || t.status === 'training')
+    return false;
   if (t.status === 'other') return false;
   return true;
 }
 
 function legSortKey(l: CrewScheduleLeg): string {
-  return `${l.dutyDate ?? ''}::${l.id}`;
+  /** Same calendar day + multiple sectors: Crewline chronological dep (0009 after 1926). */
+  const dk = departureTimeForDutyDaySortKey(l.departLocal);
+  return `${l.dutyDate ?? ''}::${dk}::${l.id ?? ''}`;
 }
 
 function pickMergedStatus(a: CrewScheduleTrip, b: CrewScheduleTrip, legs: CrewScheduleLeg[]): ScheduleDutyStatus {

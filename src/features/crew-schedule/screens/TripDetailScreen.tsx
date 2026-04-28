@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  fetchCrewScheduleTripByPairingUuid,
   fetchPairingDutiesForScheduleEntries,
   fetchTripGroupEntries,
   fetchTripMetadataForGroup,
@@ -14,6 +15,7 @@ import { dutiesToCrewScheduleLegs } from '../jetblueFlicaImport';
 import { entriesToSingleTrip } from '../tripMapper';
 import { getMockTripById } from '../mockScheduleData';
 import { tradePostPrefillParams } from '../tradePostPrefillParams';
+import { consumeStashedTripForDetail } from '../tripDetailNavCache';
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
@@ -66,7 +68,6 @@ export default function TripDetailScreen() {
         setLoadingTrip(false);
         return;
       }
-      setLoadingTrip(true);
       if (tripId.startsWith('demo-')) {
         setTrip(getMockTripById(tripId));
         setTripMeta(null);
@@ -74,12 +75,26 @@ export default function TripDetailScreen() {
         return;
       }
       if (UUID_RE.test(tripId)) {
+        const stashed = consumeStashedTripForDetail(tripId);
+        if (!stashed) setLoadingTrip(true);
+        else {
+          setTrip(stashed);
+          setTripMeta(null);
+          setLoadingTrip(false);
+        }
         try {
-          const [rows, meta] = await Promise.all([
-            fetchTripGroupEntries(tripId),
+          const [fromNormalized, meta] = await Promise.all([
+            fetchCrewScheduleTripByPairingUuid(tripId),
             fetchTripMetadataForGroup(tripId).catch(() => null),
           ]);
-          if (!cancelled) {
+          if (!cancelled && fromNormalized) {
+            setTrip(fromNormalized);
+            setTripMeta(meta);
+          } else if (!cancelled && !fromNormalized && !stashed) {
+            const [rows, metaLegacy] = await Promise.all([
+              fetchTripGroupEntries(tripId),
+              fetchTripMetadataForGroup(tripId).catch(() => null),
+            ]);
             const base = entriesToSingleTrip(rows);
             let next = base;
             if (base) {
@@ -92,10 +107,10 @@ export default function TripDetailScreen() {
               }
             }
             setTrip(next);
-            setTripMeta(meta);
+            setTripMeta(metaLegacy);
           }
         } catch {
-          if (!cancelled) {
+          if (!cancelled && !stashed) {
             setTrip(undefined);
             setTripMeta(null);
           }

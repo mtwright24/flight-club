@@ -3,7 +3,7 @@
  * dutyPeriodDate is the only duty-date source of truth; no post-import alignment.
  */
 import type { FlicaLeg, FlicaPairing } from '../../services/flicaScheduleHtmlParser';
-import { isOvernightArrivalInRow } from './ledgerDisplay';
+import { isOvernightArrivalInRow } from './overnightArrivalInRow';
 
 export interface NormalizedDutyDay {
   dutyDateIso: string;
@@ -124,7 +124,14 @@ function flicaRouteToAirports(route: string): { dep: string; arr: string } {
   return { dep: (parts[0] ?? '').toUpperCase(), arr: (parts[1] ?? '').toUpperCase() };
 }
 
-/** 0000–0559 treat as 2400+ for same-duty-day order only. */
+/**
+ * Same-duty-day leg order: continuation deps after midnight (next calendar morning) sort **after**
+ * evening deps (e.g. LAS–JFK **0009** after BOS–LAS **1926** → key 2400+9 vs 1926).
+ *
+ * We **do not** shift normal morning outbound legs (e.g. JFK–LAS **0553**) — the old `n <= 559` check
+ * wrongly treated **0553** as 553 ≤ 559 and bumped it past **0944**, reversing J3H95 Apr 22 order.
+ * Exclude **05:00–06:59** local (typical first-wave report) from the bump.
+ */
 export function departureTimeForDutyDaySortKey(raw: string | null | undefined): string {
   const s = String(raw ?? '').trim().replace(':', '');
   if (!/^\d{1,4}$/.test(s)) {
@@ -134,9 +141,17 @@ export function departureTimeForDutyDaySortKey(raw: string | null | undefined): 
   if (!/^\d{4}$/.test(pad)) {
     return String(raw ?? '');
   }
-  const n = parseInt(pad, 10);
-  if (n >= 0 && n <= 559) {
-    return String(2400 + n);
+  const hh = parseInt(pad.slice(0, 2), 10);
+  const mm = parseInt(pad.slice(2, 4), 10);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm) || hh > 23 || mm > 59) {
+    return pad;
+  }
+  const minutesFromMidnight = hh * 60 + mm;
+  if (minutesFromMidnight >= 0 && minutesFromMidnight < 6 * 60) {
+    if (minutesFromMidnight >= 5 * 60 && minutesFromMidnight < 7 * 60) {
+      return pad;
+    }
+    return String(2400 + minutesFromMidnight);
   }
   return pad;
 }

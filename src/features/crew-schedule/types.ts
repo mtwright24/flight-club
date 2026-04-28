@@ -9,7 +9,10 @@ export type ScheduleDutyStatus =
   | 'deadhead'
   | 'off'
   | 'rsv'
+  /** Paid time off (not vacation block). */
   | 'pto'
+  /** Paid time vacation — distinct from PTO; pairing code is typically PTV. */
+  | 'ptv'
   | 'continuation'
   | 'training'
   | 'other';

@@ -49,7 +49,6 @@ export function PushNotificationRoot() {
   const navigateFromPushData = useCallback(
     async (data: Record<string, unknown>) => {
       if (data.flightClubLocalTest === true) {
-        console.log('[LocalNotifTest] skipping navigation for local test notification');
         return;
       }
       const now = Date.now();
@@ -68,12 +67,6 @@ export function PushNotificationRoot() {
     [router]
   );
 
-  /** High-visibility: Metro sometimes hides console.log; warn shows reliably when JS is connected. */
-  useEffect(() => {
-    if (!__DEV__) return;
-    console.log('[Push] PushNotificationRoot mounted — if you never see this, the phone is not running JS from this Metro session.');
-  }, []);
-
   /** Register token + deactivate on logout */
   useEffect(() => {
     const prev = prevUserRef.current;
@@ -86,18 +79,9 @@ export function PushNotificationRoot() {
 
     void (async () => {
       try {
-        if (__DEV__) {
-          console.log('[Push] register attempt for user', userId.slice(0, 8) + '…');
-        }
         const res = await registerPushTokenForSignedInUser(userId);
-        if (res.ok) {
-          if (__DEV__) {
-            console.log('[Push] register result', res.skipped ? { ok: true, skipped: true } : { ok: true });
-          }
-        } else {
-          if (__DEV__) {
-            console.log('[Push] register failed', res.error);
-          }
+        if (!res.ok && __DEV__) {
+          console.warn('[Push] register failed', res.error);
         }
       } catch (e) {
         if (__DEV__) {
@@ -140,7 +124,6 @@ export function PushNotificationRoot() {
     const responseSub = addNotificationResponseReceivedListener((response: PushResponseLike) => {
       const data = pushDataRecord(response.notification.request.content.data);
       if (data.flightClubLocalTest === true) {
-        console.log('[LocalNotifTest] notification response — deep link disabled for local test');
         return;
       }
       void refreshAllBadgeCountsFromServer();
@@ -159,7 +142,6 @@ export function PushNotificationRoot() {
       if (!response) return;
       const data = pushDataRecord(response.notification.request.content.data);
       if (data.flightClubLocalTest === true) {
-        console.log('[LocalNotifTest] cold start from local test tray — skipping navigation');
         return;
       }
       void navigateFromPushData(data);

@@ -1,13 +1,19 @@
 import { addIsoDays } from './ledgerContext';
+import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
 import { formatTripCompactShorthand } from './jetblueFlicaImport';
 import { extractLayoverRestFourDigits, formatLayoverColumnDisplay } from './scheduleTime';
 import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus } from './types';
 import type { ScheduleEntryRow } from './scheduleApi';
+import type { ScheduleDuty, SchedulePairing, SchedulePairingLegLite } from './buildClassicRows';
+import { pairingOverlapsCalendarMonth } from './buildClassicRows';
+import { isOvernightArrivalToPairingBase } from './b6CrewlineOvernightBase';
 
 function statusFromCode(code: string | null | undefined): ScheduleDutyStatus {
   const u = String(code ?? '').toUpperCase();
   if (u === 'OFF') return 'off';
   if (u === 'PTO') return 'pto';
+  /** Some sources put PTV in status; pairing_code also used (see entryGroupToTrip). */
+  if (u === 'PTV') return 'ptv';
   if (u === 'RSV') return 'rsv';
   if (u === 'DH') return 'deadhead';
   if (u === 'CONT') return 'continuation';
@@ -99,7 +105,7 @@ function legsFromRow(day: ScheduleEntryRow): CrewScheduleLeg[] {
   if (st === 'continuation') return [];
 
   const pairing = String(day.pairing_code ?? '').toUpperCase();
-  if (pairing === 'PTV' || st === 'off' || st === 'pto') return [];
+  if (pairing === 'PTV' || st === 'off' || st === 'pto' || st === 'ptv') return [];
 
   const segs = parseRouteSegmentsFromCity(day.city);
   if (!segs.length) {
@@ -254,7 +260,12 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
   const m = Number(first.month_key.slice(5, 7));
 
   const pairingCode = firstNonContPairing(days);
-  const tripStatus = statusFromCode(first.status_code);
+  /**
+   * Paid time vacation (PTV) is indicated by `pairing_code`; FLICA often still puts `PTO` in status for those rows.
+   * Prefer pairing so PTV ≠ generic PTO (paid time off).
+   */
+  const tripStatus: ScheduleDutyStatus =
+    normPairingCode(pairingCode) === 'PTV' ? 'ptv' : statusFromCode(first.status_code);
 
   const legs: CrewScheduleLeg[] = [];
   for (const d of days) {
@@ -288,6 +299,25 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
     if (m?.[1]) layoverStationByDate[d.date] = m[1]!.toUpperCase();
   }
 
+  /**
+   * Extend through the arrival calendar day when the last segment is a Crewline/JetBlue overnight to base /
+   * co-base red-eye (`0009`-style deps count even when wall-clock arrival &gt; dep), matching
+   * `isOvernightArrivalToPairingBase` + normalized `schedule_pairings` span. Otherwise a CONT-only trailing
+   * row can be omitted and J3H95 collapses from BOS / – / JFK into two ledger lines.
+   */
+  let endDate = last.date;
+  if (legs.length > 0) {
+    const chronLast = legs[legs.length - 1]!;
+    const dutyIso = chronLast.dutyDate;
+    const pairingBase = 'JFK';
+    const overnightToBaseLeg =
+      !!dutyIso &&
+      isOvernightArrivalToPairingBase(chronLast.arrivalAirport, chronLast.departLocal, chronLast.arriveLocal, pairingBase);
+    if (dutyIso && (overnightToBaseLeg || hhmmCrossesMidnight(chronLast.departLocal, chronLast.arriveLocal))) {
+      endDate = maxIsoDates([endDate, addIsoDays(dutyIso, 1)]);
+    }
+  }
+
   return {
     id: first.trip_group_id,
     pairingCode,
@@ -295,8 +325,8 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
     month: m,
     year: y,
     startDate: first.date,
-    endDate: last.date,
-    dutyDays: calendarSpanDays(first.date, last.date),
+    endDate,
+    dutyDays: calendarSpanDays(first.date, endDate),
     status: tripStatus,
     routeSummary: routeSummary || pairingCode,
     origin,
@@ -306,4 +336,178 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
     ...(Object.keys(layoverByDate).length > 0 ? { layoverByDate } : {}),
     ...(Object.keys(layoverStationByDate).length > 0 ? { layoverStationByDate } : {}),
   };
+}
+
+function isoDate10(raw: unknown): string | null {
+  const s = String(raw ?? '')
+    .trim()
+    .slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+function minIsoDates(dates: string[]): string {
+  return [...dates].sort()[0]!;
+}
+
+function maxIsoDates(dates: string[]): string {
+  return [...dates].sort()[dates.length - 1]!;
+}
+
+function hhmmCrossesMidnight(dep?: string, arr?: string): boolean {
+  const ds = String(dep ?? '').replace(/\D/g, '');
+  const ars = String(arr ?? '').replace(/\D/g, '');
+  if (ds.length < 3 || ars.length < 3) return false;
+  const dn = parseInt(ds.slice(-4).padStart(4, '0'), 10);
+  const an = parseInt(ars.slice(-4).padStart(4, '0'), 10);
+  return an < dn;
+}
+
+/**
+ * One `CrewScheduleTrip` per `schedule_pairings` row touching the month, from normalized duties + legs.
+ * `trip.id` = `schedule_pairings.id` (UUID) for navigation and trip detail.
+ */
+export function buildCrewScheduleTripsFromNormalizedPack(
+  viewYear: number,
+  viewMonth: number,
+  duties: ScheduleDuty[],
+  pairings: SchedulePairing[],
+  pairingLegs: SchedulePairingLegLite[],
+): CrewScheduleTrip[] {
+  const out: CrewScheduleTrip[] = [];
+  const dutyByPairing = new Map<string, ScheduleDuty[]>();
+  for (const d of duties) {
+    const pid = String(d.pairing_id ?? '').trim();
+    if (!pid) continue;
+    const arr = dutyByPairing.get(pid) ?? [];
+    arr.push(d);
+    dutyByPairing.set(pid, arr);
+  }
+  for (const arr of dutyByPairing.values()) {
+    arr.sort((a, b) => String(a.duty_date).localeCompare(String(b.duty_date)));
+  }
+
+  for (const pairing of pairings) {
+    const pairUuid = pairing.id;
+    const code = String(pairing.pairing_id ?? '').trim();
+    if (!pairUuid || !code) continue;
+    if (!pairingOverlapsCalendarMonth(pairing, viewYear, viewMonth)) continue;
+
+    const tripDuties = dutyByPairing.get(code) ?? [];
+    const tripLegsRaw = pairingLegs.filter((l) => l.pairing_id === pairUuid);
+    if (!tripDuties.length && !tripLegsRaw.length) continue;
+
+    const tripLegs = [...tripLegsRaw].sort((a, b) => {
+      const da = String(a.duty_date ?? '');
+      const db = String(b.duty_date ?? '');
+      if (da !== db) return da.localeCompare(db);
+      /** Same duty day: Crewline order — e.g. J3H95 BOS-LAS 1926 before LAS-JFK 0009 (0009 must not sort before 1926 lexically). */
+      const ta = departureTimeForDutyDaySortKey(a.scheduled_departure_local as string | null | undefined);
+      const tb = departureTimeForDutyDaySortKey(b.scheduled_departure_local as string | null | undefined);
+      const td = ta.localeCompare(tb);
+      if (td !== 0) return td;
+      return String(a.created_at ?? '').localeCompare(String(b.created_at ?? ''));
+    });
+
+    const dutyDateToReport = new Map<string, string | null>();
+    for (const d of tripDuties) {
+      const iso = isoDate10(d.duty_date);
+      if (iso) dutyDateToReport.set(iso, d.report_time ?? null);
+    }
+
+    const legs: CrewScheduleLeg[] = [];
+    for (let idx = 0; idx < tripLegs.length; idx++) {
+      const L = tripLegs[idx]!;
+      const dutyIso = isoDate10(L.duty_date);
+      const prev = idx > 0 ? tripLegs[idx - 1]! : null;
+      const prevIso = prev ? isoDate10(prev.duty_date) : null;
+      const isFirstLegOfDay = dutyIso != null && dutyIso !== prevIso;
+      const rep = isFirstLegOfDay && dutyIso ? dutyDateToReport.get(dutyIso) : null;
+      legs.push({
+        id: L.id ? String(L.id) : `${pairUuid}-leg-${idx}`,
+        dutyDate: dutyIso ?? undefined,
+        departureAirport: String(L.departure_station ?? '')
+          .trim()
+          .toUpperCase()
+          .slice(0, 4),
+        arrivalAirport: String(L.arrival_station ?? '')
+          .trim()
+          .toUpperCase()
+          .slice(0, 4),
+        reportLocal: rep ? formatTimeDisplay(rep) : undefined,
+        departLocal: formatTimeDisplay(L.scheduled_departure_local),
+        arriveLocal: formatTimeDisplay(L.scheduled_arrival_local),
+        releaseLocal: formatTimeDisplay(L.release_time_local),
+        flightNumber: L.flight_number ? String(L.flight_number).trim() : undefined,
+        isDeadhead: String(L.segment_type ?? '').toLowerCase() === 'deadhead' || !!L.is_deadhead,
+      });
+    }
+
+    const legDutyDates = tripLegs.map((x) => isoDate10(x.duty_date)).filter((x): x is string => Boolean(x));
+
+    let firstDutyIso =
+      tripDuties.length > 0 ? isoDate10(tripDuties[0]!.duty_date) : legDutyDates.length ? minIsoDates(legDutyDates) : null;
+    let lastDutyIso =
+      tripDuties.length > 0
+        ? isoDate10(tripDuties[tripDuties.length - 1]!.duty_date)
+        : legDutyDates.length
+          ? maxIsoDates(legDutyDates)
+          : null;
+
+    const opStart = isoDate10(pairing.operate_start_date ?? pairing.pairing_start_date);
+    const opEnd = isoDate10(pairing.operate_end_date ?? pairing.pairing_end_date);
+
+    const startCand: string[] = [];
+    if (firstDutyIso) startCand.push(firstDutyIso);
+    if (opStart) startCand.push(opStart);
+    let startDate = startCand.length ? minIsoDates(startCand) : firstDutyIso ?? opStart ?? '';
+
+    const endCand: string[] = [];
+    if (lastDutyIso) endCand.push(lastDutyIso);
+    if (opEnd) endCand.push(opEnd);
+    let endDate = endCand.length ? maxIsoDates(endCand) : lastDutyIso ?? opEnd ?? startDate;
+
+    if (lastDutyIso && legs.length) {
+      const lastLeg = legs[legs.length - 1]!;
+      if (hhmmCrossesMidnight(lastLeg.departLocal, lastLeg.arriveLocal)) {
+        const span = addIsoDays(lastDutyIso!, 1);
+        endDate = maxIsoDates([endDate, span]);
+      }
+    }
+
+    const layoverByDate: Record<string, string> = {};
+    const layoverStationByDate: Record<string, string> = {};
+    for (const d of tripDuties) {
+      const di = isoDate10(d.duty_date);
+      if (!di) continue;
+      const lt = formatLayoverColumnDisplay(String(d.layover_time ?? '').trim());
+      if (lt) layoverByDate[di] = lt;
+      const city = String(d.layover_city ?? '').trim();
+      if (city) layoverStationByDate[di] = city;
+    }
+
+    const routeSummary = buildCompactTripRouteSummary(legs, code);
+    const firstLeg = legs[0];
+    const lastL = legs[legs.length - 1];
+
+    out.push({
+      id: String(pairUuid),
+      pairingCode: code,
+      base: pairing.base_code ? String(pairing.base_code).trim() : 'JFK',
+      month: viewMonth,
+      year: viewYear,
+      startDate,
+      endDate,
+      dutyDays: calendarSpanDays(startDate, endDate),
+      status: 'flying',
+      routeSummary: routeSummary || code,
+      origin: firstLeg?.departureAirport,
+      destination: lastL?.arrivalAirport,
+      legs,
+      ...(Object.keys(layoverByDate).length > 0 ? { layoverByDate } : {}),
+      ...(Object.keys(layoverStationByDate).length > 0 ? { layoverStationByDate } : {}),
+    });
+  }
+
+  out.sort((a, b) => a.startDate.localeCompare(b.startDate));
+  return out;
 }

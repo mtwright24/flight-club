@@ -3,6 +3,8 @@
  * Single adapter over `CrewScheduleTrip` — no duplicate fetch logic.
  */
 
+import { routeSummaryFromCanonicalLedgerCities } from './pairingDayApply';
+import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
 import { formatLayoverColumnDisplay } from './scheduleTime';
 import type { PairingDay } from './pairingDayModel';
 import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleCrewMember, ScheduleDutyStatus } from './types';
@@ -51,6 +53,8 @@ export function statusLabelFromTrip(trip: CrewScheduleTrip): string {
       return 'Off';
     case 'pto':
       return 'PTO';
+    case 'ptv':
+      return 'PTV';
     case 'rsv':
       return 'Reserve';
     case 'training':
@@ -96,6 +100,21 @@ function segmentTimeForUi(t: string | null | undefined): string | undefined {
   return s;
 }
 
+function depTimeLocalForSort(leg: CrewScheduleLeg): string {
+  return String(leg.departLocal ?? leg.reportLocal ?? '').trim();
+}
+
+function sortLegsByDepartureForTripDetail(legs: CrewScheduleLeg[]): CrewScheduleLeg[] {
+  if (legs.length < 2) return legs;
+  return [...legs].sort((a, b) => {
+    const ka = departureTimeForDutyDaySortKey(depTimeLocalForSort(a));
+    const kb = departureTimeForDutyDaySortKey(depTimeLocalForSort(b));
+    const c = ka.localeCompare(kb);
+    if (c !== 0) return c;
+    return (a.id ?? '').localeCompare(b.id ?? '');
+  });
+}
+
 /** When {@link CrewScheduleTrip.canonicalPairingDays} is set, per-leg flight / block / equipment match `schedule_pairing_legs`. */
 function crewLegsFromCanonicalPairingDay(pd: PairingDay, dateIso: string, tripId: string): CrewScheduleLeg[] {
   if (!pd.segments.length) return [];
@@ -120,6 +139,8 @@ function crewLegsFromCanonicalPairingDay(pd: PairingDay, dateIso: string, tripId
  * If there are no legs, a single synthetic day is returned for the trip start date.
  * When {@link CrewScheduleTrip.canonicalPairingDays} has segments for a date, those replace entry-derived
  * legs (preserves per-leg flight numbers and multi-leg duty days from stored pairing rows).
+ * Within each day, legs use {@link departureTimeForDutyDaySortKey}: normal morning deps (including 0553)
+ * stay before later same-day deps; true post‑midnight continuations sort after evening.
  */
 export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
   const byDate = new Map<string, CrewScheduleLeg[]>();
@@ -129,7 +150,6 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
     arr.push(leg);
     byDate.set(d, arr);
   }
-  // Keep leg order within a duty day as on `CrewScheduleTrip.legs` (DB / FLICA insert order), not sorted by dep time.
   if (trip.canonicalPairingDays) {
     for (const [dateIso, pd] of Object.entries(trip.canonicalPairingDays)) {
       if (pd?.phantomBlankDay) continue;
@@ -154,7 +174,7 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
     dateIso,
     dayLabel: `Day ${i + 1}`,
     dayIndex: i + 1,
-    legs: byDate.get(dateIso) ?? [],
+    legs: sortLegsByDepartureForTripDetail(byDate.get(dateIso) ?? []),
     layoverRestLine: layoverRestForDate(trip, dateIso),
   }));
 }
@@ -200,10 +220,11 @@ function buildLayoverHotelPreview(trip: CrewScheduleTrip): TripLayoverHotelPrevi
  */
 export function buildTripDetailViewModel(trip: CrewScheduleTrip): TripDetailViewModel {
   const pairingCode = trip.pairingCode !== '—' && trip.pairingCode ? trip.pairingCode : 'Duty';
+  const routeFromCanon = routeSummaryFromCanonicalLedgerCities(trip)?.trim();
   return {
     trip,
     pairingCode,
-    routeSummary: trip.routeSummary || pairingCode,
+    routeSummary: routeFromCanon || trip.routeSummary || pairingCode,
     status: trip.status,
     statusLabel: statusLabelFromTrip(trip),
     dateRangeLabel: formatTripDateRange(trip),

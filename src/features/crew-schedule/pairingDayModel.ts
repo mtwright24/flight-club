@@ -11,6 +11,7 @@ import { isOvernightArrivalInRow } from './ledgerDisplay';
 import { mapLegRowToDuty, type SchedulePairingDutyRow } from './jetblueFlicaImport';
 import type { SchedulePairingRow } from './jetblueFlicaImport';
 import { formatLayoverColumnDisplay } from './scheduleTime';
+import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
 
 function compactStation(raw: string | null | undefined): string {
   const v = String(raw ?? '').trim();
@@ -45,26 +46,6 @@ function trimStr(s: string | null | undefined): string {
 }
 
 /**
- * Sort key for one duty day: departures 0000–0559 sort after 0600–2359 (next-day continuation),
- * e.g. 0009 → 2409 so it orders after 1926. Display-only; does not change stored `departure_time_local`.
- */
-function departureTimeForDutyDaySort(raw: string | null | undefined): string {
-  const s = String(raw ?? '').trim().replace(':', '');
-  if (!/^\d{1,4}$/.test(s)) {
-    return String(raw ?? '');
-  }
-  const pad = s.padStart(4, '0');
-  if (!/^\d{4}$/.test(pad)) {
-    return String(raw ?? '');
-  }
-  const n = parseInt(pad, 10);
-  if (n >= 0 && n <= 559) {
-    return String(2400 + n);
-  }
-  return pad;
-}
-
-/**
  * FLICA may attach `hotel_name` to more than one leg; **midnight-crossing** sectors (arrival time
  * before departure time on the same row) are en route, not the overnight layover stop. Prefer
  * non-crossing hotel legs; the last one by departure time is the real layover (e.g. JFK–LAS vs LAS–MCO
@@ -74,16 +55,12 @@ function departureTimeForDutyDaySort(raw: string | null | undefined): string {
  * return **null** so CITY is **"–"** (continuation) instead of a bogus layover at LAS. True ground layovers
  * (e.g. BOS) sit on same-day, non-crossing sectors; see J3H95 (BOS / – / JFK on three rows).
  */
-function findHotelLeg(
-  dayLegs: SchedulePairingDutyRow[],
-  dateForLog: string,
-  skipDetailLog?: boolean,
-): SchedulePairingDutyRow | null {
+function findHotelLeg(dayLegs: SchedulePairingDutyRow[]): SchedulePairingDutyRow | null {
   if (!dayLegs.length) return null;
   const byDep = [...dayLegs].sort(
     (a, b) =>
-      departureTimeForDutyDaySort(a.departure_time_local).localeCompare(
-        departureTimeForDutyDaySort(b.departure_time_local),
+      departureTimeForDutyDaySortKey(a.departure_time_local).localeCompare(
+        departureTimeForDutyDaySortKey(b.departure_time_local),
       ),
   );
   const withHotel = byDep.filter((L) => trimStr(L.hotel_name));
@@ -92,24 +69,6 @@ function findHotelLeg(
     (L) =>
       !isOvernightArrivalInRow(L.departure_time_local ?? undefined, L.arrival_time_local ?? undefined),
   );
-  if (!skipDetailLog && typeof __DEV__ !== 'undefined' && __DEV__) {
-    const date = dateForLog;
-    console.log(
-      '[FIND HOTEL LEG]',
-      'date:',
-      date,
-      'withHotel:',
-      withHotel.map((l) => ({
-        route: `${l.from_airport ?? ''}-${l.to_airport ?? ''}`,
-        dep: l.departure_time_local,
-        arr: l.arrival_time_local,
-        crossing: isOvernightArrivalInRow(l.departure_time_local ?? undefined, l.arrival_time_local ?? undefined),
-        hotel: l.hotel_name,
-      })),
-      'nonCrossing:',
-      nonCrossingHotelLegs.map((l) => `${l.from_airport ?? ''}-${l.to_airport ?? ''}`),
-    );
-  }
   if (nonCrossingHotelLegs.length > 0) {
     return nonCrossingHotelLegs[nonCrossingHotelLegs.length - 1]!;
   }
@@ -183,7 +142,7 @@ export function computeCrewlineCityForDutyDay(params: {
   const { calendarDate, blockLastLegDate, baseCode, dayDuties } = params;
   if (dayDuties.length === 0) return '-';
   const byDep = [...dayDuties].sort((a, b) =>
-    departureTimeForDutyDaySort(a.departure_time_local).localeCompare(departureTimeForDutyDaySort(b.departure_time_local)),
+    departureTimeForDutyDaySortKey(a.departure_time_local).localeCompare(departureTimeForDutyDaySortKey(b.departure_time_local)),
   );
   for (const d of byDep) {
     const raw = String(d.layover_city ?? '').trim();
@@ -284,34 +243,11 @@ export function buildPairingCalendarBlockFromDb(
   const baseCode = (trimStr(pairing.base_code) || 'JFK').toUpperCase();
   const preAlignDuties = (legRows ?? []).map((r) => mapLegRowToDuty(r));
   const duties = preAlignDuties;
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    for (const a of preAlignDuties) {
-      const b = duties.find((d) => String(d.id) === String(a.id));
-      const before = a.duty_date ? String(a.duty_date).slice(0, 10) : '';
-      const after = b?.duty_date ? String(b.duty_date).slice(0, 10) : '';
-      if (before && after && before !== after) {
-        const f = (a.from_airport ?? '').trim();
-        const t0 = (a.to_airport ?? '').trim();
-        const route = f && t0 ? `${f}-${t0}` : f || t0 || '—';
-        console.log(
-          '[ALIGN RESULT]',
-          code,
-          route,
-          'duty_date',
-          before,
-          '→',
-          after,
-          'dep',
-          a.departure_time_local,
-        );
-      }
-    }
-  }
   const withDate = duties.filter((d) => d.duty_date);
   const dutiesChrono = [...duties].sort(
     (a, b) =>
       (a.duty_date ?? '').localeCompare(b.duty_date ?? '') ||
-      departureTimeForDutyDaySort(a.departure_time_local).localeCompare(departureTimeForDutyDaySort(b.departure_time_local)),
+      departureTimeForDutyDaySortKey(a.departure_time_local).localeCompare(departureTimeForDutyDaySortKey(b.departure_time_local)),
   );
   if (withDate.length === 0) return null;
 
@@ -336,7 +272,7 @@ export function buildPairingCalendarBlockFromDb(
     if (ld > opEnd) opEnd = ld;
   }
   const sortDay = (a: SchedulePairingDutyRow, b: SchedulePairingDutyRow) =>
-    departureTimeForDutyDaySort(a.departure_time_local).localeCompare(departureTimeForDutyDaySort(b.departure_time_local));
+    departureTimeForDutyDaySortKey(a.departure_time_local).localeCompare(departureTimeForDutyDaySortKey(b.departure_time_local));
 
   for (const ld of legDates) {
     const list = (byDate.get(ld) ?? []).sort(sortDay);
@@ -377,6 +313,7 @@ export function buildPairingCalendarBlockFromDb(
     const cTo = C ? compactStation(C.to_airport) : '';
 
     let displayCity = '';
+    let usedHotelForCity = false;
     let sameDayTurn = false;
     let dEnd: string | null = null;
     let layoverRest: string | null = null;
@@ -406,21 +343,6 @@ export function buildPairingCalendarBlockFromDb(
       const pureBaseFromBlockEnd =
         dateIso === blockLastLegDate && cTo.length > 0 && cTo.toUpperCase() === baseCode.toUpperCase();
       const pureBase = pureBaseFromBlockEnd || overnightToBaseArrival;
-      if (dateIso === '2026-04-24' && typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log(
-          '[DEBUG F24]',
-          'isCont:',
-          isCont,
-          'pureBase:',
-          pureBase,
-          'C leg:',
-          `${C.from_airport ?? ''}-${C.to_airport ?? ''}`,
-          'C arr:',
-          C.arrival_time_local,
-          'C dep:',
-          C.departure_time_local,
-        );
-      }
       if (pureBase) {
         pureBaseArrivalOnly = true;
         displayCity = baseCode;
@@ -445,102 +367,18 @@ export function buildPairingCalendarBlockFromDb(
         );
       gatewayOnly =
         !overBase && dayLegs.length === 1 && Boolean(firstLeg) && isGatewayLegToRedeyeToBase(firstLeg!, dutiesChrono, baseCode);
-      const hotelLeg = overBase || gatewayOnly ? null : findHotelLeg(dayLegs, dateIso);
-      if (dateIso === '2026-04-06' && typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log(
-          '[DEBUG M06]',
-          'hotelLegs:',
-          dayLegs
-            .filter((l) => trimStr(l.hotel_name))
-            .map((l) => ({
-              route: `${l.from_airport ?? ''}-${l.to_airport ?? ''}`,
-              dep: l.departure_time_local,
-              arr: l.arrival_time_local,
-              hotel: l.hotel_name,
-              crossing: isOvernightArrivalInRow(l.departure_time_local ?? undefined, l.arrival_time_local ?? undefined),
-            })),
-        );
-      }
-      if (dateIso === '2026-04-22' && typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log(
-          '[DEBUG W22]',
-          'hotelLeg:',
-          hotelLeg
-            ? `${hotelLeg.from_airport ?? ''}-${hotelLeg.to_airport ?? ''}`
-            : 'null',
-          'hotelLeg.layoverCity:',
-          hotelLeg?.layover_city,
-          'hotelLeg.layoverTime:',
-          hotelLeg?.layover_rest_display,
-        );
-      }
-      if (dateIso === '2026-04-29' && typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log(
-          '[DEBUG W29]',
-          'hotelLegs:',
-          dayLegs
-            .filter((l) => trimStr(l.hotel_name))
-            .map((l) => ({
-              route: `${l.from_airport ?? ''}-${l.to_airport ?? ''}`,
-              dep: l.departure_time_local,
-              arr: l.arrival_time_local,
-              hotel: l.hotel_name,
-              crossing: isOvernightArrivalInRow(l.departure_time_local ?? undefined, l.arrival_time_local ?? undefined),
-              layoverCity: l.layover_city,
-              layoverTime: l.layover_rest_display,
-            })),
-        );
-      }
+      const hotelLeg = overBase || gatewayOnly ? null : findHotelLeg(dayLegs);
       if (gatewayOnly && firstLeg) {
         displayCity = compactStation(firstLeg.from_airport) || '-';
         dEnd = dEndDigitsFromParserLeg(firstLeg);
         layoverRest = null;
       } else if (hotelLeg) {
+        usedHotelForCity = true;
         const rawCity = trimStr(hotelLeg.layover_city);
         displayCity = rawCity ? formatLayoverCityRaw(rawCity) : compactStation(hotelLeg.to_airport) || '-';
         dEnd = dEndDigitsFromParserLeg(hotelLeg);
         layoverRest = dateIso === blockLastLegDate ? null : layoverTimeDisplayForLeg(hotelLeg);
       } else {
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log(
-            '[NO HOTEL LEG]',
-            'date:',
-            dateIso,
-            'lastLeg:',
-            `${lastSorted.from_airport ?? ''}-${lastSorted.to_airport ?? ''}`,
-            'dep:',
-            lastSorted.departure_time_local,
-            'arr:',
-            lastSorted.arrival_time_local,
-            'crossing:',
-            isOvernightArrivalInRow(lastSorted.departure_time_local ?? undefined, lastSorted.arrival_time_local ?? undefined),
-            'toAirport:',
-            lastSorted.to_airport,
-            'baseCode:',
-            baseCode,
-            'isBase:',
-            lastSorted.to_airport === baseCode,
-            'isBaseCompact:',
-            compactStation(lastSorted.to_airport) === baseCode,
-          );
-        }
-        if (dateIso === '2026-04-17' && typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log(
-            '[DEBUG F17]',
-            'lastLeg:',
-            `${lastSorted.from_airport ?? ''}-${lastSorted.to_airport ?? ''}`,
-            'dep:',
-            lastSorted.departure_time_local,
-            'arr:',
-            lastSorted.arrival_time_local,
-            'crossing:',
-            isOvernightArrivalInRow(lastSorted.departure_time_local ?? undefined, lastSorted.arrival_time_local ?? undefined),
-            'to_airport:',
-            lastSorted.to_airport,
-            'baseCode:',
-            baseCode,
-          );
-        }
         const crosses = isOvernightArrivalInRow(
           lastSorted.departure_time_local ?? undefined,
           lastSorted.arrival_time_local ?? undefined,
@@ -548,7 +386,12 @@ export function buildPairingCalendarBlockFromDb(
         const toSt = compactStation(lastSorted.to_airport);
         const toBase = toSt.length > 0 && toSt.toUpperCase() === baseCode;
         if (crosses) {
-          displayCity = '-';
+          /** Red-eye to an outstation (e.g. JFK→LHR): show arrival city, not "—". */
+          if (!toBase && toSt.length > 0) {
+            displayCity = toSt;
+          } else {
+            displayCity = '-';
+          }
           dEnd = dEndDigitsFromParserLeg(lastSorted);
         } else if (toBase) {
           displayCity = baseCode;
@@ -565,25 +408,17 @@ export function buildPairingCalendarBlockFromDb(
       }
     }
 
-    if (dateIso === '2026-04-23' && typeof __DEV__ !== 'undefined' && __DEV__) {
-      const L23 = dayLegs.length ? dayLegs[dayLegs.length - 1]! : null;
-      const dEndDisplay = dEnd;
-      console.log(
-        '[DEBUG T23]',
-        'legs:',
-        dayLegs.map((l) => ({
-          route: `${l.from_airport ?? ''}-${l.to_airport ?? ''}`,
-          dep: l.departure_time_local,
-          arr: l.arrival_time_local,
-          crossing: isOvernightArrivalInRow(l.departure_time_local ?? undefined, l.arrival_time_local ?? undefined),
-        })),
-        'lastLeg:',
-        L23 ? `${L23.from_airport ?? ''}-${L23.to_airport ?? ''}` : 'n/a',
-        'dEnd shown:',
-        dEndDisplay,
-        'isCont:',
-        isCont,
-      );
+    /** FCV / J3H95: strict middle calendar days (with flying) show "—" in city, not base on redeye-in. */
+    if (
+      dayLegs.length > 0 &&
+      dateIso > blockFirstLegDate &&
+      dateIso < blockLastLegDate &&
+      !phantomBlankDay &&
+      !pureBaseArrivalOnly &&
+      !usedHotelForCity &&
+      !gatewayOnly
+    ) {
+      displayCity = '-';
     }
 
     const dayIdx = isCont ? -1 : flyOrd;
@@ -605,7 +440,7 @@ export function buildPairingCalendarBlockFromDb(
         if (di > 0) {
           const prevD = legDates[di - 1]!;
           const prevLegs = [...(byDate.get(prevD) ?? [])].sort(sortDay);
-          const prevHotel = findHotelLeg(prevLegs, prevD, true);
+          const prevHotel = findHotelLeg(prevLegs);
           if (prevHotel && trimStr(prevHotel.flica_rept_local)) {
             rep = digitsOrNull(prevHotel.flica_rept_local);
           } else {
@@ -639,7 +474,7 @@ export function buildPairingCalendarBlockFromDb(
       !isCont && dayLegs.length
         ? overBase || gatewayOnly
           ? null
-          : findHotelLeg(dayLegs, dateIso, true)
+          : findHotelLeg(dayLegs)
         : null;
     const rawLayoverStation =
       pureBaseArrivalOnly || phantomBlankDay
@@ -744,6 +579,63 @@ export function earliestPairingDateInViewedMonth(
   }
   if (dset.size === 0) return null;
   return minIso([...dset]);
+}
+
+/**
+ * First calendar day in `[mStart,mEnd]` where this trip has real duty to show: prefer
+ * `canonicalPairingDays` with at least one segment (FLICA truth), else {@link earliestPairingDateInViewedMonth}.
+ */
+export function earliestDisplayedDutyInViewedMonth(
+  trip: CrewScheduleTrip,
+  mStart: string,
+  mEnd: string,
+): string | null {
+  const c = trip.canonicalPairingDays;
+  const withSegs: string[] = [];
+  if (c) {
+    for (const [k, day] of Object.entries(c)) {
+      if (k < mStart || k > mEnd) continue;
+      if (day?.phantomBlankDay) continue;
+      if ((day?.segments?.length ?? 0) > 0) withSegs.push(k);
+    }
+  }
+  if (withSegs.length) return minIso(withSegs);
+  return earliestPairingDateInViewedMonth(trip, mStart, mEnd);
+}
+
+/** Earliest day with ≥1 canon segment — preferred over schedule_entries legs to trim phantom prefix dates. */
+export function earliestCanonSegmentDutyIso(trip: CrewScheduleTrip): string | null {
+  const c = trip.canonicalPairingDays;
+  if (!c) return null;
+  let best: string | null = null;
+  for (const [k, day] of Object.entries(c)) {
+    if (day?.phantomBlankDay) continue;
+    if ((day?.segments?.length ?? 0) === 0) continue;
+    if (!best || k < best) best = k;
+  }
+  return best;
+}
+
+/** Min leg `dutyDate` calendar ISO; ignores invalid/missing. */
+export function earliestLegDutyIsoFromTripLegs(trip: CrewScheduleTrip): string | null {
+  let best: string | null = null;
+  for (const l of trip.legs) {
+    const d = l.dutyDate;
+    if (!d || typeof d !== 'string') continue;
+    const s = String(d).trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) continue;
+    if (!best || s < best) best = s;
+  }
+  return best;
+}
+
+/**
+ * First operational duty day for phantom-prefix detection: canon segments trump OCR legs when present.
+ */
+export function earliestOperationalDutyIso(trip: CrewScheduleTrip): string | null {
+  const cn = earliestCanonSegmentDutyIso(trip);
+  if (cn) return cn;
+  return earliestLegDutyIsoFromTripLegs(trip);
 }
 
 /**

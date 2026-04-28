@@ -10,11 +10,6 @@ export type PushTokenRegistrationResult =
 /** Last successfully registered Expo push token for this JS runtime (for lightweight presence updates). */
 let lastRegisteredUserId: string | null = null;
 let lastRegisteredPushToken: string | null = null;
-/** Dev: "skipped — not physical device" log at most once per JS runtime. */
-let devLoggedSkipNotPhysicalDevice = false;
-/** Dev: Personal Team / stripped `aps-environment` — expected on some local iOS builds; log once only. */
-let devLoggedSkipNoApsEntitlement = false;
-
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -26,26 +21,15 @@ function nowIso(): string {
 export async function registerPushTokenForSignedInUser(userId: string): Promise<PushTokenRegistrationResult> {
   try {
     if (!expoDeviceSafe.getIsDevice()) {
-      if (__DEV__ && !devLoggedSkipNotPhysicalDevice) {
-        devLoggedSkipNotPhysicalDevice = true;
-        console.log('[Push] Skipping push registration — not a physical device (simulator/emulator).');
-      }
       return { ok: true, skipped: true };
     }
 
     const reg = await registerExpoPushTokenAsync();
     if (!reg.ok) {
       if (reg.reason === 'not_physical_device') {
-        if (__DEV__ && !devLoggedSkipNotPhysicalDevice) {
-          devLoggedSkipNotPhysicalDevice = true;
-          console.log('[Push] Skipping push registration — not a physical device.');
-        }
         return { ok: true, skipped: true };
       }
       if (reg.reason === 'permission_denied') {
-        if (__DEV__) {
-          console.log('[Push] Notification permission denied — push disabled until enabled in Settings.');
-        }
         return { ok: false, error: 'permission_denied' };
       }
       if (reg.reason === 'missing_project_id') {
@@ -57,12 +41,6 @@ export async function registerPushTokenForSignedInUser(userId: string): Promise<
       }
       const msg = `${reg.message ?? ''} ${reg.reason ?? ''}`;
       if (/aps-environment/i.test(msg) || /no valid .*entitlement/i.test(msg)) {
-        if (__DEV__ && !devLoggedSkipNoApsEntitlement) {
-          devLoggedSkipNoApsEntitlement = true;
-          console.log(
-            '[Push] Skipping Expo push token — no iOS push entitlement in this build (normal for some dev / Personal Team clients).'
-          );
-        }
         return { ok: true, skipped: true };
       }
       console.warn('[Push] Push token registration failed:', reg.message ?? reg.reason);
@@ -92,9 +70,6 @@ export async function registerPushTokenForSignedInUser(userId: string): Promise<
 
     lastRegisteredUserId = userId;
     lastRegisteredPushToken = reg.token;
-    if (__DEV__) {
-      console.log('[Push] Registered / refreshed push token for user', userId.slice(0, 8) + '…');
-    }
     return { ok: true };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

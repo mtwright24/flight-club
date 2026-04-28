@@ -7,6 +7,15 @@ import {
   fetchPairingsForBatch,
   type SchedulePairingDutyRow,
 } from './jetblueFlicaImport';
+import {
+  fetchScheduleDutiesAndPairingsForMonth,
+  buildClassicRowsFromDuties,
+  type ClassicScheduleRow,
+  type ScheduleDuty as NormScheduleDuty,
+  type SchedulePairing as NormSchedulePairing,
+  type SchedulePairingLegLite,
+} from './buildClassicRows';
+import { buildCrewScheduleTripsFromNormalizedPack } from './tripMapper';
 
 export type ScheduleEntryRow = {
   id: string;
@@ -133,6 +142,22 @@ export async function fetchScheduleEntriesForMonth(
 
   if (error) throw error;
   return (data ?? []) as ScheduleEntryRow[];
+}
+
+/**
+ * Union `month_key` and calendar-`date` month fetches (same columns). Leg-date rows win on `id` so
+ * mis-keyed imports still load in Classic without changing the import RPC.
+ */
+export function mergeScheduleEntriesLegDatePreferring(
+  monthKeyRows: ScheduleEntryRow[],
+  legDateRows: ScheduleEntryRow[],
+): ScheduleEntryRow[] {
+  const map = new Map<string, ScheduleEntryRow>();
+  for (const r of legDateRows) map.set(r.id, r);
+  for (const r of monthKeyRows) {
+    if (!map.has(r.id)) map.set(r.id, r);
+  }
+  return [...map.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
 
 export async function fetchTripGroupEntries(tripGroupId: string): Promise<ScheduleEntryRow[]> {
@@ -565,7 +590,8 @@ export async function buildApplyRowsFromPairingBatch(
         return `${a}-${b}`;
       });
       const city = segs.length ? segs.join(', ') : null;
-      const firstDay = Boolean(startIso && dateStr === startIso);
+      const opStartDay = startIso.slice(0, 10);
+      const firstDay = Boolean(/^\d{4}-\d{2}-\d{2}$/.test(opStartDay) && dateStr === opStartDay);
       const lastLeg = dayLegs[dayLegs.length - 1];
       const departFirst = dayLegs[0]?.departure_time_local ?? null;
       const fcvStn = (lastLeg?.layover_city ?? '').trim();
@@ -729,6 +755,73 @@ export async function hasFlicaDirectImportForMonth(year: number, month: number):
     .maybeSingle();
   if (error) return false;
   return data != null;
+}
+
+/** Normalized month load: `schedule_duties` + `schedule_pairings` + legs → trips + optional classic row audit. */
+export type FetchTripsFromDutiesForMonthResult = {
+  trips: CrewScheduleTrip[];
+  classicRows: ClassicScheduleRow[];
+  importBatchId: string | null;
+};
+
+export async function fetchTripsFromDutiesForMonth(
+  year: number,
+  month: number,
+): Promise<FetchTripsFromDutiesForMonthResult> {
+  const pack = await fetchScheduleDutiesAndPairingsForMonth(year, month);
+  if (!pack.duties.length) {
+    return { trips: [], classicRows: [], importBatchId: null };
+  }
+  const classicRows = buildClassicRowsFromDuties(pack.duties, pack.pairings, pack.pairingLegs);
+  const trips = buildCrewScheduleTripsFromNormalizedPack(year, month, pack.duties, pack.pairings, pack.pairingLegs);
+  const rawId = pack.duties[0]?.import_id;
+  const importBatchId = typeof rawId === 'string' && rawId.length ? rawId : null;
+  return { trips, classicRows, importBatchId };
+}
+
+/** Trip detail / deep links: load one pairing by `schedule_pairings.id` (same id as `CrewScheduleTrip.id`). */
+export async function fetchCrewScheduleTripByPairingUuid(pairingUuid: string): Promise<CrewScheduleTrip | null> {
+  const { data: u, error: ue } = await supabase.auth.getUser();
+  if (ue || !u.user) return null;
+  const uid = u.user.id;
+  const { data: pairing, error } = await supabase
+    .from('schedule_pairings')
+    .select(
+      'id, import_id, pairing_id, base_code, operate_start_date, pairing_start_date, operate_end_date, pairing_end_date',
+    )
+    .eq('id', pairingUuid)
+    .eq('user_id', uid)
+    .maybeSingle();
+  if (error || !pairing) return null;
+
+  const { data: dutyRows } = await supabase
+    .from('schedule_duties')
+    .select('*')
+    .eq('user_id', uid)
+    .eq('import_id', pairing.import_id as string)
+    .eq('pairing_id', pairing.pairing_id as string)
+    .order('duty_date', { ascending: true });
+
+  const { data: legRows } = await supabase
+    .from('schedule_pairing_legs')
+    .select(
+      'id,pairing_id,duty_date,flight_number,segment_type,departure_station,arrival_station,scheduled_departure_local,scheduled_arrival_local,release_time_local,is_deadhead,normalized_json,created_at',
+    )
+    .eq('pairing_id', pairingUuid)
+    .order('created_at', { ascending: true });
+
+  const op = String(pairing.operate_start_date ?? pairing.pairing_start_date ?? '').slice(0, 10);
+  const y = op.length >= 10 ? Number(op.slice(0, 4)) : new Date().getFullYear();
+  const m = op.length >= 10 ? Number(op.slice(5, 7)) : new Date().getMonth() + 1;
+
+  const trips = buildCrewScheduleTripsFromNormalizedPack(
+    y,
+    m,
+    (dutyRows ?? []) as NormScheduleDuty[],
+    [pairing as NormSchedulePairing],
+    (legRows ?? []) as SchedulePairingLegLite[],
+  );
+  return trips[0] ?? null;
 }
 
 export async function fetchTripMetadataForTripGroups(tripGroupIds: string[]): Promise<ScheduleTripMetadataRow[]> {

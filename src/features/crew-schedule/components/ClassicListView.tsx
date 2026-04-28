@@ -1,13 +1,13 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { memo, useCallback, useMemo, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 import { addIsoDays } from '../ledgerContext';
 import {
   buildFcvPairingCityColumn,
   isFcvClassicContinuationRow,
-  shouldShowPairingInLedger,
+  shouldShowPairingInClassicLedgerMonth,
 } from '../ledgerDisplay';
-import type { PairingDay } from '../pairingDayModel';
+import { earliestOperationalDutyIso, type PairingDay } from '../pairingDayModel';
 import {
   formatLayoverColumnDisplay,
   mergeLayoverOntoLegDates,
@@ -15,23 +15,22 @@ import {
   resolveClassicLayoverColumn,
 } from '../scheduleTime';
 import { mergeLedgerPairingBlocks } from '../pairingBlockMerge';
-import { normPairingCode } from '../pairingDayModel';
-import {
-  buildClassicRowsFromDuties,
-  fetchScheduleDutiesAndPairingsForMonth,
-  type ClassicScheduleRow,
-} from '../buildClassicRows';
+import { departureTimeForDutyDaySortKey } from '../scheduleNormalizer';
 import { scheduleTheme as T } from '../scheduleTheme';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
-/** Crewline carry-in: month title is still “April” but the first rows are Mon 30 / Tue 31 (same letter + two-digit day as in-month). */
+/**
+ * Carry-in prefix: trips that began before day 1 of the viewed month (e.g. late March at top of April).
+ * We still block **future-calendar-month** ISO rows (mis-keyed imports / overlap) so May+ never blends above April.
+ */
 
 type RowKind =
   | 'trip'
   | 'continuation'
   | 'off'
   | 'pto'
+  | 'ptv'
   | 'reserve'
   | 'unavailable'
   | 'special'
@@ -66,12 +65,75 @@ function parseLocalNoon(isoDate: string): Date {
   return new Date(`${isoDate}T12:00:00`);
 }
 
-function toIsoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+/** Calendar date in local timezone — avoids UTC shift (e.g. May 1–2 appearing above April) from `toISOString()`. */
+function dateToIsoDateLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+type DayRowBuilt = Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'>;
+
+function normPairingForDedupe(pc: string | null | undefined): string {
+  return String(pc ?? '')
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * Display-only: same calendar day + same pairing (duplicate `trip_group`/merged fetch) → one row.
+ * Import pipeline unchanged; richer row wins (times + city + legs/canonical).
+ */
+function classicRowDedupeKey(e: DayRowBuilt): string {
+  const t = e.trip;
+  if (!t) return `__${e.id}`;
+  const pc = normPairingForDedupe(t.pairingCode);
+  if (
+    pc &&
+    pc !== '—' &&
+    pc !== 'CONT' &&
+    pc !== 'RDO'
+  ) {
+    return `pair:${pc}`;
+  }
+  return `trip:${t.id}:${e.kind}`;
+}
+
+function classicRowRichness(e: DayRowBuilt): number {
+  let n = 0;
+  const z = (x: string | undefined) => (String(x ?? '').trim() ? 1 : 0);
+  n += z(e.pairingText) * 3;
+  n += z(e.reportText) * 2;
+  n += z(e.cityText) * 2;
+  n += z(e.dEndText);
+  n += z(e.layoverText);
+  if ((e.trip?.legs?.length ?? 0) > 0) n += 1;
+  if (e.trip?.canonicalPairingDays && Object.keys(e.trip.canonicalPairingDays).length > 0) n += 3;
+  return n;
+}
+
+function dedupeClassicRowsSameCalendarDay(entries: DayRowBuilt[]): DayRowBuilt[] {
+  if (entries.length < 2) return entries;
+  const byKey = new Map<string, DayRowBuilt>();
+  for (const e of entries) {
+    const k = classicRowDedupeKey(e);
+    const prev = byKey.get(k);
+    if (!prev) {
+      byKey.set(k, e);
+      continue;
+    }
+    byKey.set(k, classicRowRichness(e) > classicRowRichness(prev) ? e : prev);
+  }
+  return [...byKey.values()].sort((a, b) => {
+    if (!a.trip || !b.trip) return 0;
+    return a.trip.startDate.localeCompare(b.trip.startDate);
+  });
 }
 
 function statusToKind(trip: CrewScheduleTrip): RowKind {
   if (trip.status === 'off') return 'off';
+  if (trip.status === 'ptv') return 'ptv';
   if (trip.status === 'pto') return 'pto';
   if (trip.status === 'rsv') return 'reserve';
   if (trip.status === 'training') return 'special';
@@ -91,10 +153,8 @@ function statusToKind(trip: CrewScheduleTrip): RowKind {
 function buildRowLabel(trip: CrewScheduleTrip): string {
   const kind = statusToKind(trip);
   if (kind === 'off') return '';
-  if (kind === 'pto') {
-    const pc = String(trip.pairingCode || '').trim().toUpperCase();
-    return pc === 'PTV' ? 'PTV' : 'PTO';
-  }
+  if (kind === 'ptv') return 'PTV';
+  if (kind === 'pto') return 'PTO';
   if (kind === 'reserve') return trip.pairingCode && trip.pairingCode !== '—' ? trip.pairingCode : 'RSV';
   if (kind === 'unavailable') {
     const upperCode = String(trip.pairingCode || '').trim().toUpperCase();
@@ -147,74 +207,6 @@ function compactToken(raw?: string): string {
   return cleaned || v.slice(0, 3).toUpperCase();
 }
 
-/** First token of pairing cell (handles `J3H95  43:11` legacy). */
-function pairingTokenFromClassicPairingText(raw: string | null | undefined): string | null {
-  const s = String(raw ?? '').trim();
-  if (!s) return null;
-  const t = (s.split(/\s+/)[0] ?? '').trim();
-  return t.length ? t : null;
-}
-
-/** dateIso → all Layer-7 duty rows touching that calendar day (may overlap pairings). */
-function groupClassicRowsByDate(rows: ClassicScheduleRow[]): Map<string, ClassicScheduleRow[]> {
-  const m = new Map<string, ClassicScheduleRow[]>();
-  for (const r of rows) {
-    const k = String(r.dateIso).slice(0, 10);
-    const arr = m.get(k) ?? [];
-    arr.push(r);
-    m.set(k, arr);
-  }
-  return m;
-}
-
-/** Pick Layer-7 row aligned with this grid row (`DayRow.trip.pairing_code` preferred). */
-function pickClassicForDayRow(dayRow: DayRow, list: ClassicScheduleRow[]): ClassicScheduleRow | null {
-  if (!list.length) return null;
-  const code = dayRow.trip ? normPairingCode(dayRow.trip.pairingCode) : '';
-  if (code) {
-    const syntheticEnd = list.find(
-      (c) =>
-        c.dateIso === dayRow.dateIso &&
-        c.rowType === 'TRIP_END' &&
-        normPairingCode(c.sourcePairingId) === code,
-    );
-    if (syntheticEnd) return syntheticEnd;
-    const hit = list.find((c) => {
-      const tok = pairingTokenFromClassicPairingText(c.pairingText);
-      if (tok != null && normPairingCode(tok) === code) return true;
-      return normPairingCode(c.sourcePairingId) === code;
-    });
-    if (hit) return hit;
-  }
-  const noPairing = list.filter((c) => !pairingTokenFromClassicPairingText(c.pairingText));
-  if (noPairing.length === 1) return noPairing[0]!;
-  if (noPairing.length > 1 && dayRow.trip && code) {
-    const preferSyntheticEnd = code
-      ? noPairing.filter((c) => normPairingCode(c.sourcePairingId) === code)
-      : noPairing;
-    const pool = preferSyntheticEnd.length ? preferSyntheticEnd : noPairing;
-    const preferCont = dayRow.kind === 'continuation' || dayRow.kind === 'trip';
-    const typed = pool.find((c) =>
-      preferCont ? c.rowType === 'TRIP_CONTINUATION' : c.rowType === 'TRIP_END',
-    );
-    if (typed) return typed;
-  }
-  return noPairing[0] ?? list[0] ?? null;
-}
-
-/** Matches schedule_duty time strings FLICA persists (digits only, localized, etc.). */
-function formatLayer7DutyTime(raw?: string | null): string {
-  if (raw == null) return '';
-  const t = String(raw).trim();
-  if (!t) return '';
-  const viaCompact = toCompactTime(t);
-  if (viaCompact) return viaCompact;
-  const digits = t.replace(/\D/g, '');
-  if (digits.length >= 4) return digits.slice(0, 4);
-  if (digits.length === 3) return `0${digits}`;
-  return t;
-}
-
 /**
  * LAYOVER column: FLICA layover rest (4 digits from last leg’s layover cell / `layover_rest_display`),
  * not the first departure of the day.
@@ -230,20 +222,27 @@ function layoverColumnForFlyingLedger(
   return resolveClassicLayoverColumn(trip, dateIso);
 }
 
+type ClassicLedgerMonthCtx = {
+  fullDateList: readonly string[];
+  viewMonthStart: string;
+  viewMonthEnd: string;
+};
+
 function buildRowForTrip(
   dateIso: string,
   trip: CrewScheduleTrip,
   isProxyContinuation: boolean,
-  dayIndexInTrip: number
+  dayIndexInTrip: number,
+  ledgerMonthCtx: ClassicLedgerMonthCtx,
 ): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
   const d = parseLocalNoon(dateIso);
   const dayIdx = d.getDay();
-  const ptvEveryDay = trip.status === 'pto' && String(trip.pairingCode || '').trim().toUpperCase() === 'PTV';
+  const ptvEveryDay = trip.status === 'ptv';
   const baseKind = statusToKind(trip);
   const useLedger = (baseKind === 'trip' || baseKind === 'deadhead') && !ptvEveryDay;
 
   if (useLedger) {
-    return buildRowFlyingLedger(dateIso, trip, d, dayIdx);
+    return buildRowFlyingLedger(dateIso, trip, d, dayIdx, ledgerMonthCtx);
   }
 
   const kind = isProxyContinuation ? 'continuation' : baseKind;
@@ -259,17 +258,24 @@ function buildRowForTrip(
     trip.pairingTafbHours != null &&
     kind !== 'off' &&
     kind !== 'pto' &&
+    kind !== 'ptv' &&
     kind !== 'reserve' &&
     kind !== 'unavailable'
   ) {
     pairingText = `${pairingText}  ${formatPairingTafbSameLine(trip.pairingTafbHours)}`;
   }
   const reportText =
-    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
+    kind === 'off' ||
+    kind === 'pto' ||
+    kind === 'ptv' ||
+    kind === 'reserve' ||
+    kind === 'unavailable' ||
+    kind === 'special' ||
+    kind === 'continuation'
       ? ''
       : toCompactTime(firstLegOnDate?.reportLocal || firstLegOnDate?.departLocal || leg?.reportLocal || leg?.departLocal);
   const cityText =
-    kind === 'off' || kind === 'pto'
+    kind === 'off' || kind === 'pto' || kind === 'ptv'
       ? ''
       : kind === 'reserve'
         ? compactToken(trip.base)
@@ -279,12 +285,12 @@ function buildRowForTrip(
             : ''
         : compactToken(leg?.arrivalAirport) || compactToken(trip.origin) || compactToken(trip.routeSummary);
   const dEndText =
-    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
+    kind === 'off' || kind === 'pto' || kind === 'ptv' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
       ? ''
       : toCompactTime(legsOnDate.length ? legsOnDate[legsOnDate.length - 1]?.releaseLocal : leg?.releaseLocal);
   const layoverText = resolveClassicLayoverColumn(trip, dateIso);
   const wxText =
-    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special'
+    kind === 'off' || kind === 'pto' || kind === 'ptv' || kind === 'reserve' || kind === 'unavailable' || kind === 'special'
       ? ''
       : '☀︎';
   const statusText =
@@ -294,9 +300,11 @@ function buildRowForTrip(
         ? 'OFF'
         : kind === 'pto'
           ? 'PTO'
-          : kind === 'reserve'
-            ? 'RSV'
-            : '';
+          : kind === 'ptv'
+            ? 'PTV'
+            : kind === 'reserve'
+              ? 'RSV'
+              : '';
   const reportMinutes = parseScheduleTimeMinutes(leg?.reportLocal || leg?.departLocal);
   const releaseMinutes = parseScheduleTimeMinutes(leg?.releaseLocal);
 
@@ -325,18 +333,30 @@ function buildRowFlyingLedger(
   trip: CrewScheduleTrip,
   d: Date,
   dayIdx: number,
+  ledgerMonthCtx: ClassicLedgerMonthCtx,
 ): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
   const canon = trip.canonicalPairingDays?.[dateIso];
   const legsOnDate = trip.legs
     .filter((l) => l.dutyDate === dateIso)
-    .sort((a, b) => (a.departLocal ?? '').localeCompare(b.departLocal ?? ''));
+    .sort((a, b) =>
+      departureTimeForDutyDaySortKey(a.departLocal).localeCompare(departureTimeForDutyDaySortKey(b.departLocal)),
+    );
   const cityText = canon
     ? canon.displayCityLedger
     : buildFcvPairingCityColumn(trip, dateIso);
-  const showPairing = shouldShowPairingInLedger(trip, dateIso);
+  const showPairing = shouldShowPairingInClassicLedgerMonth(
+    trip,
+    dateIso,
+    ledgerMonthCtx.fullDateList,
+    ledgerMonthCtx.viewMonthStart,
+    ledgerMonthCtx.viewMonthEnd,
+  );
   const base = statusToKind(trip);
   /** Prefer canonical `schedule_pairing_legs` when present; else FCV on synthetic legs. */
-  const isContLike = canon ? canon.continuationDay : isFcvClassicContinuationRow(trip, dateIso);
+  /** `pureBaseArrivalOnly`: block ends arrival-only row — no REPORT/D‑END/LAY (Crewline F24-style). */
+  const isContLike = canon
+    ? canon.continuationDay || canon.pureBaseArrivalOnly === true
+    : isFcvClassicContinuationRow(trip, dateIso);
   const kind: RowKind = isContLike ? 'continuation' : base;
 
   const firstLegOnDate = legsOnDate[0];
@@ -347,24 +367,33 @@ function buildRowFlyingLedger(
     !canon && dateIso > trip.startDate
       ? trip.legs
           .filter((l) => l.dutyDate === priorDateIso)
-          .sort((a, b) => (a.departLocal ?? '').localeCompare(b.departLocal ?? ''))
+          .sort((a, b) =>
+            departureTimeForDutyDaySortKey(a.departLocal).localeCompare(departureTimeForDutyDaySortKey(b.departLocal)),
+          )
       : [];
   const lastLegPrevDay = prevDayLegs.length ? prevDayLegs[prevDayLegs.length - 1] : undefined;
 
   let pairingText = showPairing ? buildRowLabel(trip) : '';
   if (
     pairingText &&
-    dateIso === trip.startDate &&
+    showPairing &&
     trip.pairingTafbHours != null &&
     kind !== 'off' &&
     kind !== 'pto' &&
+    kind !== 'ptv' &&
     kind !== 'reserve' &&
     kind !== 'unavailable'
   ) {
     pairingText = `${pairingText}  ${formatPairingTafbSameLine(trip.pairingTafbHours)}`;
   }
   const reportText =
-    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
+    kind === 'off' ||
+    kind === 'pto' ||
+    kind === 'ptv' ||
+    kind === 'reserve' ||
+    kind === 'unavailable' ||
+    kind === 'special' ||
+    kind === 'continuation'
       ? ''
       : canon
         ? toCompactTime(canon.reportTimeDisplay ?? undefined)
@@ -376,14 +405,26 @@ function buildRowFlyingLedger(
                   firstLegOnDate?.departLocal,
           );
   const dEndText =
-    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
+    kind === 'off' ||
+    kind === 'pto' ||
+    kind === 'ptv' ||
+    kind === 'reserve' ||
+    kind === 'unavailable' ||
+    kind === 'special' ||
+    kind === 'continuation'
       ? ''
       : canon
         ? toCompactTime(canon.dEndTimeDisplay ?? undefined)
         : toCompactTime(legsOnDate.length ? lastLegOnDate?.arriveLocal : legForTime?.arriveLocal);
   const layoverText = layoverColumnForFlyingLedger(trip, dateIso, canon);
   const wxText =
-    kind === 'off' || kind === 'pto' || kind === 'reserve' || kind === 'unavailable' || kind === 'special' || kind === 'continuation'
+    kind === 'off' ||
+    kind === 'pto' ||
+    kind === 'ptv' ||
+    kind === 'reserve' ||
+    kind === 'unavailable' ||
+    kind === 'special' ||
+    kind === 'continuation'
       ? ''
       : '☀︎';
   const statusText =
@@ -393,9 +434,11 @@ function buildRowFlyingLedger(
         ? 'OFF'
         : kind === 'pto'
           ? 'PTO'
-          : kind === 'reserve'
-            ? 'RSV'
-            : '';
+          : kind === 'ptv'
+            ? 'PTV'
+            : kind === 'reserve'
+              ? 'RSV'
+              : '';
   const reportMinutes = parseScheduleTimeMinutes(
     canon ? canon.reportTimeDisplay : firstLegOnDate?.reportLocal || firstLegOnDate?.departLocal,
   );
@@ -423,17 +466,72 @@ function buildRowFlyingLedger(
   };
 }
 
+/** Last ISO day yyyy-mm-dd inclusive for [year, month1–12]; never spills into next month. */
+function viewMonthLastIso(year: number, month1to12: number): string {
+  const lastDom = new Date(year, month1to12, 0).getDate();
+  const m = String(month1to12).padStart(2, '0');
+  return `${year}-${m}-${String(lastDom).padStart(2, '0')}`;
+}
+
+/** One ISO per calendar day in the viewed month — string math only (no Date rollover bugs). */
 function enumerateMonthDates(year: number, month: number): string[] {
-  const last = new Date(year, month, 0).getDate();
+  const mNum = Number(month);
+  if (!Number.isFinite(mNum) || mNum < 1 || mNum > 12) return [];
+  const last = new Date(year, mNum, 0).getDate();
+  const mm = String(mNum).padStart(2, '0');
   const out: string[] = [];
   for (let d = 1; d <= last; d += 1) {
-    const dt = new Date(year, month - 1, d, 12, 0, 0, 0);
-    out.push(toIsoDate(dt));
+    out.push(`${year}-${mm}-${String(d).padStart(2, '0')}`);
   }
   return out;
 }
 
-/** ISO dates in `trip` that fall in calendar months before `monthStartIso` (e.g. Mar 30–31 when viewing April). */
+/**
+ * Carry-out tail: spillover ISO dates **after** the viewed month last day through `trip.endDate`,
+ * for trips that overlap `[viewMonthStart, monthLastIso]` but end later (matches Crewline continuation).
+ */
+function trailingCarryOutDates(
+  trips: CrewScheduleTrip[],
+  viewMonthStart: string,
+  monthLastIso: string,
+): string[] {
+  const dayAfterMonth = addIsoDays(monthLastIso, 1);
+  const out = new Set<string>();
+  for (const t of trips) {
+    const pc = String(t.pairingCode ?? '')
+      .trim()
+      .toUpperCase();
+    if (!pc || pc === 'PTO' || pc === 'PTV' || pc === 'CONT' || pc === '—') continue;
+    if (t.endDate < viewMonthStart || t.startDate > monthLastIso) continue;
+    if (t.endDate <= monthLastIso) continue;
+    const loopStart = t.startDate > dayAfterMonth ? t.startDate : dayAfterMonth;
+    if (loopStart > t.endDate) continue;
+    for (let d = loopStart; d <= t.endDate; d = addIsoDays(d, 1)) {
+      if (d > monthLastIso) out.add(d);
+    }
+  }
+  return [...out].sort();
+}
+
+/** Extend Classic ledger pairing window when carry-out trailing May days append after Apr 30, etc. */
+function maxIso(a: string, b: string): string {
+  return a >= b ? a : b;
+}
+
+/**
+ * Drops bogus pairing paint on viewed month dom 01–02 when FLICA/canon proves first duty lands later:
+ * avoids May-side carry pairing rows occupying Apr 1–2 at the top (display-only).
+ */
+function skipPhantomTopOfMonthDutyRowForTrip(trip: CrewScheduleTrip, dateIso: string, viewMonthStart: string): boolean {
+  if (dateIso < viewMonthStart) return false;
+  const ew = earliestOperationalDutyIso(trip);
+  if (!ew) return false;
+  const dom0 = viewMonthStart;
+  const dom1 = addIsoDays(dom0, 1);
+  return (dateIso === dom0 || dateIso === dom1) && dateIso < ew;
+}
+
+/** ISO dates in `trip` strictly before `monthStartIso` capped at calendar day before that month start (carry-in head). */
 function priorMonthDaysBeforeView(trip: CrewScheduleTrip, monthStartIso: string): string[] {
   if (trip.startDate >= monthStartIso) return [];
   const lastBeforeView = addIsoDays(monthStartIso, -1);
@@ -441,9 +539,10 @@ function priorMonthDaysBeforeView(trip: CrewScheduleTrip, monthStartIso: string)
   if (spanEnd < trip.startDate) return [];
   const out: string[] = [];
   for (let d = trip.startDate; d <= spanEnd; d = addIsoDays(d, 1)) {
+    if (d >= monthStartIso) break;
     out.push(d);
   }
-  return out;
+  return out.filter((iso) => iso < monthStartIso);
 }
 
 function isTripLikeKind(kind: RowKind): boolean {
@@ -461,21 +560,6 @@ function rowsFromTrips(trips: CrewScheduleTrip[], viewYear: number, viewMonth: n
     }),
     1,
   ).sort((a, b) => a.startDate.localeCompare(b.startDate));
-  const dateRows = new Map<string, Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'>[]>();
-
-  for (const trip of sorted) {
-    const start = parseLocalNoon(trip.startDate);
-    const end = parseLocalNoon(trip.endDate);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
-    const ptvEveryDay =
-      trip.status === 'pto' && String(trip.pairingCode || '').trim().toUpperCase() === 'PTV';
-    for (let t = start.getTime(), i = 0; t <= end.getTime(); t += 24 * 60 * 60 * 1000, i += 1) {
-      const dateIso = toIsoDate(new Date(t));
-      const row = buildRowForTrip(dateIso, trip, ptvEveryDay ? false : i > 0, i);
-      if (!dateRows.has(dateIso)) dateRows.set(dateIso, []);
-      dateRows.get(dateIso)!.push(row);
-    }
-  }
 
   const leading = new Set<string>();
   for (const t of sorted) {
@@ -483,16 +567,67 @@ function rowsFromTrips(trips: CrewScheduleTrip[], viewYear: number, viewMonth: n
       leading.add(d);
     }
   }
-  const inMonth = enumerateMonthDates(viewYear, viewMonth);
-  const fullDateList = [...Array.from(leading).sort(), ...inMonth];
 
-  const todayIso = toIsoDate(new Date());
+  /** Prior-month carry dates only (`yyyy-mm` strictly **before** the viewed month) — rejects future-month leaks. */
+  const viewYm = `${viewYear}-${String(viewMonth).padStart(2, '0')}`;
+  const leadingSortedEligible = Array.from(leading)
+    .filter((d) => {
+      const yym = d.slice(0, 7);
+      return d < viewMonthStart && yym < viewYm;
+    })
+    .sort();
+
+  const inMonth = enumerateMonthDates(viewYear, viewMonth);
+  const monthLastIso = viewMonthLastIso(viewYear, viewMonth);
+  const trailing = trailingCarryOutDates(sorted, viewMonthStart, monthLastIso);
+  const ledgerViewEndIso = trailing.length ? maxIso(monthLastIso, trailing[trailing.length - 1]!) : monthLastIso;
+
+  const baseList = [...leadingSortedEligible, ...inMonth].filter((iso) => {
+    if (iso < viewMonthStart) {
+      const yym = iso.slice(0, 7);
+      return yym < viewYm;
+    }
+    return iso >= viewMonthStart && iso <= monthLastIso && iso.slice(0, 7) === viewYm;
+  });
+
+  /** Carry-out spill (e.g. May 1+) after viewed month tail — excludes dates already covered by trailing month_key fetch duplicates. */
+  const trailingEligible = trailing.filter((iso) => {
+    const ym = iso.slice(0, 7);
+    return ym > viewYm;
+  });
+
+  const fullDateList = [...baseList, ...trailingEligible];
+
+  const ledgerMonthCtx: ClassicLedgerMonthCtx = {
+    fullDateList,
+    viewMonthStart,
+    viewMonthEnd: ledgerViewEndIso,
+  };
+
+  const dateRows = new Map<string, Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'>[]>();
+
+  for (const trip of sorted) {
+    const start = parseLocalNoon(trip.startDate);
+    const end = parseLocalNoon(trip.endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
+    const ptvEveryDay = trip.status === 'ptv';
+    for (let tt = start.getTime(), i = 0; tt <= end.getTime(); tt += 24 * 60 * 60 * 1000, i += 1) {
+      const dateIso = dateToIsoDateLocal(new Date(tt));
+      if (skipPhantomTopOfMonthDutyRowForTrip(trip, dateIso, viewMonthStart)) continue;
+      const row = buildRowForTrip(dateIso, trip, ptvEveryDay ? false : i > 0, i, ledgerMonthCtx);
+      if (!dateRows.has(dateIso)) dateRows.set(dateIso, []);
+      dateRows.get(dateIso)!.push(row);
+    }
+  }
+
+  const todayIso = dateToIsoDateLocal(new Date());
   const rows: DayRow[] = [];
   for (const dateIso of fullDateList) {
-    const entries = (dateRows.get(dateIso) || []).sort((a, b) => {
+    const sortedDay = (dateRows.get(dateIso) || []).sort((a, b) => {
       if (!a.trip || !b.trip) return 0;
       return a.trip.startDate.localeCompare(b.trip.startDate);
     });
+    const entries = dedupeClassicRowsSameCalendarDay(sortedDay);
     if (!entries.length) {
       rows.push({
         id: `empty:${dateIso}`,
@@ -527,6 +662,10 @@ function rowsFromTrips(trips: CrewScheduleTrip[], viewYear: number, viewMonth: n
     }
   }
 
+  return attachDayRowGrouping(rows);
+}
+
+function attachDayRowGrouping(rows: DayRow[]): DayRow[] {
   for (let i = 0; i < rows.length; i += 1) {
     const cur = rows[i];
     const prev = rows[i - 1];
@@ -579,14 +718,10 @@ function buildSummaryStrip(server: ScheduleMonthMetrics | null | undefined): Sum
 
 const ScheduleRow = memo(function ScheduleRow({
   row,
-  classicRow,
-  useClassicColumns,
   onPressTrip,
   onLongPressTrip,
 }: {
   row: DayRow;
-  classicRow: ClassicScheduleRow | null;
-  useClassicColumns: boolean;
   onPressTrip?: (trip: CrewScheduleTrip) => void;
   onLongPressTrip?: (trip: CrewScheduleTrip) => void;
 }) {
@@ -594,23 +729,11 @@ const ScheduleRow = memo(function ScheduleRow({
   const dayInitial = row.dayCode.slice(0, 1);
   const dayNumber = String(row.dayNum).padStart(2, '0');
 
-  const uc = Boolean(useClassicColumns && classicRow != null);
-  const classic = uc && classicRow ? classicRow : null;
-  const rt = classic?.rowType ?? null;
-  const pairingValue = classic ? (classic.pairingText ?? '') : row.pairingText || '';
-  const reportValue =
-    uc && classic
-      ? formatLayer7DutyTime(classic.reportText) || row.reportText || ''
-      : row.reportText || '';
-  const cityValue = classic ? (classic.cityText ?? '') : row.cityText || '';
-  const dEndValue =
-    uc && classic
-      ? formatLayer7DutyTime(classic.dutyEndText) || row.dEndText || ''
-      : row.dEndText || '';
-  const layoverValue =
-    uc && classic
-      ? formatLayer7DutyTime(classic.layoverText) || row.layoverText || ''
-      : row.layoverText || '';
+  const pairingValue = row.pairingText || '';
+  const reportValue = row.reportText || '';
+  const cityValue = row.cityText || '';
+  const dEndValue = row.dEndText || '';
+  const layoverValue = row.layoverText || '';
   /** WX always from trip / entries pipeline (Layer 10), not schedule_duties. */
   const wxValue = row.wxText || '';
 
@@ -622,7 +745,8 @@ const ScheduleRow = memo(function ScheduleRow({
     row.groupedWithPrev && styles.tripChainRow,
   ];
 
-  const dataPlaceholder = isEmpty || (uc && rt === 'EMPTY_DAY');
+  const dataPlaceholder = isEmpty;
+  const wxMuted = isEmpty;
 
   const interactive = !!row.trip && !!onPressTrip;
 
@@ -676,7 +800,7 @@ const ScheduleRow = memo(function ScheduleRow({
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellWx]}>
-        <Text style={[styles.cellText, styles.wxCellText, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
+        <Text style={[styles.cellText, styles.wxCellText, wxMuted && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
           {wxValue}
         </Text>
       </View>
@@ -745,9 +869,15 @@ type Props = {
   onOpenManage?: () => void;
 };
 
-export default function ClassicListView({ trips, year, month, monthMetrics, onPressTrip, onOpenManage }: Props) {
+export default function ClassicListView({
+  trips,
+  year,
+  month,
+  monthMetrics,
+  onPressTrip,
+  onOpenManage,
+}: Props) {
   const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
-  const [classicRows, setClassicRows] = useState<ClassicScheduleRow[]>([]);
   const onLongPressTrip = useCallback((t: CrewScheduleTrip) => setPreviewTrip(t), []);
   const closePreview = useCallback(() => setPreviewTrip(null), []);
   const openFullFromPreview = useCallback(() => {
@@ -756,24 +886,7 @@ export default function ClassicListView({ trips, year, month, monthMetrics, onPr
     if (t) onPressTrip(t);
   }, [previewTrip, onPressTrip]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { duties, pairings, pairingLegs } = await fetchScheduleDutiesAndPairingsForMonth(year, month);
-        if (cancelled) return;
-        setClassicRows(buildClassicRowsFromDuties(duties, pairings, pairingLegs));
-      } catch {
-        if (!cancelled) setClassicRows([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [year, month]);
-
   const rows = useMemo(() => rowsFromTrips(trips, year, month), [trips, year, month]);
-  const classicByDate = useMemo(() => groupClassicRowsByDate(classicRows), [classicRows]);
   const summary = useMemo(() => buildSummaryStrip(monthMetrics ?? null), [monthMetrics]);
 
   if (!trips.length) {
@@ -820,20 +933,13 @@ export default function ClassicListView({ trips, year, month, monthMetrics, onPr
       <FlatList
         data={rows}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => {
-          const classicPickList = classicByDate.get(item.dateIso) ?? [];
-          const classic = pickClassicForDayRow(item, classicPickList);
-          const useClassicColumns = Boolean(classicRows.length > 0 && classic);
-          return (
-            <ScheduleRow
-              row={item}
-              classicRow={classic}
-              useClassicColumns={useClassicColumns}
-              onPressTrip={item.trip ? onPressTrip : undefined}
-              onLongPressTrip={item.trip ? onLongPressTrip : undefined}
-            />
-          );
-        }}
+        renderItem={({ item }) => (
+          <ScheduleRow
+            row={item}
+            onPressTrip={item.trip ? onPressTrip : undefined}
+            onLongPressTrip={item.trip ? onLongPressTrip : undefined}
+          />
+        )}
         contentContainerStyle={styles.wrap}
         initialNumToRender={22}
         maxToRenderPerBatch={24}
@@ -908,11 +1014,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     overflow: 'visible',
   },
-  /** Same width as `cellWx` so “WX” sits centered above the ☀︎ column. */
+  /** Same width as `cellWx`. */
   headerBandWx: {
-    width: 28,
-    minWidth: 28,
-    maxWidth: 28,
+    width: 24,
+    minWidth: 24,
+    maxWidth: 24,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 0,
@@ -938,7 +1044,10 @@ const styles = StyleSheet.create({
   },
   rowCell: {
     minHeight: 22,
+    flexGrow: 0,
+    flexShrink: 0,
     paddingHorizontal: 0,
+    marginHorizontal: 0,
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
@@ -968,79 +1077,55 @@ const styles = StyleSheet.create({
   rowPressed: {
     backgroundColor: '#F1F5F9',
   },
-  /**
-   * Flex weights share the row evenly except D-END (narrow) and WX (fixed, icon-centered).
-   * All flexible cells use minWidth: 0 + overflow hidden so text clips in-column (no bleed into neighbors).
-   */
+  /** Classic grid: fixed pixel widths only (Layer 8); every row uses the same columns. */
   cellDate: {
-    flex: 0.92,
-    minWidth: 0,
+    width: 44,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
-    paddingLeft: 2,
-    paddingRight: 2,
   },
   cellPairing: {
-    flex: 1.05,
-    minWidth: 0,
+    width: 68,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
-    alignSelf: 'stretch',
-    paddingHorizontal: 2,
     justifyContent: 'center',
   },
   cellReport: {
-    flex: 1,
-    minWidth: 0,
+    width: 52,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
-    paddingHorizontal: 2,
   },
   cellRoute: {
-    flex: 1,
-    minWidth: 0,
+    width: 44,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
-    paddingHorizontal: 2,
   },
-  /** D-END / release — slightly wider than before so HH:MM does not clip against LAYOVER */
   cellDetail: {
-    flex: 0.64,
-    minWidth: 34,
+    width: 52,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
-    paddingLeft: 2,
-    paddingRight: 2,
   },
   cellLayover: {
-    flex: 1.1,
-    minWidth: 0,
+    width: 52,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
-    paddingLeft: 2,
-    paddingRight: 2,
   },
-  /** Fixed rail; header uses `headerBandWx` with the same width so ☀︎ stays under “WX”. */
   cellWx: {
-    width: 28,
-    minWidth: 28,
-    maxWidth: 28,
+    width: 24,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 0,
   },
   /** Only weekend + today override bodyRow; cool neutral, not beige/pink. */
   weekendRow: {

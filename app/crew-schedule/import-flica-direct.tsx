@@ -422,16 +422,10 @@ export default function ImportFlicaDirectScreen() {
     const u = (rawUrl ?? '').toLowerCase();
     if (u.includes('gohm=1')) {
       postCaptchaFinalizedRef.current = true;
-      console.log('[FLICA] post-captcha candidate url', rawUrl);
-      console.log('[FLICA] GOHM detected', rawUrl);
-      console.log('[FLICA] handoff allowed');
       return;
     }
     if (u.includes('leftmenu.cgi') && u.includes('whosepage=crewmember')) {
       postCaptchaFinalizedRef.current = true;
-      console.log('[FLICA] post-captcha candidate url', rawUrl);
-      console.log('[FLICA] leftmenu detected', rawUrl);
-      console.log('[FLICA] handoff allowed');
       return;
     }
   }, []);
@@ -512,12 +506,10 @@ export default function ImportFlicaDirectScreen() {
       if (Platform.OS === 'web') return;
       if (mainmenuHandoffStartedThisSyncRef.current) return;
       if (!postCaptchaFinalizedRef.current) {
-        console.log('[FLICA] handoff blocked: post-captcha not finalized', pageUrl);
         return;
       }
 
       mainmenuHandoffStartedThisSyncRef.current = true;
-      console.log('[FLICA] mainmenu detected', pageUrl);
       mainmenuHandoffInFlightRef.current = true;
       try {
         try {
@@ -538,13 +530,10 @@ export default function ImportFlicaDirectScreen() {
           const baseOrigin = flicaUrls.ORIGIN;
           const mainmenuPath = `${flicaUrls.ORIGIN}/online/mainmenu.cgi`;
           const cookies = await CookieManager.get(baseOrigin);
-          console.log('[FLICA] CookieManager.get result', JSON.stringify(cookies));
           const cookieParts = Object.entries(cookies ?? {})
             .map(([name, c]) => `${name}=${(c as { value: string }).value}`)
             .join('; ');
-          console.log('[FLICA] cookie string', cookieParts);
           const cookies2 = await CookieManager.get(mainmenuPath);
-          console.log('[FLICA] CookieManager mainmenu', JSON.stringify(cookies2));
           const pickFlica = (jar: Record<string, { value?: string } | undefined> | null | undefined) => {
             const o: { FLiCASession?: string; FLiCAService?: string; AWSALB?: string; AWSALBCORS?: string } = {};
             if (!jar) return o;
@@ -560,7 +549,6 @@ export default function ImportFlicaDirectScreen() {
           const jar2 = (cookies2 ?? {}) as Record<string, { value?: string }>;
           await saveFlicaCookies({ ...pickFlica(jar1), ...pickFlica(jar2) });
           const hAfterSave = await loadFlicaCookies();
-          console.log('[FLICA] loadFlicaCookies result', hAfterSave);
           let cookieHeader = cookieParts;
           if (!cookieHeader?.trim() && hAfterSave?.trim()) {
             cookieHeader = hAfterSave;
@@ -574,19 +562,16 @@ export default function ImportFlicaDirectScreen() {
             }
             return;
           }
-          console.log('[FLICA] cookies captured', cookieHeader);
           flowNavRef.current.loadScheduleInjected = true;
           setHttpImporting(true);
           setLastError(null);
           setOverlayMessage('Loading schedule page…');
           setStatusLine('Loading schedule page…');
           const targetLoadScheduleUrl = flicaUrls.MAINMENU_LOADSCHEDULE;
-          console.log('[FLICA] injecting loadschedule url', targetLoadScheduleUrl);
           if (injectNavToLoadSchedule.trim().length) {
             webViewRef.current?.injectJavaScript(injectNavToLoadSchedule);
           }
         } catch (e) {
-          console.log('[FLICA] beginMainmenuHandoff ERROR', e);
           throw e;
         }
       } catch (e) {
@@ -611,7 +596,6 @@ export default function ImportFlicaDirectScreen() {
       setStatusLine('Downloading schedule…');
       try {
         const token1 = extractToken1FromHtml(loadSchedulePageHtml);
-        console.log('[FLICA] token1', token1);
         if (!token1) {
           setLastError('FLICA did not return schedule data from the WebView. Please try “Sync schedule” again.');
           stopSync();
@@ -627,9 +611,6 @@ export default function ImportFlicaDirectScreen() {
           scheduleDetailBaseUrl: flicaUrls.SCHEDULE_DETAIL,
           refererUrl: flicaUrls.MAINMENU_LOADSCHEDULE,
         });
-        console.log('[FLICA] march html length', march?.length);
-        console.log('[FLICA] april html length', april?.length);
-        console.log('[FLICA] may html length', may?.length);
         parseFlicaScheduledetailHtml(march, '2026-03');
         parseFlicaScheduledetailHtml(april, '2026-04');
         parseFlicaScheduledetailHtml(may, '2026-05');
@@ -672,16 +653,12 @@ export default function ImportFlicaDirectScreen() {
     (event: WebViewMessageEvent) => {
       if (completingRef.current) return;
       const raw = event.nativeEvent.data ?? '';
-      const payloadLen = raw.length;
-      const payloadPreview = raw.slice(0, 300);
       let data: { type?: string; html?: string; url?: string };
       try {
         data = JSON.parse(raw) as { type?: string; html?: string; url?: string };
       } catch {
-        console.log('[FLICA] onMessage parse error', { payloadLen, payloadPreview });
         return;
       }
-      console.log('[FLICA] onMessage', { type: data.type, payloadLen, payloadPreview });
       if (data.type === 'flica_bridge_ping') {
         const u = (data as { url?: string; recaptchaFrameCount?: number }).url ?? '';
         const rec = (data as { recaptchaFrameCount?: number }).recaptchaFrameCount;
@@ -699,13 +676,6 @@ export default function ImportFlicaDirectScreen() {
           } else if (sawFlicaRecaptchaIframeOnMainmenuRef.current) {
             if (!postCaptchaFinalizedRef.current) {
               postCaptchaFinalizedRef.current = true;
-              console.log('[FLICA] post-captcha candidate url', u);
-              console.log(
-                '[FLICA] reCAPTCHA iframe no longer present on mainmenu (after challenge was shown)',
-                u,
-                { rec },
-              );
-              console.log('[FLICA] handoff allowed');
             }
           } else if (!postCaptchaFinalizedRef.current && noCaptchaMainmenuFinalizeTimerRef.current == null) {
             noCaptchaMainmenuFinalizeTimerRef.current = setTimeout(() => {
@@ -717,10 +687,6 @@ export default function ImportFlicaDirectScreen() {
               if (!latest.toLowerCase().includes('mainmenu.cgi')) return;
               if (!isMainmenuAwaitingCaptcha(latest)) return;
               postCaptchaFinalizedRef.current = true;
-              console.log(
-                '[FLICA] handoff allowed (no reCAPTCHA iframe on mainmenu — debounced; CAPTCHA not required this session)',
-                latest,
-              );
               void beginMainmenuHandoff(latest);
             }, 3000);
           }
@@ -749,29 +715,13 @@ export default function ImportFlicaDirectScreen() {
         return;
       }
       if (!flowNavRef.current.loadScheduleInjected) {
-        console.log('[FLICA] loadschedule_deep_capture ignored (loadScheduleInjected false)');
         return;
       }
       const cap = data as FlicaLoadscheduleDeepCapture;
-      console.log('[FLICA] loadschedule deep capture received', {
-        url: cap.url,
-        title: cap.title,
-        topOuterLen: cap.topOuterHtml?.length ?? 0,
-        topBodyLen: cap.topBodyHtml?.length ?? 0,
-        frameSrcs: cap.frameSrcs,
-        iframeSrcs: cap.iframeSrcs,
-        frameHtmlCount: cap.frameHtmlList?.length ?? 0,
-        iframeHtmlCount: cap.iframeHtmlList?.length ?? 0,
-        scriptSnippetCount: cap.scriptSnippets?.length ?? 0,
-      });
       const picked = pickFirstFlicaTokenText(cap);
       if (!picked) {
-        console.log('[FLICA] no token-bearing source found in deep capture');
         return;
       }
-      const preview = picked.text.slice(0, 1500);
-      console.log('[FLICA] loadschedule source used for token1:', picked.label);
-      console.log('[FLICA] candidate preview', preview);
       void runServiceScheduleImport(picked.text);
     },
     [beginMainmenuHandoff, markPostCaptchaFinalizedFromUrl, runServiceScheduleImport, tryDismissInitialFlicaCover]
@@ -803,30 +753,14 @@ export default function ImportFlicaDirectScreen() {
           pageLoadCountRef.current += 1;
         }
         markPostCaptchaFinalizedFromUrl(url);
-        if (low.includes('mainmenu.cgi') && low.includes('nocache') && !postCaptchaFinalizedRef.current) {
-          console.log(
-            '[FLICA] mainmenu nocache: waiting for post-captcha (GOHM / leftmenu / reCAPTCHA cleared)',
-            url,
-          );
-        }
-        if (low.includes('mainmenu.cgi')) {
-          if (low.includes('loadschedule')) {
-            console.log('[FLICA] loadschedule nav detected', url);
-          } else {
-            console.log('[FLICA] mainmenu post-detect url (onNavigation)', url);
-          }
-        }
         if (low.includes('mainmenu.cgi') && low.includes('loadschedule=true') && flowNavRef.current.loadScheduleInjected) {
           if (scheduleExtractTimerRef.current) {
             clearTimeout(scheduleExtractTimerRef.current);
             scheduleExtractTimerRef.current = null;
           }
-          scheduleExtractTimerRef.current = setTimeout(() => {
+            scheduleExtractTimerRef.current = setTimeout(() => {
             scheduleExtractTimerRef.current = null;
             if (completingRef.current) return;
-            console.log(
-              '[FLICA] Step3: inject loadschedule deep capture (2s after nav) + in-page ' + String(FLICA_LOADSCHEDULE_POST_MS) + 'ms',
-            );
             webViewRef.current?.injectJavaScript(INJECT_POST_LOADSCHEDULE_HTML);
           }, 2000);
         } else if (low.includes('mainmenu.cgi') && !low.includes('loadschedule=true')) {
@@ -862,16 +796,6 @@ export default function ImportFlicaDirectScreen() {
       markPostCaptchaFinalizedFromUrl(u);
     }
     const low = (u ?? '').toLowerCase();
-    if (u && low.includes('mainmenu.cgi') && low.includes('nocache') && !postCaptchaFinalizedRef.current) {
-      console.log('[FLICA] mainmenu nocache: waiting for post-captcha (GOHM / leftmenu / reCAPTCHA cleared)', u);
-    }
-    if (u && low.includes('mainmenu.cgi')) {
-      if (low.includes('loadschedule')) {
-        console.log('[FLICA] loadschedule nav detected', u);
-      } else {
-        console.log('[FLICA] mainmenu post-detect url (onLoadEnd)', u);
-      }
-    }
     if (u && low.includes('mainmenu.cgi') && !low.includes('loadschedule=true')) {
       void beginMainmenuHandoff(u);
     }
@@ -893,19 +817,6 @@ export default function ImportFlicaDirectScreen() {
   }, []);
 
   const startSync = useCallback(() => {
-    const urlBeingLoaded = flicaUrls?.LOGIN;
-    console.log('[FLICA URL]', urlBeingLoaded);
-    void (async () => {
-      const fromStore = await loadFlicaAirlineSubdomain();
-      const subdomain = fromStore ?? '';
-      console.log('[FLICA SUBDOMAIN from SecureStore]', JSON.stringify(fromStore), {
-        hasLeadingOrTrailingSpace: fromStore != null && fromStore !== fromStore.trim(),
-        hasQuotes: fromStore != null && /['"]/.test(fromStore),
-        hasUppercase: fromStore != null && fromStore !== fromStore.toLowerCase(),
-        hasSpaceOrWeird: fromStore != null && /[^a-z0-9-]/i.test(fromStore.replace(/[a-z0-9-]/g, '')),
-      });
-      console.log('[FLICA FULL URL]', `https://${subdomain}.flica.net/ui/login/index.html`);
-    })();
     setLastError(null);
     completingRef.current = false;
     mainmenuHandoffInFlightRef.current = false;

@@ -32,6 +32,7 @@ import {
 import { scheduleTheme as T } from '../scheduleTheme';
 import type { CrewScheduleTrip, ScheduleViewMode } from '../types';
 import { tradePostPrefillParams } from '../tradePostPrefillParams';
+import { stashTripForDetailNavigation } from '../tripDetailNavCache';
 import ClassicListView from '../components/ClassicListView';
 import CalendarMonthView from '../components/CalendarMonthView';
 import SmartListView from '../components/SmartListView';
@@ -158,6 +159,7 @@ export default function ScheduleTabScreen() {
 
   const openTrip = useCallback(
     (trip: CrewScheduleTrip) => {
+      stashTripForDetailNavigation(trip);
       router.push({ pathname: '/crew-schedule/trip-detail', params: { tripId: trip.id } });
     },
     [router]
