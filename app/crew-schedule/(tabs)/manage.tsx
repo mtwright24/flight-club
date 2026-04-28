@@ -2,7 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,6 +18,7 @@ import {
   fetchLatestBatchWithFile,
   fetchLatestParsedBatch,
   invokeImportScheduleOcr,
+  removeAllImportedSchedules,
 } from '../../../src/features/crew-schedule/scheduleApi';
 import {
   loadScheduleViewMode,
@@ -48,6 +51,7 @@ export default function ManageTabScreen() {
     typeof tripId === 'string' ? tripId : Array.isArray(tripId) ? tripId[0] : undefined;
 
   const [viewMode, setViewMode] = useState<ScheduleViewMode>('classic');
+  const [removingAllSchedules, setRemovingAllSchedules] = useState(false);
 
   React.useEffect(() => {
     void loadScheduleViewMode().then(setViewMode);
@@ -110,6 +114,50 @@ export default function ManageTabScreen() {
     }
   }, [router]);
 
+  const runDeleteAllSchedules = useCallback(async () => {
+    setRemovingAllSchedules(true);
+    const failsafe = setTimeout(() => setRemovingAllSchedules(false), 8000);
+    try {
+      const r = await removeAllImportedSchedules();
+      const doneMsg =
+        r.monthsCleared > 0 || r.entriesRemoved > 0 || r.batchesRemoved > 0
+          ? `Removed ${r.monthsCleared} month${r.monthsCleared === 1 ? '' : 's'}, ${r.entriesRemoved} calendar day${r.entriesRemoved === 1 ? '' : 's'}, and ${r.batchesRemoved} import batch${r.batchesRemoved === 1 ? '' : 'es'}.`
+          : 'No imported schedules were found to remove.';
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(`Done\n\n${doneMsg}`);
+      } else {
+        Alert.alert('Done', doneMsg);
+      }
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e);
+      console.error('DELETE_ALL_SCHEDULES_FAILED', e);
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(`Could not remove\n\n${err}`);
+      } else {
+        Alert.alert('Could not remove', err);
+      }
+    } finally {
+      clearTimeout(failsafe);
+      setRemovingAllSchedules(false);
+    }
+  }, []);
+
+  const onDeleteAllSchedules = useCallback(() => {
+    const title = 'Delete all imported schedules?';
+    const message =
+      'Are you sure? All three months you have imported will be permanently deleted. This cannot be undone.';
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (window.confirm(`${title}\n\n${message}`)) void runDeleteAllSchedules();
+      return;
+    }
+
+    Alert.alert(title, message, [
+      { text: 'No', style: 'cancel' },
+      { text: 'Yes', style: 'destructive', onPress: () => void runDeleteAllSchedules() },
+    ]);
+  }, [runDeleteAllSchedules]);
+
   const onEditDay = useCallback(async () => {
     try {
       const batch = await fetchLatestParsedBatch();
@@ -157,13 +205,6 @@ export default function ManageTabScreen() {
         />
         <Hairline />
         <ActionRow
-          icon="airplane-outline"
-          title="FLICA"
-          subtitle="Direct sync from your airline's FLICA portal"
-          onPress={() => router.push('/crew-schedule/import-flica-direct')}
-        />
-        <Hairline />
-        <ActionRow
           icon="calendar-outline"
           title="Replace Month"
           subtitle="Overwrite a month with new data"
@@ -183,6 +224,32 @@ export default function ManageTabScreen() {
           subtitle="Retry the most recent import"
           onPress={onRerunImport}
         />
+        <Hairline />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: removingAllSchedules }}
+          disabled={removingAllSchedules}
+          style={({ pressed }) => [styles.actionRowWrap, pressed && styles.pressed]}
+          onPress={onDeleteAllSchedules}
+        >
+          <View style={styles.rowContent}>
+            <View style={styles.iconCell}>
+              {removingAllSchedules ? (
+                <ActivityIndicator size="small" color={T.importReview.bad} />
+              ) : (
+                <Ionicons name="trash-outline" size={ICON_SIZE} color={T.importReview.bad} />
+              )}
+            </View>
+            <View style={styles.actionText}>
+              <Text style={styles.actionTitleDanger}>
+                {removingAllSchedules ? 'Removing…' : 'Delete all schedules'}
+              </Text>
+              <Text style={styles.actionSubDanger}>
+                Clears all imported calendar months stored for your account (your three-month snapshot)
+              </Text>
+            </View>
+          </View>
+        </Pressable>
       </View>
 
       <Text style={styles.sectionLabel}>Edit</Text>
@@ -349,6 +416,8 @@ const styles = StyleSheet.create({
   actionText: { flex: 1, paddingRight: 6 },
   actionTitle: { fontSize: 14, fontWeight: '600', color: TEXT, letterSpacing: -0.1 },
   actionSub: { fontSize: 11, color: SUB, marginTop: 1, lineHeight: 14 },
+  actionTitleDanger: { fontSize: 14, fontWeight: '700', color: T.importReview.bad, letterSpacing: -0.1 },
+  actionSubDanger: { fontSize: 11, color: T.importReview.bad, marginTop: 1, lineHeight: 14, opacity: 0.9 },
   pressed: { backgroundColor: 'rgba(15, 23, 42, 0.04)' },
   viewTextCol: { flex: 1, paddingRight: 8 },
   viewTitle: { fontSize: 14, fontWeight: '600', color: TEXT, letterSpacing: -0.1 },
