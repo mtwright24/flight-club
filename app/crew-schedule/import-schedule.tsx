@@ -30,8 +30,6 @@ import { supabase } from '../../src/lib/supabaseClient';
 
 type Source = 'photo' | 'scan' | 'pdf' | 'calendar' | 'manual' | null;
 
-const L = '[schedule-import]';
-
 const MONTH_NAMES = [
   'January',
   'February',
@@ -47,28 +45,8 @@ const MONTH_NAMES = [
   'December',
 ];
 
-function formatDbgArgs(args: unknown[]): string {
-  return args
-    .map((a) => {
-      if (a instanceof Error) return a.message;
-      if (typeof a === 'object' && a !== null) {
-        try {
-          return JSON.stringify(a);
-        } catch {
-          return String(a);
-        }
-      }
-      return String(a);
-    })
-    .join(' ');
-}
-
-/** Log to Metro (both levels — some setups only show log or only warn). */
-function dbg(...args: unknown[]) {
-  const line = `${L} ${formatDbgArgs(args)}`;
-  console.log(line);
-  console.warn(line);
-}
+/** Schedule OCR import tracing (disabled to reduce Metro noise). */
+function dbg(..._args: unknown[]) {}
 
 function pad2(n: number) {
   return String(n).padStart(2, '0');
