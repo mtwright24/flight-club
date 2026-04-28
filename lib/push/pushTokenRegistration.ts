@@ -12,6 +12,8 @@ let lastRegisteredUserId: string | null = null;
 let lastRegisteredPushToken: string | null = null;
 /** Dev: "skipped — not physical device" log at most once per JS runtime. */
 let devLoggedSkipNotPhysicalDevice = false;
+/** Dev: Personal Team / stripped `aps-environment` — expected on some local iOS builds; log once only. */
+let devLoggedSkipNoApsEntitlement = false;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -52,6 +54,16 @@ export async function registerPushTokenForSignedInUser(userId: string): Promise<
           reg.message ?? ''
         );
         return { ok: false, error: 'missing_project_id' };
+      }
+      const msg = `${reg.message ?? ''} ${reg.reason ?? ''}`;
+      if (/aps-environment/i.test(msg) || /no valid .*entitlement/i.test(msg)) {
+        if (__DEV__ && !devLoggedSkipNoApsEntitlement) {
+          devLoggedSkipNoApsEntitlement = true;
+          console.log(
+            '[Push] Skipping Expo push token — no iOS push entitlement in this build (normal for some dev / Personal Team clients).'
+          );
+        }
+        return { ok: true, skipped: true };
       }
       console.warn('[Push] Push token registration failed:', reg.message ?? reg.reason);
       return { ok: false, error: reg.message ?? 'registration_failed' };

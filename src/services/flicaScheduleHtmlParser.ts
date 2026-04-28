@@ -28,6 +28,11 @@ export interface FlicaLeg {
   nextReportTime: string; // "0600L" from REPT: on the D-END line
   /** "1413L" from D-END: on the same row — true duty end (Crewline D-END column). */
   dEndLocal: string;
+  /** DY/DD of the first leg in this D-END-bounded duty period (same for all legs until the next D-END row). */
+  dutyPeriodDay: string;
+  dutyPeriodDate: number;
+  /** First four digits of the D-END row’s duty-end time (e.g. "0840" from `D-END: 0840L`); set on the last leg of the period. */
+  dutyOffTime: string;
 }
 
 export interface FlicaCrew {
@@ -95,6 +100,242 @@ function parseTdCells(row: string): string[] {
     cells.push(stripHtml(m[1]));
   }
   return cells;
+}
+
+/** Extract all <th> or <td> cell texts from a header row. */
+function parseThTdCells(row: string): string[] {
+  const cellRe = /<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi;
+  const cells: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = cellRe.exec(row)) !== null) {
+    cells.push(stripHtml(m[1]));
+  }
+  return cells;
+}
+
+/** Per-cell indices for DY … EQP. `c` is `-1` when the C column is absent. */
+type LegTableIndices = {
+  dy: number;
+  dd: number;
+  dhc: number;
+  c: number;
+  fltno: number;
+  route: number;
+  depl: number;
+  arrl: number;
+  blkt: number;
+  grnt: number;
+  oa: number;
+  eqp: number;
+};
+
+/** Legacy layout with optional “C” column (shifted DEPL/ARRL… relative to DY). */
+const LEGACY_LEGS_WITH_C: LegTableIndices = {
+  dy: 0,
+  dd: 1,
+  dhc: 2,
+  c: 3,
+  fltno: 4,
+  route: 5,
+  depl: 6,
+  arrl: 7,
+  blkt: 8,
+  grnt: 9,
+  oa: 10,
+  eqp: 11,
+};
+
+/** When the C column is missing, columns from FLTNO rightward shift by one. */
+const LEGACY_LEGS_NO_C: LegTableIndices = {
+  dy: 0,
+  dd: 1,
+  dhc: 2,
+  c: -1,
+  fltno: 3,
+  route: 4,
+  depl: 5,
+  arrl: 6,
+  blkt: 7,
+  grnt: 8,
+  oa: 9,
+  eqp: 10,
+};
+
+type FlicaHeaderCol =
+  | 'DY'
+  | 'DD'
+  | 'DHC'
+  | 'C'
+  | 'FLTNO'
+  | 'ROUTE'
+  | 'DEPL'
+  | 'ARRL'
+  | 'BLKT'
+  | 'GRNT'
+  | 'OA'
+  | 'EQP';
+
+/**
+ * Map one header cell’s visible text to a known FLICA leg-table column.
+ * Returns `null` if the text does not match a column label.
+ */
+function matchHeaderColumnLabel(raw: string): FlicaHeaderCol | null {
+  const t0 = String(raw ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/[–—]/g, '-')
+    .trim();
+  if (!t0) return null;
+  const t = t0.toUpperCase();
+  if (/\bDEPL\b.*\bARRL\b/i.test(t0) || /DEPL\/?\s*ARRL/i.test(t0)) {
+    return null;
+  }
+  if (/^DY$|^DOW$|^DAY$/i.test(t0)) return 'DY';
+  if (/^DD$/.test(t0)) return 'DD';
+  if (/^DHC$/.test(t0)) return 'DHC';
+  if (/^C$/.test(t0)) return 'C';
+  if (/\bFLTNO\b|^FLT$/i.test(t0)) return 'FLTNO';
+  if (/DPS-?ARS|DPS\/ARS|DPSAR/i.test(t0)) return 'ROUTE';
+  if (/^DEPL\/?$/.test(t) || /^DEPL\//.test(t)) return 'DEPL';
+  if (/^ARRL\/?$/.test(t) || /\/ARRL$/.test(t0)) return 'ARRL';
+  if (/^BLKT$/i.test(t0)) return 'BLKT';
+  if (/^GRNT$/i.test(t0)) return 'GRNT';
+  if (/^OA$|^O\/A$/i.test(t0)) return 'OA';
+  if (/^EQP$|^EQUIP/i.test(t0)) return 'EQP';
+  return null;
+}
+
+const HEADER_TO_INDEX_KEY: Record<FlicaHeaderCol, keyof LegTableIndices> = {
+  DY: 'dy',
+  DD: 'dd',
+  DHC: 'dhc',
+  C: 'c',
+  FLTNO: 'fltno',
+  ROUTE: 'route',
+  DEPL: 'depl',
+  ARRL: 'arrl',
+  BLKT: 'blkt',
+  GRNT: 'grnt',
+  OA: 'oa',
+  EQP: 'eqp',
+};
+
+/**
+ * From header labels, build column indices. Requires DEPL and ARRL.
+ * Merges onto the correct legacy template (with vs without C) then overrides
+ * with any label positions found in the header row.
+ */
+function buildLegTableIndicesFromHeaderCells(headerCells: string[]): LegTableIndices | null {
+  const byLabel: Partial<Record<FlicaHeaderCol, number>> = {};
+  for (let i = 0; i < headerCells.length; i++) {
+    const label = matchHeaderColumnLabel(headerCells[i] ?? '');
+    if (label == null) continue;
+    if (byLabel[label] === undefined) {
+      byLabel[label] = i;
+    }
+  }
+  if (byLabel.DEPL === undefined || byLabel.ARRL === undefined) {
+    return null;
+  }
+  const base: LegTableIndices = byLabel.C !== undefined ? { ...LEGACY_LEGS_WITH_C } : { ...LEGACY_LEGS_NO_C };
+  for (const [label, i] of Object.entries(byLabel) as [FlicaHeaderCol, number][]) {
+    const key = HEADER_TO_INDEX_KEY[label];
+    if (key) {
+      (base as Record<keyof LegTableIndices, number>)[key] = i;
+    }
+  }
+  if (byLabel.C === undefined) {
+    base.c = -1;
+  }
+  return base;
+}
+
+function findLegTableHeaderCells(allRows: string[]): string[] | null {
+  for (const row of allRows) {
+    if (!/class="[^"]*\bmain\b/i.test(row)) continue;
+    const cells = parseThTdCells(row);
+    if (cells.length >= 6) {
+      return cells;
+    }
+  }
+  for (const row of allRows) {
+    if (!/<t[h]\b/i.test(row)) continue;
+    if (!/DEPL|ARRL/i.test(row)) continue;
+    const cells = parseThTdCells(row);
+    if (cells.length >= 6) {
+      return cells;
+    }
+  }
+  return null;
+}
+
+/** E.g. "0741+1" or "2331L" — leg table time cell (not layover 12:36 style). */
+function isLegTableTimeToken(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^\d{4}\+1$/i.test(t)) return true;
+  if (/^\d{4}([+]\d+)?[A-Z]?$/i.test(t)) return true;
+  return false;
+}
+
+/**
+ * If the header row is missing or unparseable, find DEPL/ARRL by location of the route cell
+ * and the first two consecutive time cells after it (4-digit, optional +1 / suffix).
+ */
+function tryBuildLegTableIndicesFromDataRow(cells: string[]): LegTableIndices | null {
+  if (cells.length < 7) return null;
+  const routeIdx = cells.findIndex((c) => {
+    const x = c.replace(/[–—]/g, '-').replace(/\s+/g, '');
+    return /^[A-Z]{3,4}-[A-Z]{3,4}/i.test(x) || /^[A-Z]{6}$/i.test(x);
+  });
+  if (routeIdx < 0) return null;
+  for (let i = routeIdx + 1; i < cells.length - 1; i++) {
+    const a = cells[i] ?? '';
+    const b = cells[i + 1] ?? '';
+    if (isLegTableTimeToken(a) && isLegTableTimeToken(b)) {
+      const depl = i;
+      const arrl = i + 1;
+      if (depl === 5 && arrl === 6) {
+        return { ...LEGACY_LEGS_NO_C, depl, arrl, c: -1 };
+      }
+      if (depl === 6 && arrl === 7) {
+        return { ...LEGACY_LEGS_WITH_C, depl, arrl };
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+function resolveLegTableIndicesForTable(allRows: string[]): LegTableIndices {
+  const headerCells = findLegTableHeaderCells(allRows);
+  const fromHeader = headerCells ? buildLegTableIndicesFromHeaderCells(headerCells) : null;
+  if (fromHeader) {
+    return fromHeader;
+  }
+  for (const row of allRows) {
+    if (!/class="nowrap"/i.test(row)) continue;
+    const cells = parseTdCells(row);
+    const inferred = tryBuildLegTableIndicesFromDataRow(cells);
+    if (inferred) {
+      return inferred;
+    }
+    break;
+  }
+  return LEGACY_LEGS_WITH_C;
+}
+
+function maxLegColumnIndex(idx: LegTableIndices): number {
+  let m = 0;
+  (Object.keys(idx) as (keyof LegTableIndices)[]).forEach((k) => {
+    const n = idx[k];
+    if (typeof n === 'number' && n > m) m = n;
+  });
+  return m;
+}
+
+function takeCell(cells: string[], i: number): string {
+  if (i < 0 || i >= cells.length) return '';
+  return cells[i] ?? '';
 }
 
 /**
@@ -309,20 +550,31 @@ function parseLayover(row: string): { city: string; time: string } {
   return { city, time: '' };
 }
 
+/** Non-nowrap <tr> with "D-END:" in a <td> — marks end of a duty period for the next leg. */
+function isDendBoundaryRow(row: string): boolean {
+  if (/class="nowrap"/i.test(row)) return false;
+  const cells = parseTdCells(row);
+  if (cells.some((c) => /D-END:/i.test(c))) return true;
+  return cells.length === 0 && /D-END:/i.test(stripHtml(row));
+}
+
 /**
  * Parse the table of legs inside a pairing block.
  * Returns partially-filled FlicaLeg[] (hotel/nextReport filled in a second pass).
  */
 function parseLegsTable(tableHtml: string): FlicaLeg[] {
   const rows = extractRows(tableHtml);
+  const colIdx = resolveLegTableIndicesForTable(rows);
   const legs: FlicaLeg[] = [];
+  const minLegCells = maxLegColumnIndex(colIdx) + 1;
 
   // We track "pending" leg so we can attach hotel/report from the D-END row
   let pendingLegIndex = -1;
+  /** DY+DD of the first leg in the current D-END-bounded duty period. Cleared on each D-END row. */
+  let currentDutyStart: { day: string; date: number } | null = null;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const rowLower = row.toLowerCase();
 
     // ── Skip header row ───────────────────────────────────────────────────
     if (/class="main"/i.test(row)) continue;
@@ -333,25 +585,28 @@ function parseLegsTable(tableHtml: string): FlicaLeg[] {
     // ── Nowrap = flight leg ───────────────────────────────────────────────
     if (/class="nowrap"/i.test(row)) {
       const cells = parseTdCells(row);
-      // cells: [DY, DD, DH, C, FLTNO, DPS-ARS, DEPL, ARRL, BLKT, GRNT, OA, EQP, ...]
-      if (cells.length < 8) continue;
+      if (cells.length < minLegCells) continue;
+      const n = colIdx;
 
-      const dayOfWeek = cells[0] || "";
-      const dateRaw = cells[1] || "";
+      const dayOfWeek = takeCell(cells, n.dy);
+      const dateRaw = takeCell(cells, n.dd);
       const date = parseInt(dateRaw, 10) || 0;
-      const dhCell = cells[2] || "";
-      // cells[3] = C column
-      const flightNumber = cells[4] || "";
-      const route = cells[5] || "";
-      const departLocal = cells[6] || "";
-      const arriveLocal = cells[7] || "";
-      const blockTime = cells[8] || "";
-      const equipment = cells[11] || "";
+      const dhCell = takeCell(cells, n.dhc);
+      const flightNumber = takeCell(cells, n.fltno);
+      const route = takeCell(cells, n.route);
+      const departLocal = takeCell(cells, n.depl);
+      const arriveLocal = takeCell(cells, n.arrl);
+      const blockTime = takeCell(cells, n.blkt);
+      const equipment = takeCell(cells, n.eqp);
 
       const isDeadhead = dhCell.trim().toUpperCase() === "DH";
 
       // Skip non-flight rows that sneak through (e.g. blank)
       if (!flightNumber || !route) continue;
+
+      if (currentDutyStart === null) {
+        currentDutyStart = { day: dayOfWeek, date };
+      }
 
       const { city: layoverCity, time: layoverTime } = parseLayover(row);
 
@@ -371,6 +626,9 @@ function parseLegsTable(tableHtml: string): FlicaLeg[] {
         hotelPhone: "",
         nextReportTime: "",
         dEndLocal: "",
+        dutyPeriodDay: currentDutyStart.day,
+        dutyPeriodDate: currentDutyStart.date,
+        dutyOffTime: '',
       };
 
       legs.push(leg);
@@ -378,14 +636,23 @@ function parseLegsTable(tableHtml: string): FlicaLeg[] {
       continue;
     }
 
-    // ── D-END row — D-END: (duty end) and REPT: (next report) on the same <tr> ─
+    // ── D-END row — duty period boundary; may attach dEnd/REPT/hotel to the pending leg
     // e.g.: D-END: 1413L (NR  900) REPT: 0600L | Pullman San Francisco Bay | (650)598-9000
-    if (/D-END/i.test(row) && pendingLegIndex >= 0) {
+    if (isDendBoundaryRow(row)) {
+      currentDutyStart = null;
+      if (pendingLegIndex < 0) {
+        continue;
+      }
       const text = stripHtml(row);
 
       const dendMatch = text.match(/D-END:\s*(\d{4}[A-Z]?)/i);
       if (dendMatch) {
-        legs[pendingLegIndex].dEndLocal = dendMatch[1] ?? '';
+        const dEndTok = dendMatch[1] ?? '';
+        legs[pendingLegIndex].dEndLocal = dEndTok;
+        const mOff = dEndTok.match(/^(\d{4})/);
+        if (mOff) {
+          legs[pendingLegIndex].dutyOffTime = mOff[1] ?? '';
+        }
       }
 
       // Next report time — match "REPT:" followed by a time token like "0600L"

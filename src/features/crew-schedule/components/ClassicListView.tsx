@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 import { addIsoDays } from '../ledgerContext';
@@ -15,6 +15,12 @@ import {
   resolveClassicLayoverColumn,
 } from '../scheduleTime';
 import { mergeLedgerPairingBlocks } from '../pairingBlockMerge';
+import { normPairingCode } from '../pairingDayModel';
+import {
+  buildClassicRowsFromDuties,
+  fetchScheduleDutiesAndPairingsForMonth,
+  type ClassicScheduleRow,
+} from '../buildClassicRows';
 import { scheduleTheme as T } from '../scheduleTheme';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
@@ -139,6 +145,74 @@ function compactToken(raw?: string): string {
   const cleaned = v.replace(/[^A-Za-z]/g, '').toUpperCase();
   if (cleaned.length >= 3) return cleaned.slice(0, 3);
   return cleaned || v.slice(0, 3).toUpperCase();
+}
+
+/** First token of pairing cell (handles `J3H95  43:11` legacy). */
+function pairingTokenFromClassicPairingText(raw: string | null | undefined): string | null {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  const t = (s.split(/\s+/)[0] ?? '').trim();
+  return t.length ? t : null;
+}
+
+/** dateIso → all Layer-7 duty rows touching that calendar day (may overlap pairings). */
+function groupClassicRowsByDate(rows: ClassicScheduleRow[]): Map<string, ClassicScheduleRow[]> {
+  const m = new Map<string, ClassicScheduleRow[]>();
+  for (const r of rows) {
+    const k = String(r.dateIso).slice(0, 10);
+    const arr = m.get(k) ?? [];
+    arr.push(r);
+    m.set(k, arr);
+  }
+  return m;
+}
+
+/** Pick Layer-7 row aligned with this grid row (`DayRow.trip.pairing_code` preferred). */
+function pickClassicForDayRow(dayRow: DayRow, list: ClassicScheduleRow[]): ClassicScheduleRow | null {
+  if (!list.length) return null;
+  const code = dayRow.trip ? normPairingCode(dayRow.trip.pairingCode) : '';
+  if (code) {
+    const syntheticEnd = list.find(
+      (c) =>
+        c.dateIso === dayRow.dateIso &&
+        c.rowType === 'TRIP_END' &&
+        normPairingCode(c.sourcePairingId) === code,
+    );
+    if (syntheticEnd) return syntheticEnd;
+    const hit = list.find((c) => {
+      const tok = pairingTokenFromClassicPairingText(c.pairingText);
+      if (tok != null && normPairingCode(tok) === code) return true;
+      return normPairingCode(c.sourcePairingId) === code;
+    });
+    if (hit) return hit;
+  }
+  const noPairing = list.filter((c) => !pairingTokenFromClassicPairingText(c.pairingText));
+  if (noPairing.length === 1) return noPairing[0]!;
+  if (noPairing.length > 1 && dayRow.trip && code) {
+    const preferSyntheticEnd = code
+      ? noPairing.filter((c) => normPairingCode(c.sourcePairingId) === code)
+      : noPairing;
+    const pool = preferSyntheticEnd.length ? preferSyntheticEnd : noPairing;
+    const preferCont = dayRow.kind === 'continuation' || dayRow.kind === 'trip';
+    const typed = pool.find((c) =>
+      preferCont ? c.rowType === 'TRIP_CONTINUATION' : c.rowType === 'TRIP_END',
+    );
+    if (typed) return typed;
+  }
+  return noPairing[0] ?? list[0] ?? null;
+}
+
+/** Matches schedule_duty time strings FLICA persists (digits only, localized, etc.). */
+function formatLayer7DutyTime(raw?: string | null): string {
+  if (raw == null) return '';
+  const t = String(raw).trim();
+  if (!t) return '';
+  const viaCompact = toCompactTime(t);
+  if (viaCompact) return viaCompact;
+  const digits = t.replace(/\D/g, '');
+  if (digits.length >= 4) return digits.slice(0, 4);
+  if (digits.length === 3) return `0${digits}`;
+  return t;
 }
 
 /**
@@ -505,23 +579,41 @@ function buildSummaryStrip(server: ScheduleMonthMetrics | null | undefined): Sum
 
 const ScheduleRow = memo(function ScheduleRow({
   row,
+  classicRow,
+  useClassicColumns,
   onPressTrip,
   onLongPressTrip,
 }: {
   row: DayRow;
+  classicRow: ClassicScheduleRow | null;
+  useClassicColumns: boolean;
   onPressTrip?: (trip: CrewScheduleTrip) => void;
   onLongPressTrip?: (trip: CrewScheduleTrip) => void;
 }) {
-  const debugLoggedRef = useRef(false);
   const isEmpty = row.kind === 'empty';
   const dayInitial = row.dayCode.slice(0, 1);
   const dayNumber = String(row.dayNum).padStart(2, '0');
-  const pairingValue = row.pairingText || '';
-  const reportValue = row.reportText || '';
-  const cityValue = row.cityText || '';
-  const dEndValue = row.dEndText || '';
-  const layoverValue = row.layoverText || '';
+
+  const uc = Boolean(useClassicColumns && classicRow != null);
+  const classic = uc && classicRow ? classicRow : null;
+  const rt = classic?.rowType ?? null;
+  const pairingValue = classic ? (classic.pairingText ?? '') : row.pairingText || '';
+  const reportValue =
+    uc && classic
+      ? formatLayer7DutyTime(classic.reportText) || row.reportText || ''
+      : row.reportText || '';
+  const cityValue = classic ? (classic.cityText ?? '') : row.cityText || '';
+  const dEndValue =
+    uc && classic
+      ? formatLayer7DutyTime(classic.dutyEndText) || row.dEndText || ''
+      : row.dEndText || '';
+  const layoverValue =
+    uc && classic
+      ? formatLayer7DutyTime(classic.layoverText) || row.layoverText || ''
+      : row.layoverText || '';
+  /** WX always from trip / entries pipeline (Layer 10), not schedule_duties. */
   const wxValue = row.wxText || '';
+
   const rowStyle = [
     styles.row,
     styles.bodyRow,
@@ -530,7 +622,7 @@ const ScheduleRow = memo(function ScheduleRow({
     row.groupedWithPrev && styles.tripChainRow,
   ];
 
-  if (!debugLoggedRef.current && row.dateIso.endsWith('-24')) debugLoggedRef.current = true;
+  const dataPlaceholder = isEmpty || (uc && rt === 'EMPTY_DAY');
 
   const interactive = !!row.trip && !!onPressTrip;
 
@@ -548,16 +640,7 @@ const ScheduleRow = memo(function ScheduleRow({
       </View>
       <View style={[styles.rowCell, styles.cellPairing]}>
         <Text
-          style={[
-            styles.cellText,
-            styles.assignmentCode,
-            row.kind === 'off' && styles.offCode,
-            row.kind === 'pto' && styles.ptoCode,
-            row.kind === 'reserve' && styles.reserveCode,
-            row.kind === 'unavailable' && styles.unavailableCode,
-            row.kind === 'continuation' && styles.continuationCode,
-            isEmpty && styles.routePlaceholder,
-          ]}
+          style={[styles.cellText, styles.assignmentCode, dataPlaceholder && styles.routePlaceholder]}
           numberOfLines={1}
           ellipsizeMode="tail"
         >
@@ -565,18 +648,18 @@ const ScheduleRow = memo(function ScheduleRow({
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellReport]}>
-        <Text style={[styles.cellText, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
+        <Text style={[styles.cellText, dataPlaceholder && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
           {reportValue}
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellRoute]}>
-        <Text style={[styles.cellText, styles.routeMain, isEmpty && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
+        <Text style={[styles.cellText, styles.routeMain]} numberOfLines={1} ellipsizeMode="tail">
           {cityValue}
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellDetail]}>
         <Text
-          style={[styles.cellText, styles.detailCellText, isEmpty && styles.routePlaceholder]}
+          style={[styles.cellText, styles.detailCellText, dataPlaceholder && styles.routePlaceholder]}
           numberOfLines={1}
           ellipsizeMode="tail"
         >
@@ -585,7 +668,7 @@ const ScheduleRow = memo(function ScheduleRow({
       </View>
       <View style={[styles.rowCell, styles.cellLayover]}>
         <Text
-          style={[styles.cellText, styles.detailCellText, isEmpty && styles.routePlaceholder]}
+          style={[styles.cellText, styles.detailCellText, dataPlaceholder && styles.routePlaceholder]}
           numberOfLines={1}
           ellipsizeMode="tail"
         >
@@ -664,6 +747,7 @@ type Props = {
 
 export default function ClassicListView({ trips, year, month, monthMetrics, onPressTrip, onOpenManage }: Props) {
   const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
+  const [classicRows, setClassicRows] = useState<ClassicScheduleRow[]>([]);
   const onLongPressTrip = useCallback((t: CrewScheduleTrip) => setPreviewTrip(t), []);
   const closePreview = useCallback(() => setPreviewTrip(null), []);
   const openFullFromPreview = useCallback(() => {
@@ -672,7 +756,24 @@ export default function ClassicListView({ trips, year, month, monthMetrics, onPr
     if (t) onPressTrip(t);
   }, [previewTrip, onPressTrip]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { duties, pairings, pairingLegs } = await fetchScheduleDutiesAndPairingsForMonth(year, month);
+        if (cancelled) return;
+        setClassicRows(buildClassicRowsFromDuties(duties, pairings, pairingLegs));
+      } catch {
+        if (!cancelled) setClassicRows([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [year, month]);
+
   const rows = useMemo(() => rowsFromTrips(trips, year, month), [trips, year, month]);
+  const classicByDate = useMemo(() => groupClassicRowsByDate(classicRows), [classicRows]);
   const summary = useMemo(() => buildSummaryStrip(monthMetrics ?? null), [monthMetrics]);
 
   if (!trips.length) {
@@ -719,13 +820,20 @@ export default function ClassicListView({ trips, year, month, monthMetrics, onPr
       <FlatList
         data={rows}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <ScheduleRow
-            row={item}
-            onPressTrip={item.trip ? onPressTrip : undefined}
-            onLongPressTrip={item.trip ? onLongPressTrip : undefined}
-          />
-        )}
+        renderItem={({ item }) => {
+          const classicPickList = classicByDate.get(item.dateIso) ?? [];
+          const classic = pickClassicForDayRow(item, classicPickList);
+          const useClassicColumns = Boolean(classicRows.length > 0 && classic);
+          return (
+            <ScheduleRow
+              row={item}
+              classicRow={classic}
+              useClassicColumns={useClassicColumns}
+              onPressTrip={item.trip ? onPressTrip : undefined}
+              onLongPressTrip={item.trip ? onLongPressTrip : undefined}
+            />
+          );
+        }}
         contentContainerStyle={styles.wrap}
         initialNumToRender={22}
         maxToRenderPerBatch={24}

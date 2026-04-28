@@ -13,6 +13,7 @@ import {
 import { buildApplyRowsFromPairingBatch, applyReplaceMonth, type ApplyRow } from './scheduleApi';
 import { createScheduleImport } from './jetblueFlicaImport';
 import { extractLayoverRestFourDigits } from './scheduleTime';
+import { normalizeFlicaParsedPairing } from './scheduleNormalizer';
 
 const YEAR = 2026;
 
@@ -50,11 +51,15 @@ function calendarIsoInMonth(year: number, month1to12: number, day: number): stri
 }
 
 /**
- * Resolves a leg’s calendar day. FLICA’s page `monthKey` is the *file* month, but a pairing can start
- * in the previous calendar month; naively doing `fileMonth + leg.date` can misfile Mar 30 as Apr 30
- * and break ordering / carry-in head days. We pick the ISO in [pairing.startDate, pairing.endDate] from
- * file month ±1. When more than one day-of-month matches (rare), `prev` keeps legs ordered (same
- * `leg.date` on two **calendar** days is resolved to the first strictly after the previous leg).
+ * Resolves a leg’s `duty_date` from the **DD** of the D-END duty period when
+ * {@link FlicaLeg.dutyPeriodDate} is set (&gt; 0), else {@link FlicaLeg.date} (FLICA leg row).
+ * `dutyPeriodDay` matches that calendar day’s DY when present; we do not shift by local departure time.
+ *
+ * 1) Prefer **YYYY-MM-DD = schedule file’s month** + the effective day-of-month when that date is in
+ *    `[pairing.startDate, pairing.endDate]`.
+ * 2) If not (e.g. carry-in/carry-out), use the same DOM in adacent months (file month ±1) in range, then
+ *    disambiguate with `prevResolvedIso` so legs stay in order.
+ * 3) No heuristics that push the effective DOM to the *next* calendar month because it &lt; start’s DOM.
  */
 function dutyDateIso(
   pairing: FlicaPairing,
@@ -64,18 +69,27 @@ function dutyDateIso(
 ): string {
   const y = parseInt(monthKey.slice(0, 4), 10);
   const fileM = parseInt(monthKey.slice(5, 7), 10);
-  const d = String(leg.date).padStart(2, '0');
+  const dom = leg.dutyPeriodDate > 0 ? leg.dutyPeriodDate : leg.date;
+  const d = String(dom).padStart(2, '0');
   const start = pairing.startDate;
   const end = pairing.endDate;
+  const mStr = String(fileM).padStart(2, '0');
+  const yStr = String(y);
   if (!Number.isFinite(y) || !Number.isFinite(fileM) || !start || !end) {
     return `${monthKey.slice(0, 4)}-${monthKey.slice(5, 7)}-${d}`;
   }
+
+  const inFileMonth = calendarIsoInMonth(y, fileM, dom);
+  if (inFileMonth && inFileMonth >= start && inFileMonth <= end) {
+    return inFileMonth;
+  }
+
   const inRange: string[] = [];
   for (const delta of [-1, 0, 1] as const) {
     const dt = new Date(y, fileM - 1 + delta, 1);
     const cy = dt.getFullYear();
     const cm = dt.getMonth() + 1;
-    const iso = calendarIsoInMonth(cy, cm, leg.date);
+    const iso = calendarIsoInMonth(cy, cm, dom);
     if (iso && iso >= start && iso <= end) {
       inRange.push(iso);
     }
@@ -88,16 +102,6 @@ function dutyDateIso(
     const sameOrAfter = inRange.find((iso) => iso >= prevResolvedIso);
     if (sameOrAfter) return sameOrAfter;
     return inRange[0]!;
-  }
-  const mStr = String(fileM).padStart(2, '0');
-  const yStr = String(y);
-  const startDay = parseInt(start.slice(8, 10), 10);
-  if (Number.isFinite(startDay) && leg.date < startDay) {
-    const mi = fileM + 1;
-    if (mi > 12) {
-      return `${y + 1}-01-${d}`;
-    }
-    return `${yStr}-${String(mi).padStart(2, '0')}-${d}`;
   }
   return `${yStr}-${mStr}-${d}`;
 }
@@ -140,6 +144,49 @@ function parseStatNumber(raw: string | null | undefined): number | null {
   if (raw == null || !String(raw).trim()) return null;
   const n = parseFloat(String(raw).trim());
   return Number.isFinite(n) ? n : null;
+}
+
+/** Next calendar day for YYYY-MM-DD (local date math). */
+function addOneDay(yyyyMmDd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(yyyyMmDd.trim());
+  if (!m) return yyyyMmDd;
+  const y = parseInt(m[1]!, 10);
+  const mo = parseInt(m[2]!, 10);
+  const d = parseInt(m[3]!, 10);
+  const dt = new Date(y, mo - 1, d);
+  dt.setDate(dt.getDate() + 1);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+/** FLICA-style local time → comparable integer (e.g. 0600, 1413, 1:00 → 100). */
+function localTimeToNumber(raw: string | null | undefined): number | null {
+  const s = String(raw ?? '').replace(/\D/g, '');
+  if (s.length < 4) return null;
+  const n = parseInt(s.slice(0, 4), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Trip calendar end from last duty’s last leg times only (not FLICA pairing end, not isOvernightDuty flag).
+ * If arrival local &lt; departure local, leg crosses midnight → trip end is dutyDate + 1.
+ */
+function tripEndDateIsoFromNormalizedDutyDays(
+  dutyDays: ReturnType<typeof normalizeFlicaParsedPairing>['dutyDays'],
+  startDateFallback: string
+): string {
+  const lastDay = dutyDays[dutyDays.length - 1];
+  if (!lastDay) return startDateFallback;
+  const lastLeg = lastDay.legs[lastDay.legs.length - 1];
+  if (!lastLeg) return lastDay.dutyDateIso;
+  const dep = localTimeToNumber(lastLeg.depTimeLocal);
+  const arr = localTimeToNumber(lastLeg.arrTimeLocal);
+  if (dep == null || arr == null) {
+    return lastDay.dutyDateIso;
+  }
+  if (arr < dep) {
+    return addOneDay(lastDay.dutyDateIso);
+  }
+  return lastDay.dutyDateIso;
 }
 
 function flicaStatsToMonthMetricsRow(stats: FlicaMonthStats) {
@@ -242,6 +289,12 @@ export async function persistFlicaDirectImport(
       const pCredit = flicaHhmmToDecimal(pairing.totalCredit);
       const pTafbMin = flicaHhmmToMinutes(pairing.tafb);
 
+      const normalized = normalizeFlicaParsedPairing(pairing);
+      const tripEndDateIso = tripEndDateIsoFromNormalizedDutyDays(
+        normalized.dutyDays,
+        pairing.startDate
+      );
+
       const { data: pIns, error: pErr } = await supabase
         .from('schedule_pairings')
         .upsert(
@@ -251,8 +304,9 @@ export async function persistFlicaDirectImport(
             schedule_import_id: importId,
             pairing_id: pairing.id,
             pairing_start_date: pairing.startDate,
+            pairing_end_date: tripEndDateIso,
             operate_start_date: pairing.startDate,
-            operate_end_date: pairing.endDate,
+            operate_end_date: tripEndDateIso,
             report_time_local: pairing.baseReport,
             pairing_report_time: pairing.baseReport,
             base_code: 'JFK',
@@ -273,6 +327,31 @@ export async function persistFlicaDirectImport(
       if (pErr || !pIns) throw pErr ?? new Error('pairing insert failed');
       const pairingUuid = pIns.id as string;
 
+      const { error: delDutiesForPairing } = await supabase
+        .from('schedule_duties')
+        .delete()
+        .eq('user_id', uid)
+        .eq('pairing_id', pairing.id);
+      if (delDutiesForPairing) throw delDutiesForPairing;
+
+      for (const normalizedDutyDay of normalized.dutyDays) {
+        const { error: dErr } = await supabase.from('schedule_duties').insert({
+          user_id: uid,
+          import_id: batchId,
+          pairing_id: pairing.id,
+          duty_date: normalizedDutyDay.dutyDateIso,
+          report_time: normalizedDutyDay.reportTime,
+          duty_off_time: normalizedDutyDay.dutyOffTime,
+          next_report_time: normalizedDutyDay.nextReportTime,
+          layover_city: normalizedDutyDay.layoverCity,
+          layover_time: normalizedDutyDay.layoverTime,
+          hotel_name: normalizedDutyDay.hotelName,
+          is_continuation: normalizedDutyDay.isContinuation,
+          is_overnight_duty: normalizedDutyDay.isOvernightDuty,
+        });
+        if (dErr) throw dErr;
+      }
+
       let prevLegDutyIso: string | null = null;
       for (const leg of pairing.legs) {
         const duty = dutyDateIso(pairing, leg, cfg.monthKey, prevLegDutyIso);
@@ -283,6 +362,24 @@ export async function persistFlicaDirectImport(
         const reptLocal = flicaTimeTokenToDigits(leg.nextReportTime);
         const lot = (leg.layoverTime ?? '').trim();
         const layoverRest = extractLayoverRestFourDigits(lot) ?? (/^\d{4}$/.test(lot) ? lot : undefined);
+        const storedDep = leg.departLocal;
+        console.log(
+          '[PERSIST LEG]',
+          'pairing:',
+          pairing.id,
+          'flicaDay:',
+          leg.dayOfWeek,
+          'flicaDate:',
+          leg.date,
+          'route:',
+          leg.route,
+          'dep:',
+          leg.departLocal,
+          'resolvedDate:',
+          duty,
+          'storedDep:',
+          storedDep,
+        );
         const { error: lErr } = await supabase.from('schedule_pairing_legs').insert({
           pairing_id: pairingUuid,
           duty_date: duty,
@@ -290,7 +387,7 @@ export async function persistFlicaDirectImport(
           segment_type: leg.isDeadhead ? 'deadhead' : 'operating_flight',
           departure_station: dep || null,
           arrival_station: arr || null,
-          scheduled_departure_local: leg.departLocal,
+          scheduled_departure_local: storedDep,
           scheduled_arrival_local: leg.arriveLocal,
           release_time_local: dEndLocal,
           block_time: blk,

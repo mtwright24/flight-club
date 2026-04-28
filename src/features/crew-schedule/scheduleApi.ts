@@ -2,8 +2,10 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../lib/supabaseCli
 import type { CrewScheduleTrip, ScheduleCrewMember, ScheduleMonthMetrics } from './types';
 import {
   buildLayoverSummaryFromDuties,
+  mapLegRowToDuty,
   fetchDutiesForPairing,
   fetchPairingsForBatch,
+  type SchedulePairingDutyRow,
 } from './jetblueFlicaImport';
 
 export type ScheduleEntryRow = {
@@ -144,6 +146,47 @@ export async function fetchTripGroupEntries(tripGroupId: string): Promise<Schedu
 
   if (error) throw error;
   return (data ?? []) as ScheduleEntryRow[];
+}
+
+/**
+ * Resolves `schedule_pairing_legs` rows for a trip’s schedule apply batch + pairing id (read-only; does not
+ * run import/FLICA fetch). When present, trip detail should prefer these for per-leg flight numbers and times.
+ */
+export async function fetchPairingDutiesForScheduleEntries(
+  rows: ScheduleEntryRow[],
+): Promise<SchedulePairingDutyRow[] | null> {
+  if (!rows.length) return null;
+  const batchId = rows.find((r) => r.source_batch_id)?.source_batch_id ?? null;
+  if (!batchId) return null;
+  const code = rows
+    .map((r) => String(r.pairing_code ?? '').trim())
+    .find((p) => {
+      const u = p.toUpperCase();
+      return u && u !== 'CONT' && u !== '—' && u !== 'PTO' && u !== 'PTV' && u !== 'RSV';
+    });
+  if (!code) return null;
+  const norm = code.toUpperCase();
+
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData.user) return null;
+
+  const { data: pList, error: pErr } = await supabase
+    .from('schedule_pairings')
+    .select('id, pairing_id')
+    .eq('user_id', userData.user.id)
+    .eq('import_id', batchId);
+  if (pErr) return null;
+  const match = (pList ?? []).find((p) => String(p.pairing_id ?? '').trim().toUpperCase() === norm);
+  if (!match?.id) return null;
+
+  const { data: legRows, error: lErr } = await supabase
+    .from('schedule_pairing_legs')
+    .select('*')
+    .eq('pairing_id', match.id)
+    .order('created_at', { ascending: true });
+  if (lErr || !legRows?.length) return null;
+
+  return (legRows as Record<string, unknown>[]).map((row) => mapLegRowToDuty(row));
 }
 
 export async function createImportBatch(params: {

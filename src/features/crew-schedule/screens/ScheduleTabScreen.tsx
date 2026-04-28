@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
   PanResponder,
   Platform,
   Pressable,
@@ -35,6 +36,7 @@ import ClassicListView from '../components/ClassicListView';
 import CalendarMonthView from '../components/CalendarMonthView';
 import SmartListView from '../components/SmartListView';
 import { Ionicons } from '@expo/vector-icons';
+
 const MONTH_NAMES = [
   'January',
   'February',
@@ -73,8 +75,8 @@ export default function ScheduleTabScreen() {
     });
   }, []);
 
-  const { trips, monthMetrics, refreshing, refresh, refreshSilent } = useScheduleTripsForMonth(year, month);
-  const [flicaDirectForMonth, setFlicaDirectForMonth] = useState(false);
+  const { trips, monthMetrics, refresh, refreshSilent } = useScheduleTripsForMonth(year, month);
+  const [, setFlicaDirectForMonth] = useState(false);
 
   const loadFlicaDirectFlag = useCallback(() => {
     void hasFlicaDirectImportForMonth(year, month).then(setFlicaDirectForMonth);
@@ -189,6 +191,9 @@ export default function ScheduleTabScreen() {
 
   const runRemoveMonthConfirmed = useCallback(async () => {
     setRemovingMonth(true);
+    const removingFailsafe = setTimeout(() => {
+      setRemovingMonth(false);
+    }, 5000);
     try {
       const r = await removeMonthScheduleAndImports(monthKey);
       setFlicaDirectForMonth(false);
@@ -203,6 +208,7 @@ export default function ScheduleTabScreen() {
         Alert.alert('Done', doneMsg);
       }
     } catch (e) {
+      console.error('DELETE_FAILED', e);
       const err = e instanceof Error ? e.message : String(e);
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.alert(`Could not remove\n\n${err}`);
@@ -210,6 +216,7 @@ export default function ScheduleTabScreen() {
         Alert.alert('Could not remove', err);
       }
     } finally {
+      clearTimeout(removingFailsafe);
       setRemovingMonth(false);
     }
   }, [monthKey, refresh]);
@@ -230,17 +237,22 @@ export default function ScheduleTabScreen() {
     };
   }, [flicaRow]);
 
-  /** Non-FLICA months: refetch `schedule_entries`. FLICA direct months: full WebView + cookie + token + month download. */
+  /**
+   * If content is shorter than the screen (e.g. “blank” month), the outer ScrollView may not
+   * deliver pull-to-refresh. Force a min height so the bounce/gesture can still fire.
+   */
+  const scrollContentMinHeight = useMemo(
+    () => Math.max(420, Dimensions.get('window').height - 150),
+    []
+  );
+
+  /**
+   * Schedule tab: pull-down = open FLICA import/sync (same as Manage → “FLICA” path). This screen is
+   * FLICA-first; we do not require DB heuristics to fire the gesture (those failed when the list was empty).
+   */
   const onSchedulePullToRefresh = useCallback(() => {
-    if (flicaDirectForMonth) {
-      router.push({
-        pathname: '/crew-schedule/import-flica-direct',
-        params: { autoSync: '1' },
-      });
-      return;
-    }
-    void refresh();
-  }, [flicaDirectForMonth, refresh, router]);
+    router.push('/crew-schedule/import-flica-direct?autoSync=1');
+  }, [router]);
 
   const onRemoveMonthFromSchedule = useCallback(() => {
     const title = `Delete imported schedule for ${monthLabel}?`;
@@ -273,7 +285,9 @@ export default function ScheduleTabScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={T.text} />
         </Pressable>
-        <Text style={styles.monthText}>{monthLabel}</Text>
+        <View style={styles.monthTitleRow}>
+          <Text style={styles.monthText}>{monthLabel}</Text>
+        </View>
         <Pressable
           onPress={goNextMonth}
           style={styles.iconHit}
@@ -307,12 +321,13 @@ export default function ScheduleTabScreen() {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { minHeight: scrollContentMinHeight }]}
         keyboardShouldPersistTaps="handled"
         nestedScrollEnabled
         refreshControl={
           <RefreshControl
-            refreshing={flicaDirectForMonth ? false : refreshing}
+            progressViewOffset={Platform.OS === 'android' ? 0 : undefined}
+            refreshing={false}
             onRefresh={onSchedulePullToRefresh}
             tintColor={T.accent}
           />
@@ -381,6 +396,13 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   monthText: { fontSize: 16, fontWeight: '800', color: T.text },
+  monthTitleRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
   monthRowCenter: { flex: 1, textAlign: 'center', marginHorizontal: 4 },
   monthSide: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   iconHit: { paddingHorizontal: 6, paddingVertical: 4 },

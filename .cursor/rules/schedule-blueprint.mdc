@@ -1,0 +1,136 @@
+# Flight Club Schedule Architecture Blueprint
+
+## Core Principle
+The monthly schedule screen is the final
+polished crew summary of a normalized schedule
+model — never a direct rendering of imported HTML.
+
+## 10-Layer Architecture
+
+### Layer 1 — FLICA Import (DO NOT TOUCH)
+- WebView login, cookies, token capture
+- Files: import-flica-direct.tsx,
+  flicaScheduleService.ts
+- Status: WORKING — never modify without approval
+
+### Layer 2 — Raw Parser (DO NOT TOUCH)
+- Extracts table rows, cells, D-END boundaries
+- Assigns dutyPeriodDate from D-END groups
+- File: flicaScheduleHtmlParser.ts
+- Status: WORKING — never modify without approval
+
+### Layer 3 — Row Classifier
+- Classifies each parsed row as:
+  TRIP_HEADER, REPORT_ROW, LEG_ROW,
+  LAYOVER_ROW, RELEASE_ROW, TOTALS_ROW,
+  DEND_ROW, OFF_ROW, NON_FLIGHT_ROW
+- Input: raw FlicaLeg[] from parser
+- Output: ClassifiedRow[]
+
+### Layer 4 — Date Resolver
+- Uses dutyPeriodDate from parser as source of truth
+- Never moves dates based on departure time
+- Handles month crossing for carry-in/carry-out
+- Handles midnight legs via dutyPeriodDate
+- NO post-processing alignment of any kind
+
+### Layer 5 — Trip Normalizer
+- Groups classified rows into Trip objects
+- Each Trip has DutyDay[]
+- Each DutyDay has Leg[]
+- Attaches layovers to correct DutyDay
+- Calculates touchedDays[]
+
+### Layer 6 — Persistence
+- Upserts normalized trips to Supabase
+- schedule_pairings table = Trip
+- schedule_duties table = DutyDay (NEW)
+- schedule_pairing_legs table = Leg
+- Deduplication via upsert
+
+### Layer 7 — Classic Display Builder
+- Reads from normalized model only
+- Never reads raw HTML rows
+- Builds ClassicScheduleRow per calendar day
+- Row types: EMPTY_DAY, TRIP_START,
+  TRIP_CONTINUATION, TRIP_END,
+  CARRY_IN, CARRY_OUT, NON_FLIGHT_DUTY
+
+### Layer 8 — UI Renderer
+- Table layout only
+- No parsing logic
+- Tap navigation to detail screens
+
+### Layer 9 — Detail Renderer
+- Full trip/leg details
+- Report/release/totals/hotels
+
+### Layer 10 — Overlay Services
+- Weather, hotel, flight tracker,
+  crew assistant, legality
+
+## Data Model
+
+### Trip/Pairing
+- pairingId: string
+- tripStartDateIso: string
+- tripEndDateIso: string
+- touchedDays: string[]
+- baseAirport: string
+- reportTime: string
+- dutyDays: DutyDay[]
+
+### DutyDay
+- dutyDateIso: string (from D-END boundary)
+- reportTime: string
+- dutyOffTime: string
+- legs: Leg[]
+- layoverCity: string | null
+- layoverTime: string | null
+- isContinuation: boolean
+- isOvernightDuty: boolean
+
+### Leg
+- dutyDateIso: string (same as parent DutyDay)
+- actualDepDateIso: string (from HTML DD column)
+- flightNumber: string
+- depAirport: string
+- arrAirport: string
+- depTimeLocal: string
+- arrTimeLocal: string
+- crossesMidnight: boolean
+- isDeadhead: boolean
+
+### ClassicScheduleRow
+- dateIso: string
+- pairingText: string | null (first day only)
+- reportText: string | null
+- cityText: string | null
+- dutyEndText: string | null
+- layoverText: string | null
+- rowType: RowType
+
+## J3H95 Test Case (source of truth)
+Pairing J3H95 Apr 22-24:
+- DutyDay 1: Apr 22 — JFK-LAS, LAS-BOS
+  layoverCity=BOS layoverTime=2355
+- DutyDay 2: Apr 23 — BOS-LAS (dep 1926),
+  LAS-JFK (dep 0009, dutyPeriodDate=Apr23)
+  isOvernightDuty=true
+- Apr 24 — continuation arrival day
+  cityText=JFK no report no D-END
+
+Classic list must show:
+W22 J3H95 0500 BOS  1817 2355
+T23        1812 -   0741
+F24            JFK
+
+## Hard Rules
+1. dutyPeriodDate from parser is ALWAYS
+   the duty date. Never override it.
+2. Never render raw HTML rows in month view.
+3. Never delete existing working import files.
+4. Never delete existing Supabase tables
+   without explicit approval.
+5. Always test J3H95 case before any
+   display changes.

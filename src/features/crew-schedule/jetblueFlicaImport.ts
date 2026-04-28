@@ -8,7 +8,7 @@ import { extractLayoverRestFourDigits } from './scheduleTime';
 import { tryInferFlightNumberFromLegRaw } from '../schedule-import/parser/jetblueFlicaStructuredParser';
 import { JETBLUE_FLICA_MONTHLY_SOURCE_TYPE } from './jetblueFlicaUnderstanding';
 import { JETBLUE_FLICA_TEMPLATE_KEY } from './jetblueFlicaTemplate';
-
+import type { CrewScheduleLeg } from './types';
 export { JETBLUE_FLICA_MONTHLY_SOURCE_TYPE };
 
 export type ScheduleImportStatus = 'draft' | 'processing' | 'review' | 'partial' | 'saved' | 'failed';
@@ -489,13 +489,46 @@ export function mapLegRowToDuty(l: Record<string, unknown>): SchedulePairingDuty
   };
 }
 
+function formatDutyTimeForUi(t: string | null | undefined): string | undefined {
+  if (t == null || !String(t).trim()) return undefined;
+  const s = String(t).trim();
+  if (/^\d{4}$/.test(s)) return `${s.slice(0, 2)}:${s.slice(2)}`;
+  return s;
+}
+
+/**
+ * Flattens stored pairing duties into {@link CrewScheduleLeg} (trip detail, quick preview, trackers).
+ * Uses the same `schedule_pairing_legs` fields as the canonical pairing-day model — no import-path changes.
+ */
+export function dutiesToCrewScheduleLegs(
+  duties: SchedulePairingDutyRow[],
+  tripGroupId: string,
+  _baseCode: string = 'JFK',
+): CrewScheduleLeg[] {
+  return duties.map((d, i) => ({
+    id: d.id && String(d.id).length > 0 ? String(d.id) : `${tripGroupId}-duty-${i}`,
+    scheduleEntryId: undefined,
+    dutyDate: d.duty_date ?? undefined,
+    departureAirport: (d.from_airport ?? '').trim() || '—',
+    arrivalAirport: (d.to_airport ?? '').trim() || '—',
+    reportLocal: undefined,
+    departLocal: formatDutyTimeForUi(d.departure_time_local),
+    arriveLocal: formatDutyTimeForUi(d.arrival_time_local),
+    releaseLocal: d.release_time_local ?? undefined,
+    isDeadhead: d.is_deadhead === true,
+    flightNumber: d.flight_number ?? undefined,
+    blockTimeLocal: d.block_time_local ?? undefined,
+    equipmentCode: d.equipment_code ?? undefined,
+  }));
+}
+
 /** Duty rows for a pairing (table `schedule_pairing_legs`). */
 export async function fetchDutiesForPairing(pairingUuid: string): Promise<SchedulePairingDutyRow[]> {
   const { data, error } = await supabase
     .from('schedule_pairing_legs')
     .select('*')
     .eq('pairing_id', pairingUuid)
-    .order('duty_date', { ascending: true, nullsFirst: false });
+    .order('created_at', { ascending: true });
 
   if (error) throw error;
   return (data ?? []).map((row) => mapLegRowToDuty(row as Record<string, unknown>));
@@ -511,7 +544,8 @@ export async function fetchDutiesGroupedByPairingIds(
     .from('schedule_pairing_legs')
     .select('*')
     .in('pairing_id', pairingUuids)
-    .order('duty_date', { ascending: true, nullsFirst: false });
+    .order('pairing_id', { ascending: true })
+    .order('created_at', { ascending: true });
 
   if (error) throw error;
   for (const row of data ?? []) {

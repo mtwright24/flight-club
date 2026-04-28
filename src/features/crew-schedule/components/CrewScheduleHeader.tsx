@@ -9,12 +9,17 @@ import { useDmUnreadBadge } from '../../../hooks/useDmUnreadBadge';
 
 type Props = {
   title?: string;
+  /**
+   * Extra space below title / icons inside the red bar (matches other red headers on tall screens).
+   * Use only where the default bar feels tight below the chromed row — e.g. FLICA Sync.
+   */
+  relaxedBottomInset?: boolean;
 };
 
 /**
  * Red branded header for the Crew Schedule module (matches Flight Club header affordances).
  */
-export default function CrewScheduleHeader({ title = 'Crew Schedule' }: Props) {
+export default function CrewScheduleHeader({ title = 'Crew Schedule', relaxedBottomInset = false }: Props) {
   const router = useRouter();
   const unread = useNotificationsBadge();
   const { count: dmUnread } = useDmUnreadBadge();
@@ -29,12 +34,14 @@ export default function CrewScheduleHeader({ title = 'Crew Schedule' }: Props) {
 
   return (
     <SafeAreaView style={styles.safe} edges={['left', 'right', 'top']}>
-      <View style={styles.headerWrap}>
+      <View
+        style={[styles.headerWrap, relaxedBottomInset ? styles.headerWrapRelaxedInset : undefined]}
+      >
         <Pressable
           onPress={goBack}
           style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
           accessibilityLabel="Back"
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
         >
           <Ionicons name="chevron-back" size={26} color={colors.cardBg} />
         </Pressable>
@@ -53,16 +60,17 @@ export default function CrewScheduleHeader({ title = 'Crew Schedule' }: Props) {
         <View style={styles.rightRow}>
           <Pressable
             onPress={() => router.push('/search')}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
+            style={({ pressed }) => [styles.iconButton, styles.rightIconButton, pressed && styles.iconButtonPressed]}
             accessibilityLabel="Search"
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Ionicons name="search-outline" size={26} color={colors.cardBg} />
           </Pressable>
           <Pressable
             onPress={() => router.push('/notifications')}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
+            style={({ pressed }) => [styles.iconButton, styles.rightIconButton, pressed && styles.iconButtonPressed]}
             accessibilityLabel="Notifications"
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Ionicons name="notifications-outline" size={26} color={colors.cardBg} />
             {unread > 0 ? (
@@ -73,8 +81,9 @@ export default function CrewScheduleHeader({ title = 'Crew Schedule' }: Props) {
           </Pressable>
           <Pressable
             onPress={() => router.push('/messages-inbox')}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
+            style={({ pressed }) => [styles.iconButton, styles.rightIconButton, pressed && styles.iconButtonPressed]}
             accessibilityLabel="Messages"
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Ionicons name="chatbubble-ellipses-outline" size={26} color={colors.cardBg} />
             {dmUnread > 0 ? (
@@ -106,13 +115,24 @@ const styles = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 2,
     paddingHorizontal: spacing.lg,
+    gap: 12,
     borderBottomLeftRadius: radius.md,
     borderBottomRightRadius: radius.md,
+  },
+  /**
+   * FLICA Sync: pin title + icons to the top of the red bar (not vertically centered), so they sit higher
+   * and farther from the scroll / WebView below.
+   */
+  headerWrapRelaxedInset: {
+    alignItems: 'flex-start',
+    height: 68,
+    paddingTop: 2,
+    paddingBottom: spacing.sm,
   },
   titleWrap: {
     flex: 1,
     minWidth: 0,
-    marginRight: 8,
+    paddingHorizontal: 4,
     justifyContent: 'center',
   },
   title: {
@@ -124,8 +144,8 @@ const styles = StyleSheet.create({
   rightRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
-    marginLeft: spacing.md,
+    flexShrink: 0,
+    gap: 14,
   },
   iconButton: {
     minWidth: 44,
@@ -135,8 +155,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
-    marginHorizontal: 2,
     position: 'relative',
+  },
+  /** Right-side cluster: spacing from `rightRow` gap only (no extra horizontal margins). */
+  rightIconButton: {
+    marginHorizontal: 0,
   },
   iconButtonPressed: {
     backgroundColor: 'rgba(255,255,255,0.08)',

@@ -4,6 +4,7 @@
  */
 
 import { formatLayoverColumnDisplay } from './scheduleTime';
+import type { PairingDay } from './pairingDayModel';
 import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleCrewMember, ScheduleDutyStatus } from './types';
 
 export type TripStatTile = { id: string; label: string; value: string };
@@ -88,9 +89,37 @@ function layoverRestForDate(trip: CrewScheduleTrip, dateIso: string): string | n
   return v || null;
 }
 
+function segmentTimeForUi(t: string | null | undefined): string | undefined {
+  if (t == null || !String(t).trim()) return undefined;
+  const s = String(t).trim();
+  if (/^\d{4}$/.test(s)) return `${s.slice(0, 2)}:${s.slice(2)}`;
+  return s;
+}
+
+/** When {@link CrewScheduleTrip.canonicalPairingDays} is set, per-leg flight / block / equipment match `schedule_pairing_legs`. */
+function crewLegsFromCanonicalPairingDay(pd: PairingDay, dateIso: string, tripId: string): CrewScheduleLeg[] {
+  if (!pd.segments.length) return [];
+  return pd.segments.map((seg, index) => ({
+    id: `${tripId}-canon-${dateIso}-${index}`,
+    dutyDate: dateIso,
+    departureAirport: seg.departureStation,
+    arrivalAirport: seg.arrivalStation,
+    reportLocal: undefined,
+    departLocal: segmentTimeForUi(seg.departTimeLocal),
+    arriveLocal: segmentTimeForUi(seg.arriveTimeLocal),
+    releaseLocal: undefined,
+    isDeadhead: seg.isDeadhead,
+    flightNumber: seg.flightNumber ?? undefined,
+    blockTimeLocal: seg.blockTimeLocal ?? undefined,
+    equipmentCode: seg.equipmentCode ?? undefined,
+  }));
+}
+
 /**
  * One row per calendar day that has at least one leg, sorted by date.
  * If there are no legs, a single synthetic day is returned for the trip start date.
+ * When {@link CrewScheduleTrip.canonicalPairingDays} has segments for a date, those replace entry-derived
+ * legs (preserves per-leg flight numbers and multi-leg duty days from stored pairing rows).
  */
 export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
   const byDate = new Map<string, CrewScheduleLeg[]>();
@@ -100,13 +129,16 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
     arr.push(leg);
     byDate.set(d, arr);
   }
-  const dates = [...byDate.keys()].sort((x, y) => x.localeCompare(y));
-  for (const d of dates) {
-    const row = byDate.get(d);
-    if (row && row.length > 1) {
-      row.sort((a, b) => (a.departLocal ?? '').localeCompare(b.departLocal ?? ''));
+  // Keep leg order within a duty day as on `CrewScheduleTrip.legs` (DB / FLICA insert order), not sorted by dep time.
+  if (trip.canonicalPairingDays) {
+    for (const [dateIso, pd] of Object.entries(trip.canonicalPairingDays)) {
+      if (pd?.phantomBlankDay) continue;
+      if (pd?.segments?.length) {
+        byDate.set(dateIso, crewLegsFromCanonicalPairingDay(pd, dateIso, trip.id));
+      }
     }
   }
+  const dates = [...byDate.keys()].sort((x, y) => x.localeCompare(y));
   if (dates.length === 0) {
     return [
       {

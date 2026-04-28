@@ -274,6 +274,28 @@ function isMainmenuAwaitingCaptcha(url: string): boolean {
   return true;
 }
 
+/**
+ * True when the WebView has reached FLICA content the user may need to interact with (CAPTCHA, login, menu),
+ * as opposed to an intermediate home/redirect before the login UI. Used only to hide the pre-login full-screen cover.
+ */
+function flicaUserInteractionSurfaceLikely(url: string, recaptchaFrameCount?: number): boolean {
+  if (recaptchaFrameCount != null && recaptchaFrameCount > 0) return true;
+  const u = (url ?? '').trim();
+  if (!u) return false;
+  const low = u.toLowerCase();
+  if (low.includes('captcha')) return true;
+  if (low.includes('mainmenu.cgi') || low.includes('leftmenu.cgi')) return true;
+  if (low.includes('scheduledetail')) return true;
+  if (low.includes('loadschedule') && low.includes('flica')) return true;
+  if (low.includes('/ui/login') || low.includes('login/index') || /[?&/]login(?:\.html)?(?:\?|$)/i.test(low)) {
+    return true;
+  }
+  if (/flica\.net/i.test(u) && /login|sign-?in|signin|userid|password/i.test(low)) {
+    return true;
+  }
+  return false;
+}
+
 export default function ImportFlicaDirectScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -294,6 +316,12 @@ export default function ImportFlicaDirectScreen() {
   const postCaptchaFinalizedRef = useRef(false);
   /** Avoid DOM-only finalize before a reCAPTCHA iframe has been observed on this session’s main menu. */
   const sawFlicaRecaptchaIframeOnMainmenuRef = useRef(false);
+  /**
+   * When FLICA does not show reCAPTCHA, `sawFlica...` / GOHM / leftmenu never set `postCaptchaFinalizedRef`.
+   * One debounced timer (no reset on repeat pings) allows the same handoff as captcha-cleared — optional CAPTCHA.
+   */
+  const noCaptchaMainmenuFinalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialFlicaCoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [credsLoading, setCredsLoading] = useState(true);
   const [storedAirlineSub, setStoredAirlineSub] = useState<string | null>(null);
@@ -314,6 +342,8 @@ export default function ImportFlicaDirectScreen() {
   const [statusLine, setStatusLine] = useState('idle');
   const [httpImporting, setHttpImporting] = useState(false);
   const [overlayMessage, setOverlayMessage] = useState('');
+  /** Covers the WebView on first load after “Sync / refresh” until FLICA shows login, CAPTCHA, or main menu. */
+  const [showInitialFlicaCover, setShowInitialFlicaCover] = useState(false);
 
   const flicaUrls = useMemo(
     () => (storedAirlineSub?.trim() ? buildFlicaUrls(storedAirlineSub) : null),
@@ -336,6 +366,12 @@ export default function ImportFlicaDirectScreen() {
   const hasCredentials = !!storedUser?.trim();
   const hasAirline = !!storedAirlineSub?.trim();
   const canSync = hasAirline && hasCredentials;
+
+  const tryDismissInitialFlicaCover = useCallback((url: string, recaptchaFrameCount?: number) => {
+    if (flicaUserInteractionSurfaceLikely(url, recaptchaFrameCount)) {
+      setShowInitialFlicaCover(false);
+    }
+  }, []);
 
   useEffect(() => {
     LogBox.ignoreLogs([/\d+\s*ms\s*timeout\s*exceeded/i]);
@@ -405,6 +441,15 @@ export default function ImportFlicaDirectScreen() {
       clearTimeout(scheduleExtractTimerRef.current);
       scheduleExtractTimerRef.current = null;
     }
+    if (noCaptchaMainmenuFinalizeTimerRef.current) {
+      clearTimeout(noCaptchaMainmenuFinalizeTimerRef.current);
+      noCaptchaMainmenuFinalizeTimerRef.current = null;
+    }
+    if (initialFlicaCoverTimerRef.current) {
+      clearTimeout(initialFlicaCoverTimerRef.current);
+      initialFlicaCoverTimerRef.current = null;
+    }
+    setShowInitialFlicaCover(false);
     setSyncActive(false);
     setCaptchaWebVisible(false);
     setPostCaptchaFired(false);
@@ -458,6 +503,7 @@ export default function ImportFlicaDirectScreen() {
 
   const beginMainmenuHandoff = useCallback(
     async (pageUrl: string) => {
+      setShowInitialFlicaCover(false);
       if (completingRef.current || !flicaUrls) return;
       if (mainmenuHandoffInFlightRef.current) return;
       if (flowNavRef.current.loadScheduleInjected) return;
@@ -556,6 +602,7 @@ export default function ImportFlicaDirectScreen() {
 
   const runServiceScheduleImport = useCallback(
     async (loadSchedulePageHtml: string) => {
+      setShowInitialFlicaCover(false);
       if (completingRef.current || !flicaUrls) return;
       completingRef.current = true;
       setHttpImporting(true);
@@ -640,10 +687,15 @@ export default function ImportFlicaDirectScreen() {
         const rec = (data as { recaptchaFrameCount?: number }).recaptchaFrameCount;
         if (u) {
           markPostCaptchaFinalizedFromUrl(u);
+          tryDismissInitialFlicaCover(u, typeof rec === 'number' ? rec : undefined);
         }
         if (u && isMainmenuAwaitingCaptcha(u) && typeof rec === 'number') {
           if (rec > 0) {
             sawFlicaRecaptchaIframeOnMainmenuRef.current = true;
+            if (noCaptchaMainmenuFinalizeTimerRef.current) {
+              clearTimeout(noCaptchaMainmenuFinalizeTimerRef.current);
+              noCaptchaMainmenuFinalizeTimerRef.current = null;
+            }
           } else if (sawFlicaRecaptchaIframeOnMainmenuRef.current) {
             if (!postCaptchaFinalizedRef.current) {
               postCaptchaFinalizedRef.current = true;
@@ -655,6 +707,22 @@ export default function ImportFlicaDirectScreen() {
               );
               console.log('[FLICA] handoff allowed');
             }
+          } else if (!postCaptchaFinalizedRef.current && noCaptchaMainmenuFinalizeTimerRef.current == null) {
+            noCaptchaMainmenuFinalizeTimerRef.current = setTimeout(() => {
+              noCaptchaMainmenuFinalizeTimerRef.current = null;
+              if (completingRef.current) return;
+              if (postCaptchaFinalizedRef.current) return;
+              if (sawFlicaRecaptchaIframeOnMainmenuRef.current) return;
+              const latest = lastNavUrlRef.current || u;
+              if (!latest.toLowerCase().includes('mainmenu.cgi')) return;
+              if (!isMainmenuAwaitingCaptcha(latest)) return;
+              postCaptchaFinalizedRef.current = true;
+              console.log(
+                '[FLICA] handoff allowed (no reCAPTCHA iframe on mainmenu — debounced; CAPTCHA not required this session)',
+                latest,
+              );
+              void beginMainmenuHandoff(latest);
+            }, 3000);
           }
         }
         if (u && isMainmenuAwaitingCaptcha(u)) {
@@ -664,10 +732,17 @@ export default function ImportFlicaDirectScreen() {
         return;
       }
       if (data.type === 'flica_login_submitted') {
+        setShowInitialFlicaCover(false);
         setOverlayMessage('Sign in to FLICA');
         return;
       }
-      if (data.type === 'flica_diag' || data.type === 'flica_no_login_form') {
+      if (data.type === 'flica_diag') {
+        const du = (data as { url?: string }).url ?? '';
+        if (du) tryDismissInitialFlicaCover(du);
+        return;
+      }
+      if (data.type === 'flica_no_login_form') {
+        setShowInitialFlicaCover(false);
         return;
       }
       if (data.type !== 'loadschedule_deep_capture') {
@@ -699,7 +774,7 @@ export default function ImportFlicaDirectScreen() {
       console.log('[FLICA] candidate preview', preview);
       void runServiceScheduleImport(picked.text);
     },
-    [markPostCaptchaFinalizedFromUrl, runServiceScheduleImport]
+    [beginMainmenuHandoff, markPostCaptchaFinalizedFromUrl, runServiceScheduleImport, tryDismissInitialFlicaCover]
   );
 
   const onNavigation = useCallback(
@@ -708,6 +783,7 @@ export default function ImportFlicaDirectScreen() {
       const url = nav.url ?? '';
       const low = url.toLowerCase();
       lastNavUrlRef.current = url;
+      tryDismissInitialFlicaCover(url);
       if (low.includes('captcha')) {
         setCaptchaWebVisible(true);
         setOverlayMessage("Complete the verification, then we'll continue automatically.");
@@ -758,7 +834,7 @@ export default function ImportFlicaDirectScreen() {
         }
       }
     },
-    [beginMainmenuHandoff, markPostCaptchaFinalizedFromUrl]
+    [beginMainmenuHandoff, markPostCaptchaFinalizedFromUrl, tryDismissInitialFlicaCover]
   );
 
   const runLoginInject = useCallback(() => {
@@ -782,6 +858,7 @@ export default function ImportFlicaDirectScreen() {
     runLoginInject();
     const u = lastNavUrlRef.current;
     if (u) {
+      tryDismissInitialFlicaCover(u);
       markPostCaptchaFinalizedFromUrl(u);
     }
     const low = (u ?? '').toLowerCase();
@@ -798,7 +875,7 @@ export default function ImportFlicaDirectScreen() {
     if (u && low.includes('mainmenu.cgi') && !low.includes('loadschedule=true')) {
       void beginMainmenuHandoff(u);
     }
-  }, [beginMainmenuHandoff, markPostCaptchaFinalizedFromUrl, runLoginInject]);
+  }, [beginMainmenuHandoff, markPostCaptchaFinalizedFromUrl, runLoginInject, tryDismissInitialFlicaCover]);
 
   const onLoadProgress = useCallback(
     (e: { nativeEvent: { progress: number } }) => {
@@ -839,12 +916,25 @@ export default function ImportFlicaDirectScreen() {
     capturedCookieHeaderRef.current = null;
     postCaptchaFinalizedRef.current = false;
     sawFlicaRecaptchaIframeOnMainmenuRef.current = false;
+    if (noCaptchaMainmenuFinalizeTimerRef.current) {
+      clearTimeout(noCaptchaMainmenuFinalizeTimerRef.current);
+      noCaptchaMainmenuFinalizeTimerRef.current = null;
+    }
     resetFlowNav(flowNavRef);
     setCaptchaWebVisible(false);
     setPostCaptchaFired(false);
     setHideWebForSync(false);
     setHttpImporting(false);
     setOverlayMessage('');
+    if (initialFlicaCoverTimerRef.current) {
+      clearTimeout(initialFlicaCoverTimerRef.current);
+      initialFlicaCoverTimerRef.current = null;
+    }
+    setShowInitialFlicaCover(true);
+    initialFlicaCoverTimerRef.current = setTimeout(() => {
+      initialFlicaCoverTimerRef.current = null;
+      setShowInitialFlicaCover(false);
+    }, 12_000);
     setWebViewKey((k) => k + 1);
     setSyncActive(true);
     setStatusLine('Starting sync…');
@@ -860,7 +950,7 @@ export default function ImportFlicaDirectScreen() {
     startSync();
   }, [autoSyncParam, canSync, credsLoading, startSync]);
 
-  /** Full white overlay only after login handoff — never cover the WebView during CAPTCHA / manual sign-in. */
+  /** Post–sign-in: schedule download / save (separate from the pre–login `showInitialFlicaCover`). */
   const blockingOverlay = syncActive && (postCaptchaFired || httpImporting);
 
   const overlayTitle = useMemo(() => {
@@ -869,11 +959,14 @@ export default function ImportFlicaDirectScreen() {
     return 'Syncing schedule…';
   }, [captchaWebVisible, overlayMessage]);
 
+  /** Pushes WebView (reCAPTCHA / Continue) and top-right close control down — padding only, no flow change. */
+  const flicaWvTopInset = insets.top + 48;
+
   if (credsLoading) {
     return (
       <View style={styles.shell}>
         <Stack.Screen options={{ headerShown: false }} />
-        <CrewScheduleHeader title="FLICA Sync" />
+        <CrewScheduleHeader title="FLICA Sync" relaxedBottomInset />
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={T.accent} />
         </View>
@@ -884,7 +977,7 @@ export default function ImportFlicaDirectScreen() {
   return (
     <View style={styles.shell}>
       <Stack.Screen options={{ headerShown: false }} />
-      <CrewScheduleHeader title="FLICA Sync" />
+      <CrewScheduleHeader title="FLICA Sync" relaxedBottomInset />
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
         keyboardShouldPersistTaps="handled"
@@ -998,7 +1091,7 @@ export default function ImportFlicaDirectScreen() {
 
       {syncActive && flicaUrls ? (
         <View style={styles.wvHost} pointerEvents="box-none">
-          <View style={StyleSheet.absoluteFill} pointerEvents="auto">
+          <View style={[StyleSheet.absoluteFill, { paddingTop: flicaWvTopInset }]} pointerEvents="auto">
             <WebView
               key={webViewKey}
               ref={webViewRef}
@@ -1024,15 +1117,28 @@ export default function ImportFlicaDirectScreen() {
               cacheEnabled={false}
             />
           </View>
+          {showInitialFlicaCover && !blockingOverlay ? (
+            <SafeAreaView
+              style={[styles.syncOverlay, styles.preLoginCoverAboveWeb]}
+              edges={['top', 'bottom']}
+              pointerEvents="auto"
+            >
+              <ActivityIndicator size="large" color={T.accent} />
+              <Text style={styles.overlayTitle}>Signing in to FLICA…</Text>
+            </SafeAreaView>
+          ) : null}
           {!blockingOverlay ? (
-            <View style={styles.captchaTopBar} pointerEvents="box-none">
+            <View
+              style={[styles.captchaTopBar, { paddingTop: flicaWvTopInset, paddingRight: 12 }]}
+              pointerEvents="box-none"
+            >
               <Pressable onPress={stopSync} hitSlop={12} style={styles.closeBtn} accessibilityLabel="Close FLICA">
                 <Ionicons name="close" size={26} color={T.text} />
               </Pressable>
             </View>
           ) : null}
           {blockingOverlay ? (
-            <SafeAreaView style={styles.syncOverlay} edges={['top', 'bottom']}>
+            <SafeAreaView style={[styles.syncOverlay, styles.blockingOverPreLogin]} edges={['top', 'bottom']}>
               <ActivityIndicator size="large" color={T.accent} />
               <Text style={styles.overlayTitle}>{overlayTitle}</Text>
             </SafeAreaView>
@@ -1088,7 +1194,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     gap: 10,
   },
+  preLoginCoverAboveWeb: { zIndex: 1 },
+  blockingOverPreLogin: { zIndex: 4 },
   overlayTitle: { fontSize: 17, fontWeight: '700', color: T.text, textAlign: 'center' },
-  captchaTopBar: { position: 'absolute', top: 0, right: 0, left: 0, paddingTop: 8, paddingRight: 8, zIndex: 2 },
+  captchaTopBar: { position: 'absolute', top: 0, right: 0, left: 0, zIndex: 3 },
   closeBtn: { alignSelf: 'flex-end', padding: 6 },
 });
