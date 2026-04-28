@@ -224,7 +224,7 @@ function isFcvPostCaptchaMainmenuUrl(url: string): boolean {
 
 /**
  * Post-CAPTCHA import: GOHM=1 mainmenu as soon as it finishes loading, OR bare mainmenu only after the hidden
- * WebView session has been open >3s (CAPTCHA-skipped flows). `postCaptchaFiredRef` in the handler ensures a single run.
+ * WebView session has been open >1s (CAPTCHA-skipped flows). `postCaptchaFiredRef` in the handler ensures a single run.
  */
 function shouldTriggerPostCaptchaMainmenu(
   url: string,
@@ -240,7 +240,7 @@ function shouldTriggerPostCaptchaMainmenu(
   const hasGohm = low.includes('gohm=1');
   if (hasGohm) return true;
 
-  const elapsedOk = Date.now() - sessionOpenedAtMs > 3000;
+  const elapsedOk = Date.now() - sessionOpenedAtMs > 1000;
   return elapsedOk;
 }
 
@@ -318,7 +318,7 @@ export default function FlicaTestScreen() {
   const fcvAutoPhaseRef = useRef<FcvAutoPhase>('idle');
   /** Single-flight post-CAPTCHA cookie + LoadSchedule; reset only on refresh / session clear (see `resetPostCaptchaFiredForNewSession`). */
   const postCaptchaFiredRef = useRef(false);
-  /** `startAutoRefresh` — used so bare mainmenu does not fire before the WebView has been open 3s. */
+  /** `startAutoRefresh` — used so bare mainmenu does not fire before the WebView has been open 1s. */
   const autoFlicaWebViewOpenedAtRef = useRef(0);
 
   const [backupMode, setBackupMode] = useState(false);

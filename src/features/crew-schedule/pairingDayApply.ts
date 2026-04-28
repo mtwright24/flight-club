@@ -25,7 +25,16 @@ export function attachCanonicalPairingDaysToTrips(
     );
     if (!block) return t;
     const byDate: Record<string, PairingDay> = {};
-    for (const d of enumerateDatesInclusive(t.startDate, t.endDate)) {
+    /**
+     * `entriesToTrips` / merged `t.startDate` is often the first *schedule row* date, which can be one
+     * calendar day **after** `schedule_pairings.operate_start_date` (e.g. BOS+LAS+948 on TH-23, first
+     * row filed 4/24). We must project every `PairingDay` in the union of trip span and pairing block
+     * span; otherwise the early duty days never get `canonicalPairingDays` and the classic ledger
+     * falls back to `schedule_entries` layover (LAS) and wrong 948 `dutyDate`.
+     */
+    const from = t.startDate < block.operateStart ? t.startDate : block.operateStart;
+    const to = t.endDate > block.operateEnd ? t.endDate : block.operateEnd;
+    for (const d of enumerateDatesInclusive(from, to)) {
       const day = block.daysByDate[d];
       if (day) byDate[d] = day;
     }

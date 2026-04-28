@@ -223,6 +223,12 @@ export async function fetchFlicaScheduleAllMonths(
       throw new Error(`FLICA scheduledetail ${key} HTTP ${r.status} (${html.length} bytes)`);
     }
     out[key] = html;
+    if (key === 'april') {
+      const april = html;
+      console.log('[FULL APRIL HTML START]');
+      console.log(april);
+      console.log('[FULL APRIL HTML END]');
+    }
   }
 
   return out;

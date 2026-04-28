@@ -14,7 +14,12 @@ import {
   mergeTripsWithPriorMonthRows,
 } from '../tripMapper';
 import { attachCanonicalPairingDaysToTrips } from '../pairingDayApply';
-import { fetchPairingCalendarBlocksForBatchIds, uniqueBatchIdsFromEntryRows } from '../pairingDayFetch';
+import {
+  fetchPairingCalendarBlocksByPairingIdsForUserMonth,
+  fetchPairingCalendarBlocksForBatchIds,
+  mergePairingBlockLists,
+  uniqueBatchIdsFromEntryRows,
+} from '../pairingDayFetch';
 import { supabase } from '../../../lib/supabaseClient';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 
@@ -55,13 +60,36 @@ export function useScheduleTripsForMonth(year: number, month: number) {
         const mergedCarry = mergeCarryInTripsByContiguousPairing(idMerged, rows, prevRows, year, month);
         const mergedBlocks = mergeLedgerPairingBlocks(mergedCarry, 1);
         const batchIds = uniqueBatchIdsFromEntryRows([rows, prevRows, nextRows]);
+        const pairingCodesForCanon = [
+          ...new Set(
+            mergedCarry
+              .map((t) => String(t.pairingCode ?? '')
+                .trim()
+                .toUpperCase())
+              .filter(
+                (c) =>
+                  c && c !== 'PTO' && c !== 'PTV' && c !== 'CONT' && c !== '—' && c !== 'RSV' && c !== 'RDO',
+              ),
+          ),
+        ];
         let withCanon: CrewScheduleTrip[] = mergedBlocks;
-        if (batchIds.length) {
+        if (batchIds.length || pairingCodesForCanon.length) {
           const { data: auth } = await supabase.auth.getUser();
           const uid = auth.user?.id;
           if (uid) {
             try {
-              const blocks = await fetchPairingCalendarBlocksForBatchIds(uid, batchIds, year, month);
+              const fromBatch = batchIds.length
+                ? await fetchPairingCalendarBlocksForBatchIds(uid, batchIds, year, month)
+                : [];
+              const fromCodes = pairingCodesForCanon.length
+                ? await fetchPairingCalendarBlocksByPairingIdsForUserMonth(
+                    uid,
+                    pairingCodesForCanon,
+                    year,
+                    month,
+                  )
+                : [];
+              const blocks = mergePairingBlockLists(fromBatch, fromCodes);
               withCanon = attachCanonicalPairingDaysToTrips(mergedBlocks, blocks);
             } catch {
               withCanon = mergedBlocks;

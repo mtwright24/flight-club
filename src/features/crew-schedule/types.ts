@@ -28,6 +28,10 @@ export interface CrewScheduleLeg {
   releaseLocal?: string;
   isDeadhead?: boolean;
   flightNumber?: string;
+  /** Block as stored for the leg (e.g. "06:32" or FLICA 4-digit). */
+  blockTimeLocal?: string;
+  /** Aircraft / equipment (e.g. 32N, 3NS) from the pairing leg row. */
+  equipmentCode?: string;
 }
 
 export interface CrewScheduleHotelStub {

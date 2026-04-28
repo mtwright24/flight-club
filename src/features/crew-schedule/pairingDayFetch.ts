@@ -5,7 +5,12 @@
 import { supabase } from '../../lib/supabaseClient';
 import { addIsoDays } from './ledgerContext';
 import type { SchedulePairingRow } from './jetblueFlicaImport';
-import { buildPairingCalendarBlockFromDb, type PairingCalendarBlock } from './pairingDayModel';
+import {
+  buildPairingCalendarBlockFromDb,
+  calendarMonthBoundsIso,
+  type PairingCalendarBlock,
+  normPairingCode,
+} from './pairingDayModel';
 
 type RawLeg = Record<string, unknown>;
 
@@ -106,6 +111,125 @@ export async function fetchPairingCalendarBlocksForBatchIds(
   const blocks: PairingCalendarBlock[] = [];
   for (const m of merged) {
     const b = buildPairingCalendarBlockFromDb(m.pairing, m.legs, viewYear, viewMonth);
+    if (b) blocks.push(b);
+  }
+  return blocks;
+}
+
+function pairingOverlapsViewMonth(
+  p: Pick<SchedulePairingRow, 'operate_start_date' | 'operate_end_date'>,
+  mStart: string,
+  mEnd: string,
+): boolean {
+  const a = String(p.operate_start_date ?? '')
+    .trim()
+    .slice(0, 10);
+  const b = String(p.operate_end_date ?? '')
+    .trim()
+    .slice(0, 10);
+  if (!a && !b) return true;
+  const lo = a || b;
+  const hi = b || a;
+  return !(lo > mEnd || hi < mStart);
+}
+
+function blockLegCount(b: PairingCalendarBlock): number {
+  let n = 0;
+  for (const d of Object.values(b.daysByDate)) {
+    n += d.segments?.length ?? 0;
+  }
+  return n;
+}
+
+/** When the same pairing is found via `import_id` and via FLICA `pairing_id` string, keep the richer block. */
+export function mergePairingBlockLists(
+  fromBatch: PairingCalendarBlock[],
+  fromPairingIds: PairingCalendarBlock[],
+): PairingCalendarBlock[] {
+  const by = new Map<string, PairingCalendarBlock>();
+  for (const b of fromBatch) {
+    by.set(normPairingCode(b.pairingCode), b);
+  }
+  for (const b of fromPairingIds) {
+    const k = normPairingCode(b.pairingCode);
+    const cur = by.get(k);
+    if (!cur || blockLegCount(b) > blockLegCount(cur)) {
+      by.set(k, b);
+    }
+  }
+  return [...by.values()];
+}
+
+/**
+ * Resolves `schedule_pairings` by FLICA `pairing_id` (e.g. J3H95) for months where `source_batch_id` on
+ * `schedule_entries` is missing so batch-based fetch would not run.
+ */
+export async function fetchPairingCalendarBlocksByPairingIdsForUserMonth(
+  userId: string,
+  pairingCodes: string[],
+  viewYear: number,
+  viewMonth: number,
+): Promise<PairingCalendarBlock[]> {
+  const { mStart, mEnd } = calendarMonthBoundsIso(viewYear, viewMonth);
+  const codes = [
+    ...new Set(
+      pairingCodes
+        .map((c) => String(c ?? '').trim().toUpperCase())
+        .filter((c) => c && c !== 'PTO' && c !== 'PTV' && c !== 'CONT' && c !== '—' && c !== 'RSV'),
+    ),
+  ];
+  if (!codes.length) return [];
+
+  const { data, error } = await supabase
+    .from('schedule_pairings')
+    .select(
+      'id, user_id, import_id, schedule_import_id, pairing_id, operate_start_date, operate_end_date, report_time_local, base_code, updated_at',
+    )
+    .eq('user_id', userId)
+    .in('pairing_id', codes);
+
+  if (error) throw error;
+  const rows = (data ?? []) as unknown as (SchedulePairingRow & { updated_at?: string })[];
+  const bestByCode = new Map<string, SchedulePairingRow & { updated_at?: string }>();
+  for (const r of rows) {
+    const code = String(r.pairing_id ?? '')
+      .trim()
+      .toUpperCase();
+    if (!code) continue;
+    if (!pairingOverlapsViewMonth(r, mStart, mEnd)) continue;
+    const cur = bestByCode.get(code);
+    if (!cur) {
+      bestByCode.set(code, r);
+      continue;
+    }
+    const tNew = r.updated_at ?? '';
+    const tOld = cur.updated_at ?? '';
+    if (tNew > tOld) bestByCode.set(code, r);
+  }
+
+  if (bestByCode.size === 0) return [];
+
+  const pairingUuids = [...bestByCode.values()].map((p) => p.id);
+  const { data: legRows, error: lErr } = await supabase
+    .from('schedule_pairing_legs')
+    .select('*')
+    .in('pairing_id', pairingUuids);
+  if (lErr) throw lErr;
+
+  const byPair = new Map<string, RawLeg[]>();
+  for (const row of legRows ?? []) {
+    const pid = (row as { pairing_id: string }).pairing_id;
+    if (!pid) continue;
+    const arr = byPair.get(pid) ?? [];
+    arr.push(row as RawLeg);
+    byPair.set(pid, arr);
+  }
+
+  const blocks: PairingCalendarBlock[] = [];
+  for (const pairing of bestByCode.values()) {
+    const legs = byPair.get(pairing.id) ?? [];
+    if (!legs.length) continue;
+    const b = buildPairingCalendarBlockFromDb(pairing, legs, viewYear, viewMonth);
     if (b) blocks.push(b);
   }
   return blocks;

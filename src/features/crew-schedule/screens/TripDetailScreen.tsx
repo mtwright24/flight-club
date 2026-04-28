@@ -4,11 +4,13 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  fetchPairingDutiesForScheduleEntries,
   fetchTripGroupEntries,
   fetchTripMetadataForGroup,
   mergeTripWithMetadataRow,
   type ScheduleTripMetadataRow,
 } from '../scheduleApi';
+import { dutiesToCrewScheduleLegs } from '../jetblueFlicaImport';
 import { entriesToSingleTrip } from '../tripMapper';
 import { getMockTripById } from '../mockScheduleData';
 import { tradePostPrefillParams } from '../tradePostPrefillParams';
@@ -78,7 +80,18 @@ export default function TripDetailScreen() {
             fetchTripMetadataForGroup(tripId).catch(() => null),
           ]);
           if (!cancelled) {
-            setTrip(entriesToSingleTrip(rows));
+            const base = entriesToSingleTrip(rows);
+            let next = base;
+            if (base) {
+              const duties = await fetchPairingDutiesForScheduleEntries(rows);
+              if (duties?.length) {
+                next = {
+                  ...base,
+                  legs: dutiesToCrewScheduleLegs(duties, base.id, base.base?.trim().toUpperCase() || 'JFK'),
+                };
+              }
+            }
+            setTrip(next);
             setTripMeta(meta);
           }
         } catch {
