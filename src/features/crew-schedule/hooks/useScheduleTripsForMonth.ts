@@ -190,6 +190,10 @@ export function useScheduleTripsForMonth(year: number, month: number) {
     void load();
   }, [load]);
 
+  /** Stable identities — consumers (e.g. ScheduleTabScreen useFocusEffect deps) must not change every render. */
+  const refresh = useCallback(() => load({ isPull: true }), [load]);
+  const refreshSilent = useCallback(() => load({ silent: true }), [load]);
+
   return {
     trips,
     monthMetrics,
@@ -197,8 +201,8 @@ export function useScheduleTripsForMonth(year: number, month: number) {
     refreshing,
     error,
     /** Pull-to-refresh. */
-    refresh: () => load({ isPull: true }),
+    refresh,
     /** Re-fetch when tab gains focus without blocking UI. */
-    refreshSilent: () => load({ silent: true }),
+    refreshSilent,
   };
 }

@@ -68,7 +68,7 @@ export function useHomeActivityNotifications(
         setItems((prev) => [mapPreviewToItem(n, userId), ...prev].slice(0, 80));
       }
       notifyAllBadgeCachesRefresh();
-    });
+    }, 'tabs-dashboard');
 
     return () => {
       mounted = false;

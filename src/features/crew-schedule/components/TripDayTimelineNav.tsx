@@ -4,12 +4,18 @@ import { scheduleTheme as T } from '../scheduleTheme';
 import type { TripDayViewModel } from '../tripDetailViewModel';
 
 const NODE = 12;
+const TRACK_LINE_THICKNESS = 2;
 /** Fixed column geometry so the timeline aligns with node centers */
 const PILL_MIN_H = 58;
 const PILL_NODE_GAP = 10;
 const TRACK_SLOT_H = 28;
-/** Top edge of 2px track so it runs through node centers */
-const TRACK_LINE_TOP = PILL_MIN_H + PILL_NODE_GAP + TRACK_SLOT_H / 2 - 1;
+/**
+ * Distance from row top (px) to vertical center of each dot in `trackSlot` when pill height matches PILL_MIN_H.
+ * Tracks use half-thickness inset so their horizontal midline aligns with circle centers — not resting on top of dots.
+ */
+const TRACK_DOT_CENTER_Y = PILL_MIN_H + PILL_NODE_GAP + TRACK_SLOT_H / 2;
+/** Top inset for TRACK_LINE_THICKNESS line whose vertical center is TRACK_DOT_CENTER_Y */
+const TRACK_LINE_TOP = TRACK_DOT_CENTER_Y - TRACK_LINE_THICKNESS / 2;
 /** Wider columns when scrolling so labels stay readable */
 const COLUMN_SCROLL = 96;
 const SCROLL_THRESHOLD = 6;
@@ -76,7 +82,7 @@ export default function TripDayTimelineNav({ days, selectedDayIndex, onSelectDay
 
   const trackLayer =
     rowW > 0 && n > 1 ? (
-      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={[StyleSheet.absoluteFill, styles.trackBehind]} pointerEvents="none">
         <View
           style={[
             styles.trackGray,
@@ -141,12 +147,14 @@ const styles = StyleSheet.create({
     position: 'relative',
     minHeight: PILL_MIN_H + PILL_NODE_GAP + TRACK_SLOT_H,
     alignItems: 'flex-start',
+    zIndex: 1,
   },
   rowScroll: {
     flexDirection: 'row',
     position: 'relative',
     minHeight: PILL_MIN_H + PILL_NODE_GAP + TRACK_SLOT_H,
     alignItems: 'flex-start',
+    zIndex: 1,
   },
   scrollContent: {
     flexDirection: 'row',
@@ -160,10 +168,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 12,
     backgroundColor: T.surface,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1,
     borderColor: T.line,
     minWidth: 76,
-    minHeight: PILL_MIN_H,
+    height: PILL_MIN_H,
     justifyContent: 'center',
     maxWidth: '100%',
     alignItems: 'center',
@@ -171,7 +179,7 @@ const styles = StyleSheet.create({
   pillActive: {
     backgroundColor: T.accent,
     borderColor: T.accent,
-    borderWidth: 1.5,
+    borderWidth: 1,
   },
   pillText: { fontSize: 13, fontWeight: '800', color: T.textSecondary },
   pillTextActive: { color: '#FFFFFF' },
@@ -185,18 +193,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
   },
+  trackBehind: {
+    zIndex: 0,
+  },
   trackGray: {
     position: 'absolute',
-    height: 2,
+    height: TRACK_LINE_THICKNESS,
     backgroundColor: T.line,
-    borderRadius: 1,
+    borderRadius: TRACK_LINE_THICKNESS / 2,
   },
   trackRed: {
     position: 'absolute',
-    height: 2,
+    height: TRACK_LINE_THICKNESS,
     backgroundColor: T.accent,
-    borderRadius: 1,
-    zIndex: 1,
+    borderRadius: TRACK_LINE_THICKNESS / 2,
   },
   node: {
     width: NODE,
@@ -205,7 +215,6 @@ const styles = StyleSheet.create({
     backgroundColor: T.surface,
     borderWidth: 2,
     borderColor: T.line,
-    zIndex: 2,
   },
   nodePast: {
     borderColor: T.accent,

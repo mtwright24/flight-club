@@ -1,21 +1,13 @@
-import React, { memo, useCallback, useMemo, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
+import {
+  buildClassicRowsFromDuties,
+  fetchScheduleDutiesAndPairingsForMonth,
+  type ClassicScheduleRow,
+} from '../buildClassicRows';
 import { addIsoDays } from '../ledgerContext';
-import {
-  buildFcvPairingCityColumn,
-  isFcvClassicContinuationRow,
-  shouldShowPairingInClassicLedgerMonth,
-} from '../ledgerDisplay';
-import { earliestOperationalDutyIso, type PairingDay } from '../pairingDayModel';
-import {
-  formatLayoverColumnDisplay,
-  mergeLayoverOntoLegDates,
-  parseScheduleTimeMinutes,
-  resolveClassicLayoverColumn,
-} from '../scheduleTime';
-import { mergeLedgerPairingBlocks } from '../pairingBlockMerge';
-import { departureTimeForDutyDaySortKey } from '../scheduleNormalizer';
+import { mergeLayoverOntoLegDates, parseScheduleTimeMinutes, resolveClassicLayoverColumn } from '../scheduleTime';
 import { scheduleTheme as T } from '../scheduleTheme';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
@@ -60,6 +52,15 @@ type DayRow = {
 };
 
 const DIV = StyleSheet.hairlineWidth;
+
+/** Classic grid proportional weights — sum used to split row width; WX kept small so weather glyph never owns a wide strip. */
+const GRID_W_DATE = 44;
+const GRID_W_PAIRING = 68;
+const GRID_W_REPORT = 52;
+const GRID_W_ROUTE = 44;
+const GRID_W_DETAIL = 52;
+const GRID_W_LAYOVER = 52;
+const GRID_W_WX = 22;
 
 function parseLocalNoon(isoDate: string): Date {
   return new Date(`${isoDate}T12:00:00`);
@@ -207,44 +208,15 @@ function compactToken(raw?: string): string {
   return cleaned || v.slice(0, 3).toUpperCase();
 }
 
-/**
- * LAYOVER column: FLICA layover rest (4 digits from last leg’s layover cell / `layover_rest_display`),
- * not the first departure of the day.
- */
-function layoverColumnForFlyingLedger(
-  trip: CrewScheduleTrip,
-  dateIso: string,
-  canon: PairingDay | undefined,
-): string {
-  if (canon) {
-    return formatLayoverColumnDisplay(canon.layoverRestDisplay) || '';
-  }
-  return resolveClassicLayoverColumn(trip, dateIso);
-}
-
-type ClassicLedgerMonthCtx = {
-  fullDateList: readonly string[];
-  viewMonthStart: string;
-  viewMonthEnd: string;
-};
-
 function buildRowForTrip(
   dateIso: string,
   trip: CrewScheduleTrip,
   isProxyContinuation: boolean,
   dayIndexInTrip: number,
-  ledgerMonthCtx: ClassicLedgerMonthCtx,
 ): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
   const d = parseLocalNoon(dateIso);
   const dayIdx = d.getDay();
-  const ptvEveryDay = trip.status === 'ptv';
   const baseKind = statusToKind(trip);
-  const useLedger = (baseKind === 'trip' || baseKind === 'deadhead') && !ptvEveryDay;
-
-  if (useLedger) {
-    return buildRowFlyingLedger(dateIso, trip, d, dayIdx, ledgerMonthCtx);
-  }
-
   const kind = isProxyContinuation ? 'continuation' : baseKind;
   const legsOnDate = trip.legs.filter((l) => l.dutyDate === dateIso);
   const legForDay = legsOnDate.length ? legsOnDate[legsOnDate.length - 1] : undefined;
@@ -328,144 +300,6 @@ function buildRowForTrip(
   };
 }
 
-function buildRowFlyingLedger(
-  dateIso: string,
-  trip: CrewScheduleTrip,
-  d: Date,
-  dayIdx: number,
-  ledgerMonthCtx: ClassicLedgerMonthCtx,
-): Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'> {
-  const canon = trip.canonicalPairingDays?.[dateIso];
-  const legsOnDate = trip.legs
-    .filter((l) => l.dutyDate === dateIso)
-    .sort((a, b) =>
-      departureTimeForDutyDaySortKey(a.departLocal).localeCompare(departureTimeForDutyDaySortKey(b.departLocal)),
-    );
-  const cityText = canon
-    ? canon.displayCityLedger
-    : buildFcvPairingCityColumn(trip, dateIso);
-  const showPairing = shouldShowPairingInClassicLedgerMonth(
-    trip,
-    dateIso,
-    ledgerMonthCtx.fullDateList,
-    ledgerMonthCtx.viewMonthStart,
-    ledgerMonthCtx.viewMonthEnd,
-  );
-  const base = statusToKind(trip);
-  /** Prefer canonical `schedule_pairing_legs` when present; else FCV on synthetic legs. */
-  /** `pureBaseArrivalOnly`: block ends arrival-only row — no REPORT/D‑END/LAY (Crewline F24-style). */
-  const isContLike = canon
-    ? canon.continuationDay || canon.pureBaseArrivalOnly === true
-    : isFcvClassicContinuationRow(trip, dateIso);
-  const kind: RowKind = isContLike ? 'continuation' : base;
-
-  const firstLegOnDate = legsOnDate[0];
-  const lastLegOnDate = legsOnDate.length ? legsOnDate[legsOnDate.length - 1] : undefined;
-  const legForTime = firstLegOnDate ?? (trip.legs.length ? trip.legs[0] : undefined);
-  const priorDateIso = addIsoDays(dateIso, -1);
-  const prevDayLegs =
-    !canon && dateIso > trip.startDate
-      ? trip.legs
-          .filter((l) => l.dutyDate === priorDateIso)
-          .sort((a, b) =>
-            departureTimeForDutyDaySortKey(a.departLocal).localeCompare(departureTimeForDutyDaySortKey(b.departLocal)),
-          )
-      : [];
-  const lastLegPrevDay = prevDayLegs.length ? prevDayLegs[prevDayLegs.length - 1] : undefined;
-
-  let pairingText = showPairing ? buildRowLabel(trip) : '';
-  if (
-    pairingText &&
-    showPairing &&
-    trip.pairingTafbHours != null &&
-    kind !== 'off' &&
-    kind !== 'pto' &&
-    kind !== 'ptv' &&
-    kind !== 'reserve' &&
-    kind !== 'unavailable'
-  ) {
-    pairingText = `${pairingText}  ${formatPairingTafbSameLine(trip.pairingTafbHours)}`;
-  }
-  const reportText =
-    kind === 'off' ||
-    kind === 'pto' ||
-    kind === 'ptv' ||
-    kind === 'reserve' ||
-    kind === 'unavailable' ||
-    kind === 'special' ||
-    kind === 'continuation'
-      ? ''
-      : canon
-        ? toCompactTime(canon.reportTimeDisplay ?? undefined)
-        : toCompactTime(
-            dateIso === trip.startDate
-              ? firstLegOnDate?.reportLocal || firstLegOnDate?.departLocal
-              : firstLegOnDate?.reportLocal ||
-                  lastLegPrevDay?.releaseLocal ||
-                  firstLegOnDate?.departLocal,
-          );
-  const dEndText =
-    kind === 'off' ||
-    kind === 'pto' ||
-    kind === 'ptv' ||
-    kind === 'reserve' ||
-    kind === 'unavailable' ||
-    kind === 'special' ||
-    kind === 'continuation'
-      ? ''
-      : canon
-        ? toCompactTime(canon.dEndTimeDisplay ?? undefined)
-        : toCompactTime(legsOnDate.length ? lastLegOnDate?.arriveLocal : legForTime?.arriveLocal);
-  const layoverText = layoverColumnForFlyingLedger(trip, dateIso, canon);
-  const wxText =
-    kind === 'off' ||
-    kind === 'pto' ||
-    kind === 'ptv' ||
-    kind === 'reserve' ||
-    kind === 'unavailable' ||
-    kind === 'special' ||
-    kind === 'continuation'
-      ? ''
-      : '☀︎';
-  const statusText =
-    kind === 'continuation'
-      ? 'CONT'
-      : kind === 'off'
-        ? 'OFF'
-        : kind === 'pto'
-          ? 'PTO'
-          : kind === 'ptv'
-            ? 'PTV'
-            : kind === 'reserve'
-              ? 'RSV'
-              : '';
-  const reportMinutes = parseScheduleTimeMinutes(
-    canon ? canon.reportTimeDisplay : firstLegOnDate?.reportLocal || firstLegOnDate?.departLocal,
-  );
-  const releaseMinutes = parseScheduleTimeMinutes(
-    canon ? canon.dEndTimeDisplay : lastLegOnDate?.arriveLocal,
-  );
-
-  return {
-    id: `${trip.id}:${dateIso}:ledger`,
-    dateIso,
-    kind,
-    trip,
-    dayCode: DOW[dayIdx],
-    dayNum: d.getDate(),
-    isWeekend: dayIdx === 0 || dayIdx === 6,
-    pairingText,
-    reportText,
-    cityText,
-    dEndText,
-    layoverText,
-    wxText,
-    statusText,
-    reportMinutes,
-    releaseMinutes,
-  };
-}
-
 /** Last ISO day yyyy-mm-dd inclusive for [year, month1–12]; never spills into next month. */
 function viewMonthLastIso(year: number, month1to12: number): string {
   const lastDom = new Date(year, month1to12, 0).getDate();
@@ -513,24 +347,6 @@ function trailingCarryOutDates(
   return [...out].sort();
 }
 
-/** Extend Classic ledger pairing window when carry-out trailing May days append after Apr 30, etc. */
-function maxIso(a: string, b: string): string {
-  return a >= b ? a : b;
-}
-
-/**
- * Drops bogus pairing paint on viewed month dom 01–02 when FLICA/canon proves first duty lands later:
- * avoids May-side carry pairing rows occupying Apr 1–2 at the top (display-only).
- */
-function skipPhantomTopOfMonthDutyRowForTrip(trip: CrewScheduleTrip, dateIso: string, viewMonthStart: string): boolean {
-  if (dateIso < viewMonthStart) return false;
-  const ew = earliestOperationalDutyIso(trip);
-  if (!ew) return false;
-  const dom0 = viewMonthStart;
-  const dom1 = addIsoDays(dom0, 1);
-  return (dateIso === dom0 || dateIso === dom1) && dateIso < ew;
-}
-
 /** ISO dates in `trip` strictly before `monthStartIso` capped at calendar day before that month start (carry-in head). */
 function priorMonthDaysBeforeView(trip: CrewScheduleTrip, monthStartIso: string): string[] {
   if (trip.startDate >= monthStartIso) return [];
@@ -553,13 +369,12 @@ function rowsFromTrips(trips: CrewScheduleTrip[], viewYear: number, viewMonth: n
   if (!trips.length) return [];
 
   const viewMonthStart = `${viewYear}-${String(viewMonth).padStart(2, '0')}-01`;
-  const sorted = mergeLedgerPairingBlocks(
-    [...trips].map((t) => {
+  const sorted = [...trips]
+    .map((t) => {
       const merged = mergeLayoverOntoLegDates(t);
       return merged ? { ...t, layoverByDate: merged } : t;
-    }),
-    1,
-  ).sort((a, b) => a.startDate.localeCompare(b.startDate));
+    })
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
 
   const leading = new Set<string>();
   for (const t of sorted) {
@@ -580,7 +395,6 @@ function rowsFromTrips(trips: CrewScheduleTrip[], viewYear: number, viewMonth: n
   const inMonth = enumerateMonthDates(viewYear, viewMonth);
   const monthLastIso = viewMonthLastIso(viewYear, viewMonth);
   const trailing = trailingCarryOutDates(sorted, viewMonthStart, monthLastIso);
-  const ledgerViewEndIso = trailing.length ? maxIso(monthLastIso, trailing[trailing.length - 1]!) : monthLastIso;
 
   const baseList = [...leadingSortedEligible, ...inMonth].filter((iso) => {
     if (iso < viewMonthStart) {
@@ -598,12 +412,6 @@ function rowsFromTrips(trips: CrewScheduleTrip[], viewYear: number, viewMonth: n
 
   const fullDateList = [...baseList, ...trailingEligible];
 
-  const ledgerMonthCtx: ClassicLedgerMonthCtx = {
-    fullDateList,
-    viewMonthStart,
-    viewMonthEnd: ledgerViewEndIso,
-  };
-
   const dateRows = new Map<string, Omit<DayRow, 'isToday' | 'groupedWithPrev' | 'groupedWithNext'>[]>();
 
   for (const trip of sorted) {
@@ -613,8 +421,7 @@ function rowsFromTrips(trips: CrewScheduleTrip[], viewYear: number, viewMonth: n
     const ptvEveryDay = trip.status === 'ptv';
     for (let tt = start.getTime(), i = 0; tt <= end.getTime(); tt += 24 * 60 * 60 * 1000, i += 1) {
       const dateIso = dateToIsoDateLocal(new Date(tt));
-      if (skipPhantomTopOfMonthDutyRowForTrip(trip, dateIso, viewMonthStart)) continue;
-      const row = buildRowForTrip(dateIso, trip, ptvEveryDay ? false : i > 0, i, ledgerMonthCtx);
+      const row = buildRowForTrip(dateIso, trip, ptvEveryDay ? false : i > 0, i);
       if (!dateRows.has(dateIso)) dateRows.set(dateIso, []);
       dateRows.get(dateIso)!.push(row);
     }
@@ -663,6 +470,32 @@ function rowsFromTrips(trips: CrewScheduleTrip[], viewYear: number, viewMonth: n
   }
 
   return attachDayRowGrouping(rows);
+}
+
+function overlayClassicDutyColumns(
+  item: DayRow,
+  classic: ClassicScheduleRow | undefined,
+  useClassic: boolean,
+): DayRow {
+  if (!useClassic || !classic) return item;
+  if (classic.rowType === 'EMPTY_DAY') {
+    return {
+      ...item,
+      pairingText: '',
+      reportText: '',
+      cityText: '',
+      dEndText: '',
+      layoverText: '',
+    };
+  }
+  return {
+    ...item,
+    pairingText: classic.pairingText ?? '',
+    reportText: classic.reportText ?? '',
+    cityText: classic.cityText ?? '',
+    dEndText: classic.dutyEndText ?? '',
+    layoverText: classic.layoverText ?? '',
+  };
 }
 
 function attachDayRowGrouping(rows: DayRow[]): DayRow[] {
@@ -862,6 +695,8 @@ type Props = {
   trips: CrewScheduleTrip[];
   year: number;
   month: number;
+  /** Bumps when the schedule tab gains focus / trips reload so Layer-7 duties re-fetch matches Supabase. */
+  refreshKey?: number;
   /** Month header strip: stored metrics only (import/screenshot), never derived in the client. */
   monthMetrics?: ScheduleMonthMetrics | null;
   onPressTrip: (trip: CrewScheduleTrip) => void;
@@ -873,11 +708,13 @@ export default function ClassicListView({
   trips,
   year,
   month,
+  refreshKey,
   monthMetrics,
   onPressTrip,
   onOpenManage,
 }: Props) {
   const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
+  const [classicRows, setClassicRows] = useState<ClassicScheduleRow[]>([]);
   const onLongPressTrip = useCallback((t: CrewScheduleTrip) => setPreviewTrip(t), []);
   const closePreview = useCallback(() => setPreviewTrip(null), []);
   const openFullFromPreview = useCallback(() => {
@@ -885,6 +722,30 @@ export default function ClassicListView({
     setPreviewTrip(null);
     if (t) onPressTrip(t);
   }, [previewTrip, onPressTrip]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { duties, pairings, pairingLegs } = await fetchScheduleDutiesAndPairingsForMonth(year, month);
+        if (cancelled) return;
+        setClassicRows(buildClassicRowsFromDuties(duties, pairings, pairingLegs));
+      } catch {
+        if (!cancelled) setClassicRows([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [year, month, refreshKey]);
+
+  const classicByDate = useMemo(() => {
+    const map = new Map<string, ClassicScheduleRow>();
+    for (const r of classicRows) {
+      map.set(String(r.dateIso).trim().slice(0, 10), r);
+    }
+    return map;
+  }, [classicRows]);
 
   const rows = useMemo(() => rowsFromTrips(trips, year, month), [trips, year, month]);
   const summary = useMemo(() => buildSummaryStrip(monthMetrics ?? null), [monthMetrics]);
@@ -907,22 +768,22 @@ export default function ClassicListView({
       </View>
 
       <View style={styles.headerRow}>
-        <View style={[styles.headerBandCell, styles.cellDate]}>
+        <View style={[styles.headerBandCell, styles.headerColDate]}>
           <BandBHeaderLabel align="left">DATE</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerBandCell, styles.cellPairing]}>
+        <View style={[styles.headerBandCell, styles.headerColPairing]}>
           <BandBHeaderLabel align="left">PAIRING</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerBandCell, styles.cellReport]}>
+        <View style={[styles.headerBandCell, styles.headerColReport]}>
           <BandBHeaderLabel align="left">REPORT</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerBandCell, styles.cellRoute]}>
+        <View style={[styles.headerBandCell, styles.headerColRoute]}>
           <BandBHeaderLabel align="left">CITY</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerBandCell, styles.cellDetail]}>
+        <View style={[styles.headerBandCell, styles.headerColDetail]}>
           <BandBHeaderLabel align="left">D-END</BandBHeaderLabel>
         </View>
-        <View style={[styles.headerBandCell, styles.cellLayover]}>
+        <View style={[styles.headerBandCell, styles.headerColLayover]}>
           <BandBHeaderLabel align="left">LAYOVER</BandBHeaderLabel>
         </View>
         <View style={[styles.headerBandCell, styles.headerBandWx]}>
@@ -933,13 +794,18 @@ export default function ClassicListView({
       <FlatList
         data={rows}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <ScheduleRow
-            row={item}
-            onPressTrip={item.trip ? onPressTrip : undefined}
-            onLongPressTrip={item.trip ? onLongPressTrip : undefined}
-          />
-        )}
+        renderItem={({ item }) => {
+          const classic = classicByDate.get(String(item.dateIso).trim().slice(0, 10));
+          const useClassic = classicRows.length > 0 && classic != null;
+          const displayRow = overlayClassicDutyColumns(item, classic, useClassic);
+          return (
+            <ScheduleRow
+              row={displayRow}
+              onPressTrip={item.trip ? onPressTrip : undefined}
+              onLongPressTrip={item.trip ? onLongPressTrip : undefined}
+            />
+          );
+        }}
         contentContainerStyle={styles.wrap}
         initialNumToRender={22}
         maxToRenderPerBatch={24}
@@ -1002,7 +868,7 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    gap: 3,
+    width: '100%',
     backgroundColor: '#F5F6F8',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#D8DCE2',
@@ -1014,11 +880,55 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     overflow: 'visible',
   },
-  /** Same width as `cellWx`. */
+  /** Header cells use the same flex weights as body columns so labels line up with data. */
+  headerColDate: {
+    flexGrow: GRID_W_DATE,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_DATE,
+    alignItems: 'flex-start',
+  },
+  headerColPairing: {
+    flexGrow: GRID_W_PAIRING,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_PAIRING,
+    alignItems: 'flex-start',
+  },
+  headerColReport: {
+    flexGrow: GRID_W_REPORT,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_REPORT,
+    alignItems: 'flex-start',
+  },
+  headerColRoute: {
+    flexGrow: GRID_W_ROUTE,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_ROUTE,
+    alignItems: 'flex-start',
+  },
+  headerColDetail: {
+    flexGrow: GRID_W_DETAIL,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_DETAIL,
+    alignItems: 'flex-start',
+  },
+  headerColLayover: {
+    flexGrow: GRID_W_LAYOVER,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_LAYOVER,
+    alignItems: 'flex-start',
+  },
+  /** WX: narrow flex share so the column never grows wider than a small glyph. */
   headerBandWx: {
-    width: 24,
-    minWidth: 24,
-    maxWidth: 24,
+    flexGrow: GRID_W_WX,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_WX,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 0,
@@ -1044,8 +954,6 @@ const styles = StyleSheet.create({
   },
   rowCell: {
     minHeight: 22,
-    flexGrow: 0,
-    flexShrink: 0,
     paddingHorizontal: 0,
     marginHorizontal: 0,
     justifyContent: 'center',
@@ -1057,7 +965,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'nowrap',
     alignItems: 'center',
-    gap: 3,
+    width: '100%',
     minHeight: 22,
     paddingVertical: 0,
     paddingHorizontal: 0,
@@ -1077,16 +985,25 @@ const styles = StyleSheet.create({
   rowPressed: {
     backgroundColor: '#F1F5F9',
   },
-  /** Classic grid: fixed pixel widths only (Layer 8); every row uses the same columns. */
+  /**
+   * Layer 8: proportional flex columns so the row spans full width evenly (no left-heavy cluster);
+   * WX uses the smallest weight so a tiny icon never sits in an oversized strip.
+   */
   cellDate: {
-    width: 44,
+    flexGrow: GRID_W_DATE,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_DATE,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
   },
   cellPairing: {
-    width: 68,
+    flexGrow: GRID_W_PAIRING,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_PAIRING,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
@@ -1094,35 +1011,50 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   cellReport: {
-    width: 52,
+    flexGrow: GRID_W_REPORT,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_REPORT,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
   },
   cellRoute: {
-    width: 44,
+    flexGrow: GRID_W_ROUTE,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_ROUTE,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
   },
   cellDetail: {
-    width: 52,
+    flexGrow: GRID_W_DETAIL,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_DETAIL,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
   },
   cellLayover: {
-    width: 52,
+    flexGrow: GRID_W_LAYOVER,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_LAYOVER,
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
     alignItems: 'flex-start',
   },
   cellWx: {
-    width: 24,
+    flexGrow: GRID_W_WX,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: GRID_W_WX,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',

@@ -513,6 +513,47 @@ export async function removeMonthScheduleAndImports(monthKey: string): Promise<{
   return { entriesRemoved, batchesRemoved: batchIds.length };
 }
 
+/** Every distinct `YYYY-MM` the user has calendar entries or import batches under (typically the three‑month snapshot). */
+export async function distinctUserScheduleMonthKeys(): Promise<string[]> {
+  const { data: au, error: ae } = await supabase.auth.getUser();
+  if (ae || !au.user) throw new Error('Not signed in');
+  const uid = au.user.id;
+
+  const [{ data: b }, { data: e }, { data: m }] = await Promise.all([
+    supabase.from('schedule_import_batches').select('month_key').eq('user_id', uid),
+    supabase.from('schedule_entries').select('month_key').eq('user_id', uid),
+    supabase.from('schedule_month_metrics').select('month_key').eq('user_id', uid),
+  ]);
+
+  const set = new Set<string>();
+  for (const rows of [b ?? [], e ?? [], m ?? []]) {
+    for (const r of rows) {
+      const mk = typeof (r as { month_key?: string | null }).month_key === 'string'
+        ? String((r as { month_key: string }).month_key).trim().slice(0, 7)
+        : '';
+      if (/^\d{4}-\d{2}$/.test(mk)) set.add(mk);
+    }
+  }
+  return [...set].sort();
+}
+
+/** Removes imports and calendar rows for **all** months in storage — one-shot “clear my schedule snapshot”. */
+export async function removeAllImportedSchedules(): Promise<{
+  entriesRemoved: number;
+  batchesRemoved: number;
+  monthsCleared: number;
+}> {
+  const keys = await distinctUserScheduleMonthKeys();
+  let entriesRemoved = 0;
+  let batchesRemoved = 0;
+  for (const mk of keys) {
+    const r = await removeMonthScheduleAndImports(mk);
+    entriesRemoved += r.entriesRemoved;
+    batchesRemoved += r.batchesRemoved;
+  }
+  return { entriesRemoved, batchesRemoved, monthsCleared: keys.length };
+}
+
 const DOW3 = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 
 function isoToDowThreeLetter(iso: string): string {

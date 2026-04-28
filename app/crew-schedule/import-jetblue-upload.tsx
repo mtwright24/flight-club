@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -31,6 +31,12 @@ import {
   persistJetBlueFlicaStructuredParse,
 } from '../../src/features/crew-schedule/persistJetBlueFlicaPairings';
 import { scoreJetBlueFlicaTemplateMatch } from '../../src/features/crew-schedule/jetblueFlicaTemplate';
+import {
+  clampYearMonthToScheduleWindow,
+  canGoToNextScheduleMonth,
+  canGoToPreviousScheduleMonth,
+  tryStepScheduleMonth,
+} from '../../src/features/crew-schedule/scheduleMonthWindow';
 import { loadLastMonthCursor, saveLastMonthCursor } from '../../src/features/crew-schedule/scheduleViewStorage';
 import { scheduleTheme as T } from '../../src/features/crew-schedule/scheduleTheme';
 import CrewScheduleHeader from '../../src/features/crew-schedule/components/CrewScheduleHeader';
@@ -81,9 +87,12 @@ export default function ImportJetBlueUploadScreen() {
 
   useEffect(() => {
     void loadLastMonthCursor().then((c) => {
+      const anchor = new Date();
       if (c) {
-        setYear(c.year);
-        setMonth(c.month);
+        const cl = clampYearMonthToScheduleWindow(c.year, c.month, anchor);
+        setYear(cl.year);
+        setMonth(cl.month);
+        if (cl.year !== c.year || cl.month !== c.month) void saveLastMonthCursor(cl.year, cl.month);
       }
     });
   }, []);
@@ -91,34 +100,31 @@ export default function ImportJetBlueUploadScreen() {
   const monthKey = `${year}-${pad2(month)}`;
 
   const goPrevMonth = useCallback(() => {
-    if (month === 1) {
-      setYear((y) => {
-        const ny = y - 1;
-        void saveLastMonthCursor(ny, 12);
-        return ny;
-      });
-      setMonth(12);
-    } else {
-      const nm = month - 1;
-      setMonth(nm);
-      void saveLastMonthCursor(year, nm);
-    }
+    const anchor = new Date();
+    const n = tryStepScheduleMonth(year, month, -1, anchor);
+    if (!n) return;
+    setYear(n.year);
+    setMonth(n.month);
+    void saveLastMonthCursor(n.year, n.month);
   }, [year, month]);
 
   const goNextMonth = useCallback(() => {
-    if (month === 12) {
-      setYear((y) => {
-        const ny = y + 1;
-        void saveLastMonthCursor(ny, 1);
-        return ny;
-      });
-      setMonth(1);
-    } else {
-      const nm = month + 1;
-      setMonth(nm);
-      void saveLastMonthCursor(year, nm);
-    }
+    const anchor = new Date();
+    const n = tryStepScheduleMonth(year, month, 1, anchor);
+    if (!n) return;
+    setYear(n.year);
+    setMonth(n.month);
+    void saveLastMonthCursor(n.year, n.month);
   }, [year, month]);
+
+  const canPrevJbMonth = useMemo(
+    () => canGoToPreviousScheduleMonth(year, month),
+    [year, month],
+  );
+  const canNextJbMonth = useMemo(
+    () => canGoToNextScheduleMonth(year, month),
+    [year, month],
+  );
 
   const runJetBlueImportPipeline = useCallback(
     async (items: JetBlueUploadItem[]) => {
@@ -379,14 +385,26 @@ export default function ImportJetBlueUploadScreen() {
           Import month: <Text style={styles.metaStrong}>{monthKey}</Text>
         </Text>
         <View style={styles.monthRow}>
-          <Pressable onPress={goPrevMonth} style={styles.arrow}>
-            <Text style={styles.arrowText}>‹</Text>
+          <Pressable
+            onPress={goPrevMonth}
+            style={styles.arrow}
+            disabled={!canPrevJbMonth}
+            accessibilityLabel="Previous month"
+            accessibilityState={{ disabled: !canPrevJbMonth }}
+          >
+            <Text style={[styles.arrowText, !canPrevJbMonth && styles.arrowTextDisabled]}>‹</Text>
           </Pressable>
           <Text style={styles.monthLabel}>
             {MONTH_NAMES[month - 1]} {year}
           </Text>
-          <Pressable onPress={goNextMonth} style={styles.arrow}>
-            <Text style={styles.arrowText}>›</Text>
+          <Pressable
+            onPress={goNextMonth}
+            style={styles.arrow}
+            disabled={!canNextJbMonth}
+            accessibilityLabel="Next month"
+            accessibilityState={{ disabled: !canNextJbMonth }}
+          >
+            <Text style={[styles.arrowText, !canNextJbMonth && styles.arrowTextDisabled]}>›</Text>
           </Pressable>
         </View>
 
@@ -446,6 +464,7 @@ const styles = StyleSheet.create({
   },
   arrow: { padding: 8 },
   arrowText: { fontSize: 28, color: T.accent, fontWeight: '300' },
+  arrowTextDisabled: { color: T.line },
   monthLabel: { fontSize: 17, fontWeight: '800', color: T.text },
   lead: { fontSize: 14, color: T.textSecondary, lineHeight: 21, marginBottom: 12 },
   note: { fontSize: 12, color: T.textSecondary, lineHeight: 18, marginBottom: 20 },

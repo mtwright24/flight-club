@@ -2,8 +2,12 @@
 import { createClient } from "@supabase/supabase-js";
 import type { LockFunc } from "@supabase/auth-js";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
+import { isDevice } from "expo-device";
 import { Platform } from "react-native";
 import "react-native-url-polyfill/auto";
+
+import { resilientFetch } from "./resilientFetch";
 
 /**
  * Web: default auth uses the Web Locks API with a "steal" recovery path; concurrent OAuth
@@ -30,23 +34,77 @@ rawUrl = rawUrl.trim();
 if (!rawUrl.startsWith('http')) rawUrl = `https://${rawUrl}`;
 if (rawUrl.endsWith('/')) rawUrl = rawUrl.slice(0, -1);
 
+/** Parse host from Expo dev metadata (e.g. `192.168.1.5:8081` or `http://192.168.1.5:8081`). */
+function parseLanHostFromDevString(raw: string | undefined | null): string | null {
+  if (raw == null || typeof raw !== "string") return null;
+  const s = raw.trim();
+  if (!s) return null;
+  try {
+    const host = s.includes("://") ? new URL(s).hostname : s.split(":")[0];
+    if (!host || host === "localhost" || host === "127.0.0.1") return null;
+    return host;
+  } catch {
+    return null;
+  }
+}
+
+function expoDevLanHostname(): string | null {
+  const c = Constants;
+  const candidates: (string | undefined)[] = [
+    (c.expoConfig as { hostUri?: string } | undefined)?.hostUri,
+    (c.expoGoConfig as { debuggerHost?: string } | undefined)?.debuggerHost,
+    (c.manifest2 as { extra?: { expoClient?: { hostUri?: string } } } | undefined)?.extra?.expoClient
+      ?.hostUri,
+    (c.manifest as { debuggerHost?: string } | undefined)?.debuggerHost,
+  ];
+  for (const raw of candidates) {
+    const h = parseLanHostFromDevString(raw);
+    if (h) return h;
+  }
+  return null;
+}
+
+let warnedLocalhostUnreachable: boolean = false;
+
 /**
- * Android emulator: `localhost` / `127.0.0.1` is the emulator itself, not the host machine.
- * Local Supabase (`supabase start`) on the dev machine should use 10.0.2.2 from the emulator.
+ * Dev-only: map `localhost` to a host the current runtime can reach.
+ * - Android **emulator**: 10.0.2.2 (not the physical device loopback).
+ * - iOS Simulator: keep localhost (reaches the Mac host).
+ * - Physical devices: prefer Metro’s LAN host from Expo when `EXPO_PUBLIC_SUPABASE_URL` still points at localhost.
  */
-function rewriteLocalhostForAndroidEmulator(url: string): string {
-  if (Platform.OS !== 'android' || !__DEV__) return url;
+function rewriteLocalhostForReactNativeDev(url: string): string {
+  if (!__DEV__) return url;
+  /** Browser / Next: keep localhost; Metro LAN heuristics are RN-only. */
+  if (Platform.OS === "web") return url;
   try {
     const u = new URL(url);
-    if (u.hostname !== '127.0.0.1' && u.hostname !== 'localhost') return url;
-    u.hostname = '10.0.2.2';
-    return u.toString().replace(/\/$/, '');
+    if (u.hostname !== "127.0.0.1" && u.hostname !== "localhost") return url;
+
+    if (Platform.OS === "android" && !isDevice) {
+      u.hostname = "10.0.2.2";
+      return u.toString().replace(/\/$/, "");
+    }
+
+    const lan = expoDevLanHostname();
+    if (lan) {
+      u.hostname = lan;
+      return u.toString().replace(/\/$/, "");
+    }
+
+    if (isDevice && !warnedLocalhostUnreachable) {
+      warnedLocalhostUnreachable = true;
+      console.warn(
+        "[supabase] EXPO_PUBLIC_SUPABASE_URL uses localhost / 127.0.0.1, which this physical device cannot reach. " +
+          "Point it at your machine LAN IP (same Wi‑Fi) or a hosted Supabase URL, or run Expo with LAN/tunnel so a dev host can be detected.",
+      );
+    }
+    return url;
   } catch {
     return url;
   }
 }
 
-rawUrl = rewriteLocalhostForAndroidEmulator(rawUrl);
+rawUrl = rewriteLocalhostForReactNativeDev(rawUrl);
 
 export const SUPABASE_URL = rawUrl;
 /** Public anon key (same as createClient second arg). Edge Functions need `apikey` + `Authorization` on raw fetch. */
@@ -104,5 +162,8 @@ export const supabase = createClient(SUPABASE_URL, supabaseAnonKey ?? "", {
     persistSession: true,
     detectSessionInUrl: false,
     ...(Platform.OS === "web" ? { lock: webInProcessLock } : {}),
+  },
+  global: {
+    fetch: resilientFetch,
   },
 });

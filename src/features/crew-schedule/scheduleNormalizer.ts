@@ -53,8 +53,30 @@ function calendarIsoInMonth(year: number, month1to12: number, day: number): stri
 }
 
 /**
- * Resolves a calendar YYYY-MM-DD for a leg using the same file-month + D-END rules as persist
- * (`dutyPeriodDate` or `date` for DOM, never sliding by local dep time).
+ * Prefer dates on/after **pairing.startDate** when the same DOM falls in multiple months (carry-out May 1 vs April 1).
+ */
+function pickResolvedDutyIsoFromCandidates(
+  start: string,
+  end: string,
+  uniqSorted: string[],
+  prevResolvedIso: string | null,
+): string | null {
+  if (!uniqSorted.length) return null;
+  let pool = uniqSorted.filter((iso) => iso >= start && iso <= end);
+  if (!pool.length) pool = [...uniqSorted];
+  if (prevResolvedIso === null) {
+    const aftStart = pool.filter((iso) => iso >= start);
+    return (aftStart.length ? aftStart : pool)[0] ?? null;
+  }
+  const strictLater = pool.find((iso) => iso > prevResolvedIso);
+  if (strictLater !== undefined) return strictLater;
+  const gtePrev = pool.find((iso) => iso >= prevResolvedIso);
+  if (gtePrev !== undefined) return gtePrev;
+  return pool[0] ?? null;
+}
+
+/**
+ * Resolves calendar YYYY-MM-DD for a leg (dutyPeriod DOM from parser — never slips by departure time).
  */
 function resolveFlicaLegIsoInPairing(
   pairing: FlicaPairing,
@@ -69,37 +91,56 @@ function resolveFlicaLegIsoInPairing(
   const d = String(dom).padStart(2, '0');
   const start = pairing.startDate;
   const end = pairing.endDate;
-  const mStr = String(fileM).padStart(2, '0');
   const yStr = String(y);
+  const mStr = String(fileM).padStart(2, '0');
   if (!Number.isFinite(y) || !Number.isFinite(fileM) || !start || !end) {
     return `${monthKey.slice(0, 4)}-${monthKey.slice(5, 7)}-${d}`;
   }
 
-  const inFileMonth = calendarIsoInMonth(y, fileM, dom);
-  if (inFileMonth && inFileMonth >= start && inFileMonth <= end) {
-    return inFileMonth;
-  }
-
-  const inRange: string[] = [];
-  for (const delta of [-1, 0, 1] as const) {
-    const dt = new Date(y, fileM - 1 + delta, 1);
+  const expanded: string[] = [];
+  for (const dy of [-2, -1, 0, 1, 2] as const) {
+    const dt = new Date(y, fileM - 1 + dy, 1);
     const cy = dt.getFullYear();
     const cm = dt.getMonth() + 1;
     const iso = calendarIsoInMonth(cy, cm, dom);
-    if (iso && iso >= start && iso <= end) {
-      inRange.push(iso);
+    if (iso) expanded.push(iso);
+  }
+  const uniq = [...new Set(expanded)].sort();
+  const picked =
+    pickResolvedDutyIsoFromCandidates(start, end, uniq, prevResolvedIso) ?? uniq[0] ?? null;
+  return picked ?? `${yStr}-${mStr}-${d}`;
+}
+
+/** Duty periods from parser — each closes when D-END filled `dutyOffTime` on the pending leg (~4-digit token). */
+function splitFlatLegsIntoDendDutySegments(legs: FlicaLeg[]): FlicaLeg[][] {
+  if (!legs.length) return [];
+  const out: FlicaLeg[][] = [];
+  let bucket: FlicaLeg[] = [];
+  for (const leg of legs) {
+    bucket.push(leg);
+    if (String(leg.dutyOffTime ?? '').trim().replace(/\D/g, '').length >= 4) {
+      out.push(bucket);
+      bucket = [];
     }
   }
-  inRange.sort();
-  if (inRange.length > 0) {
-    if (prevResolvedIso == null) return inRange[0]!;
-    const after = inRange.find((iso) => iso > prevResolvedIso);
-    if (after) return after;
-    const sameOrAfter = inRange.find((iso) => iso >= prevResolvedIso);
-    if (sameOrAfter) return sameOrAfter;
-    return inRange[0]!;
-  }
-  return `${yStr}-${mStr}-${d}`;
+  if (bucket.length) out.push(bucket);
+  return out.length ? out : [legs.slice()];
+}
+
+const DEBUG_NORM_PAIRINGS = new Set(['J4173', 'J4195', 'J1016', 'J3H95']);
+
+function dbgNormDuty(pairingId: string, duty: NormalizedDutyDay) {
+  if (!DEBUG_NORM_PAIRINGS.has(String(pairingId).trim().toUpperCase())) return;
+  console.log('[NORM_DUTY]', {
+    pairingId,
+    dutyDateIso: duty.dutyDateIso,
+    reportTime: duty.reportTime,
+    dutyOffTime: duty.dutyOffTime,
+    layoverCity: duty.layoverCity,
+    layoverTime: duty.layoverTime,
+    legsCount: duty.legs.length,
+    legRoutes: duty.legs.map((l) => `${l.depAirport}-${l.arrAirport}`),
+  });
 }
 
 function flicaRouteToAirports(route: string): { dep: string; arr: string } {
@@ -233,6 +274,15 @@ function findLayoverAndHotel(
       return { layoverCity: c, layoverTime: t || null, hotelName };
     }
   }
+  /** International / red-eye: last leg often crosses local midnight; layover city/time still live on that leg row. */
+  for (let i = sortedLegs.length - 1; i >= 0; i--) {
+    const o = sortedLegs[i]!;
+    const c = String(o.leg.layoverCity ?? '').trim();
+    if (c) {
+      const t = String(o.leg.layoverTime ?? '').trim();
+      return { layoverCity: c, layoverTime: t || null, hotelName };
+    }
+  }
   return { layoverCity: null, layoverTime: null, hotelName };
 }
 
@@ -245,34 +295,33 @@ export function normalizeFlicaParsedPairing(pairing: FlicaPairing): NormalizedTr
     touchedDays.push(startDateIso);
   }
 
-  const legs = pairing.legs ?? [];
-  const dutyByIso = new Map<string, FlicaLeg[]>();
-  const orderedDutyIso: string[] = [];
-  const seen = new Set<string>();
-  let prev: string | null = null;
-  for (const L of legs) {
-    const dutyIso = resolveFlicaLegIsoInPairing(pairing, L, monthKey, 'dutyPeriod', prev);
-    prev = dutyIso;
-    if (!seen.has(dutyIso)) {
-      seen.add(dutyIso);
-      orderedDutyIso.push(dutyIso);
-    }
-    if (!dutyByIso.has(dutyIso)) dutyByIso.set(dutyIso, []);
-    dutyByIso.get(dutyIso)!.push(L);
-  }
-
+  const segments = splitFlatLegsIntoDendDutySegments(pairing.legs ?? []);
   const dutyDays: NormalizedDutyDay[] = [];
-  for (let di = 0; di < orderedDutyIso.length; di++) {
-    const dutyDateIso = orderedDutyIso[di]!;
-    const dayLegs = dutyByIso.get(dutyDateIso) ?? [];
-    let prevA: string | null = null;
+
+  /** Chains DD resolver across successive D-END duty periods (same pairing, carry-out month picks). */
+  let betweenSegRowAnchor: string | null = null;
+
+  for (let si = 0; si < segments.length; si++) {
+    const segment = segments[si]!;
+    const firstLeg = segment[0]!;
+    const dutyDateIso = resolveFlicaLegIsoInPairing(
+      pairing,
+      firstLeg,
+      monthKey,
+      'dutyPeriod',
+      betweenSegRowAnchor,
+    );
+
+    let prevRowA: string | null = null;
     const withActual: { leg: FlicaLeg; actualDepDateIso: string }[] = [];
-    for (const leg of dayLegs) {
-      const actualDepDateIso = resolveFlicaLegIsoInPairing(pairing, leg, monthKey, 'row', prevA);
-      prevA = actualDepDateIso;
+    for (const leg of segment) {
+      const actualDepDateIso = resolveFlicaLegIsoInPairing(pairing, leg, monthKey, 'row', prevRowA);
+      prevRowA = actualDepDateIso;
       withActual.push({ leg, actualDepDateIso });
     }
-    const lastLegFlica = withActual.length ? withActual[withActual.length - 1]!.leg : null;
+    betweenSegRowAnchor = prevRowA ?? dutyDateIso;
+
+    const lastLegFlica = segment[segment.length - 1]!;
     const nLegs: NormalizedLeg[] = withActual.map((w) =>
       toLegFromFlica(pairing, w.leg, monthKey, dutyDateIso, w.actualDepDateIso),
     );
@@ -283,23 +332,34 @@ export function normalizeFlicaParsedPairing(pairing: FlicaPairing): NormalizedTr
     const { layoverCity, layoverTime, hotelName } = findLayoverAndHotel(pairs);
     const lastN = nLegs.length ? nLegs[nLegs.length - 1]! : null;
     const isOvernightDuty = lastN != null && lastN.crossesMidnight;
-    const dutyOffRaw = lastLegFlica?.dutyOffTime?.trim() ?? '';
+    const dutyOffRaw = String(lastLegFlica.dutyOffTime ?? '').trim();
     const dutyOffTime = dutyOffRaw.length > 0 ? dutyOffRaw : null;
-    const nextR = String(lastLegFlica?.nextReportTime ?? '').trim();
-    const nextReportTime = nextR.length > 0 ? lastLegFlica?.nextReportTime ?? null : null;
-    const isContinuation = di > 0;
-    dutyDays.push({
+    const nextR = String(lastLegFlica.nextReportTime ?? '').trim();
+    const nextReportTime = nextR.length > 0 ? lastLegFlica.nextReportTime : null;
+
+    let reportForSeg: string | null = null;
+    if (si === 0) {
+      reportForSeg = pairing.baseReport?.trim() ? pairing.baseReport : null;
+    } else {
+      const closingLeg = segments[si - 1]![segments[si - 1]!.length - 1]!;
+      const rept = String(closingLeg.nextReportTime ?? '').trim();
+      reportForSeg = rept.length > 0 ? closingLeg.nextReportTime : null;
+    }
+
+    const dd: NormalizedDutyDay = {
       dutyDateIso,
-      reportTime: di === 0 ? pairing.baseReport : null,
+      reportTime: reportForSeg,
       dutyOffTime,
       nextReportTime,
       legs: nLegs,
       layoverCity,
       layoverTime,
       hotelName,
-      isContinuation,
+      isContinuation: dutyDays.length > 0,
       isOvernightDuty,
-    });
+    };
+    dbgNormDuty(pairing.id, dd);
+    dutyDays.push(dd);
   }
 
   return {

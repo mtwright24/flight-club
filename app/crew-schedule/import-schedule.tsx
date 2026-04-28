@@ -23,27 +23,13 @@ import {
 import { looksLikeFlicaRawText, ocrLooksLikeJetBlueFlicaMonthly } from '../../src/features/schedule-import/parser/jetblueFlicaOcrDetect';
 import { persistJetBlueFlicaStructuredParseForGenericBatch } from '../../src/features/crew-schedule/persistJetBlueFlicaPairings';
 import { scheduleTheme as T } from '../../src/features/crew-schedule/scheduleTheme';
+import { clampYearMonthToScheduleWindow } from '../../src/features/crew-schedule/scheduleMonthWindow';
 import { loadLastMonthCursor, saveLastMonthCursor } from '../../src/features/crew-schedule/scheduleViewStorage';
 import CrewScheduleHeader from '../../src/features/crew-schedule/components/CrewScheduleHeader';
 import { scanScheduleDocuments } from '../../src/features/crew-schedule/documentScanSchedule';
 import { supabase } from '../../src/lib/supabaseClient';
 
-type Source = 'photo' | 'scan' | 'pdf' | 'calendar' | 'manual' | null;
-
-const MONTH_NAMES = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
-];
+type Source = 'flica' | 'photo' | 'scan' | 'pdf' | 'calendar' | 'manual' | null;
 
 /** Schedule OCR import tracing (disabled to reduce Metro noise). */
 function dbg(..._args: unknown[]) {}
@@ -132,8 +118,8 @@ async function buildUploadBytes(
 export default function ImportScheduleScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  /** Default to screenshot/photo so Continue works immediately (matches primary option styling). */
-  const [selected, setSelected] = useState<Source>('photo');
+  /** Default FLICA Sync — first in list, primary path (only active option gets accent styling). */
+  const [selected, setSelected] = useState<Source>('flica');
   const [busy, setBusy] = useState(false);
   const [busyHint, setBusyHint] = useState('Importing schedule…');
   const [photoSourceModalVisible, setPhotoSourceModalVisible] = useState(false);
@@ -144,42 +130,17 @@ export default function ImportScheduleScreen() {
   const [month, setMonth] = useState(() => new Date().getMonth() + 1);
   useEffect(() => {
     void loadLastMonthCursor().then((c) => {
+      const anchor = new Date();
       if (c) {
-        setYear(c.year);
-        setMonth(c.month);
+        const cl = clampYearMonthToScheduleWindow(c.year, c.month, anchor);
+        setYear(cl.year);
+        setMonth(cl.month);
+        if (cl.year !== c.year || cl.month !== c.month) void saveLastMonthCursor(cl.year, cl.month);
       }
     });
   }, []);
 
   const monthKey = `${year}-${pad2(month)}`;
-
-  const goPrevMonth = useCallback(() => {
-    if (month === 1) {
-      const ny = year - 1;
-      const nm = 12;
-      setYear(ny);
-      setMonth(nm);
-      void saveLastMonthCursor(ny, nm);
-    } else {
-      const nm = month - 1;
-      setMonth(nm);
-      void saveLastMonthCursor(year, nm);
-    }
-  }, [year, month]);
-
-  const goNextMonth = useCallback(() => {
-    if (month === 12) {
-      const ny = year + 1;
-      const nm = 1;
-      setYear(ny);
-      setMonth(nm);
-      void saveLastMonthCursor(ny, nm);
-    } else {
-      const nm = month + 1;
-      setMonth(nm);
-      void saveLastMonthCursor(year, nm);
-    }
-  }, [year, month]);
 
   const handlePostOcr = useCallback(
     async (
@@ -606,102 +567,92 @@ export default function ImportScheduleScreen() {
     }
   }, [uploadAndProcess]);
 
-  const continueFlow = useCallback(() => {
-    if (!selected) {
-      Alert.alert('Choose an import method', 'Tap Screenshot / photo, Scan, or PDF above, then Continue.');
-      return;
-    }
-    try {
-      if (selected === 'calendar') {
-        Alert.alert('Calendar', 'Coming soon.');
-        return;
-      }
-      if (selected === 'manual') {
-        Alert.alert('Manual entry', 'Coming soon.');
-        return;
-      }
-      if (selected === 'scan') {
-        void (async () => {
-          try {
-            const r = await scanScheduleDocuments();
-            if (r.kind === 'cancel') return;
-            if (r.kind === 'unavailable') {
-              Alert.alert(
-                'Document scan isn’t available',
-                r.reason === 'module'
-                  ? 'This build doesn’t include the native document scanner (Expo Go can’t load it). Install a development build, or use Choose screenshot / Photo — same review flow.'
-                  : 'Couldn’t open the scanner. Try again, or use Choose screenshot / Photo.',
-                [
-                  { text: 'Choose photo', onPress: () => void pickPhotoLibrary() },
-                  { text: 'OK', style: 'cancel' },
-                ]
-              );
-              return;
+  /** One tap runs the chosen import flow (no separate Continue button). */
+  const activateImportSource = useCallback(
+    (sel: NonNullable<Source>) => {
+      try {
+        if (sel === 'flica') {
+          router.push('/crew-schedule/import-flica-direct');
+          return;
+        }
+        if (sel === 'calendar') {
+          Alert.alert('Calendar', 'Coming soon.');
+          return;
+        }
+        if (sel === 'manual') {
+          Alert.alert('Manual entry', 'Coming soon.');
+          return;
+        }
+        if (sel === 'scan') {
+          void (async () => {
+            try {
+              const r = await scanScheduleDocuments();
+              if (r.kind === 'cancel') return;
+              if (r.kind === 'unavailable') {
+                Alert.alert(
+                  'Document scan isn’t available',
+                  r.reason === 'module'
+                    ? 'This build doesn’t include the native document scanner (Expo Go can’t load it). Install a development build, or use Choose screenshot / Photo — same review flow.'
+                    : 'Couldn’t open the scanner. Try again, or use Choose screenshot / Photo.',
+                  [
+                    { text: 'Choose photo', onPress: () => void pickPhotoLibrary() },
+                    { text: 'OK', style: 'cancel' },
+                  ]
+                );
+                return;
+              }
+              await uploadDocumentScanPages(r.filePaths);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              Alert.alert('Scan failed', msg);
             }
-            await uploadDocumentScanPages(r.filePaths);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            Alert.alert('Scan failed', msg);
-          }
-        })();
-        return;
+          })();
+          return;
+        }
+        if (sel === 'photo') {
+          setPhotoSourceModalVisible(true);
+          return;
+        }
+        if (sel === 'pdf') {
+          void pickPdf();
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        Alert.alert('Could not start import', msg);
       }
-      if (selected === 'photo') {
-        setPhotoSourceModalVisible(true);
-        return;
-      }
-      if (selected === 'pdf') {
-        void pickPdf();
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert('Could not continue', msg);
-    }
-  }, [pickPdf, pickPhotoLibrary, selected, uploadDocumentScanPages]);
+    },
+    [pickPdf, pickPhotoLibrary, router, uploadDocumentScanPages],
+  );
 
   return (
     <View style={styles.shell}>
       <CrewScheduleHeader title="Import schedule" />
       <ScrollView
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 12 }]}
       >
-        <View style={styles.monthCard}>
-          <View style={styles.monthRow}>
-            <Pressable onPress={goPrevMonth} style={styles.monthArrow} accessibilityLabel="Previous month">
-              <Ionicons name="chevron-back" size={22} color={T.accent} />
-            </Pressable>
-            <Text style={styles.monthLabel}>
-              {MONTH_NAMES[month - 1]} {year}
-            </Text>
-            <Pressable onPress={goNextMonth} style={styles.monthArrow} accessibilityLabel="Next month">
-              <Ionicons name="chevron-forward" size={22} color={T.accent} />
-            </Pressable>
-          </View>
+        <View style={styles.introBlock}>
+          <Text style={styles.introLead}>Three-month rolling window</Text>
+          <Text style={styles.introText}>
+            Crew schedule is shown on a rolling three-month basis.{'\n'}
+            FLICA Sync keeps that full window updated automatically when you sync.
+          </Text>
+          <Text style={[styles.introText, styles.introPara]}>
+            For screenshot, document scan, or PDF, capture or export all three months on your{' '}
+            <Text style={styles.introEmphasis}>first</Text> import so your upload lines up with the same window Flight Club
+            uses everywhere else—then tap a source below to start.
+          </Text>
         </View>
-
-        <Text style={styles.helper}>Choose how you want to import your schedule.</Text>
-
-        <Pressable
-          style={styles.jetblueFlicaCard}
-          onPress={() => router.push('/crew-schedule/import-flica-direct')}
-          accessibilityRole="button"
-          accessibilityLabel="FLICA sync: open browser sign-in"
-        >
-          <View style={styles.jetblueFlicaRow}>
-            <View style={styles.jetblueFlicaTextCol}>
-              <Text style={styles.jetblueFlicaTitle}>FLICA Sync</Text>
-              <Text style={styles.jetblueFlicaSub}>
-                Direct browser sync from your airline&apos;s FLICA
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={T.accent} style={styles.jetblueFlicaChevron} />
-          </View>
-        </Pressable>
 
         <View style={styles.options}>
           {(
             [
+              {
+                id: 'flica' as const,
+                label: 'FLICA Sync',
+                sub: "Direct browser sync from your airline's FLICA",
+              },
               {
                 id: 'photo' as const,
                 label: 'Screenshot / photo',
@@ -725,16 +676,23 @@ export default function ImportScheduleScreen() {
             return (
               <Pressable
                 key={opt.id}
-                onPress={() => setSelected(opt.id)}
-                style={[styles.opt, active && styles.optSelected]}
-                accessibilityState={{ selected: active }}
+                disabled={busy}
+                onPress={() => {
+                  setSelected(opt.id);
+                  activateImportSource(opt.id);
+                }}
+                style={[styles.opt, active && styles.optSelected, busy && styles.optBusyDim]}
+                accessibilityRole="button"
+                accessibilityHint="Starts this import flow"
+                accessibilityLabel={`${opt.label}. ${opt.sub}`}
+                accessibilityState={{ selected: active, disabled: busy }}
               >
                 <View style={styles.optRow}>
                   <View style={styles.optTextCol}>
-                    <Text style={[styles.optText, opt.id === 'photo' && styles.optTextPrimary]}>{opt.label}</Text>
+                    <Text style={[styles.optText, active && styles.optTextPrimary]}>{opt.label}</Text>
                     <Text style={styles.optSub}>{opt.sub}</Text>
                   </View>
-                  {active ? <Ionicons name="checkmark-circle" size={24} color={T.accent} style={styles.optCheck} /> : null}
+                  {active ? <Ionicons name="chevron-forward" size={18} color={T.accent} style={styles.optChevron} /> : null}
                 </View>
               </Pressable>
             );
@@ -743,20 +701,10 @@ export default function ImportScheduleScreen() {
 
         {busy ? (
           <View style={styles.loading}>
-            <ActivityIndicator color={T.accent} size="large" />
+            <ActivityIndicator color={T.accent} size="small" />
             <Text style={styles.loadingText}>{busyHint}</Text>
           </View>
-        ) : (
-          <Pressable
-            style={[styles.continue, !selected && styles.continueDisabled]}
-            onPress={continueFlow}
-            disabled={!selected}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: !selected }}
-          >
-            <Text style={styles.continueText}>Continue</Text>
-          </Pressable>
-        )}
+        ) : null}
       </ScrollView>
 
       <Modal
@@ -803,56 +751,27 @@ export default function ImportScheduleScreen() {
 
 const styles = StyleSheet.create({
   shell: { flex: 1, backgroundColor: T.bg },
-  content: { padding: 16 },
-  monthCard: {
-    backgroundColor: T.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: T.line,
-    paddingVertical: 4,
-    marginBottom: 4,
-  },
-  monthRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  monthArrow: { padding: 8 },
-  monthLabel: { fontSize: 18, fontWeight: '800', color: T.text, minWidth: 200, textAlign: 'center' },
-  helper: {
+  content: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 8 },
+  introBlock: { marginBottom: 12 },
+  introLead: {
     fontSize: 15,
-    color: T.textSecondary,
-    marginBottom: 18,
-    marginTop: 12,
-    lineHeight: 22,
-  },
-  jetblueFlicaCard: {
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: T.accent,
-    backgroundColor: T.surface,
-    padding: 14,
-    marginBottom: 20,
-  },
-  jetblueBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: T.accent,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
+    fontWeight: '800',
+    color: T.text,
     marginBottom: 8,
+    lineHeight: 21,
   },
-  jetblueBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
-  jetblueFlicaRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  jetblueFlicaTextCol: { flex: 1, minWidth: 0 },
-  jetblueFlicaTitle: { fontSize: 17, fontWeight: '800', color: T.text, marginBottom: 6 },
-  jetblueFlicaSub: { fontSize: 14, color: T.textSecondary, lineHeight: 21 },
-  jetblueFlicaChevron: { marginTop: 2 },
-  options: { gap: 10 },
+  introText: {
+    fontSize: 13,
+    color: T.textSecondary,
+    lineHeight: 19,
+  },
+  introPara: { marginTop: 10 },
+  introEmphasis: { fontWeight: '800', color: T.text },
+  options: { gap: 6 },
   opt: {
-    padding: 14,
-    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: T.line,
     backgroundColor: T.surface,
@@ -862,23 +781,22 @@ const styles = StyleSheet.create({
     borderColor: T.accent,
     backgroundColor: '#FEF2F2',
   },
-  optRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  optBusyDim: { opacity: 0.55 },
+  optRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   optTextCol: { flex: 1, minWidth: 0 },
-  optText: { fontSize: 15, fontWeight: '700', color: T.text },
-  optTextPrimary: { fontSize: 16, fontWeight: '800' },
-  optSub: { fontSize: 13, color: T.textSecondary, marginTop: 4, lineHeight: 18 },
-  optCheck: { marginTop: 2 },
-  loading: { alignItems: 'center', marginTop: 28, gap: 12 },
-  loadingText: { fontSize: 14, color: T.textSecondary, textAlign: 'center' },
-  continue: {
-    marginTop: 28,
-    backgroundColor: T.accent,
-    paddingVertical: 14,
-    borderRadius: 10,
+  optText: { fontSize: 14, fontWeight: '700', color: T.text },
+  optTextPrimary: { fontSize: 15, fontWeight: '800' },
+  optSub: { fontSize: 12, color: T.textSecondary, marginTop: 2, lineHeight: 16 },
+  optChevron: { marginTop: 0 },
+  loading: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    gap: 10,
+    paddingVertical: 8,
   },
-  continueDisabled: { opacity: 0.45 },
-  continueText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  loadingText: { fontSize: 12, color: T.textSecondary, flex: 1, textAlign: 'center' },
   photoModalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.45)',

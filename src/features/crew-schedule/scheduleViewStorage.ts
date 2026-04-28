@@ -4,6 +4,7 @@ import { DEFAULT_SCHEDULE_VIEW } from './types';
 
 const KEY_VIEW = '@flightclub/crew_schedule_view_mode';
 const KEY_TAB = '@flightclub/crew_schedule_last_tab';
+/** Last viewed month in the schedule/import UIs (persisted). Kept inside the rolling 3‑month window by callers. */
 const KEY_MONTH = '@flightclub/crew_schedule_last_month';
 
 export async function loadScheduleViewMode(): Promise<ScheduleViewMode> {

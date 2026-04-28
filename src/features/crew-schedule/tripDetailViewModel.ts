@@ -115,6 +115,32 @@ function sortLegsByDepartureForTripDetail(legs: CrewScheduleLeg[]): CrewSchedule
   });
 }
 
+function addOneCalendarIso(yyyyMmDd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(yyyyMmDd).trim());
+  if (!m) return yyyyMmDd;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+  d.setDate(d.getDate() + 1);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const da = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${da}`;
+}
+
+/** Enumerate yyyy-mm-dd inclusive from trip.startDate through trip.endDate. */
+function eachTripCalendarIsoInclusive(startIso: string, endIso: string): string[] {
+  const out: string[] = [];
+  let cur = String(startIso).trim().slice(0, 10);
+  const end = String(endIso).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cur) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return out;
+  while (cur <= end) {
+    out.push(cur);
+    const nx = addOneCalendarIso(cur);
+    if (!nx || nx <= cur || out.length > 380) break;
+    cur = nx;
+  }
+  return out;
+}
+
 /** When {@link CrewScheduleTrip.canonicalPairingDays} is set, per-leg flight / block / equipment match `schedule_pairing_legs`. */
 function crewLegsFromCanonicalPairingDay(pd: PairingDay, dateIso: string, tripId: string): CrewScheduleLeg[] {
   if (!pd.segments.length) return [];
@@ -158,25 +184,35 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
       }
     }
   }
-  const dates = [...byDate.keys()].sort((x, y) => x.localeCompare(y));
-  if (dates.length === 0) {
+
+  const range = eachTripCalendarIsoInclusive(trip.startDate, trip.endDate);
+  if (!range.length) {
     return [
       {
         dateIso: trip.startDate,
         dayLabel: 'Day 1',
         dayIndex: 1,
         legs: [],
-        layoverRestLine: layoverRestForDate(trip, trip.startDate),
+        layoverRestLine: null,
       },
     ];
   }
-  return dates.map((dateIso, i) => ({
-    dateIso,
-    dayLabel: `Day ${i + 1}`,
-    dayIndex: i + 1,
-    legs: sortLegsByDepartureForTripDetail(byDate.get(dateIso) ?? []),
-    layoverRestLine: layoverRestForDate(trip, dateIso),
-  }));
+
+  return range.map((dateIso, i) => {
+    const legs = sortLegsByDepartureForTripDetail(byDate.get(dateIso) ?? []);
+    /** RULE 7: layover/rest banner only on days with zero flight legs — never bleed onto flying days */
+    let layoverRestLine: string | null = null;
+    if (legs.length === 0) {
+      layoverRestLine = layoverRestForDate(trip, dateIso);
+    }
+    return {
+      dateIso,
+      dayLabel: `Day ${i + 1}`,
+      dayIndex: i + 1,
+      legs,
+      layoverRestLine,
+    };
+  });
 }
 
 function buildSummaryLine(trip: CrewScheduleTrip): string {

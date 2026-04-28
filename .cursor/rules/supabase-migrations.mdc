@@ -17,3 +17,5 @@ When adding or changing anything under `supabase/migrations/`, RPCs, RLS, or tab
 3. **Confirm** the feature works against the migrated schema (e.g. `npx tsc --noEmit`); mention migration file names in the handoff when relevant.
 
 The user should not have to remind you to deploy migrations for features to work.
+
+4. **Expo / React Native client URL:** `EXPO_PUBLIC_SUPABASE_URL` must be reachable from each device. `localhost` works for iOS Simulator / same-host web; Android emulator uses `10.0.2.2`; **physical devices** need your machine LAN IP (same Wi‑Fi), a tunnel, or a hosted `*.supabase.co` URL—not `localhost`. Device testing with local Supabase usually needs `npx expo start --lan` so the client can infer a LAN host. The shared Supabase client uses `resilientFetch` (`src/lib/resilientFetch.ts`) for brief retries on transient `Network request failed`; keep that or an equivalent when touching `src/lib/supabaseClient.ts`.

@@ -1,10 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
     Dimensions,
     PanResponder,
     Platform,
@@ -13,7 +11,6 @@ import {
     ScrollView,
     StyleSheet,
     Text,
-    TouchableOpacity,
     View,
 } from "react-native";
 import type {
@@ -28,9 +25,14 @@ import { useScheduleTripsForMonth } from "../hooks/useScheduleTripsForMonth";
 import {
     fetchCrewScheduleFlicaForMonth,
     hasFlicaDirectImportForMonth,
-    removeMonthScheduleAndImports,
     type CrewScheduleFlicaRow,
 } from "../scheduleApi";
+import {
+    clampYearMonthToScheduleWindow,
+    canGoToNextScheduleMonth,
+    canGoToPreviousScheduleMonth,
+    tryStepScheduleMonth,
+} from "../scheduleMonthWindow";
 import { scheduleTheme as T } from "../scheduleTheme";
 import {
     loadLastMonthCursor,
@@ -58,23 +60,28 @@ const MONTH_NAMES = [
 
 export default function ScheduleTabScreen() {
   const router = useRouter();
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [viewMode, setViewMode] = useState<ScheduleViewMode>("classic");
-  const [removingMonth, setRemovingMonth] = useState(false);
-  const [flicaRow, setFlicaRow] = useState<CrewScheduleFlicaRow | null>(null);
+  const seedYm = useMemo(() => {
+    const d = new Date();
+    return clampYearMonthToScheduleWindow(d.getFullYear(), d.getMonth() + 1, d);
+  }, []);
 
-  const monthKey = useMemo(
-    () => `${year}-${String(month).padStart(2, "0")}`,
-    [year, month],
-  );
+  const [year, setYear] = useState(seedYm.year);
+  const [month, setMonth] = useState(seedYm.month);
+
+  const ymRef = React.useRef(seedYm);
+  ymRef.current = { year, month };
+  const [viewMode, setViewMode] = useState<ScheduleViewMode>("classic");
+  const [flicaRow, setFlicaRow] = useState<CrewScheduleFlicaRow | null>(null);
+  const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
 
   React.useEffect(() => {
     void loadLastMonthCursor().then((c) => {
+      const anchor = new Date();
       if (c) {
-        setYear(c.year);
-        setMonth(c.month);
+        const cl = clampYearMonthToScheduleWindow(c.year, c.month, anchor);
+        setYear(cl.year);
+        setMonth(cl.month);
+        if (cl.year !== c.year || cl.month !== c.month) void saveLastMonthCursor(cl.year, cl.month);
       }
     });
   }, []);
@@ -96,6 +103,14 @@ export default function ScheduleTabScreen() {
     }
   }, [year, month]);
 
+  /** Refs: useFocusEffect must use a stable callback ([] deps). Otherwise any identity churn re-fires focus → setScheduleRefreshKey loops (maximum update depth). */
+  const refreshSilentRef = useRef(refreshSilent);
+  refreshSilentRef.current = refreshSilent;
+  const loadFlicaRowRef = useRef(loadFlicaRow);
+  loadFlicaRowRef.current = loadFlicaRow;
+  const loadFlicaDirectFlagRef = useRef(loadFlicaDirectFlag);
+  loadFlicaDirectFlagRef.current = loadFlicaDirectFlag;
+
   useEffect(() => {
     void loadFlicaRow();
   }, [loadFlicaRow]);
@@ -107,31 +122,50 @@ export default function ScheduleTabScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadScheduleViewMode().then(setViewMode);
-      void refreshSilent();
-      void loadFlicaRow();
-      loadFlicaDirectFlag();
-    }, [loadFlicaDirectFlag, loadFlicaRow, refreshSilent]),
+      void refreshSilentRef.current();
+      setScheduleRefreshKey((k) => k + 1);
+      void loadFlicaRowRef.current();
+      loadFlicaDirectFlagRef.current();
+      const anchor = new Date();
+      const { year: yy, month: mm } = ymRef.current;
+      const c = clampYearMonthToScheduleWindow(yy, mm, anchor);
+      if (c.year !== yy || c.month !== mm) {
+        setYear(c.year);
+        setMonth(c.month);
+        void saveLastMonthCursor(c.year, c.month);
+      }
+    }, []),
   );
 
   const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
 
   const persistMonth = useCallback((y: number, m: number) => {
-    setYear(y);
-    setMonth(m);
-    void saveLastMonthCursor(y, m);
+    const c = clampYearMonthToScheduleWindow(y, m);
+    setYear(c.year);
+    setMonth(c.month);
+    void saveLastMonthCursor(c.year, c.month);
   }, []);
 
   const goPrevMonth = useCallback(() => {
-    if (removingMonth) return;
-    if (month === 1) persistMonth(year - 1, 12);
-    else persistMonth(year, month - 1);
-  }, [month, year, persistMonth, removingMonth]);
+    const anchor = new Date();
+    const n = tryStepScheduleMonth(year, month, -1, anchor);
+    if (n) persistMonth(n.year, n.month);
+  }, [year, month, persistMonth]);
 
   const goNextMonth = useCallback(() => {
-    if (removingMonth) return;
-    if (month === 12) persistMonth(year + 1, 1);
-    else persistMonth(year, month + 1);
-  }, [month, year, persistMonth, removingMonth]);
+    const anchor = new Date();
+    const n = tryStepScheduleMonth(year, month, 1, anchor);
+    if (n) persistMonth(n.year, n.month);
+  }, [year, month, persistMonth]);
+
+  const canPrevMonth = useMemo(
+    () => canGoToPreviousScheduleMonth(year, month),
+    [year, month],
+  );
+  const canNextMonth = useMemo(
+    () => canGoToNextScheduleMonth(year, month),
+    [year, month],
+  );
 
   /**
    * Swipe to change month — **must** use JS-thread `PanResponder` here, not `Gesture.Pan().onEnd`
@@ -148,7 +182,6 @@ export default function ScheduleTabScreen() {
         },
         onPanResponderTerminationRequest: () => true,
         onPanResponderRelease: (_, g) => {
-          if (removingMonth) return;
           const minDist = 56;
           const minVel = 0.4;
           if (g.dx < -minDist || g.vx < -minVel) {
@@ -158,7 +191,7 @@ export default function ScheduleTabScreen() {
           }
         },
       }),
-    [goNextMonth, goPrevMonth, removingMonth],
+    [goNextMonth, goPrevMonth],
   );
 
   const openTrip = useCallback(
@@ -198,38 +231,6 @@ export default function ScheduleTabScreen() {
     router.push("/crew-schedule/manage");
   }, [router]);
 
-  const runRemoveMonthConfirmed = useCallback(async () => {
-    setRemovingMonth(true);
-    const removingFailsafe = setTimeout(() => {
-      setRemovingMonth(false);
-    }, 5000);
-    try {
-      const r = await removeMonthScheduleAndImports(monthKey);
-      setFlicaDirectForMonth(false);
-      await refresh();
-      const doneMsg =
-        r.entriesRemoved > 0 || r.batchesRemoved > 0
-          ? `Removed ${r.entriesRemoved} calendar day${r.entriesRemoved === 1 ? "" : "s"} and ${r.batchesRemoved} import batch${r.batchesRemoved === 1 ? "" : "es"}.`
-          : "Nothing was stored for this month.";
-      if (Platform.OS === "web" && typeof window !== "undefined") {
-        window.alert(`Done\n\n${doneMsg}`);
-      } else {
-        Alert.alert("Done", doneMsg);
-      }
-    } catch (e) {
-      console.error("DELETE_FAILED", e);
-      const err = e instanceof Error ? e.message : String(e);
-      if (Platform.OS === "web" && typeof window !== "undefined") {
-        window.alert(`Could not remove\n\n${err}`);
-      } else {
-        Alert.alert("Could not remove", err);
-      }
-    } finally {
-      clearTimeout(removingFailsafe);
-      setRemovingMonth(false);
-    }
-  }, [monthKey, refresh]);
-
   const flicaPairings = useMemo(
     () =>
       Array.isArray(flicaRow?.pairings)
@@ -266,27 +267,6 @@ export default function ScheduleTabScreen() {
     router.push("/crew-schedule/import-flica-direct?autoSync=1");
   }, [router]);
 
-  const onRemoveMonthFromSchedule = useCallback(() => {
-    const title = `Delete imported schedule for ${monthLabel}?`;
-    const message =
-      "This deletes all days on your calendar for this month, saved month totals, and import batches stored for this month (including FLICA pairing reviews tied to those imports). This cannot be undone.";
-
-    if (Platform.OS === "web" && typeof window !== "undefined") {
-      if (window.confirm(`${title}\n\n${message}`))
-        void runRemoveMonthConfirmed();
-      return;
-    }
-
-    Alert.alert(title, message, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => void runRemoveMonthConfirmed(),
-      },
-    ]);
-  }, [monthLabel, runRemoveMonthConfirmed]);
-
   return (
     <View style={styles.screenRoot} {...monthSwipePan.panHandlers}>
       <View
@@ -296,10 +276,15 @@ export default function ScheduleTabScreen() {
         <Pressable
           onPress={goPrevMonth}
           style={styles.iconHit}
-          disabled={removingMonth}
+          disabled={!canPrevMonth}
           accessibilityLabel="Previous month"
+          accessibilityState={{ disabled: !canPrevMonth }}
         >
-          <Ionicons name="chevron-back" size={22} color={T.text} />
+          <Ionicons
+            name="chevron-back"
+            size={22}
+            color={canPrevMonth ? T.text : T.line}
+          />
         </Pressable>
         <View style={styles.monthTitleRow}>
           <Text style={styles.monthText}>{monthLabel}</Text>
@@ -307,39 +292,16 @@ export default function ScheduleTabScreen() {
         <Pressable
           onPress={goNextMonth}
           style={styles.iconHit}
-          disabled={removingMonth}
+          disabled={!canNextMonth}
           accessibilityLabel="Next month"
+          accessibilityState={{ disabled: !canNextMonth }}
         >
-          <Ionicons name="chevron-forward" size={22} color={T.text} />
+          <Ionicons
+            name="chevron-forward"
+            size={22}
+            color={canNextMonth ? T.text : T.line}
+          />
         </Pressable>
-      </View>
-
-      <View style={styles.monthToolsRow} collapsable={false}>
-        <TouchableOpacity
-          activeOpacity={0.75}
-          onPress={onRemoveMonthFromSchedule}
-          disabled={removingMonth}
-          style={[
-            styles.deleteImportBtn,
-            removingMonth && styles.deleteImportBtnDisabled,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel={`Delete imported schedule for ${monthLabel}`}
-          hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
-        >
-          {removingMonth ? (
-            <ActivityIndicator size="small" color={T.importReview.bad} />
-          ) : (
-            <Ionicons
-              name="trash-outline"
-              size={18}
-              color={T.importReview.bad}
-            />
-          )}
-          <Text style={styles.deleteImportLabel}>
-            {removingMonth ? "Removing…" : "Delete imported schedule"}
-          </Text>
-        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -371,6 +333,7 @@ export default function ScheduleTabScreen() {
             <ClassicListView
               year={year}
               month={month}
+              refreshKey={scheduleRefreshKey}
               trips={trips}
               monthMetrics={monthMetrics}
               onPressTrip={openTrip}
@@ -443,32 +406,5 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   iconHit: { paddingHorizontal: 6, paddingVertical: 4 },
-  monthToolsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: "#FFFFFF",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: T.line,
-  },
-  deleteImportBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: T.importReview.badBg,
-    backgroundColor: T.importReview.badBg,
-  },
-  deleteImportBtnDisabled: { opacity: 0.65 },
-  deleteImportLabel: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: T.importReview.bad,
-    marginLeft: 8,
-  },
   readingArea: { paddingHorizontal: 0, paddingTop: 0 },
 });

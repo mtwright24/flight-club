@@ -56,6 +56,9 @@ export type SchedulePairing = {
   pairing_end_date?: string | null;
 };
 
+/** Non-enumerable tag on `duties` arrays returned by `fetchScheduleDutiesAndPairingsForMonth` (view month for Rule 4 carry-in/out). */
+export type ClassicViewMonthTag = { year: number; month: number };
+
 export type SchedulePairingLegLite = {
   id?: string;
   pairing_id: string;
@@ -102,6 +105,40 @@ function monthLastIso(year: number, month1to12: number): string {
   const m = String(month1to12).padStart(2, '0');
   const lastDom = new Date(year, month1to12, 0).getDate();
   return `${year}-${m}-${String(lastDom).padStart(2, '0')}`;
+}
+
+function readClassicViewTag(duties: ScheduleDuty[]): ClassicViewMonthTag | null {
+  const tag = (duties as ScheduleDuty[] & { __classicViewMonth?: ClassicViewMonthTag }).__classicViewMonth;
+  if (!tag || !Number.isFinite(tag.year) || !Number.isFinite(tag.month)) return null;
+  return { year: tag.year, month: tag.month };
+}
+
+function tagDutiesWithClassicViewMonth(duties: ScheduleDuty[], year: number, month1to12: number): ScheduleDuty[] {
+  Object.defineProperty(duties, '__classicViewMonth', {
+    value: { year, month: month1to12 },
+    enumerable: false,
+    configurable: true,
+  });
+  return duties;
+}
+
+/** Rule 4: keep classic rows whose trip touches the viewed month and date lies in the full trip calendar window. */
+function filterClassicRowsForTouchedMonth(
+  rows: ClassicScheduleRow[],
+  tripCalendarByPairingId: Map<string, { startIso: string; endIso: string }>,
+  pairings: SchedulePairing[],
+  viewYear: number,
+  viewMonth: number,
+): ClassicScheduleRow[] {
+  return rows.filter((r) => {
+    const pid = String(r.sourcePairingId).trim().toUpperCase();
+    const pairing = mergePairingsForFlicaId(pairings, pid);
+    if (!pairing || !pairingOverlapsCalendarMonth(pairing, viewYear, viewMonth)) return false;
+    const bounds = tripCalendarByPairingId.get(pid);
+    if (!bounds) return false;
+    const d = String(r.dateIso).trim().slice(0, 10);
+    return d >= bounds.startIso && d <= bounds.endIso;
+  });
 }
 
 /** Trip window overlaps [monthFirst, monthLast]. Used by trip list filters (tripMapper). */
@@ -173,11 +210,12 @@ function syntheticEndIsoFromMorningDutyOff(lastDuty: ScheduleDuty, lastDutyIso: 
 function syntheticEndIsoFromLegs(
   legs: SchedulePairingLegLite[],
   lastDutyIso: string,
-  pairingUuid: string,
+  pairingUuids: string[],
 ): string | null {
-  const mine = legs.filter((l) => l.pairing_id === pairingUuid);
+  const set = new Set(pairingUuids);
   let best: string | null = null;
-  for (const leg of mine) {
+  for (const leg of legs) {
+    if (!set.has(String(leg.pairing_id))) continue;
     const nj = leg.normalized_json ?? {};
     const ad = typeof nj.actualDepDateIso === 'string' ? sliceDutyIso(nj.actualDepDateIso) : null;
     if (!ad || ad <= lastDutyIso) continue;
@@ -197,6 +235,20 @@ function findPairing(
   return pairings.find((x) => x.import_id === p.import_id && x.pairing_id === p.pairing_id);
 }
 
+/** Drop stray `schedule_duties` rows outside the pairing calendar window (fixes phantom carry-in rows). */
+function filterDutiesToPairingWindow(dutyList: ScheduleDuty[], pairing: SchedulePairing | undefined): ScheduleDuty[] {
+  const ps = pairingStartDateIso(pairing);
+  const pe = pairingEndDateIso(pairing);
+  if (ps == null && pe == null) return dutyList;
+  return dutyList.filter((d) => {
+    const iso = sliceDutyIso(d.duty_date);
+    if (!iso) return false;
+    if (ps != null && iso < ps) return false;
+    if (pe != null && iso > pe) return false;
+    return true;
+  });
+}
+
 /** Step 7 debug: duties for a FLICA pairing id (e.g. J3H95). */
 export function filterDutiesByPairingId(duties: ScheduleDuty[], pairingId: string): ScheduleDuty[] {
   const id = pairingId.trim().toUpperCase();
@@ -213,22 +265,37 @@ export function findPairingByPairingId(pairings: SchedulePairing[], pairingId: s
 function rowPriorityDedupeGlobally(t: RowType): number {
   switch (t) {
     case 'TRIP_START':
-      return 6;
+      return 60;
     case 'TRIP_CONTINUATION':
-      return 5;
+      return 50;
     case 'TRIP_END':
-      return 4;
+      return 45;
     case 'CARRY_IN':
-      return 3;
+      return 40;
     case 'CARRY_OUT':
-      return 2;
-    case 'EMPTY_DAY':
-      return 1;
+      return 35;
     case 'NON_FLIGHT_DUTY':
-      return 0;
+      return 20;
+    case 'EMPTY_DAY':
+      return 10;
     default:
       return -1;
   }
+}
+
+function hasReportText(r: ClassicScheduleRow): boolean {
+  return Boolean(r.reportText && String(r.reportText).trim());
+}
+
+/** When priorities tie, prefer the row with real report time (e.g. W01 carry-in vs same-day duty). */
+function classicRowWinsDedupe(next: ClassicScheduleRow, prev: ClassicScheduleRow): boolean {
+  const pn = rowPriorityDedupeGlobally(next.rowType);
+  const pp = rowPriorityDedupeGlobally(prev.rowType);
+  if (pn !== pp) return pn > pp;
+  const nHas = hasReportText(next);
+  const pHas = hasReportText(prev);
+  if (nHas !== pHas) return nHas;
+  return false;
 }
 
 /** Final pass: exactly one Layer-7 row per `dateIso`; higher priority row type wins (same trip may merge). */
@@ -241,29 +308,37 @@ function dedupeClassicRowsGlobally(rows: ClassicScheduleRow[]): ClassicScheduleR
       m.set(dateKey, r);
       continue;
     }
-    const pr = rowPriorityDedupeGlobally(r.rowType);
-    const px = rowPriorityDedupeGlobally(prev.rowType);
-    if (pr > px) m.set(dateKey, r);
+    if (classicRowWinsDedupe(r, prev)) m.set(dateKey, r);
   }
-  return [...m.values()].sort((a, b) => a.dateIso.localeCompare(b.dateIso) || a.sourcePairingId.localeCompare(b.sourcePairingId));
+  return [...m.values()].sort((a, b) =>
+    String(a.dateIso).trim().slice(0, 10).localeCompare(String(b.dateIso).trim().slice(0, 10)),
+  );
 }
 
 /**
  * Persisted imports may repeat `duty_date` for one pairing; canonical display is one Classic row per distinct date.
+ * Rule 1: same-day double duty → **first duty period only** = row with lowest numeric report_time (`L`/colons stripped);
+ * prefer a row that has report_time when the other does not.
  */
+function reportTimeDigitsForSort(raw: string | null | undefined): number | null {
+  if (raw == null || typeof raw !== 'string') return null;
+  const digits = String(raw).replace(/\D/g, '');
+  if (!digits.length) return null;
+  const head = digits.length >= 4 ? digits.slice(0, 4) : digits.padStart(4, '0');
+  const n = parseInt(head, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 function pickDutyForDuplicateDate(prev: ScheduleDuty, next: ScheduleDuty): ScheduleDuty {
-  const pCont = !!prev.is_continuation;
-  const nCont = !!next.is_continuation;
-  if (pCont !== nCont) return nCont ? prev : next;
-  const prevScore =
-    (prev.report_time ? 2 : 0) +
-    (prev.duty_off_time ? 1 : 0) +
-    ((prev.layover_city != null && String(prev.layover_city).trim()) ? 1 : 0);
-  const nextScore =
-    (next.report_time ? 2 : 0) +
-    (next.duty_off_time ? 1 : 0) +
-    ((next.layover_city != null && String(next.layover_city).trim()) ? 1 : 0);
-  return nextScore > prevScore ? next : prev;
+  const pr = reportTimeDigitsForSort(prev.report_time);
+  const nr = reportTimeDigitsForSort(next.report_time);
+  if (pr == null && nr != null) return next;
+  if (nr == null && pr != null) return prev;
+  if (pr != null && nr != null) {
+    if (pr < nr) return prev;
+    if (nr < pr) return next;
+  }
+  return prev;
 }
 
 function uniqDutiesByDutyDateAscending(duties: ScheduleDuty[]): ScheduleDuty[] {
@@ -280,119 +355,287 @@ function uniqDutiesByDutyDateAscending(duties: ScheduleDuty[]): ScheduleDuty[] {
     .map(([, duty]) => duty);
 }
 
+/** Every calendar ISO from startIso through endIso inclusive. */
+function eachIsoInclusive(startIso: string, endIso: string): string[] {
+  const out: string[] = [];
+  let cur = String(startIso).trim().slice(0, 10);
+  const end = String(endIso).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cur) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return out;
+  while (cur <= end) {
+    out.push(cur);
+    const nx = addOneCalendarDayIso(cur);
+    if (!nx || nx === cur) break;
+    cur = nx;
+    if (out.length > 400) break;
+  }
+  return out;
+}
+
+/** Drop stray duty rows dated before merged pairing operate start (handles stale imports without hard-coded ids). */
+function filterDutiesNotBeforePairingOperateStart(duties: ScheduleDuty[], pairings: SchedulePairing[]): ScheduleDuty[] {
+  return duties.filter((d) => {
+    const pid = String(d.pairing_id).trim().toUpperCase();
+    const pairing = mergePairingsForFlicaId(pairings, pid);
+    if (!pairing) return true;
+    const pStart = pairingStartDateIso(pairing);
+    if (pStart == null) return true;
+    const dutyIso = sliceDutyIso(d.duty_date);
+    if (!dutyIso) return false;
+    return dutyIso >= pStart;
+  });
+}
+
+function mergePairingsForFlicaId(pairings: SchedulePairing[], pidUpper: string): SchedulePairing | undefined {
+  const matches = pairings.filter((p) => String(p.pairing_id).trim().toUpperCase() === pidUpper);
+  if (!matches.length) return undefined;
+  if (matches.length === 1) return matches[0];
+  let minS: string | null = null;
+  let maxE: string | null = null;
+  for (const p of matches) {
+    const s = pairingStartDateIso(p);
+    const e = pairingEndDateIso(p);
+    if (s != null && (minS == null || s < minS)) minS = s;
+    if (e != null && (maxE == null || e > maxE)) maxE = e;
+  }
+  const base = { ...matches[0] };
+  if (minS != null) {
+    base.operate_start_date = minS;
+    base.pairing_start_date = minS;
+  }
+  if (maxE != null) {
+    base.operate_end_date = maxE;
+    base.pairing_end_date = maxE;
+  }
+  return base;
+}
+
+function pairingUuidListForFlica(pairings: SchedulePairing[], pidUpper: string): string[] {
+  const u: string[] = [];
+  for (const p of pairings) {
+    if (String(p.pairing_id).trim().toUpperCase() !== pidUpper) continue;
+    const id = p.id != null && String(p.id).trim() ? String(p.id) : null;
+    if (id) u.push(id);
+  }
+  return u;
+}
+
+/** Viewed-month rows first by date; carry-over dates (outside month ISO) appended at bottom — Rule 3. */
+function partitionRowsForClassicViewMonth(
+  rows: ClassicScheduleRow[],
+  viewYear: number,
+  viewMonth: number,
+): ClassicScheduleRow[] {
+  const vl = monthLastIso(viewYear, viewMonth);
+  const inMonth: ClassicScheduleRow[] = [];
+  const spill: ClassicScheduleRow[] = [];
+  for (const r of rows) {
+    const d = String(r.dateIso).trim().slice(0, 10);
+    if (d > vl) spill.push(r);
+    else inMonth.push(r);
+  }
+  const sortAsc = (a: ClassicScheduleRow, b: ClassicScheduleRow) =>
+    a.dateIso.localeCompare(b.dateIso) || a.sourcePairingId.localeCompare(b.sourcePairingId);
+  inMonth.sort(sortAsc);
+  spill.sort(sortAsc);
+  return [...inMonth, ...spill];
+}
+
 /**
- * Group duties by trip (import + FLICA pairing id), sort by duty_date, map to one Classic row per duty day.
+ * Group duties by trip (schedule_pairings), sort by duty_date, fill every calendar operate day.
  */
 export function buildClassicRowsFromDuties(
   duties: ScheduleDuty[],
   pairings: SchedulePairing[],
   pairingLegs: SchedulePairingLegLite[],
 ): ClassicScheduleRow[] {
-  const byTrip = new Map<string, ScheduleDuty[]>();
+  const flicaSeen = new Set<string>();
   for (const d of duties) {
-    const k = dutyPairKey(d);
-    if (!byTrip.has(k)) byTrip.set(k, []);
-    byTrip.get(k)!.push(d);
+    const k = String(d.pairing_id).trim().toUpperCase();
+    if (k) flicaSeen.add(k);
   }
-  for (const list of byTrip.values()) {
-    list.sort((a, b) => String(a.duty_date).localeCompare(String(b.duty_date)));
-  }
-
-  const uuidByTripKey = new Map<string, string>();
   for (const p of pairings) {
-    if (!p?.id) continue;
-    uuidByTripKey.set(`${p.import_id}|${p.pairing_id}`, p.id);
+    const k = String(p.pairing_id).trim().toUpperCase();
+    if (k) flicaSeen.add(k);
   }
 
   const rows: ClassicScheduleRow[] = [];
+  const tripCalendarByPairingId = new Map<string, { startIso: string; endIso: string }>();
 
-  for (const [, rawTripDuties] of byTrip) {
-    const tripDuties = uniqDutiesByDutyDateAscending(rawTripDuties);
-    if (!tripDuties.length) continue;
+  for (const pidUpper of [...flicaSeen].sort()) {
+    const pairing = mergePairingsForFlicaId(pairings, pidUpper);
+    const rawTripDuties = duties.filter((d) => String(d.pairing_id).trim().toUpperCase() === pidUpper);
+    if (!rawTripDuties.length && !pairing) continue;
+    let pairingEffective = pairing;
+    if (!pairingEffective && rawTripDuties.length) {
+      pairingEffective = findPairing(rawTripDuties[0]!, pairings);
+    }
+    if (!pairingEffective) continue;
 
-    const sample = tripDuties[0]!;
-    const flicaPairingKey = String(sample.pairing_id).trim();
-    const pairing = findPairing(sample, pairings);
-    const pairingUuid =
-      pairing?.id ??
-      uuidByTripKey.get(dutyPairKey(sample)) ??
-      '';
+    /** Merge wins over import-scoped pairing rows so May carry-out duties survive filtering (FIX 4). */
+    const windowed = filterDutiesToPairingWindow(rawTripDuties, pairingEffective);
+    const tripDutiesSorted = uniqDutiesByDutyDateAscending(windowed);
+
+    const flicaPairingKey = String(pairingEffective.pairing_id ?? pidUpper).trim();
+    const uuidsForLegs = pairingUuidListForFlica(pairings, pidUpper);
 
     const baseCity =
-      (pairing?.base_code && String(pairing.base_code).trim()) ||
-      (pairing as { baseAirport?: string } | undefined)?.baseAirport?.trim() ||
+      (pairingEffective.base_code && String(pairingEffective.base_code).trim()) ||
+      (pairingEffective as { baseAirport?: string }).baseAirport?.trim() ||
       'JFK';
 
-    const n = tripDuties.length;
-    const lastDutyIso = sliceDutyIso(tripDuties[n - 1]!.duty_date)!;
+    let opStart = pairingStartDateIso(pairingEffective);
+    let opEnd = pairingEndDateIso(pairingEffective);
+    if (opStart == null && tripDutiesSorted.length) opStart = sliceDutyIso(tripDutiesSorted[0]!.duty_date);
+    if (opEnd == null && tripDutiesSorted.length) opEnd = sliceDutyIso(tripDutiesSorted[tripDutiesSorted.length - 1]!.duty_date);
+    if (opStart == null || opEnd == null || opEnd < opStart) continue;
 
-    const lastDutyRow = tripDuties[n - 1]!;
+    /** FIX 3: never enumerate phantom days before the first persisted duty when merged pairing dates are stale. */
+    if (tripDutiesSorted.length) {
+      const firstDutyIso = sliceDutyIso(tripDutiesSorted[0]!.duty_date)!;
+      if (firstDutyIso > opStart) opStart = firstDutyIso;
+    }
 
-    let endIsoFromPairing = pairingEndDateIso(pairing);
-    let endIsoFromLeg = syntheticEndIsoFromLegs(pairingLegs, lastDutyIso, pairingUuid);
-    const endIsoFromMorningDutyOff = syntheticEndIsoFromMorningDutyOff(lastDutyRow, lastDutyIso);
+    const pairingEndOnlyIso = sliceDutyIso(pairingEffective.pairing_end_date);
 
-    let syntheticArrivalIso: string | null = null;
-    if (endIsoFromPairing != null && endIsoFromPairing > lastDutyIso) syntheticArrivalIso = endIsoFromPairing;
+    const dutyByIso = new Map<string, ScheduleDuty>();
+    for (const d of tripDutiesSorted) {
+      const iso = sliceDutyIso(d.duty_date);
+      if (!iso) continue;
+      dutyByIso.set(iso, d);
+    }
+
+    let lastDutyIso = tripDutiesSorted.length ? sliceDutyIso(tripDutiesSorted[tripDutiesSorted.length - 1]!.duty_date)! : opStart!;
+    let lastDutyRow = tripDutiesSorted.length ? tripDutiesSorted[tripDutiesSorted.length - 1]! : null;
+
+    let endIsoFromPairing = pairingEndDateIso(pairingEffective);
+    let endIsoFromLeg = syntheticEndIsoFromLegs(pairingLegs, lastDutyIso, uuidsForLegs);
+    const endIsoFromMorningDutyOff =
+      lastDutyRow != null ? syntheticEndIsoFromMorningDutyOff(lastDutyRow, lastDutyIso) : null;
+
+    let syntheticArrivalCalendar: string | null = null;
+    if (endIsoFromPairing != null && endIsoFromPairing > lastDutyIso) syntheticArrivalCalendar = endIsoFromPairing;
     if (endIsoFromLeg != null) {
-      if (syntheticArrivalIso == null || endIsoFromLeg > syntheticArrivalIso) syntheticArrivalIso = endIsoFromLeg;
+      if (syntheticArrivalCalendar == null || endIsoFromLeg > syntheticArrivalCalendar)
+        syntheticArrivalCalendar = endIsoFromLeg;
     }
     if (endIsoFromMorningDutyOff != null) {
-      if (syntheticArrivalIso == null || endIsoFromMorningDutyOff > syntheticArrivalIso) {
-        syntheticArrivalIso = endIsoFromMorningDutyOff;
+      if (syntheticArrivalCalendar == null || endIsoFromMorningDutyOff > syntheticArrivalCalendar) {
+        syntheticArrivalCalendar = endIsoFromMorningDutyOff;
       }
     }
 
-    const needsSyntheticEnd = syntheticArrivalIso != null && syntheticArrivalIso > lastDutyIso;
+    /** Align with enumerated window start after FIX 3 clamp (avoids stale pairing_start vs first duty). */
+    const tripLabelIso = opStart!;
+    const viewTag = readClassicViewTag(duties);
+    const monthLastForCarry =
+      viewTag != null ? monthLastIso(viewTag.year, viewTag.month) : null;
 
-    for (let i = 0; i < n; i++) {
-      const duty = tripDuties[i]!;
-      const dateIso = sliceDutyIso(duty.duty_date)!;
-      const isFirst = i === 0;
-      const isLastDutyIndex = i === n - 1;
+    const calendarDays = eachIsoInclusive(opStart, opEnd);
 
-      let rowType: RowType;
-      if (needsSyntheticEnd) {
-        rowType = isFirst ? 'TRIP_START' : 'TRIP_CONTINUATION';
-      } else {
-        rowType = isFirst ? 'TRIP_START' : isLastDutyIndex ? 'TRIP_END' : 'TRIP_CONTINUATION';
+    /** Extra trip-end row AFTER opEnd when midnight / leg calendar extends arrival (J3H95 Rule 10). */
+    let extraSyntheticBeyondOpEnd = false;
+
+    const pushDutyOrGapRow = (dateIso: string) => {
+      const dutyRow = dutyByIso.get(dateIso);
+
+      if (dutyRow) {
+        const isLabelDay = dateIso === tripLabelIso;
+        let rowType: RowType = isLabelDay ? 'TRIP_START' : 'TRIP_CONTINUATION';
+        if (monthLastForCarry != null && dateIso > monthLastForCarry && rowType !== 'TRIP_START') {
+          rowType = 'CARRY_OUT';
+        }
+
+        const lay =
+          dutyRow.layover_city != null && String(dutyRow.layover_city).trim()
+            ? String(dutyRow.layover_city).trim()
+            : null;
+        const hasLay = lay != null;
+        const hasDutyTimes =
+          Boolean(dutyRow.report_time && String(dutyRow.report_time).trim()) ||
+          Boolean(dutyRow.duty_off_time && String(dutyRow.duty_off_time).trim());
+
+        let cityText: string;
+        if (rowType === 'TRIP_START') {
+          cityText = hasLay ? lay! : '-';
+        } else {
+          const isCont = Boolean(dutyRow.is_continuation);
+          const notOnPairingEnd = pairingEndOnlyIso == null || dateIso !== pairingEndOnlyIso;
+          const notSyntheticArrivalDay =
+            syntheticArrivalCalendar == null || dateIso !== syntheticArrivalCalendar;
+          /**
+           * Continuation duty with no layover_city shows "-" unless it falls on pairing end or synthetic arrival
+           * (don’t tie to operate_end_date — bad DB mirror of last duty date would force JFK instead of "-" on T23).
+           */
+          if (isCont && !hasLay && notOnPairingEnd && notSyntheticArrivalDay) {
+            cityText = '-';
+          } else if ((!hasLay || lay === baseCity) && hasDutyTimes) {
+            cityText = baseCity;
+          } else if (!hasLay || lay === baseCity) {
+            cityText = '-';
+          } else {
+            cityText = lay!;
+          }
+        }
+
+        const layoverRaw =
+          dutyRow.layover_time != null && String(dutyRow.layover_time).trim() ? String(dutyRow.layover_time).trim() : null;
+        const layoverText =
+          rowType === 'TRIP_START' || rowType === 'TRIP_CONTINUATION' || rowType === 'CARRY_OUT' ? layoverRaw : null;
+
+        rows.push({
+          dateIso,
+          pairingText: isLabelDay ? flicaPairingKey || null : null,
+          reportText: dutyRow.report_time != null && String(dutyRow.report_time).trim() ? dutyRow.report_time : null,
+          cityText,
+          dutyEndText:
+            dutyRow.duty_off_time != null && String(dutyRow.duty_off_time).trim() ? dutyRow.duty_off_time : null,
+          layoverText,
+          rowType,
+          sourcePairingId: flicaPairingKey,
+        });
+        return;
       }
 
-      const lay =
-        duty.layover_city != null && String(duty.layover_city).trim() ? String(duty.layover_city).trim() : null;
-
-      const hasLay = lay != null;
-
-      let cityText: string | null;
-      /** TRIP_END (non-synthetic arrival day): show base; START/CONTINUATION use layover city or "-". */
-      if (!needsSyntheticEnd && isLastDutyIndex) {
-        cityText = baseCity;
-      } else {
-        cityText = hasLay ? lay : '-';
+      /** No duty: rest day “-” (Rule 1) or synthetic TRIP_END on final operate day (Rule 4). */
+      if (dateIso < opEnd) {
+        let rowType: RowType = 'TRIP_CONTINUATION';
+        if (monthLastForCarry != null && dateIso > monthLastForCarry) rowType = 'CARRY_OUT';
+        rows.push({
+          dateIso,
+          pairingText: null,
+          reportText: null,
+          cityText: '-',
+          dutyEndText: null,
+          layoverText: null,
+          rowType,
+          sourcePairingId: flicaPairingKey,
+        });
+        return;
       }
 
-      const pairingText = isFirst ? flicaPairingKey || null : null;
-      const reportText = duty.report_time != null && String(duty.report_time).trim() ? duty.report_time : null;
-      const dutyEndText =
-        duty.duty_off_time != null && String(duty.duty_off_time).trim() ? duty.duty_off_time : null;
-      const layoverRaw = duty.layover_time != null && String(duty.layover_time).trim() ? duty.layover_time : null;
-      const layoverText = rowType === 'TRIP_START' ? layoverRaw : null;
+      if (dateIso === opEnd) {
+        rows.push({
+          dateIso,
+          pairingText: null,
+          reportText: null,
+          cityText: baseCity,
+          dutyEndText: null,
+          layoverText: null,
+          rowType: 'TRIP_END',
+          sourcePairingId: flicaPairingKey,
+        });
+      }
+    };
 
-      rows.push({
-        dateIso,
-        pairingText,
-        reportText,
-        cityText,
-        dutyEndText,
-        layoverText,
-        rowType,
-        sourcePairingId: flicaPairingKey,
-      });
-    }
+    for (const dIso of calendarDays) pushDutyOrGapRow(dIso);
 
-    if (needsSyntheticEnd && syntheticArrivalIso) {
+    if (
+      syntheticArrivalCalendar != null &&
+      syntheticArrivalCalendar > opEnd &&
+      !dutyByIso.has(syntheticArrivalCalendar)
+    ) {
       rows.push({
-        dateIso: syntheticArrivalIso,
+        dateIso: syntheticArrivalCalendar,
         pairingText: null,
         reportText: null,
         cityText: baseCity,
@@ -402,9 +645,28 @@ export function buildClassicRowsFromDuties(
         sourcePairingId: flicaPairingKey,
       });
     }
+
+    let tripCalendarEndIso = opEnd;
+    if (syntheticArrivalCalendar != null && syntheticArrivalCalendar > tripCalendarEndIso)
+      tripCalendarEndIso = syntheticArrivalCalendar;
+
+    tripCalendarByPairingId.set(String(flicaPairingKey).trim().toUpperCase(), {
+      startIso: opStart,
+      endIso: tripCalendarEndIso,
+    });
   }
 
-  return dedupeClassicRowsGlobally(rows);
+  let out = dedupeClassicRowsGlobally(rows);
+  const viewTag = readClassicViewTag(duties);
+  if (viewTag != null) {
+    out = filterClassicRowsForTouchedMonth(out, tripCalendarByPairingId, pairings, viewTag.year, viewTag.month);
+    out = partitionRowsForClassicViewMonth(out, viewTag.year, viewTag.month);
+  }
+  {
+    const dateKeys = out.map((r) => String(r.dateIso).trim().slice(0, 10));
+    console.log('[ROW_COUNT]', out.length, 'unique dates:', new Set(dateKeys).size);
+  }
+  return out;
 }
 
 /**
@@ -446,20 +708,6 @@ export async function fetchScheduleDutiesAndPairingsForMonth(
     return { duties: [], pairings: [], pairingLegs: [] };
   }
 
-  const { data: dutyRows, error: dErr } = await supabase
-    .from('schedule_duties')
-    .select('*')
-    .eq('user_id', uid)
-    .eq('import_id', latestImportId)
-    .gte('duty_date', start)
-    .lte('duty_date', end);
-
-  if (dErr) throw dErr;
-  const duties = (dutyRows ?? []) as ScheduleDuty[];
-  if (duties.length === 0) {
-    return { duties: [], pairings: [], pairingLegs: [] };
-  }
-
   const { data: pRows, error: pErr } = await supabase
     .from('schedule_pairings')
     .select(
@@ -469,9 +717,106 @@ export async function fetchScheduleDutiesAndPairingsForMonth(
     .eq('import_id', latestImportId);
 
   if (pErr) throw pErr;
-  const pairings = (pRows ?? []) as SchedulePairing[];
+  let pairingsMerged = (pRows ?? []) as SchedulePairing[];
 
-  const pairingUuidList = pairings.map((p) => p.id).filter((x): x is string => Boolean(x && String(x).trim().length));
+  /** Rule 4 carry-out/in: widen duty fetch to full trip tails/heads that bracket the viewed calendar month (Crewline-style). */
+  let dutyRangeGte = start;
+  let dutyRangeLte = end;
+  const overlapping = pairingsMerged.filter((p) => pairingOverlapsCalendarMonth(p, year, month1to12));
+  const pool = overlapping.length ? overlapping : pairingsMerged;
+  for (const p of pool) {
+    const st = pairingStartDateIso(p);
+    const en = pairingEndDateIso(p);
+    if (st != null && st < dutyRangeGte) dutyRangeGte = st;
+    if (en != null && en > dutyRangeLte) dutyRangeLte = en;
+  }
+
+  const { data: dutyRows, error: dErr } = await supabase
+    .from('schedule_duties')
+    .select('*')
+    .eq('user_id', uid)
+    .eq('import_id', latestImportId)
+    .gte('duty_date', dutyRangeGte)
+    .lte('duty_date', dutyRangeLte);
+
+  if (dErr) throw dErr;
+  let mergedDuties = (dutyRows ?? []) as ScheduleDuty[];
+
+  /** Pairings ending after the viewed month: pull continuation duties from next month’s latest batch (e.g. J4195 Apr trip → May 1–2). */
+  const nxYear = month1to12 === 12 ? year + 1 : year;
+  const nxMon = month1to12 === 12 ? 1 : month1to12 + 1;
+  const nextMonthKey = `${nxYear}-${String(nxMon).padStart(2, '0')}`;
+  const tailFlicaUpper = new Set<string>();
+  let maxPairingEndBeyondView = end;
+  for (const hp of pairingsMerged) {
+    const en = pairingEndDateIso(hp);
+    if (en != null && en > end) {
+      tailFlicaUpper.add(String(hp.pairing_id).trim().toUpperCase());
+      if (en > maxPairingEndBeyondView) maxPairingEndBeyondView = en;
+    }
+  }
+  if (tailFlicaUpper.size > 0 && maxPairingEndBeyondView > end) {
+    const { data: nextBatchPick } = await supabase
+      .from('schedule_import_batches')
+      .select('id')
+      .eq('user_id', uid)
+      .eq('month_key', nextMonthKey)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const nextImportId = nextBatchPick?.[0]?.id ?? null;
+    const tailPidList = [...tailFlicaUpper];
+    const firstDayAfterMonth = addOneCalendarDayIso(end)!;
+    console.log('[CARRY_OUT_DEBUG]', {
+      tailPidList,
+      nextMonthKey,
+      nextImportId,
+      maxPairingEndBeyondView,
+      firstDayAfterMonth,
+      pairingsCount: pairingsMerged.length,
+      pairingsWithEndBeyond: pairingsMerged
+        .filter((p) => {
+          const en = pairingEndDateIso(p);
+          return en != null && en > end;
+        })
+        .map((p) => ({
+          id: p.pairing_id,
+          end: pairingEndDateIso(p),
+        })),
+    });
+    if (nextImportId) {
+      const { data: nextPairRows, error: npe } = await supabase
+        .from('schedule_pairings')
+        .select(
+          'id, import_id, pairing_id, base_code, operate_start_date, pairing_start_date, operate_end_date, pairing_end_date',
+        )
+        .eq('user_id', uid)
+        .eq('import_id', nextImportId)
+        .in('pairing_id', tailPidList);
+      if (!npe && nextPairRows?.length) {
+        pairingsMerged = [...pairingsMerged, ...(nextPairRows as SchedulePairing[])];
+      }
+      const { data: nextDutyRows, error: nde } = await supabase
+        .from('schedule_duties')
+        .select('*')
+        .eq('user_id', uid)
+        .eq('import_id', nextImportId)
+        .in('pairing_id', tailPidList)
+        .gte('duty_date', firstDayAfterMonth)
+        .lte('duty_date', maxPairingEndBeyondView);
+      if (!nde && nextDutyRows?.length) {
+        mergedDuties = [...mergedDuties, ...(nextDutyRows as ScheduleDuty[])];
+      }
+    }
+  }
+
+  mergedDuties = filterDutiesNotBeforePairingOperateStart(mergedDuties, pairingsMerged);
+
+  const duties = tagDutiesWithClassicViewMonth(mergedDuties, year, month1to12);
+  if (!duties.length) {
+    return { duties: [], pairings: [], pairingLegs: [] };
+  }
+
+  const pairingUuidList = pairingsMerged.map((p) => p.id).filter((x): x is string => Boolean(x && String(x).trim().length));
   let pairingLegs: SchedulePairingLegLite[] = [];
 
   if (pairingUuidList.length) {
@@ -487,5 +832,5 @@ export async function fetchScheduleDutiesAndPairingsForMonth(
     }
   }
 
-  return { duties, pairings, pairingLegs };
+  return { duties, pairings: pairingsMerged, pairingLegs };
 }

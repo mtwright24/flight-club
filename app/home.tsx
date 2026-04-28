@@ -179,7 +179,7 @@ export default function HomeScreen() {
         [mapPreviewToItem(n, effectiveUserId), ...prev].slice(0, 24),
       );
       notifyAllBadgeCachesRefresh();
-    });
+    }, 'standalone-home');
     return () => {
       mounted = false;
       if (activitySubRef.current) activitySubRef.current.unsubscribe();

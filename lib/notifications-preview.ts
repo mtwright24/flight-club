@@ -84,18 +84,34 @@ export async function markNotificationRead(notificationId: string): Promise<void
   notifyNotificationsBadgeRefresh();
 }
 
-export function subscribeToNotifications(userId: string, onNew: (n: NotificationPreview) => void) {
-  return supabase
-    .channel('notifications')
+/**
+ * Subscribe to new notification rows for this user.
+ * `channelKey` must be unique per subscriber (e.g. screen/hook). Reusing the same topic as another
+ * active `subscribeToNotifications` causes: "cannot add postgres_changes callbacks after subscribe()".
+ */
+export function subscribeToNotifications(
+  userId: string,
+  onNew: (n: NotificationPreview) => void,
+  channelKey: string,
+) {
+  const channel = supabase
+    .channel(`notifications:${channelKey}:${userId}`)
     .on(
       'postgres_changes',
       { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
       (payload) => {
         const n = payload.new as Notification;
         onNew({ ...n, summary: getNotificationSummary(n) } as NotificationPreview);
-      }
-    )
-    .subscribe();
+      },
+    );
+
+  channel.subscribe();
+
+  return {
+    unsubscribe: () => {
+      void supabase.removeChannel(channel);
+    },
+  };
 }
 
 function getNotificationSummary(n: Notification): string {
