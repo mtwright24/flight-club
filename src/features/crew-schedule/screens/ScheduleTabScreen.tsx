@@ -1,56 +1,59 @@
-import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
+import { useRouter } from "expo-router";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  Dimensions,
-  PanResponder,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import type { FlicaMonthStats, FlicaPairing } from '../../../services/flicaScheduleHtmlParser';
-import FlicaCrewScheduleSection from '../components/FlicaCrewScheduleSection';
-import { useScheduleTripsForMonth } from '../hooks/useScheduleTripsForMonth';
+    ActivityIndicator,
+    Alert,
+    Dimensions,
+    PanResponder,
+    Platform,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import type {
+    FlicaMonthStats,
+    FlicaPairing,
+} from "../../../services/flicaScheduleHtmlParser";
+import CalendarMonthView from "../components/CalendarMonthView";
+import ClassicListView from "../components/ClassicListView";
+import FlicaCrewScheduleSection from "../components/FlicaCrewScheduleSection";
+import SmartListView from "../components/SmartListView";
+import { useScheduleTripsForMonth } from "../hooks/useScheduleTripsForMonth";
 import {
-  fetchCrewScheduleFlicaForMonth,
-  hasFlicaDirectImportForMonth,
-  type CrewScheduleFlicaRow,
-  removeMonthScheduleAndImports,
-} from '../scheduleApi';
+    fetchCrewScheduleFlicaForMonth,
+    hasFlicaDirectImportForMonth,
+    removeMonthScheduleAndImports,
+    type CrewScheduleFlicaRow,
+} from "../scheduleApi";
+import { scheduleTheme as T } from "../scheduleTheme";
 import {
-  loadLastMonthCursor,
-  loadScheduleViewMode,
-  saveLastMonthCursor,
-} from '../scheduleViewStorage';
-import { scheduleTheme as T } from '../scheduleTheme';
-import type { CrewScheduleTrip, ScheduleViewMode } from '../types';
-import { tradePostPrefillParams } from '../tradePostPrefillParams';
-import { stashTripForDetailNavigation } from '../tripDetailNavCache';
-import ClassicListView from '../components/ClassicListView';
-import CalendarMonthView from '../components/CalendarMonthView';
-import SmartListView from '../components/SmartListView';
-import { Ionicons } from '@expo/vector-icons';
+    loadLastMonthCursor,
+    loadScheduleViewMode,
+    saveLastMonthCursor,
+} from "../scheduleViewStorage";
+import { tradePostPrefillParams } from "../tradePostPrefillParams";
+import { stashTripForDetailNavigation } from "../tripDetailNavCache";
+import type { CrewScheduleTrip, ScheduleViewMode } from "../types";
 
 const MONTH_NAMES = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 export default function ScheduleTabScreen() {
@@ -58,13 +61,13 @@ export default function ScheduleTabScreen() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [viewMode, setViewMode] = useState<ScheduleViewMode>('classic');
+  const [viewMode, setViewMode] = useState<ScheduleViewMode>("classic");
   const [removingMonth, setRemovingMonth] = useState(false);
   const [flicaRow, setFlicaRow] = useState<CrewScheduleFlicaRow | null>(null);
 
   const monthKey = useMemo(
-    () => `${year}-${String(month).padStart(2, '0')}`,
-    [year, month]
+    () => `${year}-${String(month).padStart(2, "0")}`,
+    [year, month],
   );
 
   React.useEffect(() => {
@@ -76,7 +79,8 @@ export default function ScheduleTabScreen() {
     });
   }, []);
 
-  const { trips, monthMetrics, refresh, refreshSilent } = useScheduleTripsForMonth(year, month);
+  const { trips, monthMetrics, refresh, refreshSilent } =
+    useScheduleTripsForMonth(year, month);
   const [, setFlicaDirectForMonth] = useState(false);
 
   const loadFlicaDirectFlag = useCallback(() => {
@@ -106,7 +110,7 @@ export default function ScheduleTabScreen() {
       void refreshSilent();
       void loadFlicaRow();
       loadFlicaDirectFlag();
-    }, [loadFlicaDirectFlag, loadFlicaRow, refreshSilent])
+    }, [loadFlicaDirectFlag, loadFlicaRow, refreshSilent]),
   );
 
   const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
@@ -154,29 +158,32 @@ export default function ScheduleTabScreen() {
           }
         },
       }),
-    [goNextMonth, goPrevMonth, removingMonth]
+    [goNextMonth, goPrevMonth, removingMonth],
   );
 
   const openTrip = useCallback(
     (trip: CrewScheduleTrip) => {
       stashTripForDetailNavigation(trip);
-      router.push({ pathname: '/crew-schedule/trip-detail', params: { tripId: trip.id } });
+      router.push({
+        pathname: "/crew-schedule/trip-detail",
+        params: { tripId: trip.id },
+      });
     },
-    [router]
+    [router],
   );
 
   const openTradePost = useCallback(
     (trip?: CrewScheduleTrip) => {
       if (trip) {
         router.push({
-          pathname: '/crew-exchange/create-post',
+          pathname: "/crew-exchange/create-post",
           params: tradePostPrefillParams(trip),
         });
       } else {
-        router.push('/crew-exchange/create-post');
+        router.push("/crew-exchange/create-post");
       }
     },
-    [router]
+    [router],
   );
 
   const onPressCalendarDay = useCallback(
@@ -184,11 +191,11 @@ export default function ScheduleTabScreen() {
       const onDay = trips.filter((t) => iso >= t.startDate && iso <= t.endDate);
       if (onDay.length > 0) openTrip(onDay[0]);
     },
-    [trips, openTrip]
+    [trips, openTrip],
   );
 
   const openManage = useCallback(() => {
-    router.push('/crew-schedule/manage');
+    router.push("/crew-schedule/manage");
   }, [router]);
 
   const runRemoveMonthConfirmed = useCallback(async () => {
@@ -202,20 +209,20 @@ export default function ScheduleTabScreen() {
       await refresh();
       const doneMsg =
         r.entriesRemoved > 0 || r.batchesRemoved > 0
-          ? `Removed ${r.entriesRemoved} calendar day${r.entriesRemoved === 1 ? '' : 's'} and ${r.batchesRemoved} import batch${r.batchesRemoved === 1 ? '' : 'es'}.`
-          : 'Nothing was stored for this month.';
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          ? `Removed ${r.entriesRemoved} calendar day${r.entriesRemoved === 1 ? "" : "s"} and ${r.batchesRemoved} import batch${r.batchesRemoved === 1 ? "" : "es"}.`
+          : "Nothing was stored for this month.";
+      if (Platform.OS === "web" && typeof window !== "undefined") {
         window.alert(`Done\n\n${doneMsg}`);
       } else {
-        Alert.alert('Done', doneMsg);
+        Alert.alert("Done", doneMsg);
       }
     } catch (e) {
-      console.error('DELETE_FAILED', e);
+      console.error("DELETE_FAILED", e);
       const err = e instanceof Error ? e.message : String(e);
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (Platform.OS === "web" && typeof window !== "undefined") {
         window.alert(`Could not remove\n\n${err}`);
       } else {
-        Alert.alert('Could not remove', err);
+        Alert.alert("Could not remove", err);
       }
     } finally {
       clearTimeout(removingFailsafe);
@@ -224,18 +231,21 @@ export default function ScheduleTabScreen() {
   }, [monthKey, refresh]);
 
   const flicaPairings = useMemo(
-    () => (Array.isArray(flicaRow?.pairings) ? (flicaRow.pairings as FlicaPairing[]) : []),
-    [flicaRow]
+    () =>
+      Array.isArray(flicaRow?.pairings)
+        ? (flicaRow.pairings as FlicaPairing[])
+        : [],
+    [flicaRow],
   );
 
   const flicaStats: FlicaMonthStats = useMemo(() => {
     const raw = (flicaRow?.stats ?? {}) as Partial<FlicaMonthStats>;
     return {
-      block: raw.block ?? '',
-      credit: raw.credit ?? '',
-      tafb: raw.tafb ?? '',
-      ytd: raw.ytd ?? '',
-      daysOff: typeof raw.daysOff === 'number' ? raw.daysOff : 0,
+      block: raw.block ?? "",
+      credit: raw.credit ?? "",
+      tafb: raw.tafb ?? "",
+      ytd: raw.ytd ?? "",
+      daysOff: typeof raw.daysOff === "number" ? raw.daysOff : 0,
     };
   }, [flicaRow]);
 
@@ -244,8 +254,8 @@ export default function ScheduleTabScreen() {
    * deliver pull-to-refresh. Force a min height so the bounce/gesture can still fire.
    */
   const scrollContentMinHeight = useMemo(
-    () => Math.max(420, Dimensions.get('window').height - 150),
-    []
+    () => Math.max(420, Dimensions.get("window").height - 150),
+    [],
   );
 
   /**
@@ -253,24 +263,25 @@ export default function ScheduleTabScreen() {
    * FLICA-first; we do not require DB heuristics to fire the gesture (those failed when the list was empty).
    */
   const onSchedulePullToRefresh = useCallback(() => {
-    router.push('/crew-schedule/import-flica-direct?autoSync=1');
+    router.push("/crew-schedule/import-flica-direct?autoSync=1");
   }, [router]);
 
   const onRemoveMonthFromSchedule = useCallback(() => {
     const title = `Delete imported schedule for ${monthLabel}?`;
     const message =
-      'This deletes all days on your calendar for this month, saved month totals, and import batches stored for this month (including FLICA pairing reviews tied to those imports). This cannot be undone.';
+      "This deletes all days on your calendar for this month, saved month totals, and import batches stored for this month (including FLICA pairing reviews tied to those imports). This cannot be undone.";
 
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm(`${title}\n\n${message}`)) void runRemoveMonthConfirmed();
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      if (window.confirm(`${title}\n\n${message}`))
+        void runRemoveMonthConfirmed();
       return;
     }
 
     Alert.alert(title, message, [
-      { text: 'Cancel', style: 'cancel' },
+      { text: "Cancel", style: "cancel" },
       {
-        text: 'Delete',
-        style: 'destructive',
+        text: "Delete",
+        style: "destructive",
         onPress: () => void runRemoveMonthConfirmed(),
       },
     ]);
@@ -278,7 +289,10 @@ export default function ScheduleTabScreen() {
 
   return (
     <View style={styles.screenRoot} {...monthSwipePan.panHandlers}>
-      <View style={styles.monthRow} accessibilityLabel="Month header — swipe left or right to change month">
+      <View
+        style={styles.monthRow}
+        accessibilityLabel="Month header — swipe left or right to change month"
+      >
         <Pressable
           onPress={goPrevMonth}
           style={styles.iconHit}
@@ -305,7 +319,10 @@ export default function ScheduleTabScreen() {
           activeOpacity={0.75}
           onPress={onRemoveMonthFromSchedule}
           disabled={removingMonth}
-          style={[styles.deleteImportBtn, removingMonth && styles.deleteImportBtnDisabled]}
+          style={[
+            styles.deleteImportBtn,
+            removingMonth && styles.deleteImportBtnDisabled,
+          ]}
           accessibilityRole="button"
           accessibilityLabel={`Delete imported schedule for ${monthLabel}`}
           hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
@@ -313,22 +330,29 @@ export default function ScheduleTabScreen() {
           {removingMonth ? (
             <ActivityIndicator size="small" color={T.importReview.bad} />
           ) : (
-            <Ionicons name="trash-outline" size={18} color={T.importReview.bad} />
+            <Ionicons
+              name="trash-outline"
+              size={18}
+              color={T.importReview.bad}
+            />
           )}
           <Text style={styles.deleteImportLabel}>
-            {removingMonth ? 'Removing…' : 'Delete imported schedule'}
+            {removingMonth ? "Removing…" : "Delete imported schedule"}
           </Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { minHeight: scrollContentMinHeight }]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { minHeight: scrollContentMinHeight },
+        ]}
         keyboardShouldPersistTaps="handled"
         nestedScrollEnabled
         refreshControl={
           <RefreshControl
-            progressViewOffset={Platform.OS === 'android' ? 0 : undefined}
+            progressViewOffset={Platform.OS === "android" ? 0 : undefined}
             refreshing={false}
             onRefresh={onSchedulePullToRefresh}
             tintColor={T.accent}
@@ -343,7 +367,7 @@ export default function ScheduleTabScreen() {
               importedAt={flicaRow?.imported_at}
             />
           ) : null}
-          {viewMode === 'classic' && (
+          {viewMode === "classic" && (
             <ClassicListView
               year={year}
               month={month}
@@ -353,7 +377,7 @@ export default function ScheduleTabScreen() {
               onOpenManage={openManage}
             />
           )}
-          {viewMode === 'calendar' && (
+          {viewMode === "calendar" && (
             <CalendarMonthView
               year={year}
               month={month}
@@ -362,17 +386,23 @@ export default function ScheduleTabScreen() {
               onOpenTrip={openTrip}
             />
           )}
-          {viewMode === 'smart' && (
+          {viewMode === "smart" && (
             <SmartListView
               trips={trips}
               onPressTrip={openTrip}
               onPost={(trip) => openTradePost(trip)}
               onChat={(trip) =>
-                router.push({ pathname: '/crew-schedule/trip-chat', params: { tripId: trip.id } })
+                router.push({
+                  pathname: "/crew-schedule/trip-chat",
+                  params: { tripId: trip.id },
+                })
               }
-              onManageSchedule={() => router.push('/crew-schedule/manage')}
+              onManageSchedule={() => router.push("/crew-schedule/manage")}
               onAlert={(trip) =>
-                router.push({ pathname: '/crew-schedule/alerts', params: { tripId: trip.id } })
+                router.push({
+                  pathname: "/crew-schedule/alerts",
+                  params: { tripId: trip.id },
+                })
               }
             />
           )}
@@ -387,40 +417,45 @@ const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: T.bg },
   scrollContent: { flexGrow: 1, paddingBottom: 8 },
   monthRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: T.line,
     gap: 4,
   },
-  monthText: { fontSize: 16, fontWeight: '800', color: T.text },
+  monthText: { fontSize: 16, fontWeight: "800", color: T.text },
   monthTitleRow: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 8,
   },
-  monthRowCenter: { flex: 1, textAlign: 'center', marginHorizontal: 4 },
-  monthSide: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  monthRowCenter: { flex: 1, textAlign: "center", marginHorizontal: 4 },
+  monthSide: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   iconHit: { paddingHorizontal: 6, paddingVertical: 4 },
   monthToolsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     paddingVertical: 8,
     paddingHorizontal: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: T.line,
   },
   deleteImportBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 10,
@@ -431,7 +466,7 @@ const styles = StyleSheet.create({
   deleteImportBtnDisabled: { opacity: 0.65 },
   deleteImportLabel: {
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: "700",
     color: T.importReview.bad,
     marginLeft: 8,
   },
