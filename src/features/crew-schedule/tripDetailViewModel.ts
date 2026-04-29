@@ -220,18 +220,22 @@ function buildSummaryLine(trip: CrewScheduleTrip): string {
   parts.push(`${trip.dutyDays} duty day${trip.dutyDays === 1 ? '' : 's'}`);
   const block = trip.pairingBlockHours;
   const credit = trip.pairingCreditHours ?? trip.creditHours;
+  const legCount = trip.legs?.length ?? 0;
+  if (legCount > 0) parts.push(`${legCount} leg${legCount === 1 ? '' : 's'}`);
   if (block != null && Number.isFinite(block)) parts.push(`${block.toFixed(2)} block`);
   if (credit != null && Number.isFinite(Number(credit))) parts.push(`${Number(credit).toFixed(2)} credit`);
   return parts.join(' · ');
 }
 
 function buildStatTiles(trip: CrewScheduleTrip): TripStatTile[] {
-  const layVal =
-    trip.tripLayoverTotalMinutes != null
-      ? formatLayoverTotalMinutes(trip.tripLayoverTotalMinutes)
-      : trip.layoverCity
-        ? trip.layoverCity
-        : '—';
+  let layVal: string;
+  if (trip.tripLayoverTotalMinutes != null && Number.isFinite(trip.tripLayoverTotalMinutes)) {
+    layVal = formatLayoverTotalMinutes(trip.tripLayoverTotalMinutes);
+  } else if (trip.layoverCity?.trim()) {
+    layVal = trip.layoverCity.trim();
+  } else {
+    layVal = '—';
+  }
   return [
     { id: 'block', label: 'Block', value: formatHoursH(trip.pairingBlockHours) },
     { id: 'credit', label: 'Credit', value: formatHoursH(trip.pairingCreditHours ?? trip.creditHours) },
@@ -244,7 +248,7 @@ function buildLayoverHotelPreview(trip: CrewScheduleTrip): TripLayoverHotelPrevi
   const hotel = trip.hotel;
   const hotelLine =
     hotel?.name != null
-      ? [hotel.name, hotel.city].filter(Boolean).join(' · ') || hotel.name
+      ? [hotel.name, hotel.city, hotel.phone].filter(Boolean).join(' · ') || hotel.name
       : null;
   const lay = trip.layoverCity?.trim() || null;
   if (!lay && !hotelLine) return null;

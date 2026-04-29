@@ -69,6 +69,7 @@ export type SchedulePairingLegLite = {
   id?: string;
   pairing_id: string;
   duty_date: string | null;
+  calendar_day?: number | null;
   flight_number?: string | null;
   segment_type?: string | null;
   departure_station?: string | null;
@@ -76,6 +77,11 @@ export type SchedulePairingLegLite = {
   scheduled_departure_local?: string | null;
   scheduled_arrival_local?: string | null;
   release_time_local?: string | null;
+  block_time?: number | null;
+  layover_city?: string | null;
+  hotel_name?: string | null;
+  hotel_phone?: string | null;
+  aircraft_position_code?: string | null;
   is_deadhead?: boolean | null;
   normalized_json: Record<string, unknown>;
   created_at?: string | null;
@@ -924,7 +930,7 @@ export async function fetchScheduleDutiesAndPairingsForMonth(
     const { data: legRows, error: legErr } = await supabase
       .from('schedule_pairing_legs')
       .select(
-        'id,pairing_id,duty_date,flight_number,segment_type,departure_station,arrival_station,scheduled_departure_local,scheduled_arrival_local,release_time_local,is_deadhead,normalized_json,created_at',
+        'id,pairing_id,duty_date,calendar_day,flight_number,segment_type,departure_station,arrival_station,scheduled_departure_local,scheduled_arrival_local,release_time_local,block_time,layover_city,hotel_name,hotel_phone,is_deadhead,aircraft_position_code,normalized_json,created_at',
       )
       .in('pairing_id', pairingUuidList)
       .order('created_at', { ascending: true });

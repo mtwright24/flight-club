@@ -60,6 +60,7 @@ function mergeTwoTrips(a: CrewScheduleTrip, b: CrewScheduleTrip): CrewScheduleTr
   return {
     ...a,
     id: a.id,
+    schedulePairingId: a.schedulePairingId ?? b.schedulePairingId,
     endDate,
     startDate: startDate,
     status: st,

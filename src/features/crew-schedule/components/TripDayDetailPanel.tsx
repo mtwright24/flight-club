@@ -44,10 +44,14 @@ export default function TripDayDetailPanel({ day, legStatuses, trackingLegId, on
             </View>
             {leg.flightNumber ? <Text style={styles.fn}>Flight {leg.flightNumber}</Text> : null}
             <View style={styles.timeGrid}>
+              {leg.dutyDayCalendarDom != null ? <Row k="Calendar day" v={String(leg.dutyDayCalendarDom)} /> : null}
               <Row k="Departure" v={leg.departLocal} />
               <Row k="Arrival" v={leg.arriveLocal} />
-              {leg.blockTimeLocal ? <Row k="Block" v={leg.blockTimeLocal} /> : null}
-              {leg.equipmentCode ? <Row k="Equipment" v={leg.equipmentCode} /> : null}
+              {leg.blockTimeLocal ? <Row k="Block" v={leg.blockTimeLocal} /> : <Row k="Block" v={undefined} />}
+              {leg.equipmentCode ? <Row k="Equipment" v={leg.equipmentCode} /> : <Row k="Equipment" v={undefined} />}
+              {leg.layoverCityLeg ? <Row k="Layover city" v={leg.layoverCityLeg} /> : null}
+              {leg.layoverRestDisplay ? <Row k="Layover / rest" v={leg.layoverRestDisplay} /> : null}
+              <Row k="Duty end (D-END)" v={leg.releaseLocal} />
             </View>
             {legStatuses[leg.id] ? <Text style={styles.live}>Live: {legStatuses[leg.id]}</Text> : null}
             {leg.flightNumber ? (

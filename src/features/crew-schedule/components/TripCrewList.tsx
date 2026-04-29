@@ -21,11 +21,18 @@ export default function TripCrewList({ members, maxVisible, title = 'Crew', show
     <View style={styles.wrap}>
       {showTitle ? <Text style={styles.title}>{title}</Text> : null}
       {shown.map((c, i) => (
-        <View key={`${c.position}-${i}`} style={styles.line}>
+        <View key={`${c.position}-${c.employeeId ?? ''}-${i}`} style={styles.line}>
           <Text style={styles.pos}>{c.position}</Text>
-          <Text style={styles.name} numberOfLines={1}>
-            {c.name}
-          </Text>
+          <View style={styles.nameCol}>
+            <Text style={styles.name} numberOfLines={2}>
+              {c.name}
+            </Text>
+            {c.employeeId || c.roleLabel ? (
+              <Text style={styles.meta} numberOfLines={1}>
+                {[c.employeeId, c.roleLabel].filter(Boolean).join(' · ')}
+              </Text>
+            ) : null}
+          </View>
         </View>
       ))}
       {more > 0 ? (
@@ -49,7 +56,7 @@ const styles = StyleSheet.create({
   },
   line: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 6,
     gap: 8,
   },
@@ -59,6 +66,8 @@ const styles = StyleSheet.create({
     color: T.accent,
     minWidth: 28,
   },
-  name: { flex: 1, fontSize: 13, fontWeight: '600', color: T.text },
+  nameCol: { flex: 1 },
+  name: { fontSize: 13, fontWeight: '600', color: T.text },
+  meta: { fontSize: 11, fontWeight: '600', color: T.textSecondary, marginTop: 2 },
   more: { fontSize: 12, color: T.textSecondary, fontStyle: 'italic', marginTop: 2 },
 });

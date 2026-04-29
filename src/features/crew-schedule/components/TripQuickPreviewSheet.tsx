@@ -1,12 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { fetchCrewScheduleTripByPairingUuid } from '../scheduleApi';
 import { scheduleTheme as T } from '../scheduleTheme';
 import { buildTripDetailViewModel } from '../tripDetailViewModel';
 import type { CrewScheduleTrip } from '../types';
 import TripCrewList from './TripCrewList';
 import TripStatTilesRow from './TripStatTilesRow';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Quick trip preview: scrollable bottom-sheet style modal (not full operational detail).
@@ -24,12 +28,57 @@ export default function TripQuickPreviewSheet({
 }) {
   const insets = useSafeAreaInsets();
   const { height: winH } = useWindowDimensions();
-  const vm = useMemo(() => (trip ? buildTripDetailViewModel(trip) : null), [trip]);
+  const [enrichedTrip, setEnrichedTrip] = useState<CrewScheduleTrip | null>(null);
 
-  if (!trip || !vm) return null;
+  useEffect(() => {
+    setEnrichedTrip(null);
+  }, [trip?.id]);
+
+  useEffect(() => {
+    if (!visible || !trip) return;
+    if (!UUID_RE.test(trip.id)) return;
+    let cancelled = false;
+    fetchCrewScheduleTripByPairingUuid(trip.id)
+      .then((t) => {
+        if (!cancelled && t) setEnrichedTrip(t);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, trip?.id]);
+
+  const displayTrip = enrichedTrip ?? trip ?? null;
+  const vm = useMemo(() => (displayTrip ? buildTripDetailViewModel(displayTrip) : null), [displayTrip]);
+
+  useEffect(() => {
+    if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+    if (!vm || !displayTrip) return;
+    if (String(displayTrip.pairingCode).trim().toUpperCase() !== 'J1015') return;
+    const ds = String(displayTrip.startDate).slice(0, 7);
+    const de = String(displayTrip.endDate).slice(0, 7);
+    if (ds > '2026-05' || de < '2026-05') return;
+    console.log('[pairing-detail ui] TripQuickPreviewSheet final vm J1015', {
+      enriched: enrichedTrip != null,
+      block: vm.statTiles.find((x) => x.id === 'block')?.value ?? null,
+      credit: vm.statTiles.find((x) => x.id === 'credit')?.value ?? null,
+      tafb: vm.statTiles.find((x) => x.id === 'tafb')?.value ?? null,
+      layover: vm.statTiles.find((x) => x.id === 'layover')?.value ?? null,
+      crewCount: vm.crewMembers.length,
+      routeSummary: vm.routeSummary,
+      dayPanels: vm.days.length,
+      firstDayLegs:
+        vm.days[0]?.legs.map((l) => ({
+          releaseLocal: l.releaseLocal ?? null,
+          block: l.blockTimeLocal ?? null,
+        })) ?? [],
+    });
+  }, [vm, displayTrip, enrichedTrip]);
+
+  if (!trip || !vm || !displayTrip) return null;
 
   const sheetMaxH = Math.min(winH * 0.82, 720);
-  const legCount = trip.legs.length;
+  const legCount = displayTrip.legs.length;
   const dayCount = vm.days.length;
 
   return (
@@ -78,29 +127,36 @@ export default function TripQuickPreviewSheet({
               <TripStatTilesRow tiles={vm.statTiles} compact />
             </View>
 
-            {vm.crewMembers.length > 0 ? (
-              <View style={styles.section}>
-                <TripCrewList members={vm.crewMembers} maxVisible={4} title="Crew" />
-              </View>
-            ) : null}
+            <View style={styles.section}>
+              <Text style={styles.previewTitle}>Crew</Text>
+              {vm.crewMembers.length > 0 ? (
+                <TripCrewList members={vm.crewMembers} maxVisible={6} showTitle={false} />
+              ) : (
+                <Text style={styles.emdash}>—</Text>
+              )}
+            </View>
 
-            {vm.layoverHotelPreview && (vm.layoverHotelPreview.layoverLine || vm.layoverHotelPreview.hotelLine) ? (
-              <View style={styles.previewCard}>
-                <Text style={styles.previewTitle}>Layover & hotel</Text>
-                {vm.layoverHotelPreview.layoverLine ? (
-                  <Text style={styles.previewLine}>
-                    <Text style={styles.previewMuted}>City </Text>
-                    {vm.layoverHotelPreview.layoverLine}
-                  </Text>
-                ) : null}
-                {vm.layoverHotelPreview.hotelLine ? (
-                  <Text style={styles.previewLine} numberOfLines={2}>
-                    <Text style={styles.previewMuted}>Hotel </Text>
-                    {vm.layoverHotelPreview.hotelLine}
-                  </Text>
-                ) : null}
-              </View>
-            ) : null}
+            <View style={styles.previewCard}>
+              <Text style={styles.previewTitle}>Layover & hotel</Text>
+              {vm.layoverHotelPreview && (vm.layoverHotelPreview.layoverLine || vm.layoverHotelPreview.hotelLine) ? (
+                <>
+                  {vm.layoverHotelPreview.layoverLine ? (
+                    <Text style={styles.previewLine}>
+                      <Text style={styles.previewMuted}>City </Text>
+                      {vm.layoverHotelPreview.layoverLine}
+                    </Text>
+                  ) : null}
+                  {vm.layoverHotelPreview.hotelLine ? (
+                    <Text style={styles.previewLine} numberOfLines={3}>
+                      <Text style={styles.previewMuted}>Hotel </Text>
+                      {vm.layoverHotelPreview.hotelLine}
+                    </Text>
+                  ) : null}
+                </>
+              ) : (
+                <Text style={styles.emdash}>—</Text>
+              )}
+            </View>
 
             <View style={styles.opsHint}>
               <Text style={styles.opsHintText}>
@@ -199,4 +255,5 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  emdash: { fontSize: 15, fontWeight: '700', color: T.textSecondary, marginTop: 4 },
 });

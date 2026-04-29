@@ -199,7 +199,12 @@ export default function ScheduleTabScreen() {
       stashTripForDetailNavigation(trip);
       router.push({
         pathname: "/crew-schedule/trip-detail",
-        params: { tripId: trip.id },
+        params: {
+          tripId: trip.id,
+          ...(trip.schedulePairingId
+            ? { pairingUuid: trip.schedulePairingId }
+            : {}),
+        },
       });
     },
     [router],

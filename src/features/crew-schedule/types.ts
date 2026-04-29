@@ -23,6 +23,8 @@ export interface CrewScheduleLeg {
   scheduleEntryId?: string;
   /** Calendar day this leg operates (matches schedule_entries.date). */
   dutyDate?: string;
+  /** Day-of-month from FLICA leg table (DD) when stored. */
+  dutyDayCalendarDom?: number;
   departureAirport: string;
   arrivalAirport: string;
   reportLocal?: string;
@@ -35,11 +37,16 @@ export interface CrewScheduleLeg {
   blockTimeLocal?: string;
   /** Aircraft / equipment (e.g. 32N, 3NS) from the pairing leg row. */
   equipmentCode?: string;
+  /** Layover station from leg row when present. */
+  layoverCityLeg?: string;
+  /** FLICA layover / rest display (e.g. 4-digit HHMM) when present. */
+  layoverRestDisplay?: string;
 }
 
 export interface CrewScheduleHotelStub {
   name?: string;
   city?: string;
+  phone?: string;
   address?: string;
   shuttleNotes?: string;
   foodNearbyNote?: string;
@@ -50,10 +57,17 @@ export interface CrewScheduleHotelStub {
 export interface ScheduleCrewMember {
   position: string;
   name: string;
+  employeeId?: string;
+  roleLabel?: string;
 }
 
 export interface CrewScheduleTrip {
   id: string;
+  /**
+   * `schedule_pairings.id` when known (pairing row in Supabase). `id` is often `trip_group_id` from
+   * `schedule_entries` — do not use `id` for `fetchCrewScheduleTripByPairingUuid` unless they match.
+   */
+  schedulePairingId?: string | null;
   pairingCode: string;
   base?: string;
   month: number;

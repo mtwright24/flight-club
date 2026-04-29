@@ -9,6 +9,7 @@ import {
   fetchTripGroupEntries,
   fetchTripMetadataForGroup,
   mergeTripWithMetadataRow,
+  resolveSchedulePairingDbIdByOverlap,
   type ScheduleTripMetadataRow,
 } from '../scheduleApi';
 import { dutiesToCrewScheduleLegs } from '../jetblueFlicaImport';
@@ -30,11 +31,22 @@ import TripSummaryCard from '../components/TripSummaryCard';
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+function firstRouteParam(v: string | string[] | undefined): string | undefined {
+  if (v == null) return undefined;
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v) && v.length > 0) return v[0];
+  return undefined;
+}
+
 export default function TripDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { tripId: tripIdParam } = useLocalSearchParams<{ tripId?: string }>();
-  const tripId = typeof tripIdParam === 'string' ? tripIdParam : tripIdParam?.[0];
+  const { tripId: tripIdParam, pairingUuid: pairingUuidParam } = useLocalSearchParams<{
+    tripId?: string;
+    pairingUuid?: string;
+  }>();
+  const tripId = firstRouteParam(tripIdParam);
+  const pairingUuidFromRoute = firstRouteParam(pairingUuidParam);
 
   const [trip, setTrip] = useState<CrewScheduleTrip | undefined>(undefined);
   const [tripMeta, setTripMeta] = useState<ScheduleTripMetadataRow | null>(null);
@@ -83,14 +95,70 @@ export default function TripDetailScreen() {
           setLoadingTrip(false);
         }
         try {
+          let pairingDbId: string | undefined =
+            (pairingUuidFromRoute && UUID_RE.test(pairingUuidFromRoute) ? pairingUuidFromRoute : undefined) ??
+            (stashed?.schedulePairingId && UUID_RE.test(stashed.schedulePairingId)
+              ? stashed.schedulePairingId
+              : undefined);
+
+          if (!pairingDbId && stashed) {
+            pairingDbId =
+              (await resolveSchedulePairingDbIdByOverlap({
+                pairingCode: stashed.pairingCode,
+                rangeStart: stashed.startDate,
+                rangeEnd: stashed.endDate,
+              })) ?? undefined;
+          }
+
+          if (!pairingDbId && !stashed && UUID_RE.test(tripId)) {
+            pairingDbId = tripId;
+          }
+
           const [fromNormalized, meta] = await Promise.all([
-            fetchCrewScheduleTripByPairingUuid(tripId),
+            pairingDbId ? fetchCrewScheduleTripByPairingUuid(pairingDbId) : Promise.resolve(null),
             fetchTripMetadataForGroup(tripId).catch(() => null),
           ]);
           if (!cancelled && fromNormalized) {
-            setTrip(fromNormalized);
+            const schedulePairingId = fromNormalized.schedulePairingId ?? pairingDbId ?? fromNormalized.id;
+            if (
+              typeof __DEV__ !== 'undefined' &&
+              __DEV__ &&
+              String(fromNormalized.pairingCode).trim().toUpperCase() === 'J1015' &&
+              String(fromNormalized.startDate).slice(0, 7) <= '2026-05' &&
+              String(fromNormalized.endDate).slice(0, 7) >= '2026-05'
+            ) {
+              console.log('[pairing-detail ui] TripDetailScreen fetchCrewScheduleTripByPairingUuid OK J1015', {
+                tripGroupId: tripId,
+                schedulePairingId,
+                pairingBlockHours: fromNormalized.pairingBlockHours ?? null,
+                crewLen: fromNormalized.crewMembers?.length ?? 0,
+                hotelName: fromNormalized.hotel?.name ?? null,
+                legsLen: fromNormalized.legs.length,
+                firstLegRelease: fromNormalized.legs[0]?.releaseLocal ?? null,
+              });
+            }
+            setTrip({
+              ...fromNormalized,
+              id: tripId,
+              schedulePairingId,
+            });
             setTripMeta(meta);
-          } else if (!cancelled && !fromNormalized && !stashed) {
+          } else if (!cancelled && !fromNormalized && stashed) {
+            if (
+              typeof __DEV__ !== 'undefined' &&
+              __DEV__ &&
+              UUID_RE.test(tripId) &&
+              String(stashed.pairingCode).trim().toUpperCase() === 'J1015' &&
+              String(stashed.startDate).slice(0, 7) <= '2026-05' &&
+              String(stashed.endDate).slice(0, 7) >= '2026-05'
+            ) {
+              console.warn(
+                '[pairing-detail ui] TripDetailScreen kept stashed trip — fetchCrewScheduleTripByPairingUuid was null (no DB bundle merge)',
+                { tripId, pairingDbId: pairingDbId ?? null, stashedLegs: stashed.legs.length },
+              );
+            }
+          }
+          if (!cancelled && !fromNormalized && !stashed) {
             const [rows, metaLegacy] = await Promise.all([
               fetchTripGroupEntries(tripId),
               fetchTripMetadataForGroup(tripId).catch(() => null),
@@ -127,7 +195,7 @@ export default function TripDetailScreen() {
     return () => {
       cancelled = true;
     };
-  }, [tripId]);
+  }, [tripId, pairingUuidFromRoute]);
 
   useEffect(() => {
     setLegStatuses({});
@@ -187,6 +255,31 @@ export default function TripDetailScreen() {
     },
     [router]
   );
+
+  useEffect(() => {
+    if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+    if (!vm || !display) return;
+    if (String(display.pairingCode).trim().toUpperCase() !== 'J1015') return;
+    const ds = String(display.startDate).slice(0, 7);
+    const de = String(display.endDate).slice(0, 7);
+    if (ds > '2026-05' || de < '2026-05') return;
+    console.log('[pairing-detail ui] TripDetailScreen final vm J1015', {
+      block: vm.statTiles.find((x) => x.id === 'block')?.value ?? null,
+      credit: vm.statTiles.find((x) => x.id === 'credit')?.value ?? null,
+      tafb: vm.statTiles.find((x) => x.id === 'tafb')?.value ?? null,
+      layover: vm.statTiles.find((x) => x.id === 'layover')?.value ?? null,
+      routeSummary: vm.routeSummary,
+      crewCount: vm.crewMembers.length,
+      layoverHotelPreview: vm.layoverHotelPreview,
+      dayPanels: vm.days.length,
+      firstDayLegs:
+        vm.days[0]?.legs.map((l) => ({
+          releaseLocal: l.releaseLocal ?? null,
+          block: l.blockTimeLocal ?? null,
+          equip: l.equipmentCode ?? null,
+        })) ?? [],
+    });
+  }, [vm, display]);
 
   if (!tripId) {
     return (
@@ -263,12 +356,10 @@ export default function TripDetailScreen() {
 
         <Text style={styles.h2}>Layover & hotel</Text>
         <View style={styles.card}>
-          {t.layoverCity ? (
-            <View style={styles.kv}>
-              <Text style={styles.k}>Layover city</Text>
-              <Text style={styles.v}>{t.layoverCity}</Text>
-            </View>
-          ) : null}
+          <View style={styles.kv}>
+            <Text style={styles.k}>Layover city</Text>
+            <Text style={styles.v}>{t.layoverCity?.trim() ? t.layoverCity : '—'}</Text>
+          </View>
           <View style={styles.kv}>
             <Text style={styles.k}>Layover total</Text>
             <Text style={styles.v}>
@@ -280,11 +371,13 @@ export default function TripDetailScreen() {
           {hotel?.name ? (
             <>
               <Text style={styles.hotelName}>{hotel.name}</Text>
-              <Text style={styles.meta}>{[hotel.city, hotel.address].filter(Boolean).join(' · ')}</Text>
+              <Text style={styles.meta}>
+                {[hotel.city, hotel.phone, hotel.address].filter(Boolean).join(' · ')}
+              </Text>
               {hotel.shuttleNotes ? <Text style={styles.note}>Shuttle · {hotel.shuttleNotes}</Text> : null}
             </>
           ) : (
-            <Text style={styles.muted}>No hotel on file for this pairing.</Text>
+            <Text style={styles.muted}>—</Text>
           )}
         </View>
 
@@ -294,7 +387,7 @@ export default function TripDetailScreen() {
             {vm.crewMembers.length > 0 ? (
               <TripCrewList members={vm.crewMembers} showTitle={false} />
             ) : (
-              <Text style={styles.muted}>Crew appears when your schedule source includes positions and names.</Text>
+              <Text style={styles.muted}>—</Text>
             )}
             {t.tripChatThreadId ? (
               <Text style={styles.mono}>Trip chat: {t.tripChatThreadId}</Text>

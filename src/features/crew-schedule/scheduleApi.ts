@@ -1,5 +1,5 @@
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../lib/supabaseClient';
-import type { CrewScheduleTrip, ScheduleCrewMember, ScheduleMonthMetrics } from './types';
+import type { CrewScheduleTrip, ScheduleCrewMember, ScheduleMonthMetrics, CrewScheduleHotelStub } from './types';
 import {
   buildLayoverSummaryFromDuties,
   mapLegRowToDuty,
@@ -834,49 +834,380 @@ export async function fetchTripsFromDutiesForMonth(
   return { trips, classicRows, importBatchId };
 }
 
-/** Trip detail / deep links: load one pairing by `schedule_pairings.id` (same id as `CrewScheduleTrip.id`). */
-export async function fetchCrewScheduleTripByPairingUuid(pairingUuid: string): Promise<CrewScheduleTrip | null> {
+export type PairingDetailDbCrewRow = {
+  id: string;
+  position: string | null;
+  employee_number: string | null;
+  crew_name: string | null;
+  role_label: string | null;
+  is_current_user: boolean;
+  raw_text: string | null;
+};
+
+export type PairingDetailDbHotelRow = {
+  id: string;
+  duty_date: string | null;
+  layover_city: string | null;
+  hotel_name: string | null;
+  hotel_phone: string | null;
+  nights: number | null;
+  raw_text: string | null;
+};
+
+/** DB rows for one pairing: pairing + duties + legs + FLICA-detail crew/hotel tables. */
+export type PairingDetailBundle = {
+  pairing: NormSchedulePairing & {
+    route_summary?: string | null;
+    pairing_block_minutes?: number | null;
+    pairing_credit_minutes?: number | null;
+    pairing_tafb_minutes?: number | null;
+    layover_total_minutes?: number | null;
+    report_time?: string | null;
+    report_time_local?: string | null;
+  };
+  duties: NormScheduleDuty[];
+  legs: SchedulePairingLegLite[];
+  crew: PairingDetailDbCrewRow[];
+  hotels: PairingDetailDbHotelRow[];
+};
+
+function devIsJ1015May2026(
+  pairingCode: string,
+  startIso?: string | null,
+  endIso?: string | null,
+): boolean {
+  if (String(pairingCode).trim().toUpperCase() !== 'J1015') return false;
+  const s = String(startIso ?? '').slice(0, 7);
+  const e = String(endIso ?? '').slice(0, 7);
+  return s <= '2026-05' && e >= '2026-05';
+}
+
+/** Merge FLICA pairing-detail table fields + crew/hotel rows into a normalized trip. */
+export function mergePairingDetailBundleIntoTrip(
+  trip: CrewScheduleTrip,
+  bundle: PairingDetailBundle,
+): CrewScheduleTrip {
+  const prow = bundle.pairing as Record<string, unknown>;
+  const pairingCodeStr = String(prow.pairing_id ?? trip.pairingCode ?? '').trim();
+  const opS = String(prow.operate_start_date ?? '').slice(0, 10);
+  const opE = String(prow.operate_end_date ?? '').slice(0, 10);
+  const devJ = typeof __DEV__ !== 'undefined' && __DEV__ && devIsJ1015May2026(pairingCodeStr, opS, opE);
+
+  const beforeStats = {
+    routeSummary: trip.routeSummary,
+    pairingBlockHours: trip.pairingBlockHours ?? null,
+    pairingCreditHours: trip.pairingCreditHours ?? null,
+    pairingTafbHours: trip.pairingTafbHours ?? null,
+    tripLayoverTotalMinutes: trip.tripLayoverTotalMinutes ?? null,
+    crewLen: trip.crewMembers?.length ?? 0,
+    legsLen: trip.legs?.length ?? 0,
+    firstLegRelease: trip.legs[0]?.releaseLocal ?? null,
+    lastLegRelease: trip.legs.length ? trip.legs[trip.legs.length - 1]!.releaseLocal ?? null : null,
+  };
+
+  const routeDb = typeof prow.route_summary === 'string' ? prow.route_summary.trim() : '';
+  const blockMin = prow.pairing_block_minutes;
+  const creditMin = prow.pairing_credit_minutes;
+  const tafbMin = prow.pairing_tafb_minutes;
+  const layMin = prow.layover_total_minutes;
+
+  const next: CrewScheduleTrip = { ...trip };
+  if (routeDb) next.routeSummary = routeDb;
+
+  if (blockMin != null && Number.isFinite(Number(blockMin))) {
+    next.pairingBlockHours = Number(blockMin) / 60;
+  }
+  if (creditMin != null && Number.isFinite(Number(creditMin))) {
+    next.pairingCreditHours = Number(creditMin) / 60;
+  }
+  if (tafbMin != null && Number.isFinite(Number(tafbMin))) {
+    next.pairingTafbHours = Number(tafbMin) / 60;
+  }
+  if (layMin != null && Number.isFinite(Number(layMin))) {
+    next.tripLayoverTotalMinutes = Number(layMin);
+  }
+
+  if (bundle.crew.length) {
+    const mapped: ScheduleCrewMember[] = bundle.crew.map((r) => ({
+      position: r.position?.trim() || '—',
+      name: r.crew_name?.trim() || '—',
+      employeeId: r.employee_number?.trim() || undefined,
+      roleLabel: r.role_label?.trim() || undefined,
+    }));
+    next.crewMembers = mapped;
+  }
+
+  if (bundle.hotels.length) {
+    const first = bundle.hotels[0]!;
+    const hotel: CrewScheduleHotelStub = {
+      name: first.hotel_name?.trim() || undefined,
+      city: first.layover_city?.trim() || undefined,
+      phone: first.hotel_phone?.trim() || undefined,
+    };
+    next.hotel = hotel;
+    const c = first.layover_city?.trim();
+    if (c && !next.layoverCity) next.layoverCity = c;
+  }
+
+  if (devJ) {
+    console.log('[pairing-detail merge] J1015 before', {
+      tripId: trip.id,
+      pairingCode: trip.pairingCode,
+      ...beforeStats,
+      bundlePairing: {
+        route_summary: prow.route_summary ?? null,
+        pairing_block_minutes: prow.pairing_block_minutes ?? null,
+        pairing_credit_minutes: prow.pairing_credit_minutes ?? null,
+        pairing_tafb_minutes: prow.pairing_tafb_minutes ?? null,
+        layover_total_minutes: prow.layover_total_minutes ?? null,
+      },
+      bundleCrewLen: bundle.crew.length,
+      bundleHotelsLen: bundle.hotels.length,
+      note: 'merge does not mutate legs (D-END comes from trip.legs / schedule_pairing_legs only)',
+    });
+    console.log('[pairing-detail merge] J1015 after', {
+      tripId: next.id,
+      pairingCode: next.pairingCode,
+      routeSummary: next.routeSummary,
+      pairingBlockHours: next.pairingBlockHours ?? null,
+      pairingCreditHours: next.pairingCreditHours ?? null,
+      pairingTafbHours: next.pairingTafbHours ?? null,
+      tripLayoverTotalMinutes: next.tripLayoverTotalMinutes ?? null,
+      crewLen: next.crewMembers?.length ?? 0,
+      legsLen: next.legs.length,
+      firstLegRelease: next.legs[0]?.releaseLocal ?? null,
+      hotelName: next.hotel?.name ?? null,
+    });
+  }
+
+  return next;
+}
+
+/**
+ * Resolve `schedule_pairings.id` when navigating with `trip_group_id` only: same user, pairing code,
+ * date range overlap with operate / pairing span. Optional `import_id` tightens matches when known.
+ */
+export async function resolveSchedulePairingDbIdByOverlap(opts: {
+  pairingCode: string;
+  rangeStart: string;
+  rangeEnd: string;
+  importId?: string | null;
+}): Promise<string | null> {
+  const { data: u, error: ue } = await supabase.auth.getUser();
+  if (ue || !u.user) return null;
+  const code = String(opts.pairingCode ?? '').trim();
+  if (!code || code === '—') return null;
+  const rs = opts.rangeStart.slice(0, 10);
+  const re = opts.rangeEnd.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(rs) || !/^\d{4}-\d{2}-\d{2}$/.test(re)) return null;
+
+  const runQuery = (importId: string | null | undefined) => {
+    let q = supabase
+      .from('schedule_pairings')
+      .select(
+        'id, operate_start_date, operate_end_date, pairing_start_date, pairing_end_date, import_id, updated_at',
+      )
+      .eq('user_id', u.user.id)
+      .eq('pairing_id', code)
+      .order('updated_at', { ascending: false })
+      .limit(25);
+    const trimmed = importId && String(importId).trim() ? String(importId).trim() : '';
+    if (trimmed) q = q.eq('import_id', trimmed);
+    return q;
+  };
+
+  let { data, error } = await runQuery(opts.importId);
+  if (error) return null;
+  if ((!data || data.length === 0) && opts.importId && String(opts.importId).trim()) {
+    const second = await runQuery(null);
+    if (second.error) return null;
+    data = second.data;
+  }
+  if (!data?.length) return null;
+
+  const overlaps = (row: (typeof data)[number]): boolean => {
+    const s = String(row.operate_start_date ?? row.pairing_start_date ?? '').slice(0, 10);
+    const e = String(row.operate_end_date ?? row.pairing_end_date ?? '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const effEnd = /^\d{4}-\d{2}-\d{2}$/.test(e) && e >= s ? e : s;
+    return s <= re && effEnd >= rs;
+  };
+
+  const hit = data.find(overlaps);
+  return hit?.id ? String(hit.id) : null;
+}
+
+const PAIRING_DETAIL_PAIRING_SELECT =
+  'id, import_id, pairing_id, base_code, operate_start_date, pairing_start_date, operate_end_date, pairing_end_date, route_summary, report_time, report_time_local, pairing_block_minutes, pairing_credit_minutes, pairing_tafb_minutes, layover_total_minutes, raw_pairing_html, raw_pairing_text';
+
+const PAIRING_DETAIL_LEG_SELECT =
+  'id,pairing_id,duty_date,calendar_day,flight_number,segment_type,departure_station,arrival_station,scheduled_departure_local,scheduled_arrival_local,release_time_local,block_time,layover_city,hotel_name,hotel_phone,is_deadhead,aircraft_position_code,normalized_json,created_at';
+
+/** Full pairing detail for summary sheet + detail screen (`pairing`, legs, crew, hotels + duties for trip assembly). */
+export async function fetchPairingDetailByPairingUuid(pairingUuid: string): Promise<PairingDetailBundle | null> {
   const { data: u, error: ue } = await supabase.auth.getUser();
   if (ue || !u.user) return null;
   const uid = u.user.id;
-  const { data: pairing, error } = await supabase
+
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log('[pairing-detail read] input pairingUuid', pairingUuid);
+  }
+
+  const { data: pairingRow, error: pe } = await supabase
     .from('schedule_pairings')
-    .select(
-      'id, import_id, pairing_id, base_code, operate_start_date, pairing_start_date, operate_end_date, pairing_end_date',
-    )
+    .select(PAIRING_DETAIL_PAIRING_SELECT)
     .eq('id', pairingUuid)
     .eq('user_id', uid)
     .maybeSingle();
-  if (error || !pairing) return null;
 
-  const { data: dutyRows } = await supabase
-    .from('schedule_duties')
-    .select('*')
+  if (pe) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[pairing-detail read] schedule_pairings select error', pe.message);
+    }
+    return null;
+  }
+  if (!pairingRow) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[pairing-detail read] no schedule_pairings row for uuid', { pairingUuid });
+    }
+    return null;
+  }
+
+  const batchId = String((pairingRow as { import_id?: string | null }).import_id ?? '').trim();
+  const pairingCode = String((pairingRow as { pairing_id?: string | null }).pairing_id ?? '').trim();
+
+  if (!pairingCode) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[pairing-detail read] pairing row missing pairing_id text', { pairingUuid });
+    }
+    return null;
+  }
+
+  const opS = String((pairingRow as { operate_start_date?: string | null }).operate_start_date ?? '').slice(0, 10);
+  const opE = String((pairingRow as { operate_end_date?: string | null }).operate_end_date ?? '').slice(0, 10);
+  const devJ = typeof __DEV__ !== 'undefined' && __DEV__ && devIsJ1015May2026(pairingCode, opS, opE);
+
+  if (!batchId && typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.warn(
+      '[pairing-detail read] schedule_pairings.import_id empty — using pairing_db_id for crew/hotels; duties by pairing_id only',
+      { pairingUuid, pairingCode },
+    );
+  }
+
+  let dutyQ = supabase.from('schedule_duties').select('*').eq('user_id', uid).eq('pairing_id', pairingCode);
+  if (batchId) {
+    dutyQ = dutyQ.eq('import_id', batchId);
+  }
+  const dutyRes = await dutyQ.order('duty_date', { ascending: true });
+
+  let crewQ = supabase
+    .from('schedule_pairing_crew')
+    .select('id,position,employee_number,crew_name,role_label,is_current_user,raw_text')
     .eq('user_id', uid)
-    .eq('import_id', pairing.import_id as string)
-    .eq('pairing_id', pairing.pairing_id as string)
-    .order('duty_date', { ascending: true });
+    .eq('pairing_id', pairingCode);
+  crewQ = batchId ? crewQ.eq('import_batch_id', batchId) : crewQ.eq('pairing_db_id', pairingUuid);
+  const crewRes = await crewQ.order('created_at', { ascending: true });
 
-  const { data: legRows } = await supabase
+  let hotelQ = supabase
+    .from('schedule_pairing_hotels')
+    .select('id,duty_date,layover_city,hotel_name,hotel_phone,nights,raw_text')
+    .eq('user_id', uid)
+    .eq('pairing_id', pairingCode);
+  hotelQ = batchId ? hotelQ.eq('import_batch_id', batchId) : hotelQ.eq('pairing_db_id', pairingUuid);
+  const hotelRes = await hotelQ.order('created_at', { ascending: true });
+
+  const legRes = await supabase
     .from('schedule_pairing_legs')
-    .select(
-      'id,pairing_id,duty_date,flight_number,segment_type,departure_station,arrival_station,scheduled_departure_local,scheduled_arrival_local,release_time_local,is_deadhead,normalized_json,created_at',
-    )
+    .select(PAIRING_DETAIL_LEG_SELECT)
     .eq('pairing_id', pairingUuid)
     .order('created_at', { ascending: true });
 
-  const op = String(pairing.operate_start_date ?? pairing.pairing_start_date ?? '').slice(0, 10);
+  if (dutyRes.error) throw dutyRes.error;
+  if (legRes.error) throw legRes.error;
+  if (crewRes.error) throw crewRes.error;
+  if (hotelRes.error) throw hotelRes.error;
+
+  const pr = pairingRow as Record<string, unknown>;
+  if (devJ) {
+    const legsArr = (legRes.data ?? []) as SchedulePairingLegLite[];
+    const firstL = legsArr[0];
+    const lastL = legsArr.length ? legsArr[legsArr.length - 1]! : undefined;
+    console.log('[pairing-detail read] J1015 pairing row + join keys', {
+      pairingUuid,
+      import_id_used_as_batch: batchId || null,
+      pairing_id_text: pairingCode,
+      operate_start: opS,
+      operate_end: opE,
+      route_summary: pr.route_summary ?? null,
+      pairing_block_minutes: pr.pairing_block_minutes ?? null,
+      pairing_credit_minutes: pr.pairing_credit_minutes ?? null,
+      pairing_tafb_minutes: pr.pairing_tafb_minutes ?? null,
+      layover_total_minutes: pr.layover_total_minutes ?? null,
+      raw_pairing_html_len: typeof pr.raw_pairing_html === 'string' ? pr.raw_pairing_html.length : 0,
+      raw_pairing_text_len: typeof pr.raw_pairing_text === 'string' ? pr.raw_pairing_text.length : 0,
+      dutiesCount: (dutyRes.data ?? []).length,
+      legsCount: legsArr.length,
+      crewCount: (crewRes.data ?? []).length,
+      crewSample: (crewRes.data ?? []).slice(0, 2),
+      hotelsCount: (hotelRes.data ?? []).length,
+      hotelsSample: (hotelRes.data ?? []).slice(0, 2),
+      firstLeg: firstL
+        ? {
+            duty_date: firstL.duty_date,
+            release_time_local: firstL.release_time_local,
+            flica_d_end_local: firstL.normalized_json?.flica_d_end_local,
+            hotel_name: firstL.hotel_name,
+          }
+        : null,
+      lastLeg: lastL
+        ? {
+            duty_date: lastL.duty_date,
+            release_time_local: lastL.release_time_local,
+            flica_d_end_local: lastL.normalized_json?.flica_d_end_local,
+          }
+        : null,
+    });
+    console.log('[pairing-detail read] J1015 bundle returned', {
+      duties: (dutyRes.data ?? []).length,
+      legs: legsArr.length,
+      crew: (crewRes.data ?? []).length,
+      hotels: (hotelRes.data ?? []).length,
+    });
+  }
+
+  return {
+    pairing: pairingRow as PairingDetailBundle['pairing'],
+    duties: (dutyRes.data ?? []) as NormScheduleDuty[],
+    legs: (legRes.data ?? []) as SchedulePairingLegLite[],
+    crew: (crewRes.data ?? []) as PairingDetailDbCrewRow[],
+    hotels: (hotelRes.data ?? []) as PairingDetailDbHotelRow[],
+  };
+}
+
+/** Trip detail / deep links: load one pairing by `schedule_pairings.id`. Pass `schedulePairingId`, not `trip_group_id`. */
+export async function fetchCrewScheduleTripByPairingUuid(pairingUuid: string): Promise<CrewScheduleTrip | null> {
+  const bundle = await fetchPairingDetailByPairingUuid(pairingUuid);
+  if (!bundle) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[pairing-detail fetch trip] fetchPairingDetailByPairingUuid returned null', { pairingUuid });
+    }
+    return null;
+  }
+
+  const op = String(bundle.pairing.operate_start_date ?? bundle.pairing.pairing_start_date ?? '').slice(0, 10);
   const y = op.length >= 10 ? Number(op.slice(0, 4)) : new Date().getFullYear();
   const m = op.length >= 10 ? Number(op.slice(5, 7)) : new Date().getMonth() + 1;
 
   const trips = buildCrewScheduleTripsFromNormalizedPack(
     y,
     m,
-    (dutyRows ?? []) as NormScheduleDuty[],
-    [pairing as NormSchedulePairing],
-    (legRows ?? []) as SchedulePairingLegLite[],
+    bundle.duties,
+    [bundle.pairing as NormSchedulePairing],
+    bundle.legs,
   );
-  return trips[0] ?? null;
+  const trip = trips[0];
+  if (!trip) return null;
+  return mergePairingDetailBundleIntoTrip(trip, bundle);
 }
 
 export async function fetchTripMetadataForTripGroups(tripGroupIds: string[]): Promise<ScheduleTripMetadataRow[]> {
@@ -924,7 +1255,7 @@ export function mergeTripMetadataIntoTrips(
 
 export function mergeTripWithMetadataRow(trip: CrewScheduleTrip, m: ScheduleTripMetadataRow | null): CrewScheduleTrip {
   if (!m) return trip;
-  return {
+  const out: CrewScheduleTrip = {
     ...trip,
     pairingBlockHours: m.pairing_block_hours ?? trip.pairingBlockHours,
     pairingCreditHours: m.pairing_credit_hours ?? trip.pairingCreditHours,
@@ -932,4 +1263,24 @@ export function mergeTripWithMetadataRow(trip: CrewScheduleTrip, m: ScheduleTrip
     tripLayoverTotalMinutes: m.layover_total_minutes ?? trip.tripLayoverTotalMinutes,
     crewMembers: m.crew?.length ? m.crew : trip.crewMembers,
   };
+  if (
+    typeof __DEV__ !== 'undefined' &&
+    __DEV__ &&
+    devIsJ1015May2026(trip.pairingCode, trip.startDate, trip.endDate)
+  ) {
+    console.log('[pairing-detail ui-meta] mergeTripWithMetadataRow J1015', {
+      metaHasRow: true,
+      meta_pairing_block_hours: m.pairing_block_hours ?? null,
+      meta_pairing_credit_hours: m.pairing_credit_hours ?? null,
+      meta_pairing_tafb_hours: m.pairing_tafb_hours ?? null,
+      meta_layover_total_minutes: m.layover_total_minutes ?? null,
+      meta_crew_array_length: Array.isArray(m.crew) ? m.crew.length : null,
+      trip_before_pairingBlockHours: trip.pairingBlockHours ?? null,
+      out_pairingBlockHours: out.pairingBlockHours ?? null,
+      trip_before_crewLen: trip.crewMembers?.length ?? 0,
+      out_crewLen: out.crewMembers?.length ?? 0,
+      note: 'If meta_crew_array_length > 0, metadata crew replaces trip crew (see pairing_block_hours ?? pattern)',
+    });
+  }
+  return out;
 }

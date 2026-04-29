@@ -67,7 +67,11 @@ export function attachCanonicalPairingDaysToTrips(
       if (day) byDate[d] = day;
     }
     if (Object.keys(byDate).length === 0) return t;
-    let next: CrewScheduleTrip = { ...t, canonicalPairingDays: byDate };
+    let next: CrewScheduleTrip = {
+      ...t,
+      canonicalPairingDays: byDate,
+      schedulePairingId: block.pairingUuid,
+    };
     const line = routeSummaryFromCanonicalLedgerCities(next);
     if (line) {
       next = { ...next, routeSummary: line };

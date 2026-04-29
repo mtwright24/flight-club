@@ -32,6 +32,19 @@ function formatTimeDisplay(t: string | null | undefined): string | undefined {
   return s;
 }
 
+function blockTimeDisplayFromLegRow(L: SchedulePairingLegLite): string | undefined {
+  const nj = L.normalized_json;
+  const hhmm = nj && typeof nj.flica_block_hhmm === 'string' ? String(nj.flica_block_hhmm).trim() : '';
+  if (/^\d{4}$/.test(hhmm)) return `${hhmm.slice(0, 2)}:${hhmm.slice(2)}`;
+  return undefined;
+}
+
+function layoverRestFromLegRow(L: SchedulePairingLegLite): string | undefined {
+  const nj = L.normalized_json;
+  const v = nj?.layover_rest_display;
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+}
+
 /** e.g. notes "flt:B6 841" or "B6 841" → display for leg + tracker */
 function parseFlightFromNotes(notes: string | null | undefined): string | undefined {
   if (!notes) return undefined;
@@ -428,6 +441,7 @@ export function buildCrewScheduleTripsFromNormalizedPack(
                   : 'other';
       out.push({
         id: String(pairUuid),
+        schedulePairingId: String(pairUuid),
         pairingCode: code,
         base: pairing.base_code ? String(pairing.base_code).trim() : 'JFK',
         month: viewMonth,
@@ -468,9 +482,14 @@ export function buildCrewScheduleTripsFromNormalizedPack(
       const prevIso = prev ? isoDate10(prev.duty_date) : null;
       const isFirstLegOfDay = dutyIso != null && dutyIso !== prevIso;
       const rep = isFirstLegOfDay && dutyIso ? dutyDateToReport.get(dutyIso) : null;
+      const calDom =
+        L.calendar_day != null && Number.isFinite(Number(L.calendar_day))
+          ? Number(L.calendar_day)
+          : undefined;
       legs.push({
         id: L.id ? String(L.id) : `${pairUuid}-leg-${idx}`,
         dutyDate: dutyIso ?? undefined,
+        dutyDayCalendarDom: calDom,
         departureAirport: String(L.departure_station ?? '')
           .trim()
           .toUpperCase()
@@ -484,6 +503,10 @@ export function buildCrewScheduleTripsFromNormalizedPack(
         arriveLocal: formatTimeDisplay(L.scheduled_arrival_local),
         releaseLocal: formatTimeDisplay(L.release_time_local),
         flightNumber: L.flight_number ? String(L.flight_number).trim() : undefined,
+        blockTimeLocal: blockTimeDisplayFromLegRow(L),
+        equipmentCode: L.aircraft_position_code ? String(L.aircraft_position_code).trim() : undefined,
+        layoverCityLeg: L.layover_city ? String(L.layover_city).trim() : undefined,
+        layoverRestDisplay: layoverRestFromLegRow(L),
         isDeadhead: String(L.segment_type ?? '').toLowerCase() === 'deadhead' || !!L.is_deadhead,
       });
     }
@@ -537,6 +560,7 @@ export function buildCrewScheduleTripsFromNormalizedPack(
 
     out.push({
       id: String(pairUuid),
+      schedulePairingId: String(pairUuid),
       pairingCode: code,
       base: pairing.base_code ? String(pairing.base_code).trim() : 'JFK',
       month: viewMonth,
