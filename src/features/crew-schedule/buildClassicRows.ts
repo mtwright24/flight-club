@@ -23,6 +23,11 @@ export interface ClassicScheduleRow {
   rowType: RowType;
   /** Stable FLICA pairing id for this duty trip (every row includes for dedupe + matching). */
   sourcePairingId: string;
+  /**
+   * True when this row is a duty-less enumerated gap (no `schedule_duties` row for this date).
+   * Layer-8 may treat as blank for PTV/entry overlay while still showing "-" in the grid when rendered as TRIP_CONTINUATION.
+   */
+  syntheticGapNoDuty?: boolean;
 }
 
 /** One row from `schedule_duties` (shape matches persisted columns). */
@@ -207,6 +212,13 @@ function syntheticEndIsoFromMorningDutyOff(lastDuty: ScheduleDuty, lastDutyIso: 
   return addOneCalendarDayIso(lastDutyIso);
 }
 
+/** HHMM-style D-OFF in 0001–1159 = next-morning release after last leg crossed midnight (T23 / J3H95 city column). */
+function isMorningDutyOff(dutyOffTime: string | null | undefined): boolean {
+  if (!dutyOffTime) return false;
+  const n = parseInt(String(dutyOffTime).replace(/\D/g, '').slice(0, 4), 10);
+  return !Number.isNaN(n) && n >= 1 && n <= 1159;
+}
+
 function syntheticEndIsoFromLegs(
   legs: SchedulePairingLegLite[],
   lastDutyIso: string,
@@ -371,6 +383,54 @@ function eachIsoInclusive(startIso: string, endIso: string): string[] {
   return out;
 }
 
+/**
+ * When `operate_end_date` is far beyond the last persisted duty, do not walk the full pairing window — that produces
+ * months of phantom "-" gap rows (e.g. J3920 / J3F39). Cap enumeration at last duty + synthetic arrival only.
+ */
+function safeEnumerateEnd(
+  opEnd: string | null,
+  lastDutyIso: string,
+  syntheticArrival: string | null,
+): string {
+  const candidates = [String(lastDutyIso).trim().slice(0, 10)];
+  if (syntheticArrival) candidates.push(String(syntheticArrival).trim().slice(0, 10));
+  const naturalEnd = [...candidates].sort((a, b) => a.localeCompare(b)).reverse()[0]!;
+
+  if (!opEnd) return naturalEnd;
+
+  const opEndS = String(opEnd).trim().slice(0, 10);
+  const lastS = String(lastDutyIso).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(opEndS) || !/^\d{4}-\d{2}-\d{2}$/.test(lastS)) return naturalEnd;
+
+  const opEndDate = new Date(`${opEndS}T12:00:00`);
+  const lastDutyDate = new Date(`${lastS}T12:00:00`);
+  const diffDays = Math.round((opEndDate.getTime() - lastDutyDate.getTime()) / 86400000);
+
+  if (diffDays > 7) return naturalEnd;
+  return opEndS > naturalEnd ? opEndS : naturalEnd;
+}
+
+/** Layer-8: same as ClassicListView `isDutyClassicBlank` plus duty-less gap dashes (PTV can overlay). */
+export function classicRowIsBlankForEntryOverlay(c: ClassicScheduleRow | undefined): boolean {
+  if (!c) return true;
+  if (c.rowType === 'EMPTY_DAY') return true;
+  if (c.syntheticGapNoDuty === true && c.cityText === '-') {
+    return (
+      !String(c.pairingText ?? '').trim() &&
+      !String(c.reportText ?? '').trim() &&
+      !String(c.dutyEndText ?? '').trim() &&
+      !String(c.layoverText ?? '').trim()
+    );
+  }
+  return (
+    !String(c.pairingText ?? '').trim() &&
+    !String(c.reportText ?? '').trim() &&
+    !String(c.cityText ?? '').trim() &&
+    !String(c.dutyEndText ?? '').trim() &&
+    !String(c.layoverText ?? '').trim()
+  );
+}
+
 /** Drop stray duty rows dated before merged pairing operate start (handles stale imports without hard-coded ids). */
 function filterDutiesNotBeforePairingOperateStart(duties: ScheduleDuty[], pairings: SchedulePairing[]): ScheduleDuty[] {
   return duties.filter((d) => {
@@ -490,10 +550,11 @@ export function buildClassicRowsFromDuties(
     if (opStart == null || opEnd == null || opEnd < opStart) continue;
 
     /** FIX 3: never enumerate phantom days before the first persisted duty when merged pairing dates are stale. */
-    if (tripDutiesSorted.length) {
-      const firstDutyIso = sliceDutyIso(tripDutiesSorted[0]!.duty_date)!;
-      if (firstDutyIso > opStart) opStart = firstDutyIso;
+    const firstDutyIsoFromDuties = tripDutiesSorted.length ? sliceDutyIso(tripDutiesSorted[0]!.duty_date)! : null;
+    if (tripDutiesSorted.length && firstDutyIsoFromDuties != null && firstDutyIsoFromDuties > opStart!) {
+      opStart = firstDutyIsoFromDuties;
     }
+    const firstDutyIso = firstDutyIsoFromDuties ?? opStart!;
 
     const pairingEndOnlyIso = sliceDutyIso(pairingEffective.pairing_end_date);
 
@@ -524,16 +585,22 @@ export function buildClassicRowsFromDuties(
       }
     }
 
+    /** Real trip calendar end (last duty + synthetic arrival) — trip bounds / TRIP_END. */
+    let tripVisualEnd = lastDutyIso;
+    if (syntheticArrivalCalendar != null && syntheticArrivalCalendar > tripVisualEnd) tripVisualEnd = syntheticArrivalCalendar;
+    const enumerateEnd = safeEnumerateEnd(
+      opEnd != null ? String(opEnd).trim().slice(0, 10) : null,
+      lastDutyIso,
+      syntheticArrivalCalendar,
+    );
+
     /** Align with enumerated window start after FIX 3 clamp (avoids stale pairing_start vs first duty). */
     const tripLabelIso = opStart!;
     const viewTag = readClassicViewTag(duties);
     const monthLastForCarry =
       viewTag != null ? monthLastIso(viewTag.year, viewTag.month) : null;
 
-    const calendarDays = eachIsoInclusive(opStart, opEnd);
-
-    /** Extra trip-end row AFTER opEnd when midnight / leg calendar extends arrival (J3H95 Rule 10). */
-    let extraSyntheticBeyondOpEnd = false;
+    const calendarDays = eachIsoInclusive(opStart!, enumerateEnd);
 
     const pushDutyOrGapRow = (dateIso: string) => {
       const dutyRow = dutyByIso.get(dateIso);
@@ -559,21 +626,51 @@ export function buildClassicRowsFromDuties(
           cityText = hasLay ? lay! : '-';
         } else {
           const isCont = Boolean(dutyRow.is_continuation);
+          /** DB flag sometimes missing on overnight return leg; duty-backed non-start with times + no lay still reads as continuation for city. */
+          const treatAsContinuation = isCont || (!hasLay && hasDutyTimes);
           const notOnPairingEnd = pairingEndOnlyIso == null || dateIso !== pairingEndOnlyIso;
           const notSyntheticArrivalDay =
             syntheticArrivalCalendar == null || dateIso !== syntheticArrivalCalendar;
           /**
            * Continuation duty with no layover_city shows "-" unless it falls on pairing end or synthetic arrival
            * (don’t tie to operate_end_date — bad DB mirror of last duty date would force JFK instead of "-" on T23).
+           * J3H95-style overnight return leg: continuation, no lay, morning D-OFF → "-" (LAS-JFK 0009; next day synthetic JFK).
            */
-          if (isCont && !hasLay && notOnPairingEnd && notSyntheticArrivalDay) {
+          if (
+            isCont &&
+            !hasLay &&
+            isMorningDutyOff(dutyRow.duty_off_time) &&
+            notSyntheticArrivalDay
+          ) {
+            cityText = '-';
+          } else if (treatAsContinuation && !hasLay && notOnPairingEnd && notSyntheticArrivalDay) {
             cityText = '-';
           } else if ((!hasLay || lay === baseCity) && hasDutyTimes) {
-            cityText = baseCity;
+            /**
+             * This branch used to always set CITY = base (JFK). That duplicates the synthetic TRIP_END row and ignores Crewline
+             * “-” on non–trip-start duty days. Do not use DB `is_continuation` here — it is often unset; `rowType` is already
+             * TRIP_CONTINUATION / CARRY_OUT for every day after trip label.
+             */
+            cityText =
+              notOnPairingEnd && notSyntheticArrivalDay ? '-' : baseCity;
           } else if (!hasLay || lay === baseCity) {
             cityText = '-';
           } else {
             cityText = lay!;
+          }
+
+          if (String(dutyRow?.pairing_id) === 'J3H95') {
+            const layover_city = dutyRow?.layover_city;
+            console.log('[J3H95_CITY_DEBUG]', {
+              dateIso,
+              isCont: Boolean(dutyRow?.is_continuation),
+              hasLay: Boolean(layover_city),
+              dutyOff: dutyRow?.duty_off_time,
+              isMorning: isMorningDutyOff(dutyRow?.duty_off_time),
+              notPairingEnd: notOnPairingEnd,
+              notSynthetic: notSyntheticArrivalDay,
+              resultCity: cityText,
+            });
           }
         }
 
@@ -596,8 +693,10 @@ export function buildClassicRowsFromDuties(
         return;
       }
 
-      /** No duty: rest day “-” (Rule 1) or synthetic TRIP_END on final operate day (Rule 4). */
-      if (dateIso < opEnd) {
+      /** No duty: in-trip rest “-” only inside [firstDuty, enumerateEnd]; never for dates outside real trip span (off days stay absent). */
+      if (dateIso < firstDutyIso || dateIso > enumerateEnd) return;
+
+      if (dateIso < enumerateEnd) {
         let rowType: RowType = 'TRIP_CONTINUATION';
         if (monthLastForCarry != null && dateIso > monthLastForCarry) rowType = 'CARRY_OUT';
         rows.push({
@@ -609,11 +708,12 @@ export function buildClassicRowsFromDuties(
           layoverText: null,
           rowType,
           sourcePairingId: flicaPairingKey,
+          syntheticGapNoDuty: true,
         });
         return;
       }
 
-      if (dateIso === opEnd) {
+      if (dateIso === enumerateEnd) {
         rows.push({
           dateIso,
           pairingText: null,
@@ -631,7 +731,7 @@ export function buildClassicRowsFromDuties(
 
     if (
       syntheticArrivalCalendar != null &&
-      syntheticArrivalCalendar > opEnd &&
+      syntheticArrivalCalendar > enumerateEnd &&
       !dutyByIso.has(syntheticArrivalCalendar)
     ) {
       rows.push({
@@ -646,13 +746,9 @@ export function buildClassicRowsFromDuties(
       });
     }
 
-    let tripCalendarEndIso = opEnd;
-    if (syntheticArrivalCalendar != null && syntheticArrivalCalendar > tripCalendarEndIso)
-      tripCalendarEndIso = syntheticArrivalCalendar;
-
     tripCalendarByPairingId.set(String(flicaPairingKey).trim().toUpperCase(), {
-      startIso: opStart,
-      endIso: tripCalendarEndIso,
+      startIso: opStart!,
+      endIso: tripVisualEnd,
     });
   }
 
@@ -661,10 +757,6 @@ export function buildClassicRowsFromDuties(
   if (viewTag != null) {
     out = filterClassicRowsForTouchedMonth(out, tripCalendarByPairingId, pairings, viewTag.year, viewTag.month);
     out = partitionRowsForClassicViewMonth(out, viewTag.year, viewTag.month);
-  }
-  {
-    const dateKeys = out.map((r) => String(r.dateIso).trim().slice(0, 10));
-    console.log('[ROW_COUNT]', out.length, 'unique dates:', new Set(dateKeys).size);
   }
   return out;
 }
@@ -766,23 +858,6 @@ export async function fetchScheduleDutiesAndPairingsForMonth(
     const nextImportId = nextBatchPick?.[0]?.id ?? null;
     const tailPidList = [...tailFlicaUpper];
     const firstDayAfterMonth = addOneCalendarDayIso(end)!;
-    console.log('[CARRY_OUT_DEBUG]', {
-      tailPidList,
-      nextMonthKey,
-      nextImportId,
-      maxPairingEndBeyondView,
-      firstDayAfterMonth,
-      pairingsCount: pairingsMerged.length,
-      pairingsWithEndBeyond: pairingsMerged
-        .filter((p) => {
-          const en = pairingEndDateIso(p);
-          return en != null && en > end;
-        })
-        .map((p) => ({
-          id: p.pairing_id,
-          end: pairingEndDateIso(p),
-        })),
-    });
     if (nextImportId) {
       const { data: nextPairRows, error: npe } = await supabase
         .from('schedule_pairings')

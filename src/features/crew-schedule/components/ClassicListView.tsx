@@ -3,6 +3,7 @@ import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-nat
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 import {
   buildClassicRowsFromDuties,
+  classicRowIsBlankForEntryOverlay,
   fetchScheduleDutiesAndPairingsForMonth,
   type ClassicScheduleRow,
 } from '../buildClassicRows';
@@ -80,8 +81,8 @@ function viewMonthLastIso(year: number, month1to12: number): string {
   return `${year}-${m}-${String(lastDom).padStart(2, '0')}`;
 }
 
-/** One ISO per calendar day in the viewed month — string math only (no Date rollover bugs). */
-function enumerateMonthDates(year: number, month: number): string[] {
+/** All YYYY-MM-DD strings for the viewed calendar month — string math only (no Date rollover bugs). */
+function getAllDatesInMonth(year: number, month: number): string[] {
   const mNum = Number(month);
   if (!Number.isFinite(mNum) || mNum < 1 || mNum > 12) return [];
   const last = new Date(year, mNum, 0).getDate();
@@ -146,6 +147,61 @@ function findTripForDutyDay(trips: CrewScheduleTrip[], dateIso: string, sourcePa
   return null;
 }
 
+/** PTV blocks often have no `schedule_duties` rows — merge from trips when the duty grid is blank for that date. */
+function findPtvTripForDate(trips: CrewScheduleTrip[], dateIso: string): CrewScheduleTrip | null {
+  for (const t of trips) {
+    if (t.status !== 'ptv') continue;
+    if (dateIso >= t.startDate && dateIso <= t.endDate) return t;
+  }
+  return null;
+}
+
+function isDutyClassicBlank(classic: ClassicScheduleRow | undefined): boolean {
+  if (!classic) return true;
+  if (classic.rowType === 'EMPTY_DAY') return true;
+  return (
+    !String(classic.pairingText ?? '').trim() &&
+    !String(classic.reportText ?? '').trim() &&
+    !String(classic.cityText ?? '').trim() &&
+    !String(classic.dutyEndText ?? '').trim() &&
+    !String(classic.layoverText ?? '').trim()
+  );
+}
+
+function ptvToDayRow(dateIso: string, trip: CrewScheduleTrip, todayIso: string): DayRow {
+  const d = parseLocalNoon(dateIso);
+  const dayIdx = d.getDay();
+  const code = String(trip.pairingCode ?? '').trim() || 'PTV';
+  return {
+    id: `ptv:${dateIso}:${trip.id}`,
+    dateIso,
+    kind: 'ptv',
+    trip,
+    dayCode: DOW[dayIdx],
+    dayNum: d.getDate(),
+    isWeekend: dayIdx === 0 || dayIdx === 6,
+    pairingText: code,
+    reportText: '',
+    cityText: '',
+    dEndText: '',
+    layoverText: '',
+    wxText: '',
+    statusText: '',
+    reportMinutes: null,
+    releaseMinutes: null,
+    isToday: dateIso === todayIso,
+    groupedWithPrev: false,
+    groupedWithNext: false,
+  };
+}
+
+/** One calendar line: Layer-7 classic row (if any) + trip for navigation; grid order is duties-first, not trip-touched-days. */
+type ClassicDisplayItem = {
+  dateIso: string;
+  classic: ClassicScheduleRow | undefined;
+  trip: CrewScheduleTrip | null;
+};
+
 function classicToDayRow(dateIso: string, classic: ClassicScheduleRow | undefined, trip: CrewScheduleTrip | null, todayIso: string): DayRow {
   const d = parseLocalNoon(dateIso);
   const dayIdx = d.getDay();
@@ -157,8 +213,9 @@ function classicToDayRow(dateIso: string, classic: ClassicScheduleRow | undefine
       !String(classic.cityText ?? '').trim() &&
       !String(classic.dutyEndText ?? '').trim() &&
       !String(classic.layoverText ?? '').trim());
-  const kind: RowKind = isBlank ? 'empty' : 'trip';
-  const wxText = isBlank ? '' : '☀︎';
+  const isPtvTrip = trip?.status === 'ptv';
+  const kind: RowKind = isPtvTrip ? 'ptv' : isBlank ? 'empty' : 'trip';
+  const wxText = isBlank || isPtvTrip ? '' : '☀︎';
   return {
     id: `duty:${dateIso}:${classic?.sourcePairingId ?? 'none'}`,
     dateIso,
@@ -182,52 +239,22 @@ function classicToDayRow(dateIso: string, classic: ClassicScheduleRow | undefine
   };
 }
 
-/**
- * Classic grid from `schedule_duties` only: carry-in (prior-month ISOs from Layer-7), every in-month day (blank if no duty),
- * carry-out after month end, then navigation matched from `trips` by date + pairing id.
- */
-function buildDutyFirstDisplayRows(
-  classicRows: ClassicScheduleRow[],
-  trips: CrewScheduleTrip[],
-  viewYear: number,
-  viewMonth: number,
-): DayRow[] {
-  const byDate = classicRowsByDate(classicRows);
-  const viewMonthStart = `${viewYear}-${String(viewMonth).padStart(2, '0')}-01`;
-  const monthLastIso = viewMonthLastIso(viewYear, viewMonth);
-  const viewYm = `${viewYear}-${String(viewMonth).padStart(2, '0')}`;
-
-  const carryInDates = [...byDate.keys()].filter((d) => d < viewMonthStart && d.slice(0, 7) < viewYm);
-  const inMonthDates = enumerateMonthDates(viewYear, viewMonth);
-  const carryOutDates = [...byDate.keys()].filter((d) => d > monthLastIso);
-
-  const orderedSet = new Set<string>([...carryInDates, ...inMonthDates, ...carryOutDates, ...byDate.keys()]);
-  const uniqueOrdered = [...orderedSet].sort((a, b) => a.localeCompare(b));
-
-  const seen = new Set<string>();
-  const orderedDeduped = uniqueOrdered.filter((d) => {
-    const k = d.slice(0, 10);
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-
-  const mergedTrips = trips.map((t) => {
-    const merged = mergeLayoverOntoLegDates(t);
-    return merged ? { ...t, layoverByDate: merged } : t;
-  });
-  const todayIso = dateToIsoDateLocal(new Date());
-  const out: DayRow[] = [];
-  for (const dateIso of orderedDeduped) {
-    const classic = byDate.get(dateIso);
-    const trip = classic ? findTripForDutyDay(mergedTrips, dateIso, classic.sourcePairingId) : null;
-    out.push(classicToDayRow(dateIso, classic, trip, todayIso));
+function displayItemToDayRow(item: ClassicDisplayItem, mergedTrips: CrewScheduleTrip[], todayIso: string): DayRow {
+  const { dateIso, classic } = item;
+  let trip = item.trip;
+  if (classic && classic.sourcePairingId) {
+    const byPairing = findTripForDutyDay(mergedTrips, dateIso, classic.sourcePairingId);
+    if (byPairing) trip = byPairing;
   }
-  return attachDayRowGrouping(out);
+  if (classicRowIsBlankForEntryOverlay(classic)) {
+    const ptv = findPtvTripForDate(mergedTrips, dateIso);
+    if (ptv) return ptvToDayRow(dateIso, ptv, todayIso);
+  }
+  return classicToDayRow(dateIso, classic, trip, todayIso);
 }
 
 function isTripLikeKind(kind: RowKind): boolean {
-  return kind === 'trip' || kind === 'continuation' || kind === 'deadhead';
+  return kind === 'trip' || kind === 'continuation' || kind === 'deadhead' || kind === 'ptv';
 }
 
 function attachDayRowGrouping(rows: DayRow[]): DayRow[] {
@@ -291,6 +318,7 @@ const ScheduleRow = memo(function ScheduleRow({
   onLongPressTrip?: (trip: CrewScheduleTrip) => void;
 }) {
   const isEmpty = row.kind === 'empty';
+  const isPtv = row.kind === 'ptv';
   const dayInitial = row.dayCode.slice(0, 1);
   const dayNumber = String(row.dayNum).padStart(2, '0');
 
@@ -310,8 +338,8 @@ const ScheduleRow = memo(function ScheduleRow({
     row.groupedWithPrev && styles.tripChainRow,
   ];
 
-  const dataPlaceholder = isEmpty;
-  const wxMuted = isEmpty;
+  const dataPlaceholder = isEmpty || isPtv;
+  const wxMuted = isEmpty || isPtv;
 
   const interactive = !!row.trip && !!onPressTrip;
 
@@ -329,7 +357,12 @@ const ScheduleRow = memo(function ScheduleRow({
       </View>
       <View style={[styles.rowCell, styles.cellPairing]}>
         <Text
-          style={[styles.cellText, styles.assignmentCode, dataPlaceholder && styles.routePlaceholder]}
+          style={[
+            styles.cellText,
+            styles.assignmentCode,
+            isPtv && styles.ptoCode,
+            !isPtv && dataPlaceholder && styles.routePlaceholder,
+          ]}
           numberOfLines={1}
           ellipsizeMode="tail"
         >
@@ -471,10 +504,66 @@ export default function ClassicListView({
     };
   }, [year, month, refreshKey]);
 
-  const rows = useMemo(
-    () => buildDutyFirstDisplayRows(classicRows, trips, year, month),
-    [classicRows, trips, year, month],
+  const classicByDate = useMemo(() => classicRowsByDate(classicRows), [classicRows]);
+
+  const mergedTrips = useMemo(
+    () =>
+      trips.map((t) => {
+        const merged = mergeLayoverOntoLegDates(t);
+        return merged ? { ...t, layoverByDate: merged } : t;
+      }),
+    [trips],
   );
+
+  const displayRows = useMemo((): ClassicDisplayItem[] => {
+    const monthLastIso = viewMonthLastIso(year, month);
+    const viewMonthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+    const viewYm = `${year}-${String(month).padStart(2, '0')}`;
+    const monthDates = getAllDatesInMonth(year, month);
+    const carryOutRows = classicRows.filter((r) => {
+      const d = r.dateIso.slice(0, 10);
+      return d > monthLastIso;
+    });
+
+    const result: ClassicDisplayItem[] = [];
+    const seen = new Set<string>();
+
+    const tripForDate = (dateIso: string): CrewScheduleTrip | null =>
+      mergedTrips.find((t) => dateIso >= t.startDate && dateIso <= t.endDate) ?? null;
+
+    const carryInDates = [...classicByDate.keys()]
+      .filter((d) => d < viewMonthStart && d.slice(0, 7) < viewYm)
+      .sort((a, b) => a.localeCompare(b));
+
+    for (const dateIso of carryInDates) {
+      if (seen.has(dateIso)) continue;
+      seen.add(dateIso);
+      const classic = classicByDate.get(dateIso);
+      result.push({ dateIso, classic, trip: tripForDate(dateIso) });
+    }
+
+    for (const dateIso of monthDates) {
+      if (seen.has(dateIso)) continue;
+      seen.add(dateIso);
+      const classic = classicByDate.get(dateIso);
+      result.push({ dateIso, classic, trip: tripForDate(dateIso) });
+    }
+
+    for (const r of [...carryOutRows].sort((a, b) => a.dateIso.localeCompare(b.dateIso))) {
+      const dateIso = r.dateIso.slice(0, 10);
+      if (seen.has(dateIso)) continue;
+      seen.add(dateIso);
+      result.push({ dateIso, classic: r, trip: tripForDate(dateIso) });
+    }
+
+    return result;
+  }, [classicRows, classicByDate, mergedTrips, year, month]);
+
+  const rows = useMemo(() => {
+    const todayIso = dateToIsoDateLocal(new Date());
+    return attachDayRowGrouping(displayRows.map((item) => displayItemToDayRow(item, mergedTrips, todayIso)));
+  }, [displayRows, mergedTrips]);
+
   const summary = useMemo(() => buildSummaryStrip(monthMetrics ?? null), [monthMetrics]);
 
   if (!trips.length && !classicRows.length) {
