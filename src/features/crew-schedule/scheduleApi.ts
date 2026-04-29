@@ -760,16 +760,29 @@ export type ScheduleTripMetadataRow = {
 
 export async function fetchScheduleMonthMetrics(year: number, month: number): Promise<ScheduleMonthMetrics | null> {
   const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+  const { data: au, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !au.user) return null;
   const { data, error } = await supabase
     .from('schedule_month_metrics')
     .select('*')
     .eq('month_key', monthKey)
+    .eq('user_id', au.user.id)
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
+
+  const row = data as Record<string, unknown>;
+  const numOrNull = (v: unknown): number | null => {
+    if (v == null) return null;
+    const n = typeof v === 'number' ? v : parseFloat(String(v));
+    return Number.isFinite(n) ? n : null;
+  };
+  const monthlyTafb =
+    numOrNull(row.monthly_tafb_hours) ?? numOrNull(row.tafb_hours_month);
+
   return {
-    monthKey: data.month_key,
-    monthlyTafbHours: data.monthly_tafb_hours != null ? Number(data.monthly_tafb_hours) : null,
+    monthKey: data.month_key as string,
+    monthlyTafbHours: monthlyTafb,
     blockHours: data.block_hours != null ? Number(data.block_hours) : null,
     creditHours: data.credit_hours != null ? Number(data.credit_hours) : null,
     ytdCreditHours: data.ytd_credit_hours != null ? Number(data.ytd_credit_hours) : null,
