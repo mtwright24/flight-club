@@ -3,12 +3,12 @@ import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-nat
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 import {
   buildClassicRowsFromDuties,
-  classicRowIsBlankForEntryOverlay,
   fetchScheduleDutiesAndPairingsForMonth,
   type ClassicScheduleRow,
 } from '../buildClassicRows';
 import { mergeLayoverOntoLegDates } from '../scheduleTime';
 import { scheduleTheme as T } from '../scheduleTheme';
+import { isFlicaNonFlyingActivityId } from '../../../services/flicaScheduleHtmlParser';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
@@ -156,6 +156,48 @@ function findPtvTripForDate(trips: CrewScheduleTrip[], dateIso: string): CrewSch
   return null;
 }
 
+/** City tokens that are placeholders in Classic — must not block PTV overlay (Layer-7 dash/continuation). */
+function isRoutePlaceholderCity(cityRaw: string | null | undefined): boolean {
+  const t = String(cityRaw ?? '').trim();
+  return t === '' || t === '-' || t === '—' || t === '–';
+}
+
+/**
+ * When a PTV trip exists for this date, use `ptvToDayRow` unless the winning classic row is clearly another
+ * pairing's flying duty (real pairing label, report/D-OFF/layover, or route city). Does not read buildClassicRows rules.
+ */
+function classicRowBlocksPtvTripOverlay(classic: ClassicScheduleRow | undefined): boolean {
+  if (!classic) return false;
+  if (isFlicaNonFlyingActivityId(String(classic.sourcePairingId ?? ''))) return false;
+
+  const pairing = String(classic.pairingText ?? '').trim();
+  if (pairing && !isFlicaNonFlyingActivityId(pairing)) return true;
+
+  if (String(classic.reportText ?? '').trim()) return true;
+  if (String(classic.dutyEndText ?? '').trim()) return true;
+  if (String(classic.layoverText ?? '').trim()) return true;
+
+  if (!isRoutePlaceholderCity(classic.cityText)) return true;
+
+  return false;
+}
+
+function tripForDisplayDate(
+  mergedTrips: CrewScheduleTrip[],
+  dateIso: string,
+  classic: ClassicScheduleRow | undefined,
+): CrewScheduleTrip | null {
+  if (classic?.sourcePairingId) {
+    const byPairing = findTripForDutyDay(mergedTrips, dateIso, classic.sourcePairingId);
+    if (byPairing) return byPairing;
+  }
+  const ptv = findPtvTripForDate(mergedTrips, dateIso);
+  if (ptv && !classicRowBlocksPtvTripOverlay(classic)) return ptv;
+  const overlap = mergedTrips.filter((t) => dateIso >= t.startDate && dateIso <= t.endDate);
+  if (!overlap.length) return null;
+  return overlap.find((t) => t.status !== 'ptv') ?? overlap[0]!;
+}
+
 function isDutyClassicBlank(classic: ClassicScheduleRow | undefined): boolean {
   if (!classic) return true;
   if (classic.rowType === 'EMPTY_DAY') return true;
@@ -239,18 +281,128 @@ function classicToDayRow(dateIso: string, classic: ClassicScheduleRow | undefine
   };
 }
 
+/** TEMP: diagnose PTV Classic row — remove when PTV pipeline verified. */
+const PTV_DEBUG_DATE_ISO = '2026-05-23';
+
+function logClassicPtvDebug20260523(params: {
+  dateIso: string;
+  mergedTrips: CrewScheduleTrip[];
+  classic: ClassicScheduleRow | undefined;
+  itemTrip: CrewScheduleTrip | null;
+  finalRow: DayRow;
+}) {
+  if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+  const { dateIso, mergedTrips, classic, itemTrip, finalRow } = params;
+  if (dateIso !== PTV_DEBUG_DATE_ISO) return;
+
+  const overlapping = mergedTrips.filter((t) => dateIso >= t.startDate && dateIso <= t.endDate);
+  const overlapSummaries = overlapping.map((t) => ({
+    id: t.id,
+    pairingCode: t.pairingCode ?? '',
+    status: t.status,
+    startDate: t.startDate,
+    endDate: t.endDate,
+  }));
+
+  for (const t of overlapping) {
+    const pc = String(t.pairingCode ?? '')
+      .trim()
+      .toUpperCase();
+    if (pc === 'PTV' && t.status !== 'ptv') {
+      console.warn('[Classic PTV DEBUG] pairingCode is PTV but status is not `ptv`:', t.status, {
+        id: t.id,
+        startDate: t.startDate,
+        endDate: t.endDate,
+      });
+    }
+  }
+
+  const ptvFromFinder = findPtvTripForDate(mergedTrips, dateIso);
+  const blocksOverlay = classicRowBlocksPtvTripOverlay(classic);
+  const wouldPtvOverlay = Boolean(ptvFromFinder) && !blocksOverlay;
+
+  console.log('[Classic PTV DEBUG] date', dateIso);
+  console.log('[Classic PTV DEBUG] 1) mergedTrips overlapping this date:', JSON.stringify(overlapSummaries));
+  console.log(
+    '[Classic PTV DEBUG] 2) findPtvTripForDate (status must be exactly "ptv"):',
+    ptvFromFinder
+      ? JSON.stringify({
+          id: ptvFromFinder.id,
+          pairingCode: ptvFromFinder.pairingCode,
+          status: ptvFromFinder.status,
+          startDate: ptvFromFinder.startDate,
+          endDate: ptvFromFinder.endDate,
+        })
+      : 'null',
+  );
+  console.log(
+    '[Classic PTV DEBUG] 3) classic row (winner for date):',
+    classic == null
+      ? 'undefined'
+      : JSON.stringify({
+          dateIso: classic.dateIso,
+          rowType: classic.rowType,
+          sourcePairingId: classic.sourcePairingId,
+          pairingText: classic.pairingText,
+          reportText: classic.reportText,
+          cityText: classic.cityText,
+          dutyEndText: classic.dutyEndText,
+          layoverText: classic.layoverText,
+          syntheticGapNoDuty: classic.syntheticGapNoDuty ?? false,
+        }),
+  );
+  console.log('[Classic PTV DEBUG] 4) classicRowBlocksPtvTripOverlay:', blocksOverlay);
+  console.log(
+    '[Classic PTV DEBUG] 5) item.trip (from tripForDisplayDate, navigation target):',
+    itemTrip
+      ? JSON.stringify({
+          id: itemTrip.id,
+          pairingCode: itemTrip.pairingCode,
+          status: itemTrip.status,
+          startDate: itemTrip.startDate,
+          endDate: itemTrip.endDate,
+        })
+      : 'null',
+  );
+  console.log(
+    '[Classic PTV DEBUG] 6) final DayRow:',
+    JSON.stringify({
+      id: finalRow.id,
+      kind: finalRow.kind,
+      pairingText: finalRow.pairingText,
+      tripAttached: finalRow.trip
+        ? {
+            id: finalRow.trip.id,
+            pairingCode: finalRow.trip.pairingCode,
+            status: finalRow.trip.status,
+          }
+        : null,
+    }),
+  );
+  console.log('[Classic PTV DEBUG] ptvToDayRow called:', wouldPtvOverlay && finalRow.kind === 'ptv');
+  if (!wouldPtvOverlay) {
+    console.log(
+      '[Classic PTV DEBUG] ptvToDayRow NOT used because:',
+      !ptvFromFinder
+        ? 'findPtvTripForDate is null (no trip with status==="ptv" spanning date, or dates exclude this day).'
+        : blocksOverlay
+          ? 'classicRowBlocksPtvTripOverlay===true (classic looks like another pairing flying duty).'
+          : 'unexpected',
+    );
+  }
+}
+
 function displayItemToDayRow(item: ClassicDisplayItem, mergedTrips: CrewScheduleTrip[], todayIso: string): DayRow {
-  const { dateIso, classic } = item;
-  let trip = item.trip;
-  if (classic && classic.sourcePairingId) {
-    const byPairing = findTripForDutyDay(mergedTrips, dateIso, classic.sourcePairingId);
-    if (byPairing) trip = byPairing;
+  const { dateIso, classic, trip } = item;
+  const ptv = findPtvTripForDate(mergedTrips, dateIso);
+  let finalRow: DayRow;
+  if (ptv && !classicRowBlocksPtvTripOverlay(classic)) {
+    finalRow = ptvToDayRow(dateIso, ptv, todayIso);
+  } else {
+    finalRow = classicToDayRow(dateIso, classic, trip, todayIso);
   }
-  if (classicRowIsBlankForEntryOverlay(classic)) {
-    const ptv = findPtvTripForDate(mergedTrips, dateIso);
-    if (ptv) return ptvToDayRow(dateIso, ptv, todayIso);
-  }
-  return classicToDayRow(dateIso, classic, trip, todayIso);
+  logClassicPtvDebug20260523({ dateIso, mergedTrips, classic, itemTrip: trip, finalRow: finalRow });
+  return finalRow;
 }
 
 function isTripLikeKind(kind: RowKind): boolean {
@@ -528,9 +680,6 @@ export default function ClassicListView({
     const result: ClassicDisplayItem[] = [];
     const seen = new Set<string>();
 
-    const tripForDate = (dateIso: string): CrewScheduleTrip | null =>
-      mergedTrips.find((t) => dateIso >= t.startDate && dateIso <= t.endDate) ?? null;
-
     const carryInDates = [...classicByDate.keys()]
       .filter((d) => d < viewMonthStart && d.slice(0, 7) < viewYm)
       .sort((a, b) => a.localeCompare(b));
@@ -539,21 +688,21 @@ export default function ClassicListView({
       if (seen.has(dateIso)) continue;
       seen.add(dateIso);
       const classic = classicByDate.get(dateIso);
-      result.push({ dateIso, classic, trip: tripForDate(dateIso) });
+      result.push({ dateIso, classic, trip: tripForDisplayDate(mergedTrips, dateIso, classic) });
     }
 
     for (const dateIso of monthDates) {
       if (seen.has(dateIso)) continue;
       seen.add(dateIso);
       const classic = classicByDate.get(dateIso);
-      result.push({ dateIso, classic, trip: tripForDate(dateIso) });
+      result.push({ dateIso, classic, trip: tripForDisplayDate(mergedTrips, dateIso, classic) });
     }
 
     for (const r of [...carryOutRows].sort((a, b) => a.dateIso.localeCompare(b.dateIso))) {
       const dateIso = r.dateIso.slice(0, 10);
       if (seen.has(dateIso)) continue;
       seen.add(dateIso);
-      result.push({ dateIso, classic: r, trip: tripForDate(dateIso) });
+      result.push({ dateIso, classic: r, trip: tripForDisplayDate(mergedTrips, dateIso, r) });
     }
 
     return result;

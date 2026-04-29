@@ -30,6 +30,7 @@ import {
 } from '../scheduleMonthCache';
 import { supabase } from '../../../lib/supabaseClient';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
+import { isFlicaNonFlyingActivityId } from '../../../services/flicaScheduleHtmlParser';
 
 const inflight = new Map<string, Promise<ScheduleMonthCached>>();
 
@@ -71,7 +72,13 @@ async function fetchScheduleMonthData(year: number, month: number): Promise<Sche
         )
         .filter(
           (c) =>
-            c && c !== 'PTO' && c !== 'PTV' && c !== 'CONT' && c !== '—' && c !== 'RSV' && c !== 'RDO',
+            Boolean(
+              c &&
+                c !== 'CONT' &&
+                c !== '—' &&
+                c !== 'RDO' &&
+                !isFlicaNonFlyingActivityId(c),
+            ),
         ),
     ),
   ];

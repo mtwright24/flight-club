@@ -5,6 +5,7 @@
 import { supabase } from '../../lib/supabaseClient';
 import { addIsoDays } from './ledgerContext';
 import type { SchedulePairingRow } from './jetblueFlicaImport';
+import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
 import {
   buildPairingCalendarBlockFromDb,
   calendarMonthBoundsIso,
@@ -175,7 +176,7 @@ export async function fetchPairingCalendarBlocksByPairingIdsForUserMonth(
     ...new Set(
       pairingCodes
         .map((c) => String(c ?? '').trim().toUpperCase())
-        .filter((c) => c && c !== 'PTO' && c !== 'PTV' && c !== 'CONT' && c !== '—' && c !== 'RSV'),
+        .filter((c) => Boolean(c && c !== 'CONT' && c !== '—' && !isFlicaNonFlyingActivityId(c))),
     ),
   ];
   if (!codes.length) return [];

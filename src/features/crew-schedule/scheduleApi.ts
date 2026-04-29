@@ -16,6 +16,7 @@ import {
   type SchedulePairingLegLite,
 } from './buildClassicRows';
 import { buildCrewScheduleTripsFromNormalizedPack } from './tripMapper';
+import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
 
 export type ScheduleEntryRow = {
   id: string;
@@ -187,7 +188,7 @@ export async function fetchPairingDutiesForScheduleEntries(
     .map((r) => String(r.pairing_code ?? '').trim())
     .find((p) => {
       const u = p.toUpperCase();
-      return u && u !== 'CONT' && u !== '—' && u !== 'PTO' && u !== 'PTV' && u !== 'RSV';
+      return u && u !== 'CONT' && u !== '—' && !isFlicaNonFlyingActivityId(u);
     });
   if (!code) return null;
   const norm = code.toUpperCase();

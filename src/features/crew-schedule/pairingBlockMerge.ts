@@ -7,6 +7,7 @@
 import { addIsoDays } from './ledgerContext';
 import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
 import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus } from './types';
+import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
 
 function calendarSpanDays(startIso: string, endIso: string): number {
   const a = new Date(`${startIso}T12:00:00`);
@@ -16,7 +17,7 @@ function calendarSpanDays(startIso: string, endIso: string): number {
 
 function isRealPairing(p: string): boolean {
   const u = p.trim().toUpperCase();
-  return u.length > 0 && u !== 'CONT' && u !== '—' && u !== 'RDO' && u !== 'PTV';
+  return u.length > 0 && u !== 'CONT' && u !== '—' && u !== 'RDO' && !isFlicaNonFlyingActivityId(u);
 }
 
 function isMergeableDuty(t: CrewScheduleTrip): boolean {

@@ -12,6 +12,7 @@ import { mapLegRowToDuty, type SchedulePairingDutyRow } from './jetblueFlicaImpo
 import type { SchedulePairingRow } from './jetblueFlicaImport';
 import { formatLayoverColumnDisplay } from './scheduleTime';
 import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
+import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
 
 function compactStation(raw: string | null | undefined): string {
   const v = String(raw ?? '').trim();
@@ -648,7 +649,7 @@ export function shouldShowPairingIdInViewedMonth(
   mStart: string,
   mEnd: string,
 ): boolean {
-  if (String(trip.pairingCode || '').toUpperCase() === 'PTV') return true;
+  if (isFlicaNonFlyingActivityId(String(trip.pairingCode || ''))) return true;
   const first = earliestPairingDateInViewedMonth(trip, mStart, mEnd);
   if (first == null) return false;
   return dateIso === first;

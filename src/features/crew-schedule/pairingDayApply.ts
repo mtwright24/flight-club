@@ -5,6 +5,7 @@ import {
   enumerateDatesInclusive,
   normPairingCode,
 } from './pairingDayModel';
+import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
 
 /**
  * Smart list / trip preview line: one token per calendar day from ledger city column (BOS – JFK), not
@@ -44,7 +45,7 @@ export function attachCanonicalPairingDaysToTrips(
   if (!blocks.length) return trips;
   return trips.map((t) => {
     const code = normPairingCode(t.pairingCode);
-    if (!code || code === '—' || code === 'PTV' || code === 'PTO' || code === 'CONT') return t;
+    if (!code || code === '—' || code === 'CONT' || isFlicaNonFlyingActivityId(code)) return t;
     const block = blocks.find(
       (b) =>
         normPairingCode(b.pairingCode) === code &&

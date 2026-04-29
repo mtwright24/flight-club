@@ -3,6 +3,7 @@
  * Does not replace existing Classic UI; used for verification logging first.
  */
 import { supabase } from '../../lib/supabaseClient';
+import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
 
 export type RowType =
   | 'EMPTY_DAY'
@@ -501,6 +502,23 @@ function partitionRowsForClassicViewMonth(
 }
 
 /**
+ * Crewline non-flying row: `pairing_id` is either a plain activity code (`PTV`) or a calendar-grid key (`PTV·cal·…`).
+ * When set, Classic **city** column shows this code — never base-return / synthetic arrival airport.
+ */
+function classicNonFlyingActivityDisplayCode(pairingId: string | null | undefined): string | null {
+  const raw = String(pairingId ?? '').trim();
+  if (!raw) return null;
+  if (isFlicaNonFlyingActivityId(raw)) return raw.toUpperCase();
+  const u = raw.toUpperCase();
+  const i = u.indexOf('·CAL·');
+  if (i > 0) {
+    const prefix = raw.slice(0, i).trim();
+    if (isFlicaNonFlyingActivityId(prefix)) return prefix.toUpperCase();
+  }
+  return null;
+}
+
+/**
  * Group duties by trip (schedule_pairings), sort by duty_date, fill every calendar operate day.
  */
 export function buildClassicRowsFromDuties(
@@ -542,6 +560,8 @@ export function buildClassicRowsFromDuties(
       (pairingEffective.base_code && String(pairingEffective.base_code).trim()) ||
       (pairingEffective as { baseAirport?: string }).baseAirport?.trim() ||
       'JFK';
+
+    const activityCityCode = classicNonFlyingActivityDisplayCode(flicaPairingKey);
 
     let opStart = pairingStartDateIso(pairingEffective);
     let opEnd = pairingEndDateIso(pairingEffective);
@@ -674,6 +694,8 @@ export function buildClassicRowsFromDuties(
           }
         }
 
+        if (activityCityCode && cityText === baseCity) cityText = '-';
+
         const layoverRaw =
           dutyRow.layover_time != null && String(dutyRow.layover_time).trim() ? String(dutyRow.layover_time).trim() : null;
         const layoverText =
@@ -681,7 +703,11 @@ export function buildClassicRowsFromDuties(
 
         rows.push({
           dateIso,
-          pairingText: isLabelDay ? flicaPairingKey || null : null,
+          pairingText: activityCityCode
+            ? activityCityCode
+            : isLabelDay
+              ? flicaPairingKey || null
+              : null,
           reportText: dutyRow.report_time != null && String(dutyRow.report_time).trim() ? dutyRow.report_time : null,
           cityText,
           dutyEndText:
@@ -701,7 +727,7 @@ export function buildClassicRowsFromDuties(
         if (monthLastForCarry != null && dateIso > monthLastForCarry) rowType = 'CARRY_OUT';
         rows.push({
           dateIso,
-          pairingText: null,
+          pairingText: activityCityCode ?? null,
           reportText: null,
           cityText: '-',
           dutyEndText: null,
@@ -716,9 +742,9 @@ export function buildClassicRowsFromDuties(
       if (dateIso === enumerateEnd) {
         rows.push({
           dateIso,
-          pairingText: null,
+          pairingText: activityCityCode ?? null,
           reportText: null,
-          cityText: baseCity,
+          cityText: activityCityCode ? '-' : baseCity,
           dutyEndText: null,
           layoverText: null,
           rowType: 'TRIP_END',
@@ -736,9 +762,9 @@ export function buildClassicRowsFromDuties(
     ) {
       rows.push({
         dateIso: syntheticArrivalCalendar,
-        pairingText: null,
+        pairingText: activityCityCode ?? null,
         reportText: null,
-        cityText: baseCity,
+        cityText: activityCityCode ? '-' : baseCity,
         dutyEndText: null,
         layoverText: null,
         rowType: 'TRIP_END',

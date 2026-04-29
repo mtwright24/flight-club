@@ -7,16 +7,18 @@ import type { ScheduleEntryRow } from './scheduleApi';
 import type { ScheduleDuty, SchedulePairing, SchedulePairingLegLite } from './buildClassicRows';
 import { pairingOverlapsCalendarMonth } from './buildClassicRows';
 import { isOvernightArrivalToPairingBase } from './b6CrewlineOvernightBase';
+import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
 
 function statusFromCode(code: string | null | undefined): ScheduleDutyStatus {
   const u = String(code ?? '').toUpperCase();
   if (u === 'OFF') return 'off';
-  if (u === 'PTO') return 'pto';
-  /** Some sources put PTV in status; pairing_code also used (see entryGroupToTrip). */
-  if (u === 'PTV') return 'ptv';
+  if (u === 'PTO' || u === 'UTO') return 'pto';
+  if (u === 'PTV' || u === 'VAC') return 'ptv';
   if (u === 'RSV') return 'rsv';
   if (u === 'DH') return 'deadhead';
   if (u === 'CONT') return 'continuation';
+  if (u === 'TRAINING' || u === 'RECURRENT') return 'training';
+  if (u === 'FMLA' || u === 'SICK' || u === 'JURY') return 'other';
   if (u === 'BLANK' || u === 'UNK') return 'other';
   return 'flying';
 }
@@ -105,7 +107,7 @@ function legsFromRow(day: ScheduleEntryRow): CrewScheduleLeg[] {
   if (st === 'continuation') return [];
 
   const pairing = String(day.pairing_code ?? '').toUpperCase();
-  if (pairing === 'PTV' || st === 'off' || st === 'pto' || st === 'ptv') return [];
+  if (isFlicaNonFlyingActivityId(pairing) || st === 'off' || st === 'pto' || st === 'ptv') return [];
 
   const segs = parseRouteSegmentsFromCity(day.city);
   if (!segs.length) {
@@ -191,7 +193,10 @@ function normPairingCode(p: string | undefined): string {
 /** Same real pairing line as ledger (not CONT / placeholder). */
 function isCarryMergePairing(p: string): boolean {
   const u = p.trim().toUpperCase();
-  return u.length > 0 && u !== 'CONT' && u !== '—' && u !== 'RDO' && u !== 'PTV' && u !== 'PTO' && u !== 'RSV';
+  if (u.length === 0 || u === 'CONT' || u === '—' || u === 'RDO' || isFlicaNonFlyingActivityId(u)) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -260,12 +265,19 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
   const m = Number(first.month_key.slice(5, 7));
 
   const pairingCode = firstNonContPairing(days);
-  /**
-   * Paid time vacation (PTV) is indicated by `pairing_code`; FLICA often still puts `PTO` in status for those rows.
-   * Prefer pairing so PTV ≠ generic PTO (paid time off).
-   */
+  const pc = normPairingCode(pairingCode);
   const tripStatus: ScheduleDutyStatus =
-    normPairingCode(pairingCode) === 'PTV' ? 'ptv' : statusFromCode(first.status_code);
+    pc === 'PTV' || pc === 'VAC'
+      ? 'ptv'
+      : pc === 'PTO' || pc === 'UTO'
+        ? 'pto'
+        : pc === 'RSV'
+          ? 'rsv'
+          : pc === 'TRAINING' || pc === 'RECURRENT'
+            ? 'training'
+            : pc === 'FMLA' || pc === 'SICK' || pc === 'JURY'
+              ? 'other'
+              : statusFromCode(first.status_code);
 
   const legs: CrewScheduleLeg[] = [];
   for (const d of days) {
@@ -394,7 +406,41 @@ export function buildCrewScheduleTripsFromNormalizedPack(
 
     const tripDuties = dutyByPairing.get(code) ?? [];
     const tripLegsRaw = pairingLegs.filter((l) => l.pairing_id === pairUuid);
-    if (!tripDuties.length && !tripLegsRaw.length) continue;
+    if (!tripDuties.length && !tripLegsRaw.length) {
+      if (!isFlicaNonFlyingActivityId(code)) continue;
+      const opS = isoDate10(pairing.operate_start_date ?? pairing.pairing_start_date);
+      const opE = isoDate10(pairing.operate_end_date ?? pairing.pairing_end_date);
+      if (!opS) continue;
+      const zlStart = opS;
+      const zlEnd = opE && opE >= opS ? opE : opS;
+      const pcNl = normPairingCode(code);
+      const zlStatus: ScheduleDutyStatus =
+        pcNl === 'PTV' || pcNl === 'VAC'
+          ? 'ptv'
+          : pcNl === 'PTO' || pcNl === 'UTO'
+            ? 'pto'
+            : pcNl === 'RSV'
+              ? 'rsv'
+              : pcNl === 'TRAINING' || pcNl === 'RECURRENT'
+                ? 'training'
+                : pcNl === 'FMLA' || pcNl === 'SICK' || pcNl === 'JURY'
+                  ? 'other'
+                  : 'other';
+      out.push({
+        id: String(pairUuid),
+        pairingCode: code,
+        base: pairing.base_code ? String(pairing.base_code).trim() : 'JFK',
+        month: viewMonth,
+        year: viewYear,
+        startDate: zlStart,
+        endDate: zlEnd,
+        dutyDays: calendarSpanDays(zlStart, zlEnd),
+        status: zlStatus,
+        routeSummary: code,
+        legs: [],
+      });
+      continue;
+    }
 
     const tripLegs = [...tripLegsRaw].sort((a, b) => {
       const da = String(a.duty_date ?? '');
