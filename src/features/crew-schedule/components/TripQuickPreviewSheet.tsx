@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -90,19 +90,24 @@ export default function TripQuickPreviewSheet({
   const insets = useSafeAreaInsets();
   const { height: winH } = useWindowDimensions();
   const [enrichedTrip, setEnrichedTrip] = useState<CrewScheduleTrip | null>(null);
+  const previewTargetTripIdRef = useRef<string>('');
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!visible) {
+      previewTargetTripIdRef.current = '';
+      setEnrichedTrip(null);
+      return;
+    }
+    previewTargetTripIdRef.current = trip?.id ?? '';
     setEnrichedTrip(null);
-  }, [trip?.id]);
-
-  useEffect(() => {
-    if (!visible) setEnrichedTrip(null);
-  }, [visible]);
+  }, [visible, trip?.id]);
 
   useEffect(() => {
     if (!visible || !trip || !quickPreviewTripIsEnrichable(trip)) {
       return;
     }
+    const targetTripId = trip.id;
+    const targetPairing = String(trip.pairingCode ?? '').trim().toUpperCase();
     let cancel = false;
     (async () => {
       const resolved = await resolveSchedulePairingIdForQuickPreview(trip, pairingUuid);
@@ -121,8 +126,15 @@ export default function TripQuickPreviewSheet({
           fetchTripMetadataForGroup(trip.id).catch(() => null),
         ]);
         if (cancel || !fetched) return;
+        if (
+          previewTargetTripIdRef.current !== targetTripId ||
+          String(trip.pairingCode ?? '').trim().toUpperCase() !== targetPairing
+        ) {
+          return;
+        }
         const withMeta = mergeTripWithMetadataRow(fetched, meta);
         const merged = mergeEnrichedPreviewTrip(withMeta, trip);
+        if (previewTargetTripIdRef.current !== targetTripId) return;
         setEnrichedTrip(merged);
         if (typeof __DEV__ !== 'undefined' && __DEV__ && devLogPreviewPairing(trip)) {
           console.log('[quick-preview enrich]', {
@@ -146,7 +158,18 @@ export default function TripQuickPreviewSheet({
     };
   }, [visible, trip, pairingUuid]);
 
-  const displayTrip = enrichedTrip ?? trip ?? null;
+  const displayTrip = useMemo((): CrewScheduleTrip | null => {
+    if (!trip) return null;
+    if (
+      enrichedTrip &&
+      enrichedTrip.id === trip.id &&
+      String(enrichedTrip.pairingCode ?? '').trim().toUpperCase() ===
+        String(trip.pairingCode ?? '').trim().toUpperCase()
+    ) {
+      return enrichedTrip;
+    }
+    return trip;
+  }, [trip, enrichedTrip]);
   const vm = useMemo(() => (displayTrip ? buildTripDetailViewModel(displayTrip) : null), [displayTrip]);
 
   const statTiles: TripStatTile[] = useMemo(() => (vm ? vm.statTiles : []), [vm]);

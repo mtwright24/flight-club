@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 import {
@@ -648,6 +648,7 @@ export default function ClassicListView({
 }: Props) {
   const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
   const [classicRows, setClassicRows] = useState<ClassicScheduleRow[]>([]);
+  const classicFetchGen = useRef(0);
   const onLongPressTrip = useCallback((t: CrewScheduleTrip) => setPreviewTrip(t), []);
   const closePreview = useCallback(() => setPreviewTrip(null), []);
   const openFullFromPreview = useCallback(() => {
@@ -657,14 +658,19 @@ export default function ClassicListView({
   }, [previewTrip, onPressTrip]);
 
   useEffect(() => {
+    const gen = ++classicFetchGen.current;
+    const y = year;
+    const m = month;
     let cancelled = false;
     void (async () => {
       try {
-        const { duties, pairings, pairingLegs } = await fetchScheduleDutiesAndPairingsForMonth(year, month);
-        if (cancelled) return;
+        const { duties, pairings, pairingLegs } = await fetchScheduleDutiesAndPairingsForMonth(y, m);
+        if (cancelled || gen !== classicFetchGen.current) return;
         setClassicRows(buildClassicRowsFromDuties(duties, pairings, pairingLegs));
       } catch {
-        if (!cancelled) setClassicRows([]);
+        if (!cancelled && gen === classicFetchGen.current) {
+          setClassicRows([]);
+        }
       }
     })();
     return () => {

@@ -3,6 +3,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+    ActivityIndicator,
     Dimensions,
     PanResponder,
     Platform,
@@ -33,6 +34,7 @@ import {
     canGoToPreviousScheduleMonth,
     tryStepScheduleMonth,
 } from "../scheduleMonthWindow";
+import { monthCalendarKey } from "../scheduleMonthCache";
 import { scheduleTheme as T } from "../scheduleTheme";
 import {
     loadLastMonthCursor,
@@ -41,7 +43,14 @@ import {
 } from "../scheduleViewStorage";
 import { tradePostPrefillParams } from "../tradePostPrefillParams";
 import { stashTripForDetailNavigation } from "../tripDetailNavCache";
-import type { CrewScheduleTrip, ScheduleViewMode } from "../types";
+import type { CrewScheduleTrip, ScheduleMonthMetrics, ScheduleViewMode } from "../types";
+
+function parseMonthCalendarKey(key: string): { year: number; month: number } {
+  const [ys, ms] = key.split("-");
+  const year = parseInt(ys ?? "", 10);
+  const month = parseInt(ms ?? "", 10);
+  return { year: Number.isFinite(year) ? year : 2026, month: Number.isFinite(month) ? month : 1 };
+}
 
 const MONTH_NAMES = [
   "January",
@@ -86,22 +95,53 @@ export default function ScheduleTabScreen() {
     });
   }, []);
 
-  const { trips, monthMetrics, refresh, refreshSilent } =
+  const { trips, monthMetrics, loading, refresh, refreshSilent } =
     useScheduleTripsForMonth(year, month);
   const [, setFlicaDirectForMonth] = useState(false);
 
+  const [committedMonth, setCommittedMonth] = useState<{
+    key: string;
+    trips: CrewScheduleTrip[];
+    monthMetrics: ScheduleMonthMetrics | null;
+  } | null>(null);
+
+  const requestedKey = useMemo(() => monthCalendarKey(year, month), [year, month]);
+
+  useEffect(() => {
+    if (loading) return;
+    setCommittedMonth({
+      key: monthCalendarKey(year, month),
+      trips,
+      monthMetrics,
+    });
+  }, [loading, year, month, trips, monthMetrics]);
+
+  const monthLoadPending =
+    committedMonth != null && loading && committedMonth.key !== requestedKey;
+
+  const { displayYear, displayMonth, displayTrips, displayMetrics } = useMemo(() => {
+    const dk = monthLoadPending ? committedMonth!.key : requestedKey;
+    const ym = parseMonthCalendarKey(dk);
+    return {
+      displayYear: ym.year,
+      displayMonth: ym.month,
+      displayTrips: monthLoadPending ? committedMonth!.trips : trips,
+      displayMetrics: monthLoadPending ? committedMonth!.monthMetrics : monthMetrics,
+    };
+  }, [monthLoadPending, committedMonth, requestedKey, trips, monthMetrics]);
+
   const loadFlicaDirectFlag = useCallback(() => {
-    void hasFlicaDirectImportForMonth(year, month).then(setFlicaDirectForMonth);
-  }, [year, month]);
+    void hasFlicaDirectImportForMonth(displayYear, displayMonth).then(setFlicaDirectForMonth);
+  }, [displayYear, displayMonth]);
 
   const loadFlicaRow = useCallback(async () => {
     try {
-      const row = await fetchCrewScheduleFlicaForMonth(year, month);
+      const row = await fetchCrewScheduleFlicaForMonth(displayYear, displayMonth);
       setFlicaRow(row);
     } catch {
       setFlicaRow(null);
     }
-  }, [year, month]);
+  }, [displayYear, displayMonth]);
 
   /** Refs: useFocusEffect must use a stable callback ([] deps). Otherwise any identity churn re-fires focus → setScheduleRefreshKey loops (maximum update depth). */
   const refreshSilentRef = useRef(refreshSilent);
@@ -137,7 +177,7 @@ export default function ScheduleTabScreen() {
     }, []),
   );
 
-  const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
+  const monthLabel = `${MONTH_NAMES[displayMonth - 1]} ${displayYear}`;
 
   const persistMonth = useCallback((y: number, m: number) => {
     const c = clampYearMonthToScheduleWindow(y, m);
@@ -226,10 +266,10 @@ export default function ScheduleTabScreen() {
 
   const onPressCalendarDay = useCallback(
     (iso: string) => {
-      const onDay = trips.filter((t) => iso >= t.startDate && iso <= t.endDate);
+      const onDay = displayTrips.filter((t) => iso >= t.startDate && iso <= t.endDate);
       if (onDay.length > 0) openTrip(onDay[0]);
     },
-    [trips, openTrip],
+    [displayTrips, openTrip],
   );
 
   const openManage = useCallback(() => {
@@ -327,6 +367,11 @@ export default function ScheduleTabScreen() {
         }
       >
         <View style={styles.readingArea}>
+          {monthLoadPending ? (
+            <View style={styles.monthTransitionOverlay} pointerEvents="none">
+              <ActivityIndicator size="small" color={T.accent} />
+            </View>
+          ) : null}
           {flicaPairings.length > 0 ? (
             <FlicaCrewScheduleSection
               stats={flicaStats}
@@ -336,27 +381,27 @@ export default function ScheduleTabScreen() {
           ) : null}
           {viewMode === "classic" && (
             <ClassicListView
-              year={year}
-              month={month}
+              year={displayYear}
+              month={displayMonth}
               refreshKey={scheduleRefreshKey}
-              trips={trips}
-              monthMetrics={monthMetrics}
+              trips={displayTrips}
+              monthMetrics={displayMetrics}
               onPressTrip={openTrip}
               onOpenManage={openManage}
             />
           )}
           {viewMode === "calendar" && (
             <CalendarMonthView
-              year={year}
-              month={month}
-              trips={trips}
+              year={displayYear}
+              month={displayMonth}
+              trips={displayTrips}
               onPressDay={onPressCalendarDay}
               onOpenTrip={openTrip}
             />
           )}
           {viewMode === "smart" && (
             <SmartListView
-              trips={trips}
+              trips={displayTrips}
               onPressTrip={openTrip}
               onPost={(trip) => openTradePost(trip)}
               onChat={(trip) =>
@@ -411,5 +456,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   iconHit: { paddingHorizontal: 6, paddingVertical: 4 },
-  readingArea: { paddingHorizontal: 0, paddingTop: 0 },
+  readingArea: { paddingHorizontal: 0, paddingTop: 0, position: "relative" },
+  monthTransitionOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: 48,
+    zIndex: 4,
+  },
 });

@@ -17,10 +17,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   fetchCrewScheduleTripByPairingUuid,
   fetchPairingDutiesForScheduleEntries,
+  fetchPairingDetailByPairingUuid,
   fetchTripGroupEntries,
   fetchTripMetadataForGroup,
   mergeTripWithMetadataRow,
   resolveSchedulePairingDbIdByOverlap,
+  type PairingDetailDbHotelRow,
   type ScheduleTripMetadataRow,
 } from '../scheduleApi';
 import { dutiesToCrewScheduleLegs } from '../jetblueFlicaImport';
@@ -31,8 +33,9 @@ import { consumeStashedTripForDetail } from '../tripDetailNavCache';
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
-import { buildTripDetailViewModel, formatLayoverTotalMinutes, type TripDayViewModel } from '../tripDetailViewModel';
-import type { CrewScheduleLeg, CrewScheduleTrip } from '../types';
+import { buildTripDetailViewModel, type TripDayViewModel } from '../tripDetailViewModel';
+import { formatLayoverColumnDisplay } from '../scheduleTime';
+import type { CrewScheduleHotelStub, CrewScheduleLeg, CrewScheduleTrip } from '../types';
 import CrewScheduleHeader from '../components/CrewScheduleHeader';
 import TripCrewList from '../components/TripCrewList';
 import TripDayDetailPanel from '../components/TripDayDetailPanel';
@@ -41,6 +44,65 @@ import TripSummaryCard from '../components/TripSummaryCard';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normLayoverCityKey(s: string | null | undefined): string {
+  return String(s ?? '')
+    .trim()
+    .toUpperCase();
+}
+
+function layoverCityForActivePanel(day: TripDayViewModel, trip: CrewScheduleTrip): string | null {
+  const legs = day.legs;
+  for (let i = legs.length - 1; i >= 0; i--) {
+    const ly = legs[i]?.layoverCityLeg?.trim();
+    if (ly) return ly;
+  }
+  const st = trip.layoverStationByDate?.[day.dateIso]?.trim();
+  if (st) return st;
+  return null;
+}
+
+function layoverRestRawForActivePanel(day: TripDayViewModel, trip: CrewScheduleTrip): string | null {
+  const legs = day.legs;
+  for (let i = legs.length - 1; i >= 0; i--) {
+    const r = legs[i]?.layoverRestDisplay?.trim();
+    if (r) return r;
+  }
+  const raw = trip.layoverByDate?.[day.dateIso]?.trim();
+  return raw || null;
+}
+
+function dbHotelRowToStub(h: PairingDetailDbHotelRow): CrewScheduleHotelStub {
+  return {
+    name: h.hotel_name?.trim() || undefined,
+    city: h.layover_city?.trim() || undefined,
+    phone: h.hotel_phone?.trim() || undefined,
+  };
+}
+
+/** Match `schedule_pairing_hotels` rows to the swiped operating day; never default to [0] when multiple cities exist. */
+function hotelStubForActivePanel(
+  hotels: PairingDetailDbHotelRow[],
+  activeLayoverCity: string | null,
+  activeDateIso: string,
+  tripLevelHotel: CrewScheduleHotelStub | undefined,
+): CrewScheduleHotelStub | null {
+  if (!hotels.length) {
+    return tripLevelHotel?.name || tripLevelHotel?.city ? tripLevelHotel! : null;
+  }
+  if (hotels.length === 1) {
+    return dbHotelRowToStub(hotels[0]!);
+  }
+  const ac = normLayoverCityKey(activeLayoverCity);
+  const byCity = hotels.filter((h) => normLayoverCityKey(h.layover_city) === ac);
+  if (!byCity.length) {
+    return null;
+  }
+  const exactDate = byCity.filter((h) => String(h.duty_date ?? '').slice(0, 10) === activeDateIso);
+  const pool = exactDate.length ? exactDate : byCity;
+  const pick = [...pool].sort((a, b) => String(a.duty_date ?? '').localeCompare(String(b.duty_date ?? '')))[0];
+  return pick ? dbHotelRowToStub(pick) : null;
+}
 
 function firstRouteParam(v: string | string[] | undefined): string | undefined {
   if (v == null) return undefined;
@@ -65,9 +127,32 @@ export default function TripDetailScreen() {
   const [legStatuses, setLegStatuses] = useState<Record<string, string>>({});
   const [trackingLegId, setTrackingLegId] = useState<string | null>(null);
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
+  const [pairingHotels, setPairingHotels] = useState<PairingDetailDbHotelRow[]>([]);
   const panelPagerRef = useRef<FlatList<TripDayViewModel>>(null);
   const panelScrollAnimatedRef = useRef(false);
   const { width: panelWidth } = useWindowDimensions();
+  /** Dismiss stale async detail merges when `tripId` changes before paint. */
+  const activeDetailTripIdRef = useRef<string>('');
+
+  useLayoutEffect(() => {
+    activeDetailTripIdRef.current = tripId ?? '';
+    setPairingHotels([]);
+    if (!tripId) {
+      setTrip(undefined);
+      setTripMeta(null);
+      setLoadingTrip(false);
+      return;
+    }
+    if (tripId.startsWith('demo-')) {
+      setTrip(getMockTripById(tripId));
+      setTripMeta(null);
+      setLoadingTrip(false);
+      return;
+    }
+    setTrip(undefined);
+    setTripMeta(null);
+    setLoadingTrip(true);
+  }, [tripId]);
 
   const display = useMemo(
     () => (trip ? mergeTripWithMetadataRow(trip, tripMeta) : undefined),
@@ -75,6 +160,39 @@ export default function TripDetailScreen() {
   );
 
   const vm = useMemo(() => (display ? buildTripDetailViewModel(display) : null), [display]);
+
+  useEffect(() => {
+    setPairingHotels([]);
+    const pid = trip?.schedulePairingId?.trim();
+    if (!pid || !UUID_RE.test(pid)) return;
+    let cancelled = false;
+    void fetchPairingDetailByPairingUuid(pid).then((b) => {
+      if (cancelled || activeDetailTripIdRef.current !== tripId) return;
+      if (b?.hotels?.length) {
+        setPairingHotels(b.hotels);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [trip?.schedulePairingId, tripId]);
+
+  const layoverHotelActive = useMemo(() => {
+    if (!vm?.days.length || !display) {
+      return {
+        layoverCityLine: null as string | null,
+        layoverRestLine: '—' as string,
+        hotel: null as CrewScheduleHotelStub | null,
+      };
+    }
+    const idx = Math.min(Math.max(0, selectedDayIndex), vm.days.length - 1);
+    const activeDay = vm.days[idx]!;
+    const layCity = layoverCityForActivePanel(activeDay, display);
+    const restRaw = layoverRestRawForActivePanel(activeDay, display);
+    const restLine = restRaw?.trim() ? formatLayoverColumnDisplay(restRaw) : '—';
+    const hotel = hotelStubForActivePanel(pairingHotels, layCity, activeDay.dateIso, display.hotel);
+    return { layoverCityLine: layCity, layoverRestLine: restLine, hotel };
+  }, [vm, display, selectedDayIndex, pairingHotels]);
 
   useLayoutEffect(() => {
     setSelectedDayIndex(0);
@@ -117,22 +235,13 @@ export default function TripDetailScreen() {
   useEffect(() => {
     let cancelled = false;
     async function run() {
-      if (!tripId) {
-        setTrip(undefined);
-        setTripMeta(null);
-        setLoadingTrip(false);
-        return;
-      }
-      if (tripId.startsWith('demo-')) {
-        setTrip(getMockTripById(tripId));
-        setTripMeta(null);
-        setLoadingTrip(false);
+      if (!tripId || tripId.startsWith('demo-')) {
         return;
       }
       if (UUID_RE.test(tripId)) {
         const stashed = consumeStashedTripForDetail(tripId);
-        if (!stashed) setLoadingTrip(true);
-        else {
+        if (stashed) {
+          if (cancelled || activeDetailTripIdRef.current !== tripId) return;
           setTrip(stashed);
           setTripMeta(null);
           setLoadingTrip(false);
@@ -153,6 +262,8 @@ export default function TripDetailScreen() {
               })) ?? undefined;
           }
 
+          if (cancelled || activeDetailTripIdRef.current !== tripId) return;
+
           if (!pairingDbId && !stashed && UUID_RE.test(tripId)) {
             pairingDbId = tripId;
           }
@@ -161,7 +272,8 @@ export default function TripDetailScreen() {
             pairingDbId ? fetchCrewScheduleTripByPairingUuid(pairingDbId) : Promise.resolve(null),
             fetchTripMetadataForGroup(tripId).catch(() => null),
           ]);
-          if (!cancelled && fromNormalized) {
+          if (cancelled || activeDetailTripIdRef.current !== tripId) return;
+          if (fromNormalized) {
             const schedulePairingId = fromNormalized.schedulePairingId ?? pairingDbId ?? fromNormalized.id;
             if (
               typeof __DEV__ !== 'undefined' &&
@@ -186,7 +298,7 @@ export default function TripDetailScreen() {
               schedulePairingId,
             });
             setTripMeta(meta);
-          } else if (!cancelled && !fromNormalized && stashed) {
+          } else if (!fromNormalized && stashed) {
             if (
               typeof __DEV__ !== 'undefined' &&
               __DEV__ &&
@@ -201,7 +313,7 @@ export default function TripDetailScreen() {
               );
             }
           }
-          if (!cancelled && !fromNormalized && !stashed) {
+          if (!fromNormalized && !stashed) {
             const [rows, metaLegacy] = await Promise.all([
               fetchTripGroupEntries(tripId),
               fetchTripMetadataForGroup(tripId).catch(() => null),
@@ -217,19 +329,21 @@ export default function TripDetailScreen() {
                 };
               }
             }
+            if (cancelled || activeDetailTripIdRef.current !== tripId) return;
             setTrip(next);
             setTripMeta(metaLegacy);
           }
         } catch {
-          if (!cancelled && !stashed) {
+          if (!stashed && activeDetailTripIdRef.current === tripId) {
             setTrip(undefined);
             setTripMeta(null);
           }
         } finally {
-          if (!cancelled) setLoadingTrip(false);
+          if (!cancelled && activeDetailTripIdRef.current === tripId) setLoadingTrip(false);
         }
         return;
       }
+      if (cancelled || activeDetailTripIdRef.current !== tripId) return;
       setTrip(getMockTripById(tripId));
       setTripMeta(null);
       setLoadingTrip(false);
@@ -367,7 +481,6 @@ export default function TripDetailScreen() {
   }
 
   const t = display as CrewScheduleTrip;
-  const hotel = t.hotel;
   const headerTitle = vm.pairingCode.length > 18 ? `${vm.pairingCode.slice(0, 17)}…` : vm.pairingCode;
 
   return (
@@ -425,26 +538,26 @@ export default function TripDetailScreen() {
         <View style={styles.card}>
           <View style={styles.kv}>
             <Text style={styles.k}>Layover city</Text>
-            <Text style={styles.v}>{t.layoverCity?.trim() ? t.layoverCity : '—'}</Text>
+            <Text style={styles.v}>{layoverHotelActive.layoverCityLine?.trim() ? layoverHotelActive.layoverCityLine : '—'}</Text>
           </View>
           <View style={styles.kv}>
             <Text style={styles.k}>Layover total</Text>
-            <Text style={styles.v}>
-              {t.tripLayoverTotalMinutes != null
-                ? formatLayoverTotalMinutes(t.tripLayoverTotalMinutes)
-                : '—'}
-            </Text>
+            <Text style={styles.v}>{layoverHotelActive.layoverRestLine}</Text>
           </View>
-          {hotel?.name ? (
+          {layoverHotelActive.hotel?.name ? (
             <>
-              <Text style={styles.hotelName}>{hotel.name}</Text>
-              {[hotel.city, hotel.address].filter(Boolean).length > 0 ? (
-                <Text style={styles.meta}>{[hotel.city, hotel.address].filter(Boolean).join(' · ')}</Text>
+              <Text style={styles.hotelName}>{layoverHotelActive.hotel.name}</Text>
+              {[layoverHotelActive.hotel.city, layoverHotelActive.hotel.address].filter(Boolean).length > 0 ? (
+                <Text style={styles.meta}>
+                  {[layoverHotelActive.hotel.city, layoverHotelActive.hotel.address].filter(Boolean).join(' · ')}
+                </Text>
               ) : null}
-              {hotel.phone?.trim() ? (
-                <Text style={styles.meta}>{hotel.phone.trim()}</Text>
+              {layoverHotelActive.hotel.phone?.trim() ? (
+                <Text style={styles.meta}>{layoverHotelActive.hotel.phone.trim()}</Text>
               ) : null}
-              {hotel.shuttleNotes ? <Text style={styles.note}>Shuttle · {hotel.shuttleNotes}</Text> : null}
+              {layoverHotelActive.hotel.shuttleNotes ? (
+                <Text style={styles.note}>Shuttle · {layoverHotelActive.hotel.shuttleNotes}</Text>
+              ) : null}
             </>
           ) : (
             <Text style={styles.muted}>—</Text>

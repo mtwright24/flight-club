@@ -150,7 +150,10 @@ export function useScheduleTripsForMonth(year: number, month: number) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  /** Paint cached month before first paint so back/forth between months feels instant once warmed. */
+  /**
+   * Month change: paint cache immediately when warm; otherwise clear stale trips so consumers
+   * never pair a new month_key with the previous month's rows (UI may keep a snapshot separately).
+   */
   useLayoutEffect(() => {
     const key = monthCalendarKey(year, month);
     const hit = readScheduleMonthCache(key);
@@ -158,6 +161,11 @@ export function useScheduleTripsForMonth(year: number, month: number) {
       setTrips(hit.trips);
       setMonthMetrics(hit.monthMetrics);
       setLoading(false);
+      setError(null);
+    } else {
+      setTrips([]);
+      setMonthMetrics(null);
+      setLoading(true);
       setError(null);
     }
   }, [year, month]);
