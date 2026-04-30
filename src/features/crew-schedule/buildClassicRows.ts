@@ -243,6 +243,86 @@ function syntheticEndIsoFromLegs(
   return best;
 }
 
+function legCalendarIsoCandidates(leg: SchedulePairingLegLite): string[] {
+  const out: string[] = [];
+  const d = sliceDutyIso(leg.duty_date);
+  if (d) out.push(d);
+  const nj = (leg.normalized_json ?? {}) as Record<string, unknown>;
+  for (const k of ['dutyDateIso', 'operatingDateIso', 'calendarDateIso', 'actualDepDateIso', 'actualArrDateIso']) {
+    const v = nj[k];
+    if (typeof v === 'string') {
+      const s = sliceDutyIso(v);
+      if (s) out.push(s);
+    }
+  }
+  return [...new Set(out)];
+}
+
+function classicStationHintFromLegs(
+  legs: SchedulePairingLegLite[],
+  pairingUuidSet: Set<string>,
+  dateIso: string,
+): string | null {
+  let arrivalFallback: string | null = null;
+  for (const leg of legs) {
+    if (!pairingUuidSet.has(String(leg.pairing_id))) continue;
+    if (!legCalendarIsoCandidates(leg).includes(dateIso)) continue;
+    const ly = leg.layover_city != null && String(leg.layover_city).trim() ? String(leg.layover_city).trim() : null;
+    if (ly) return ly;
+    const arr = leg.arrival_station != null && String(leg.arrival_station).trim() ? String(leg.arrival_station).trim() : null;
+    if (arr) arrivalFallback = arr;
+  }
+  return arrivalFallback;
+}
+
+/** REPORT / D-OFF / layover column from legs when duty row missing or synthetic gap. */
+function classicDutyFieldsFromLegs(
+  legs: SchedulePairingLegLite[],
+  pairingUuidSet: Set<string>,
+  dateIso: string,
+): { report: string | null; dEnd: string | null; layover: string | null } {
+  let report: string | null = null;
+  let dEnd: string | null = null;
+  let layover: string | null = null;
+  for (const leg of legs) {
+    if (!pairingUuidSet.has(String(leg.pairing_id))) continue;
+    if (!legCalendarIsoCandidates(leg).includes(dateIso)) continue;
+    const dep = leg.scheduled_departure_local != null && String(leg.scheduled_departure_local).trim() ? String(leg.scheduled_departure_local).trim() : null;
+    const rel = leg.release_time_local != null && String(leg.release_time_local).trim() ? String(leg.release_time_local).trim() : null;
+    if (dep && !report) report = dep;
+    if (rel && !dEnd) dEnd = rel;
+    const ly = leg.layover_city != null && String(leg.layover_city).trim() ? String(leg.layover_city).trim() : null;
+    if (ly && !layover) layover = ly;
+  }
+  return { report, dEnd, layover };
+}
+
+function pairingHasDutyOrLegOnOrAfter(
+  fromIsoExclusive: string,
+  throughIsoInclusive: string,
+  dutyByIso: Map<string, ScheduleDuty>,
+  legs: SchedulePairingLegLite[],
+  legUuids: Set<string>,
+): boolean {
+  let cur = addOneCalendarDayIso(fromIsoExclusive);
+  const end = String(throughIsoInclusive).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return false;
+  let guard = 0;
+  while (cur && cur <= end && guard < 160) {
+    guard += 1;
+    if (dutyByIso.has(cur)) return true;
+    for (const leg of legs) {
+      if (!legUuids.has(String(leg.pairing_id))) continue;
+      if (legCalendarIsoCandidates(leg).includes(cur)) return true;
+    }
+    if (cur === end) break;
+    const nx = addOneCalendarDayIso(cur);
+    if (!nx || nx === cur) break;
+    cur = nx;
+  }
+  return false;
+}
+
 function dutyPairKey(d: Pick<ScheduleDuty, 'import_id' | 'pairing_id'>): string {
   return `${d.import_id}|${d.pairing_id}`;
 }
@@ -280,7 +360,7 @@ export function findPairingByPairingId(pairings: SchedulePairing[], pairingId: s
   return pairings.find((p) => String(p.pairing_id).trim().toUpperCase() === id);
 }
 
-/** Prefer one winner per calendar `dateIso` (global dedupe across pairings): TRIP_START > … > EMPTY_DAY. */
+/** Prefer one winner per calendar day **within the same pairing** (`dateIso` + `sourcePairingId`). */
 function rowPriorityDedupeGlobally(t: RowType): number {
   switch (t) {
     case 'TRIP_START':
@@ -317,21 +397,64 @@ function classicRowWinsDedupe(next: ClassicScheduleRow, prev: ClassicScheduleRow
   return false;
 }
 
-/** Final pass: exactly one Layer-7 row per `dateIso`; higher priority row type wins (same trip may merge). */
+function pairingKeyForClassicDedupe(r: ClassicScheduleRow): string {
+  const raw = String(r.sourcePairingId ?? '').trim();
+  return raw ? raw.toUpperCase() : '__no_pid__';
+}
+
+/** One row per `dateIso` per pairing; different pairings on the same day both kept. */
 function dedupeClassicRowsGlobally(rows: ClassicScheduleRow[]): ClassicScheduleRow[] {
   const m = new Map<string, ClassicScheduleRow>();
   for (const r of rows) {
     const dateKey = String(r.dateIso).trim().slice(0, 10);
-    const prev = m.get(dateKey);
+    const dedupeKey = `${dateKey}::${pairingKeyForClassicDedupe(r)}`;
+    const prev = m.get(dedupeKey);
     if (!prev) {
-      m.set(dateKey, r);
+      m.set(dedupeKey, r);
       continue;
     }
-    if (classicRowWinsDedupe(r, prev)) m.set(dateKey, r);
+    if (classicRowWinsDedupe(r, prev)) m.set(dedupeKey, r);
   }
-  return [...m.values()].sort((a, b) =>
-    String(a.dateIso).trim().slice(0, 10).localeCompare(String(b.dateIso).trim().slice(0, 10)),
-  );
+  return [...m.values()].sort((a, b) => {
+    const da = String(a.dateIso).trim().slice(0, 10).localeCompare(String(b.dateIso).trim().slice(0, 10));
+    if (da !== 0) return da;
+    return pairingKeyForClassicDedupe(a).localeCompare(pairingKeyForClassicDedupe(b));
+  });
+}
+
+/**
+ * FCV-style: when trip B **starts** on a calendar day, drop **TRIP_END** from another pairing on that day
+ * (e.g. Mar 8 J1030 LHR vs J3920 JFK end).
+ */
+function suppressForeignTripEndWhenAnotherTripStartsSameDay(rows: ClassicScheduleRow[]): ClassicScheduleRow[] {
+  const byDate = new Map<string, ClassicScheduleRow[]>();
+  for (const r of rows) {
+    const d = String(r.dateIso).trim().slice(0, 10);
+    const arr = byDate.get(d) ?? [];
+    arr.push(r);
+    byDate.set(d, arr);
+  }
+  const drop = new Set<string>();
+  for (const arr of byDate.values()) {
+    const starterPids = new Set(
+      arr
+        .filter((r) => r.rowType === 'TRIP_START')
+        .map((r) => String(r.sourcePairingId).trim().toUpperCase()),
+    );
+    if (starterPids.size === 0) continue;
+    for (const r of arr) {
+      if (r.rowType !== 'TRIP_END') continue;
+      const pid = String(r.sourcePairingId).trim().toUpperCase();
+      if (!starterPids.has(pid)) {
+        drop.add(`${String(r.dateIso).trim().slice(0, 10)}::${pid}::TRIP_END`);
+      }
+    }
+  }
+  return rows.filter((r) => {
+    if (r.rowType !== 'TRIP_END') return true;
+    const k = `${String(r.dateIso).trim().slice(0, 10)}::${String(r.sourcePairingId).trim().toUpperCase()}::TRIP_END`;
+    return !drop.has(k);
+  });
 }
 
 /**
@@ -418,11 +541,16 @@ function eachIsoInclusive(startIso: string, endIso: string): string[] {
 /**
  * When `operate_end_date` is far beyond the last persisted duty, do not walk the full pairing window — that produces
  * months of phantom "-" gap rows (e.g. J3920 / J3F39). Cap enumeration at last duty + synthetic arrival only.
+ * Never extend into `operate_end_date` tail unless this pairing has a duty or leg on a calendar day in that tail
+ * (FCV placement — no phantom JFK/base rows from DB end date alone).
  */
 function safeEnumerateEnd(
   opEnd: string | null,
   lastDutyIso: string,
   syntheticArrival: string | null,
+  dutyByIso: Map<string, ScheduleDuty>,
+  legs: SchedulePairingLegLite[],
+  legUuids: Set<string>,
 ): string {
   const candidates = [String(lastDutyIso).trim().slice(0, 10)];
   if (syntheticArrival) candidates.push(String(syntheticArrival).trim().slice(0, 10));
@@ -434,12 +562,17 @@ function safeEnumerateEnd(
   const lastS = String(lastDutyIso).trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(opEndS) || !/^\d{4}-\d{2}-\d{2}$/.test(lastS)) return naturalEnd;
 
+  if (opEndS <= naturalEnd) return naturalEnd;
+
+  const hasActivityInOpTail = pairingHasDutyOrLegOnOrAfter(naturalEnd, opEndS, dutyByIso, legs, legUuids);
+  if (!hasActivityInOpTail) return naturalEnd;
+
   const opEndDate = new Date(`${opEndS}T12:00:00`);
   const lastDutyDate = new Date(`${lastS}T12:00:00`);
   const diffDays = Math.round((opEndDate.getTime() - lastDutyDate.getTime()) / 86400000);
 
   if (diffDays > 7) return naturalEnd;
-  return opEndS > naturalEnd ? opEndS : naturalEnd;
+  return opEndS;
 }
 
 /** Layer-8: same as ClassicListView `isDutyClassicBlank` plus duty-less gap dashes (PTV can overlay). */
@@ -499,6 +632,16 @@ function mergePairingsForFlicaId(pairings: SchedulePairing[], pidUpper: string):
     base.pairing_end_date = maxE;
   }
   return base;
+}
+
+function maxIsoYmd(cands: (string | null | undefined)[]): string | null {
+  let best: string | null = null;
+  for (const raw of cands) {
+    const s = raw != null ? String(raw).trim().slice(0, 10) : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) continue;
+    if (best == null || s > best) best = s;
+  }
+  return best;
 }
 
 function pairingUuidListForFlica(pairings: SchedulePairing[], pidUpper: string): string[] {
@@ -623,19 +766,19 @@ export function buildClassicRowsFromDuties(
       dutyByIso.set(iso, d);
     }
 
-    let lastDutyIso = tripDutiesSorted.length ? sliceDutyIso(tripDutiesSorted[tripDutiesSorted.length - 1]!.duty_date)! : opStart!;
+    let lastDutyIso = tripDutiesSorted.length
+      ? sliceDutyIso(tripDutiesSorted[tripDutiesSorted.length - 1]!.duty_date)!
+      : (opEnd ?? opStart!);
     let lastDutyRow = tripDutiesSorted.length ? tripDutiesSorted[tripDutiesSorted.length - 1]! : null;
 
-    let endIsoFromPairing = pairingEndDateIso(pairingEffective);
-    let endIsoFromLeg = syntheticEndIsoFromLegs(pairingLegs, lastDutyIso, uuidsForLegs);
+    const endIsoFromLeg = syntheticEndIsoFromLegs(pairingLegs, lastDutyIso, uuidsForLegs);
     const endIsoFromMorningDutyOff =
       lastDutyRow != null ? syntheticEndIsoFromMorningDutyOff(lastDutyRow, lastDutyIso) : null;
 
+    /** Crew/Fleet Calendar: synthetic arrival from legs / morning D-OFF only — never `operate_end_date` alone. */
     let syntheticArrivalCalendar: string | null = null;
-    if (endIsoFromPairing != null && endIsoFromPairing > lastDutyIso) syntheticArrivalCalendar = endIsoFromPairing;
     if (endIsoFromLeg != null) {
-      if (syntheticArrivalCalendar == null || endIsoFromLeg > syntheticArrivalCalendar)
-        syntheticArrivalCalendar = endIsoFromLeg;
+      syntheticArrivalCalendar = endIsoFromLeg;
     }
     if (endIsoFromMorningDutyOff != null) {
       if (syntheticArrivalCalendar == null || endIsoFromMorningDutyOff > syntheticArrivalCalendar) {
@@ -643,13 +786,18 @@ export function buildClassicRowsFromDuties(
       }
     }
 
-    /** Real trip calendar end (last duty + synthetic arrival) — trip bounds / TRIP_END. */
+    const legUuidSet = new Set(uuidsForLegs);
+
+    /** Real trip calendar end (last duty + synthetic arrival) — trip bounds / filter hint. */
     let tripVisualEnd = lastDutyIso;
     if (syntheticArrivalCalendar != null && syntheticArrivalCalendar > tripVisualEnd) tripVisualEnd = syntheticArrivalCalendar;
     const enumerateEnd = safeEnumerateEnd(
       opEnd != null ? String(opEnd).trim().slice(0, 10) : null,
       lastDutyIso,
       syntheticArrivalCalendar,
+      dutyByIso,
+      pairingLegs,
+      legUuidSet,
     );
 
     /** Align with enumerated window start after FIX 3 clamp (avoids stale pairing_start vs first duty). */
@@ -665,6 +813,9 @@ export function buildClassicRowsFromDuties(
       const dutyRow = dutyByIso.get(dateIso);
 
       if (dutyRow) {
+        const legFields = classicDutyFieldsFromLegs(pairingLegs, legUuidSet, dateIso);
+        const legHintStation = classicStationHintFromLegs(pairingLegs, legUuidSet, dateIso);
+
         const isLabelDay = dateIso === tripLabelIso;
         let rowType: RowType = isLabelDay ? 'TRIP_START' : 'TRIP_CONTINUATION';
         if (monthLastForCarry != null && dateIso > monthLastForCarry && rowType !== 'TRIP_START') {
@@ -773,6 +924,10 @@ export function buildClassicRowsFromDuties(
 
         if (activityCityCode && cityText === baseCity) cityText = '-';
 
+        if (!activityCityCode && cityText === '-' && legHintStation && rowType !== 'TRIP_END') {
+          cityText = legHintStation;
+        }
+
         if (
           typeof __DEV__ !== 'undefined' &&
           __DEV__ &&
@@ -799,6 +954,15 @@ export function buildClassicRowsFromDuties(
             ? layoverRaw
             : null;
 
+        const reportMerged =
+          dutyRow.report_time != null && String(dutyRow.report_time).trim()
+            ? String(dutyRow.report_time).trim()
+            : legFields.report;
+        const dutyEndMerged =
+          dutyRow.duty_off_time != null && String(dutyRow.duty_off_time).trim()
+            ? String(dutyRow.duty_off_time).trim()
+            : legFields.dEnd;
+
         rows.push({
           dateIso,
           pairingText: activityCityCode
@@ -806,10 +970,9 @@ export function buildClassicRowsFromDuties(
             : isLabelDay
               ? flicaPairingKey || null
               : null,
-          reportText: dutyRow.report_time != null && String(dutyRow.report_time).trim() ? dutyRow.report_time : null,
+          reportText: reportMerged,
           cityText,
-          dutyEndText:
-            dutyRow.duty_off_time != null && String(dutyRow.duty_off_time).trim() ? dutyRow.duty_off_time : null,
+          dutyEndText: dutyEndMerged,
           layoverText,
           rowType,
           sourcePairingId: flicaPairingKey,
@@ -821,14 +984,19 @@ export function buildClassicRowsFromDuties(
       if (dateIso < firstDutyIso || dateIso > enumerateEnd) return;
 
       if (dateIso < enumerateEnd) {
-        let rowType: RowType = 'TRIP_CONTINUATION';
-        if (monthLastForCarry != null && dateIso > monthLastForCarry) rowType = 'CARRY_OUT';
+        const legF = classicDutyFieldsFromLegs(pairingLegs, legUuidSet, dateIso);
+        const gapStationRaw = classicStationHintFromLegs(pairingLegs, legUuidSet, dateIso);
+        const gapCity = gapStationRaw != null ? gapStationRaw : '-';
+        let rowType: RowType = dateIso === tripLabelIso ? 'TRIP_START' : 'TRIP_CONTINUATION';
+        if (monthLastForCarry != null && dateIso > monthLastForCarry && rowType !== 'TRIP_START') rowType = 'CARRY_OUT';
+        const gapPairing =
+          dateIso === tripLabelIso ? (activityCityCode ? activityCityCode : flicaPairingKey || null) : activityCityCode ?? null;
         rows.push({
           dateIso,
-          pairingText: activityCityCode ?? null,
-          reportText: null,
-          cityText: '-',
-          dutyEndText: null,
+          pairingText: gapPairing,
+          reportText: legF.report,
+          cityText: gapCity,
+          dutyEndText: legF.dEnd,
           layoverText: null,
           rowType,
           sourcePairingId: flicaPairingKey,
@@ -838,12 +1006,14 @@ export function buildClassicRowsFromDuties(
       }
 
       if (dateIso === enumerateEnd) {
+        const legF = classicDutyFieldsFromLegs(pairingLegs, legUuidSet, dateIso);
+        const gapStationRaw = classicStationHintFromLegs(pairingLegs, legUuidSet, dateIso);
         rows.push({
           dateIso,
           pairingText: activityCityCode ?? null,
-          reportText: null,
-          cityText: activityCityCode ? '-' : baseCity,
-          dutyEndText: null,
+          reportText: legF.report,
+          cityText: activityCityCode ? '-' : gapStationRaw ?? baseCity,
+          dutyEndText: legF.dEnd,
           layoverText: null,
           rowType: 'TRIP_END',
           sourcePairingId: flicaPairingKey,
@@ -858,25 +1028,29 @@ export function buildClassicRowsFromDuties(
       syntheticArrivalCalendar > enumerateEnd &&
       !dutyByIso.has(syntheticArrivalCalendar)
     ) {
+      const legF = classicDutyFieldsFromLegs(pairingLegs, legUuidSet, syntheticArrivalCalendar);
+      const gapStationRaw = classicStationHintFromLegs(pairingLegs, legUuidSet, syntheticArrivalCalendar);
       rows.push({
         dateIso: syntheticArrivalCalendar,
         pairingText: activityCityCode ?? null,
-        reportText: null,
-        cityText: activityCityCode ? '-' : baseCity,
-        dutyEndText: null,
+        reportText: legF.report,
+        cityText: activityCityCode ? '-' : gapStationRaw ?? baseCity,
+        dutyEndText: legF.dEnd,
         layoverText: null,
         rowType: 'TRIP_END',
         sourcePairingId: flicaPairingKey,
       });
     }
 
-    tripCalendarByPairingId.set(String(flicaPairingKey).trim().toUpperCase(), {
+    const pidKey = String(flicaPairingKey).trim().toUpperCase();
+    tripCalendarByPairingId.set(pidKey, {
       startIso: opStart!,
-      endIso: tripVisualEnd,
+      endIso: maxIsoYmd([opEnd, enumerateEnd, tripVisualEnd, syntheticArrivalCalendar, lastDutyIso]) ?? tripVisualEnd,
     });
   }
 
   let out = dedupeClassicRowsGlobally(rows);
+  out = suppressForeignTripEndWhenAnotherTripStartsSameDay(out);
   const viewTag = readClassicViewTag(duties);
   if (viewTag != null) {
     out = filterClassicRowsForTouchedMonth(out, tripCalendarByPairingId, pairings, viewTag.year, viewTag.month);
