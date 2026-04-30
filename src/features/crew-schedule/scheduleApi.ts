@@ -16,6 +16,7 @@ import {
   type SchedulePairingLegLite,
 } from './buildClassicRows';
 import { buildCrewScheduleTripsFromNormalizedPack } from './tripMapper';
+import type { TripSummaryPackExtra } from './tripSummary';
 import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
 
 export type ScheduleEntryRow = {
@@ -939,10 +940,17 @@ export function mergePairingDetailBundleIntoTrip(
 
   if (bundle.hotels.length) {
     const first = bundle.hotels[0]!;
+    const phoneFromHotels = bundle.hotels
+      .map((h) => h.hotel_phone?.trim())
+      .find((p) => p && p.length > 0);
+    const phoneFromLegs = bundle.legs
+      .map((l) => String(l.hotel_phone ?? '').trim())
+      .find((p) => p.length > 0);
+    const phone = phoneFromHotels || phoneFromLegs;
     const hotel: CrewScheduleHotelStub = {
       name: first.hotel_name?.trim() || undefined,
       city: first.layover_city?.trim() || undefined,
-      phone: first.hotel_phone?.trim() || undefined,
+      phone: phone || undefined,
     };
     next.hotel = hotel;
     const c = first.layover_city?.trim();
@@ -977,6 +985,7 @@ export function mergePairingDetailBundleIntoTrip(
       legsLen: next.legs.length,
       firstLegRelease: next.legs[0]?.releaseLocal ?? null,
       hotelName: next.hotel?.name ?? null,
+      hotelPhone: next.hotel?.phone ?? null,
     });
   }
 
@@ -1150,13 +1159,19 @@ export async function fetchPairingDetailByPairingUuid(pairingUuid: string): Prom
       crewCount: (crewRes.data ?? []).length,
       crewSample: (crewRes.data ?? []).slice(0, 2),
       hotelsCount: (hotelRes.data ?? []).length,
-      hotelsSample: (hotelRes.data ?? []).slice(0, 2),
+      hotelsSample: (hotelRes.data ?? []).slice(0, 3).map((h) => ({
+        duty_date: h.duty_date,
+        hotel_name: h.hotel_name,
+        hotel_phone: h.hotel_phone,
+      })),
       firstLeg: firstL
         ? {
             duty_date: firstL.duty_date,
             release_time_local: firstL.release_time_local,
             flica_d_end_local: firstL.normalized_json?.flica_d_end_local,
             hotel_name: firstL.hotel_name,
+            hotel_phone: firstL.hotel_phone,
+            normalized_json_hotel_phone: (firstL.normalized_json as { hotel_phone?: string } | undefined)?.hotel_phone,
           }
         : null,
       lastLeg: lastL
@@ -1164,6 +1179,8 @@ export async function fetchPairingDetailByPairingUuid(pairingUuid: string): Prom
             duty_date: lastL.duty_date,
             release_time_local: lastL.release_time_local,
             flica_d_end_local: lastL.normalized_json?.flica_d_end_local,
+            hotel_phone: lastL.hotel_phone,
+            normalized_json_hotel_phone: (lastL.normalized_json as { hotel_phone?: string } | undefined)?.hotel_phone,
           }
         : null,
     });
@@ -1173,6 +1190,7 @@ export async function fetchPairingDetailByPairingUuid(pairingUuid: string): Prom
       crew: (crewRes.data ?? []).length,
       hotels: (hotelRes.data ?? []).length,
     });
+    console.log('[pairing-detail read] J1015 schedule_pairing_hotels phone sample', (hotelRes.data ?? []).slice(0, 4));
   }
 
   return {
@@ -1198,12 +1216,19 @@ export async function fetchCrewScheduleTripByPairingUuid(pairingUuid: string): P
   const y = op.length >= 10 ? Number(op.slice(0, 4)) : new Date().getFullYear();
   const m = op.length >= 10 ? Number(op.slice(5, 7)) : new Date().getMonth() + 1;
 
+  const bundlePairingId = String(bundle.pairing.id ?? '').trim();
+  const summaryExtraByUuid = new Map<string, TripSummaryPackExtra>();
+  if (bundlePairingId) {
+    summaryExtraByUuid.set(bundlePairingId, { crew: bundle.crew, hotels: bundle.hotels });
+  }
+
   const trips = buildCrewScheduleTripsFromNormalizedPack(
     y,
     m,
     bundle.duties,
     [bundle.pairing as NormSchedulePairing],
     bundle.legs,
+    summaryExtraByUuid,
   );
   const trip = trips[0];
   if (!trip) return null;

@@ -12,12 +12,17 @@ import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleCrewMember, ScheduleDut
 export type TripStatTile = { id: string; label: string; value: string };
 
 export type TripDayViewModel = {
+  /** Stable key (unique per operating duty block; same calendar date may repeat). */
+  panelId: string;
   dateIso: string;
-  /** "Day 1", "Day 2", … */
+  /** Calendar display "MM-DD" e.g. "04-06". */
+  dateShort: string;
+  /** DOW e.g. "MON". */
   dayLabel: string;
+  /** 1-based operating panel index. */
   dayIndex: number;
   legs: CrewScheduleLeg[];
-  /** Short layover/rest line for this calendar day when import provided it */
+  /** Legacy: layover-only placeholder panels; operating panels use leg-level layover rows. */
   layoverRestLine: string | null;
 };
 
@@ -72,10 +77,10 @@ export function formatTripDateRange(trip: CrewScheduleTrip): string {
   return `${a.toLocaleDateString(undefined, opts)} → ${b.toLocaleDateString(undefined, opts)}`;
 }
 
-function formatHoursH(h: number | null | undefined | string): string {
+export function formatHoursH(h: number | null | undefined | string): string {
   const n = typeof h === 'number' ? h : Number(h);
   if (h == null || h === '' || !Number.isFinite(n)) return '—';
-  return `${n.toFixed(2)}h`;
+  return `${n.toFixed(2)}`;
 }
 
 export function formatLayoverTotalMinutes(m: number | null | undefined): string {
@@ -115,31 +120,49 @@ function sortLegsByDepartureForTripDetail(legs: CrewScheduleLeg[]): CrewSchedule
   });
 }
 
-function addOneCalendarIso(yyyyMmDd: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(yyyyMmDd).trim());
-  if (!m) return yyyyMmDd;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
-  d.setDate(d.getDate() + 1);
-  const y = d.getFullYear();
-  const mo = String(d.getMonth() + 1).padStart(2, '0');
-  const da = String(d.getDate()).padStart(2, '0');
-  return `${y}-${mo}-${da}`;
+function dayOfWeekShortLabel(iso: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso).trim().slice(0, 10))) return '—';
+  const d = new Date(`${String(iso).trim().slice(0, 10)}T12:00:00`);
+  return d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
 }
 
-/** Enumerate yyyy-mm-dd inclusive from trip.startDate through trip.endDate. */
-function eachTripCalendarIsoInclusive(startIso: string, endIso: string): string[] {
-  const out: string[] = [];
-  let cur = String(startIso).trim().slice(0, 10);
-  const end = String(endIso).trim().slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(cur) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return out;
-  while (cur <= end) {
-    out.push(cur);
-    const nx = addOneCalendarIso(cur);
-    if (!nx || nx <= cur || out.length > 380) break;
-    cur = nx;
-  }
-  return out;
+function dateShortMmDd(iso: string): string {
+  const s = String(iso).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return `${s.slice(5, 7)}-${s.slice(8, 10)}`;
 }
+
+function clockToMinutes(raw: string | null | undefined): number | null {
+  if (raw == null || !String(raw).trim()) return null;
+  const s = String(raw).trim();
+  if (/^\d{4}$/.test(s)) {
+    const hh = Number(s.slice(0, 2));
+    const mm = Number(s.slice(2, 4));
+    if (hh > 47 || mm > 59) return null;
+    return hh * 60 + mm;
+  }
+  const m24 = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) {
+    const hh = Number(m24[1]);
+    const mm = Number(m24[2]);
+    if (hh > 23 || mm > 59) return null;
+    return hh * 60 + mm;
+  }
+  return null;
+}
+
+/** Ground time between consecutive legs on the same operating calendar date (arrival → next departure). */
+function groundGapMinutesSameDay(prev: CrewScheduleLeg, next: CrewScheduleLeg): number | null {
+  const arr = clockToMinutes(prev.arriveLocal);
+  const dep = clockToMinutes(next.departLocal);
+  if (arr == null || dep == null) return null;
+  let gap = dep - arr;
+  if (gap < 0) gap += 24 * 60;
+  return gap;
+}
+
+/** When sit time exceeds this between same-day legs, start a new operating panel (Crewline-style duty split). */
+const OPERATING_SPLIT_GAP_MINUTES = 180;
 
 /** When {@link CrewScheduleTrip.canonicalPairingDays} is set, per-leg flight / block / equipment match `schedule_pairing_legs`. */
 function crewLegsFromCanonicalPairingDay(pd: PairingDay, dateIso: string, tripId: string): CrewScheduleLeg[] {
@@ -161,12 +184,10 @@ function crewLegsFromCanonicalPairingDay(pd: PairingDay, dateIso: string, tripId
 }
 
 /**
- * One row per calendar day that has at least one leg, sorted by date.
- * If there are no legs, a single synthetic day is returned for the trip start date.
- * When {@link CrewScheduleTrip.canonicalPairingDays} has segments for a date, those replace entry-derived
- * legs (preserves per-leg flight numbers and multi-leg duty days from stored pairing rows).
- * Within each day, legs use {@link departureTimeForDutyDaySortKey}: normal morning deps (including 0553)
- * stay before later same-day deps; true post‑midnight continuations sort after evening.
+ * One panel per operating duty / leg group (Crewline-style), not per calendar date.
+ * Same calendar date may yield multiple panels when a new report period starts (second `schedule_entries` row)
+ * or when ground time between consecutive legs exceeds {@link OPERATING_SPLIT_GAP_MINUTES}.
+ * Dates with no flight legs do not produce panels (layover-only days live in the trip layover section).
  */
 export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
   const byDate = new Map<string, CrewScheduleLeg[]>();
@@ -185,34 +206,68 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
     }
   }
 
-  const range = eachTripCalendarIsoInclusive(trip.startDate, trip.endDate);
-  if (!range.length) {
+  const datesWithLegs = [...byDate.keys()]
+    .filter((d) => (byDate.get(d) ?? []).length > 0)
+    .sort((a, b) => a.localeCompare(b));
+
+  const panels: TripDayViewModel[] = [];
+  let dayIndex = 0;
+
+  for (const dateIso of datesWithLegs) {
+    const sorted = sortLegsByDepartureForTripDetail(byDate.get(dateIso)!);
+    const groups: CrewScheduleLeg[][] = [];
+    let cur: CrewScheduleLeg[] = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+      const leg = sorted[i]!;
+      const prev = cur.length > 0 ? cur[cur.length - 1]! : null;
+      const hasExplicitReport = leg.reportLocal != null && String(leg.reportLocal).trim() !== '';
+      const gapMin = prev ? groundGapMinutesSameDay(prev, leg) : null;
+      const splitByGap = prev != null && gapMin != null && gapMin >= OPERATING_SPLIT_GAP_MINUTES;
+      const splitByReport = prev != null && hasExplicitReport;
+      const startNew = splitByReport || splitByGap;
+
+      if (startNew) {
+        if (cur.length) groups.push(cur);
+        cur = [leg];
+      } else {
+        cur.push(leg);
+      }
+    }
+    if (cur.length) groups.push(cur);
+
+    for (let g = 0; g < groups.length; g++) {
+      const legs = groups[g]!;
+      dayIndex++;
+      const panelId = `${dateIso}-op${g}-${legs[0]?.id ?? g}`;
+      panels.push({
+        panelId,
+        dateIso,
+        dateShort: dateShortMmDd(dateIso),
+        dayLabel: dayOfWeekShortLabel(dateIso),
+        dayIndex,
+        legs,
+        layoverRestLine: null,
+      });
+    }
+  }
+
+  if (!panels.length) {
+    const iso = String(trip.startDate).trim().slice(0, 10);
     return [
       {
-        dateIso: trip.startDate,
-        dayLabel: 'Day 1',
+        panelId: `placeholder-${iso}`,
+        dateIso: iso,
+        dateShort: dateShortMmDd(iso),
+        dayLabel: dayOfWeekShortLabel(iso),
         dayIndex: 1,
         legs: [],
-        layoverRestLine: null,
+        layoverRestLine: layoverRestForDate(trip, iso),
       },
     ];
   }
 
-  return range.map((dateIso, i) => {
-    const legs = sortLegsByDepartureForTripDetail(byDate.get(dateIso) ?? []);
-    /** RULE 7: layover/rest banner only on days with zero flight legs — never bleed onto flying days */
-    let layoverRestLine: string | null = null;
-    if (legs.length === 0) {
-      layoverRestLine = layoverRestForDate(trip, dateIso);
-    }
-    return {
-      dateIso,
-      dayLabel: `Day ${i + 1}`,
-      dayIndex: i + 1,
-      legs,
-      layoverRestLine,
-    };
-  });
+  return panels;
 }
 
 function buildSummaryLine(trip: CrewScheduleTrip): string {
@@ -261,6 +316,25 @@ function buildLayoverHotelPreview(trip: CrewScheduleTrip): TripLayoverHotelPrevi
 export function buildTripDetailViewModel(trip: CrewScheduleTrip): TripDetailViewModel {
   const pairingCode = trip.pairingCode !== '—' && trip.pairingCode ? trip.pairingCode : 'Duty';
   const routeFromCanon = routeSummaryFromCanonicalLedgerCities(trip)?.trim();
+  const days = buildTripDays(trip);
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && String(trip.pairingCode).trim().toUpperCase() === 'J4173') {
+    console.log('[detail operating panels]', {
+      panelCount: days.length,
+      panels: days.map((p) => ({
+        date: p.dateIso,
+        report: p.legs[0]?.reportLocal ?? null,
+        legs: p.legs.length,
+        route: p.legs.map((l) => `${l.departureAirport}→${l.arrivalAirport}`).join(', '),
+        dEnd: p.legs[p.legs.length - 1]?.releaseLocal ?? null,
+        layover:
+          p.legs
+            .map((l) => l.layoverRestDisplay ?? l.layoverCityLeg)
+            .filter(Boolean)
+            .join('; ') || null,
+        hotel: trip.hotel?.name ?? null,
+      })),
+    });
+  }
   return {
     trip,
     pairingCode,
@@ -272,7 +346,7 @@ export function buildTripDetailViewModel(trip: CrewScheduleTrip): TripDetailView
     statTiles: buildStatTiles(trip),
     crewMembers: trip.crewMembers ?? [],
     layoverHotelPreview: buildLayoverHotelPreview(trip),
-    days: buildTripDays(trip),
+    days,
   };
 }
 

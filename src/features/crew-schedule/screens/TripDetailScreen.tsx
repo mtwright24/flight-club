@@ -1,7 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  FlatList,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   fetchCrewScheduleTripByPairingUuid,
@@ -20,7 +31,7 @@ import { consumeStashedTripForDetail } from '../tripDetailNavCache';
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
-import { buildTripDetailViewModel, formatLayoverTotalMinutes } from '../tripDetailViewModel';
+import { buildTripDetailViewModel, formatLayoverTotalMinutes, type TripDayViewModel } from '../tripDetailViewModel';
 import type { CrewScheduleLeg, CrewScheduleTrip } from '../types';
 import CrewScheduleHeader from '../components/CrewScheduleHeader';
 import TripCrewList from '../components/TripCrewList';
@@ -54,6 +65,9 @@ export default function TripDetailScreen() {
   const [legStatuses, setLegStatuses] = useState<Record<string, string>>({});
   const [trackingLegId, setTrackingLegId] = useState<string | null>(null);
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
+  const panelPagerRef = useRef<FlatList<TripDayViewModel>>(null);
+  const panelScrollAnimatedRef = useRef(false);
+  const { width: panelWidth } = useWindowDimensions();
 
   const display = useMemo(
     () => (trip ? mergeTripWithMetadataRow(trip, tripMeta) : undefined),
@@ -62,14 +76,43 @@ export default function TripDetailScreen() {
 
   const vm = useMemo(() => (display ? buildTripDetailViewModel(display) : null), [display]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setSelectedDayIndex(0);
+    panelScrollAnimatedRef.current = false;
   }, [tripId]);
 
   useEffect(() => {
     if (!vm?.days.length) return;
     setSelectedDayIndex((i) => Math.max(0, Math.min(i, vm.days.length - 1)));
   }, [vm?.days.length]);
+
+  useEffect(() => {
+    if (!vm?.days.length || panelWidth <= 0) return;
+    const idx = Math.min(selectedDayIndex, vm.days.length - 1);
+    const animated = panelScrollAnimatedRef.current;
+    panelScrollAnimatedRef.current = true;
+    panelPagerRef.current?.scrollToOffset({ offset: idx * panelWidth, animated });
+  }, [selectedDayIndex, vm?.days.length, panelWidth]);
+
+  const getOperatingPanelLayout = useCallback(
+    (_data: ArrayLike<TripDayViewModel> | null | undefined, index: number) => ({
+      length: panelWidth,
+      offset: panelWidth * index,
+      index,
+    }),
+    [panelWidth],
+  );
+
+  const onOperatingPanelMomentumEnd = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (!vm?.days.length || panelWidth <= 0) return;
+      const idx = Math.round(e.nativeEvent.contentOffset.x / panelWidth);
+      if (idx < 0 || idx >= vm.days.length || idx === selectedDayIndex) return;
+      panelScrollAnimatedRef.current = false;
+      setSelectedDayIndex(idx);
+    },
+    [vm?.days.length, panelWidth, selectedDayIndex],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -325,7 +368,6 @@ export default function TripDetailScreen() {
 
   const t = display as CrewScheduleTrip;
   const hotel = t.hotel;
-  const selectedDay = vm.days[selectedDayIndex] ?? vm.days[0];
   const headerTitle = vm.pairingCode.length > 18 ? `${vm.pairingCode.slice(0, 17)}…` : vm.pairingCode;
 
   return (
@@ -338,19 +380,44 @@ export default function TripDetailScreen() {
       >
         <TripSummaryCard vm={vm} showStats />
 
-        <Text style={styles.h2}>Operating days</Text>
+        <Text style={styles.h2}>Operating duties</Text>
         <TripDayTimelineNav
           days={vm.days}
           selectedDayIndex={selectedDayIndex}
           onSelectDay={setSelectedDayIndex}
         />
 
-        {selectedDay ? (
-          <TripDayDetailPanel
-            day={selectedDay}
-            legStatuses={legStatuses}
-            trackingLegId={trackingLegId}
-            onTrackLeg={(leg) => void trackLeg(leg, t)}
+        {vm.days.length > 0 ? (
+          <FlatList
+            ref={panelPagerRef}
+            data={vm.days}
+            keyExtractor={(item) => item.panelId}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            decelerationRate="fast"
+            getItemLayout={getOperatingPanelLayout}
+            renderItem={({ item }) => (
+              <View style={{ width: panelWidth }}>
+                <TripDayDetailPanel
+                  day={item}
+                  legStatuses={legStatuses}
+                  trackingLegId={trackingLegId}
+                  onTrackLeg={(leg) => void trackLeg(leg, t)}
+                />
+              </View>
+            )}
+            onMomentumScrollEnd={onOperatingPanelMomentumEnd}
+            onScrollToIndexFailed={({ index }) => {
+              setTimeout(() => {
+                panelPagerRef.current?.scrollToOffset({
+                  offset: index * panelWidth,
+                  animated: false,
+                });
+              }, 0);
+            }}
           />
         ) : null}
 
@@ -371,9 +438,12 @@ export default function TripDetailScreen() {
           {hotel?.name ? (
             <>
               <Text style={styles.hotelName}>{hotel.name}</Text>
-              <Text style={styles.meta}>
-                {[hotel.city, hotel.phone, hotel.address].filter(Boolean).join(' · ')}
-              </Text>
+              {[hotel.city, hotel.address].filter(Boolean).length > 0 ? (
+                <Text style={styles.meta}>{[hotel.city, hotel.address].filter(Boolean).join(' · ')}</Text>
+              ) : null}
+              {hotel.phone?.trim() ? (
+                <Text style={styles.meta}>{hotel.phone.trim()}</Text>
+              ) : null}
               {hotel.shuttleNotes ? <Text style={styles.note}>Shuttle · {hotel.shuttleNotes}</Text> : null}
             </>
           ) : (

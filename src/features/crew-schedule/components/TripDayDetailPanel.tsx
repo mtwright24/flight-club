@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { scheduleTheme as T } from '../scheduleTheme';
-import { shortDateLabel, type TripDayViewModel } from '../tripDetailViewModel';
+import type { TripDayViewModel } from '../tripDetailViewModel';
 import type { CrewScheduleLeg } from '../types';
 
 type Props = {
@@ -13,12 +13,20 @@ type Props = {
 };
 
 export default function TripDayDetailPanel({ day, legStatuses, trackingLegId, onTrackLeg }: Props) {
+  const reportDisplay = day.legs.find((l) => l.reportLocal?.trim())?.reportLocal;
   return (
     <View style={styles.card}>
       <View style={styles.dayTitleRow}>
         <Text style={styles.dayPill}>{day.dayLabel}</Text>
-        <Text style={styles.dayDate}>{shortDateLabel(day.dateIso)}</Text>
+        <Text style={styles.dayDate}>{day.dateShort}</Text>
       </View>
+
+      {reportDisplay ? (
+        <View style={styles.reportRow}>
+          <Text style={styles.reportK}>Report</Text>
+          <Text style={styles.reportV}>{reportDisplay}</Text>
+        </View>
+      ) : null}
 
       {day.layoverRestLine ? (
         <View style={styles.layRow}>
@@ -114,6 +122,17 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   dayDate: { fontSize: 14, fontWeight: '700', color: T.textSecondary },
+  reportRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: T.line,
+  },
+  reportK: { fontSize: 12, fontWeight: '800', color: T.textSecondary, textTransform: 'uppercase' },
+  reportV: { fontSize: 14, fontWeight: '700', color: T.text },
   layRow: {
     flexDirection: 'row',
     alignItems: 'center',

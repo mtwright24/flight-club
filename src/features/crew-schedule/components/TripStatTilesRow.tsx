@@ -7,19 +7,21 @@ type Props = {
   tiles: TripStatTile[];
   /** Slightly tighter padding for bottom sheet */
   compact?: boolean;
+  /** Tighter still (trip quick preview only). */
+  dense?: boolean;
 };
 
-export default function TripStatTilesRow({ tiles, compact }: Props) {
+export default function TripStatTilesRow({ tiles, compact, dense }: Props) {
   return (
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
-      contentContainerStyle={[styles.row, compact && styles.rowCompact]}
+      contentContainerStyle={[styles.row, compact && styles.rowCompact, dense && styles.rowDense]}
     >
       {tiles.map((t) => (
-        <View key={t.id} style={[styles.tile, compact && styles.tileCompact]}>
-          <Text style={styles.tileLabel}>{t.label}</Text>
-          <Text style={styles.tileValue} numberOfLines={1}>
+        <View key={t.id} style={[styles.tile, compact && styles.tileCompact, dense && styles.tileDense]}>
+          <Text style={[styles.tileLabel, dense && styles.tileLabelDense]}>{t.label}</Text>
+          <Text style={[styles.tileValue, dense && styles.tileValueDense]} numberOfLines={1}>
             {t.value}
           </Text>
         </View>
@@ -36,6 +38,7 @@ const styles = StyleSheet.create({
     paddingRight: 4,
   },
   rowCompact: { paddingVertical: 2 },
+  rowDense: { gap: 6, paddingVertical: 0 },
   tile: {
     minWidth: 76,
     paddingVertical: 10,
@@ -51,6 +54,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     borderRadius: 10,
   },
+  tileDense: {
+    minWidth: 62,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
   tileLabel: {
     fontSize: 10,
     fontWeight: '800',
@@ -60,4 +69,6 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   tileValue: { fontSize: 14, fontWeight: '800', color: T.text },
+  tileLabelDense: { fontSize: 9, marginBottom: 2, letterSpacing: 0.3 },
+  tileValueDense: { fontSize: 12 },
 });

@@ -8,6 +8,7 @@ import { addIsoDays } from './ledgerContext';
 import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
 import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus } from './types';
 import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
+import { classicTripSummaryFromMergedTrip } from './tripMapper';
 
 function calendarSpanDays(startIso: string, endIso: string): number {
   const a = new Date(`${startIso}T12:00:00`);
@@ -57,7 +58,7 @@ function mergeTwoTrips(a: CrewScheduleTrip, b: CrewScheduleTrip): CrewScheduleTr
   const first = legs[0];
   const last = legs[legs.length - 1];
   const st = pickMergedStatus(a, b, legs);
-  return {
+  const merged: CrewScheduleTrip = {
     ...a,
     id: a.id,
     schedulePairingId: a.schedulePairingId ?? b.schedulePairingId,
@@ -76,6 +77,8 @@ function mergeTwoTrips(a: CrewScheduleTrip, b: CrewScheduleTrip): CrewScheduleTr
       carryOutToNextMonth: Boolean(a.ledgerContext?.carryOutToNextMonth || b.ledgerContext?.carryOutToNextMonth),
     },
   };
+  const summary = classicTripSummaryFromMergedTrip(merged);
+  return summary ? { ...merged, summary } : merged;
 }
 
 /**

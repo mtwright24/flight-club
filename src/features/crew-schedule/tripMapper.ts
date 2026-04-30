@@ -2,12 +2,13 @@ import { addIsoDays } from './ledgerContext';
 import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
 import { formatTripCompactShorthand } from './jetblueFlicaImport';
 import { extractLayoverRestFourDigits, formatLayoverColumnDisplay } from './scheduleTime';
-import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus } from './types';
+import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus, TripSummary } from './types';
 import type { ScheduleEntryRow } from './scheduleApi';
 import type { ScheduleDuty, SchedulePairing, SchedulePairingLegLite } from './buildClassicRows';
 import { pairingOverlapsCalendarMonth } from './buildClassicRows';
 import { isOvernightArrivalToPairingBase } from './b6CrewlineOvernightBase';
 import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
+import { buildTripSummaryFromNormalized, type TripSummaryPackExtra } from './tripSummary';
 
 function statusFromCode(code: string | null | undefined): ScheduleDutyStatus {
   const u = String(code ?? '').toUpperCase();
@@ -142,6 +143,218 @@ function legsFromRow(day: ScheduleEntryRow): CrewScheduleLeg[] {
     isDeadhead: isDh,
     flightNumber,
   }));
+}
+
+const FCV_LO_FOR_DUTY = /\bfcv_lo:([A-Z]{3,4})\b/i;
+
+function localClockToFourDigit(t: string | null | undefined): string | null {
+  if (t == null || !String(t).trim()) return null;
+  const s = String(t).trim();
+  if (/^\d{4}$/.test(s)) return s;
+  const m24 = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) return `${m24[1]!.padStart(2, '0')}${m24[2]}`;
+  return null;
+}
+
+function blockHoursFromLegDisplay(blockTimeLocal?: string | null): number | null {
+  if (!blockTimeLocal) return null;
+  const s = String(blockTimeLocal).trim();
+  if (/^\d{4}$/.test(s)) {
+    const h = parseInt(s.slice(0, 2), 10);
+    const m = parseInt(s.slice(2), 10);
+    if (h > 99 || m > 59) return null;
+    return (h * 60 + m) / 60;
+  }
+  const m24 = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) {
+    const h = parseInt(m24[1]!, 10);
+    const m = parseInt(m24[2]!, 10);
+    if (h > 99 || m > 59) return null;
+    return (h * 60 + m) / 60;
+  }
+  return null;
+}
+
+/** `schedule_entries`-backed duties for TripSummary (same shape as normalized `schedule_duties`). */
+function scheduleEntryRowsToNormDuties(days: ScheduleEntryRow[], tripPairingCode: string): ScheduleDuty[] {
+  const byDate = new Map<string, ScheduleEntryRow[]>();
+  for (const d of days) {
+    const arr = byDate.get(d.date) ?? [];
+    arr.push(d);
+    byDate.set(d.date, arr);
+  }
+  const pid = String(tripPairingCode ?? '').trim();
+  const out: ScheduleDuty[] = [];
+  for (const dateIso of [...byDate.keys()].sort((a, b) => a.localeCompare(b))) {
+    const rows = byDate.get(dateIso)!;
+    rows.sort((a, b) => String(a.report_time ?? '').localeCompare(String(b.report_time ?? '')));
+    const primary = rows[0]!;
+    const last = rows[rows.length - 1]!;
+
+    let layover_city: string | null = null;
+    for (const r of rows) {
+      const mx = FCV_LO_FOR_DUTY.exec(r.notes ?? '');
+      if (mx?.[1]) {
+        layover_city = mx[1]!.toUpperCase();
+        break;
+      }
+    }
+    if (!layover_city) {
+      for (const r of rows) {
+        if (!r.city) continue;
+        if (parseRouteSegmentsFromCity(r.city).length) continue;
+        const t = r.city.trim().toUpperCase();
+        if (/^[A-Z]{3,4}$/.test(t)) {
+          layover_city = t;
+          break;
+        }
+      }
+    }
+
+    let layover_time: string | null = null;
+    for (const r of rows) {
+      const L = r.layover?.trim();
+      if (L && /^\d{4}$/.test(L)) {
+        layover_time = L;
+        break;
+      }
+      const fromCity = extractLayoverRestFourDigits(r.city ?? null);
+      if (fromCity) {
+        layover_time = fromCity;
+        break;
+      }
+    }
+
+    const contOnly =
+      rows.length > 0 &&
+      rows.every((r) => statusFromCode(r.status_code) === 'continuation') &&
+      !parseRouteSegmentsFromCity(primary.city).length;
+
+    out.push({
+      import_id: String(primary.source_batch_id ?? primary.trip_group_id ?? 'entry'),
+      pairing_id: pid,
+      duty_date: dateIso,
+      report_time: primary.report_time,
+      duty_off_time: last.d_end_time,
+      next_report_time: null,
+      layover_city,
+      layover_time,
+      hotel_name: null,
+      is_continuation: contOnly,
+    });
+  }
+  return out;
+}
+
+function crewLegsToPairingLegLites(legs: CrewScheduleLeg[]): SchedulePairingLegLite[] {
+  return legs.map((l) => ({
+    pairing_id: 'classic',
+    duty_date: l.dutyDate ?? null,
+    departure_station: l.departureAirport,
+    arrival_station: l.arrivalAirport,
+    scheduled_departure_local: localClockToFourDigit(l.departLocal),
+    scheduled_arrival_local: localClockToFourDigit(l.arriveLocal),
+    release_time_local: localClockToFourDigit(l.releaseLocal),
+    block_time: blockHoursFromLegDisplay(l.blockTimeLocal),
+    normalized_json: {},
+  }));
+}
+
+/** Duty-like rows derived from merged/classic `CrewScheduleTrip` when `schedule_entries` rows are unavailable. */
+function tripToNormDutiesFromLegsAndMeta(trip: CrewScheduleTrip): ScheduleDuty[] {
+  const byLegDate = new Map<string, CrewScheduleLeg[]>();
+  for (const leg of trip.legs) {
+    const d = leg.dutyDate ?? trip.startDate;
+    const arr = byLegDate.get(d) ?? [];
+    arr.push(leg);
+    byLegDate.set(d, arr);
+  }
+  const metaDates = new Set<string>();
+  for (const k of Object.keys(trip.layoverByDate ?? {})) metaDates.add(k.slice(0, 10));
+  for (const k of Object.keys(trip.layoverStationByDate ?? {})) metaDates.add(k.slice(0, 10));
+  const allDates = new Set<string>([...byLegDate.keys(), ...metaDates]);
+  const sorted = [...allDates]
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d >= trip.startDate.slice(0, 10) && d <= trip.endDate.slice(0, 10))
+    .sort((a, b) => a.localeCompare(b));
+  const pid = String(trip.pairingCode ?? '').trim();
+  const out: ScheduleDuty[] = [];
+  for (const dateIso of sorted) {
+    const dayLegs = byLegDate.get(dateIso);
+    if (dayLegs?.length) {
+      const sortedLegs = [...dayLegs].sort((a, b) =>
+        departureTimeForDutyDaySortKey(a.departLocal).localeCompare(departureTimeForDutyDaySortKey(b.departLocal)),
+      );
+      const first = sortedLegs[0]!;
+      const last = sortedLegs[sortedLegs.length - 1]!;
+      const laySt = trip.layoverStationByDate?.[dateIso] ?? null;
+      const layRaw = trip.layoverByDate?.[dateIso];
+      const layDigits = extractLayoverRestFourDigits(layRaw ?? null);
+      out.push({
+        import_id: trip.id,
+        pairing_id: pid,
+        duty_date: dateIso,
+        report_time: first.reportLocal ?? null,
+        duty_off_time: last.releaseLocal ?? null,
+        next_report_time: null,
+        layover_city: laySt,
+        layover_time: layDigits,
+        hotel_name: null,
+      });
+    } else {
+      const laySt = trip.layoverStationByDate?.[dateIso] ?? null;
+      const layRaw = trip.layoverByDate?.[dateIso];
+      const layDigits = extractLayoverRestFourDigits(layRaw ?? null);
+      if (!laySt && !layDigits) continue;
+      out.push({
+        import_id: trip.id,
+        pairing_id: pid,
+        duty_date: dateIso,
+        report_time: null,
+        duty_off_time: null,
+        next_report_time: null,
+        layover_city: laySt,
+        layover_time: layDigits,
+        hotel_name: null,
+        is_continuation: true,
+      });
+    }
+  }
+  return out;
+}
+
+/** TripSummary from `schedule_entries` grouping (classic month / ledger). */
+export function classicTripSummaryFromEntries(
+  days: ScheduleEntryRow[],
+  legs: CrewScheduleLeg[],
+  pairingCode: string,
+  baseHint: string | null | undefined,
+  startDate: string,
+  endDate: string,
+): TripSummary | undefined {
+  const code = String(pairingCode ?? '').trim();
+  if (!code || code === '—' || isFlicaNonFlyingActivityId(code)) return undefined;
+  if (!legs.length) return undefined;
+  const normDuties = scheduleEntryRowsToNormDuties(days, code);
+  const normLegs = crewLegsToPairingLegLites(legs);
+  return buildTripSummaryFromNormalized(code, baseHint ?? null, startDate, endDate, normDuties, normLegs, undefined);
+}
+
+/** Recompute TripSummary after ledger merges (no raw entry rows — legs + layover maps only). */
+export function classicTripSummaryFromMergedTrip(trip: CrewScheduleTrip): TripSummary | undefined {
+  const code = String(trip.pairingCode ?? '').trim();
+  if (!code || code === '—' || isFlicaNonFlyingActivityId(code)) return undefined;
+  if (!trip.legs.length) return undefined;
+  const normDuties = tripToNormDutiesFromLegsAndMeta(trip);
+  const normLegs = crewLegsToPairingLegLites(trip.legs);
+  return buildTripSummaryFromNormalized(
+    code,
+    trip.destination?.trim() ?? null,
+    trip.startDate,
+    trip.endDate,
+    normDuties,
+    normLegs,
+    undefined,
+  );
 }
 
 /** Map one trip_group's rows to a single CrewScheduleTrip. */
@@ -343,6 +556,11 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
     }
   }
 
+  const summary =
+    legs.length > 0 && !isFlicaNonFlyingActivityId(pairingCode)
+      ? classicTripSummaryFromEntries(days, legs, pairingCode, destination ?? null, first.date, endDate)
+      : undefined;
+
   return {
     id: first.trip_group_id,
     pairingCode,
@@ -360,6 +578,7 @@ function entryGroupToTrip(days: ScheduleEntryRow[]): CrewScheduleTrip {
     legs,
     ...(Object.keys(layoverByDate).length > 0 ? { layoverByDate } : {}),
     ...(Object.keys(layoverStationByDate).length > 0 ? { layoverStationByDate } : {}),
+    ...(summary ? { summary } : {}),
   };
 }
 
@@ -397,6 +616,7 @@ export function buildCrewScheduleTripsFromNormalizedPack(
   duties: ScheduleDuty[],
   pairings: SchedulePairing[],
   pairingLegs: SchedulePairingLegLite[],
+  extraByPairingUuid?: Map<string, TripSummaryPackExtra> | null,
 ): CrewScheduleTrip[] {
   const out: CrewScheduleTrip[] = [];
   const dutyByPairing = new Map<string, ScheduleDuty[]>();
@@ -443,7 +663,7 @@ export function buildCrewScheduleTripsFromNormalizedPack(
         id: String(pairUuid),
         schedulePairingId: String(pairUuid),
         pairingCode: code,
-        base: pairing.base_code ? String(pairing.base_code).trim() : 'JFK',
+        base: pairing.base_code ?? undefined,
         month: viewMonth,
         year: viewYear,
         startDate: zlStart,
@@ -452,6 +672,15 @@ export function buildCrewScheduleTripsFromNormalizedPack(
         status: zlStatus,
         routeSummary: code,
         legs: [],
+        summary: buildTripSummaryFromNormalized(
+          code,
+          pairing.base_code ?? null,
+          zlStart,
+          zlEnd,
+          [],
+          [],
+          extraByPairingUuid?.get(String(pairUuid)),
+        ),
       });
       continue;
     }
@@ -557,12 +786,13 @@ export function buildCrewScheduleTripsFromNormalizedPack(
     const routeSummary = buildCompactTripRouteSummary(legs, code);
     const firstLeg = legs[0];
     const lastL = legs[legs.length - 1];
+    const summaryExtra = extraByPairingUuid?.get(String(pairUuid));
 
     out.push({
       id: String(pairUuid),
       schedulePairingId: String(pairUuid),
       pairingCode: code,
-      base: pairing.base_code ? String(pairing.base_code).trim() : 'JFK',
+      base: pairing.base_code ?? undefined,
       month: viewMonth,
       year: viewYear,
       startDate,
@@ -573,6 +803,15 @@ export function buildCrewScheduleTripsFromNormalizedPack(
       origin: firstLeg?.departureAirport,
       destination: lastL?.arrivalAirport,
       legs,
+      summary: buildTripSummaryFromNormalized(
+        code,
+        pairing.base_code ?? null,
+        startDate,
+        endDate,
+        tripDuties,
+        tripLegsRaw,
+        summaryExtra,
+      ),
       ...(Object.keys(layoverByDate).length > 0 ? { layoverByDate } : {}),
       ...(Object.keys(layoverStationByDate).length > 0 ? { layoverStationByDate } : {}),
     });

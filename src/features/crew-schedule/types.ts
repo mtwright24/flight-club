@@ -61,6 +61,45 @@ export interface ScheduleCrewMember {
   roleLabel?: string;
 }
 
+/** Computed quick-preview payload from normalized duties + legs (mapping layer only). */
+export type TripSummary = {
+  pairingCode: string;
+  route: string;
+  startDate: string;
+  endDate: string;
+  dutyDays: number;
+  legsCount: number;
+
+  blockTotal: number;
+  creditTotal: number;
+  tafbTotal: number;
+  layoverTotal: number;
+
+  legs: {
+    dayIndex: number;
+    route: string;
+    date: string;
+    report?: string;
+    dep: string;
+    arr: string;
+    block: number;
+    layover?: number;
+    dutyEnd?: string;
+  }[];
+
+  crew: {
+    position: string;
+    name: string;
+    role?: string;
+  }[];
+
+  hotel?: {
+    name: string;
+    city: string;
+    nights: number;
+  };
+};
+
 export interface CrewScheduleTrip {
   id: string;
   /**
@@ -80,6 +119,8 @@ export interface CrewScheduleTrip {
   status: ScheduleDutyStatus;
   /** Aviation-style compact trip line (layover pattern + return base), not a full leg chain. */
   routeSummary: string;
+  /** Mapping-layer summary for quick preview (normalized legs + duties). */
+  summary?: TripSummary;
   /** First departure airport on the trip (not necessarily crew base). */
   origin?: string;
   destination?: string;

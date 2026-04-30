@@ -54,17 +54,17 @@ export default function TripDayTimelineNav({ days, selectedDayIndex, onSelectDay
     const active = idx === selectedDayIndex;
     return (
       <Pressable
-        key={d.dateIso}
+        key={d.panelId}
         onPress={() => onSelectDay(idx)}
         style={[styles.column, columnStyle]}
         accessibilityRole="button"
         accessibilityState={{ selected: active }}
-        accessibilityLabel={`${d.dayLabel}, ${d.dateIso}`}
+        accessibilityLabel={`${d.dayLabel}, ${d.dateShort}`}
       >
         <View style={[styles.pill, active && styles.pillActive]}>
           <Text style={[styles.pillText, active && styles.pillTextActive]}>{d.dayLabel}</Text>
           <Text style={[styles.pillSub, active && styles.pillSubActive]} numberOfLines={1}>
-            {d.dateIso.slice(5)}
+            {d.dateShort}
           </Text>
         </View>
         <View style={styles.trackSlot}>
