@@ -542,7 +542,7 @@ const ScheduleRow = memo(function ScheduleRow({
       </View>
       <View style={[styles.rowCell, styles.cellLayover]}>
         <Text
-          style={[styles.cellText, styles.detailCellText, dataPlaceholder && styles.routePlaceholder]}
+          style={[styles.cellText, styles.detailCellText, styles.layoverCellText, dataPlaceholder && styles.routePlaceholder]}
           numberOfLines={1}
           ellipsizeMode="tail"
         >
@@ -749,7 +749,7 @@ export default function ClassicListView({
           <BandBHeaderLabel align="left">D-END</BandBHeaderLabel>
         </View>
         <View style={[styles.headerBandCell, styles.headerColLayover]}>
-          <BandBHeaderLabel align="left">LAYOVER</BandBHeaderLabel>
+          <BandBHeaderLabel align="center">LAYOVER</BandBHeaderLabel>
         </View>
         <View style={[styles.headerBandCell, styles.headerBandWx]}>
           <BandBHeaderLabel align="center">WX</BandBHeaderLabel>
@@ -881,7 +881,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     flexBasis: 0,
     minWidth: GRID_W_LAYOVER,
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   /** WX: narrow flex share so the column never grows wider than a small glyph. */
   headerBandWx: {
@@ -1008,7 +1008,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderRightWidth: DIV,
     borderRightColor: '#ECEEF1',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   cellWx: {
     flexGrow: GRID_W_WX,
@@ -1063,6 +1064,7 @@ const styles = StyleSheet.create({
   assignmentCode: { fontSize: 8.2, fontWeight: '700', color: T.text, lineHeight: 10 },
   routeMain: { fontSize: 7.8, fontWeight: '600', color: '#B5161E', lineHeight: 10 },
   detailCellText: { fontSize: 7.8, color: '#607086', lineHeight: 10, fontWeight: '600' },
+  layoverCellText: { textAlign: 'center' },
   wxCellText: {
     fontSize: 8,
     color: '#EAB308',
