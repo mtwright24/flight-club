@@ -908,6 +908,11 @@ export function buildClassicRowsFromDuties(
         const legHintStation = classicStationHintFromLegs(pairingLegs, legUuidSet, dateIso);
 
         const isLabelDay = dateIso === tripLabelIso;
+        /** Mar 8 header TRIP_START → Mar 9 first duty must stay city "-" (no leg-hint promotion to LHR). */
+        const isFirstDutyDayImmediatelyAfterHeaderLead =
+          headerLeadBeforeFirstDuty &&
+          firstDutyIsoFromDuties != null &&
+          dateIso === firstDutyIsoFromDuties;
         let rowType: RowType = isLabelDay ? 'TRIP_START' : 'TRIP_CONTINUATION';
         if (monthLastForCarry != null && dateIso > monthLastForCarry && rowType !== 'TRIP_START') {
           rowType = 'CARRY_OUT';
@@ -950,6 +955,16 @@ export function buildClassicRowsFromDuties(
           !dutyByIso.has(nextCalendarIso) &&
           !nextDateOccupiedByAnyDuty;
 
+        const baseU = String(baseCity).trim().toUpperCase();
+        const layU = lay != null ? String(lay).trim().toUpperCase() : null;
+        const hintU =
+          legHintStation != null && String(legHintStation).trim()
+            ? String(legHintStation).trim().toUpperCase()
+            : null;
+        /** Duty DB + same-day leg hint: real outstation to show (not base). Used to avoid forcing '-' before synthetic JFK when LAS is real (J4173). */
+        const hasRealOutstationLayoverForThisDuty =
+          (layU != null && layU !== baseU) || (hintU != null && hintU !== baseU);
+
         const isTrueEndOfTrip = isLastLeg && !hasSyntheticNextDay;
 
         let cityText: string;
@@ -959,7 +974,8 @@ export function buildClassicRowsFromDuties(
             rowType = 'TRIP_END';
           }
           cityText = baseCity;
-        } else if (isLastLeg && hasSyntheticNextDay && !hasLay) {
+        } else if (isLastLeg && hasSyntheticNextDay && !hasRealOutstationLayoverForThisDuty) {
+          /** Last persisted duty before synthetic/base next day: dash only when no real non-base outstation (J3H95). */
           cityText = '-';
         } else if (rowType === 'TRIP_START') {
           cityText = hasLay ? lay! : '-';
@@ -1055,6 +1071,10 @@ export function buildClassicRowsFromDuties(
           suppressMiddleOutstationLegHint = true;
         }
 
+        /** When we force dash before synthetic JFK, block leg-hint promotion to arrival (JFK); if real outstation exists, allow normal hint path. */
+        const suppressSynthBaseLegHint =
+          isLastLeg && hasSyntheticNextDay && !hasRealOutstationLayoverForThisDuty;
+
         if (activityCityCode && cityText === baseCity) cityText = '-';
 
         if (
@@ -1062,28 +1082,14 @@ export function buildClassicRowsFromDuties(
           cityText === '-' &&
           legHintStation &&
           rowType !== 'TRIP_END' &&
-          !suppressMiddleOutstationLegHint
+          !suppressMiddleOutstationLegHint &&
+          !suppressSynthBaseLegHint
         ) {
           cityText = legHintStation;
         }
 
-        if (
-          typeof __DEV__ !== 'undefined' &&
-          __DEV__ &&
-          (String(flicaPairingKey).toUpperCase() === 'J1010' ||
-            String(flicaPairingKey).toUpperCase() === 'J4173')
-        ) {
-          console.log('[CITY FINAL FIX]', {
-            pairingId: flicaPairingKey,
-            dutyDate: dutyDateIso,
-            layoverCity: lay ?? null,
-            baseCity,
-            nextIso: nextCalendarIso,
-            nextDateOccupiedByAnyDuty,
-            hasSyntheticNextDay,
-            isTrueEndOfTrip,
-            chosenCity: cityText,
-          });
+        if (isFirstDutyDayImmediatelyAfterHeaderLead) {
+          cityText = '-';
         }
 
         const reportMerged =
@@ -1111,6 +1117,39 @@ export function buildClassicRowsFromDuties(
             ? layoverMerged
             : null;
 
+        /** J1030: first persisted duty shifts display onto header-lead day — clear duplicate report/d-end/lay on that duty row. */
+        const pushDutyReport = isFirstDutyDayImmediatelyAfterHeaderLead ? null : reportMerged;
+        const pushDutyEnd = isFirstDutyDayImmediatelyAfterHeaderLead ? null : dutyEndMerged;
+        const pushLayover = isFirstDutyDayImmediatelyAfterHeaderLead ? null : layoverText;
+
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          const pk = String(flicaPairingKey).trim().toUpperCase();
+          if (pk === 'J4173' && dateIso >= '2026-04-06' && dateIso <= '2026-04-09') {
+            console.log('[J4173_CITY_CHECK]', {
+              dateIso,
+              hasRealOutstationLayoverForThisDuty,
+              isLastLeg,
+              hasSyntheticNextDay,
+              lay,
+              legHintStation,
+              cityText,
+              rowType,
+            });
+          }
+          if (pk === 'J3H95' && dateIso >= '2026-04-22' && dateIso <= '2026-04-24') {
+            console.log('[J3H95_DASH_CHECK]', {
+              dateIso,
+              hasRealOutstationLayoverForThisDuty,
+              isLastLeg,
+              hasSyntheticNextDay,
+              lay,
+              legHintStation,
+              cityText,
+              rowType,
+            });
+          }
+        }
+
         rows.push({
           dateIso,
           pairingText: activityCityCode
@@ -1118,10 +1157,10 @@ export function buildClassicRowsFromDuties(
             : isLabelDay
               ? flicaPairingKey || null
               : null,
-          reportText: reportMerged,
+          reportText: pushDutyReport,
           cityText,
-          dutyEndText: dutyEndMerged,
-          layoverText,
+          dutyEndText: pushDutyEnd,
+          layoverText: pushLayover,
           rowType,
           sourcePairingId: flicaPairingKey,
         });
@@ -1140,9 +1179,20 @@ export function buildClassicRowsFromDuties(
       }
 
       if (dateIso < enumerateEnd) {
-        const legF = classicDutyFieldsFromLegs(pairingLegs, legUuidSet, dateIso);
+        const legAttachIso =
+          headerLeadBeforeFirstDuty &&
+          dateIso === opStart &&
+          firstDutyIsoFromDuties != null &&
+          tripDutiesSorted.length > 0
+            ? firstDutyIsoFromDuties
+            : dateIso;
+        const legF = classicDutyFieldsFromLegs(pairingLegs, legUuidSet, legAttachIso);
         const gapStationRaw = classicStationHintFromLegs(pairingLegs, legUuidSet, dateIso);
         let gapCity = gapStationRaw != null ? gapStationRaw : '-';
+        /** Header-lead (opStart): show first duty report / city / D-end / layover on pairing label row — not blanks from wrong-calendar legs. */
+        let gapReport = legF.report;
+        let gapDEnd = legF.dEnd;
+        let gapLayoverRest = legF.layoverRest;
         if (headerLeadBeforeFirstDuty && dateIso === opStart && tripDutiesSorted.length) {
           const fd = tripDutiesSorted[0]!;
           const fdIso = sliceDutyIso(fd.duty_date);
@@ -1150,9 +1200,29 @@ export function buildClassicRowsFromDuties(
             fd.layover_city != null && String(fd.layover_city).trim()
               ? String(fd.layover_city).trim()
               : null;
-          const hint0 = fdIso ? classicStationHintFromLegs(pairingLegs, legUuidSet, fdIso) : null;
+          const legHintStationLead = fdIso ? classicStationHintFromLegs(pairingLegs, legUuidSet, fdIso) : null;
           if (lay0 && lay0.toUpperCase() !== baseCity.toUpperCase()) gapCity = lay0;
-          else if (hint0 && hint0.toUpperCase() !== baseCity.toUpperCase()) gapCity = hint0;
+          else if (legHintStationLead && legHintStationLead.toUpperCase() !== baseCity.toUpperCase()) gapCity = legHintStationLead;
+          const legFields = classicDutyFieldsFromLegs(pairingLegs, legUuidSet, fdIso ?? dateIso);
+          gapReport =
+            fd.report_time != null && String(fd.report_time).trim()
+              ? String(fd.report_time).trim()
+              : legFields.report;
+          gapDEnd =
+            fd.duty_off_time != null && String(fd.duty_off_time).trim()
+              ? String(fd.duty_off_time).trim()
+              : legFields.dEnd;
+          const layoverRawLead =
+            fd.layover_time != null && String(fd.layover_time).trim() ? String(fd.layover_time).trim() : null;
+          const dutyHadRep = Boolean(fd.report_time != null && String(fd.report_time).trim());
+          const dutyHadDEnd = Boolean(fd.duty_off_time != null && String(fd.duty_off_time).trim());
+          const usedLegTimesLead =
+            (!dutyHadRep && Boolean(legFields.report)) || (!dutyHadDEnd && Boolean(legFields.dEnd));
+          const cityMatchesLegLead =
+            Boolean(legHintStationLead) && String(gapCity).trim().toUpperCase() === String(legHintStationLead).trim().toUpperCase();
+          gapLayoverRest =
+            layoverRawLead ??
+            (legFields.layoverRest && (usedLegTimesLead || cityMatchesLegLead) ? legFields.layoverRest : null);
         }
         let rowType: RowType = dateIso === tripLabelIso ? 'TRIP_START' : 'TRIP_CONTINUATION';
         if (monthLastForCarry != null && dateIso > monthLastForCarry && rowType !== 'TRIP_START') rowType = 'CARRY_OUT';
@@ -1161,10 +1231,10 @@ export function buildClassicRowsFromDuties(
         rows.push({
           dateIso,
           pairingText: gapPairing,
-          reportText: legF.report,
+          reportText: gapReport,
           cityText: gapCity,
-          dutyEndText: legF.dEnd,
-          layoverText: legF.layoverRest,
+          dutyEndText: gapDEnd,
+          layoverText: gapLayoverRest,
           rowType,
           sourcePairingId: flicaPairingKey,
           syntheticGapNoDuty: true,
@@ -1189,52 +1259,6 @@ export function buildClassicRowsFromDuties(
     };
 
     for (const dIso of calendarDays) pushDutyOrGapRow(dIso);
-
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      const pk = String(flicaPairingKey).trim().toUpperCase();
-      if (pk === 'J1030') {
-        const mar = rows.filter(
-          (r) =>
-            String(r.sourcePairingId).trim().toUpperCase() === 'J1030' &&
-            r.dateIso >= '2026-03-08' &&
-            r.dateIso <= '2026-03-10',
-        );
-        console.log('[J1030_RELOAD_CHECK]', {
-          pairingDbStart: pairingStartDateIso(pairingEffective),
-          opStart,
-          firstDutyDate: firstDutyIsoFromDuties,
-          headerLeadCreated: headerLeadBeforeFirstDuty,
-          rowsMar8To10: mar.map((r) => ({
-            dateIso: r.dateIso,
-            pairingText: r.pairingText,
-            cityText: r.cityText,
-            rowType: r.rowType,
-            syntheticGapNoDuty: r.syntheticGapNoDuty,
-          })),
-        });
-      }
-      if (pk === 'J3H95' && tripDutiesSorted.length >= 3) {
-        const mid = tripDutiesSorted[1];
-        const midIso = mid ? sliceDutyIso(mid.duty_date) : null;
-        const apr = rows.filter(
-          (r) =>
-            String(r.sourcePairingId).trim().toUpperCase() === 'J3H95' &&
-            r.dateIso >= '2026-04-22' &&
-            r.dateIso <= '2026-04-24',
-        );
-        console.log('[J3H95_CITY_CHECK]', {
-          middleContinuationDutyDate: midIso,
-          rowsApr22To24: apr.map((r) => ({
-            dateIso: r.dateIso,
-            pairingText: r.pairingText,
-            cityText: r.cityText,
-            rowType: r.rowType,
-            syntheticGapNoDuty: r.syntheticGapNoDuty,
-            isMiddleDutyDate: midIso != null && r.dateIso === midIso,
-          })),
-        });
-      }
-    }
 
     if (
       syntheticArrivalCalendar != null &&
@@ -1277,6 +1301,48 @@ export function buildClassicRowsFromDuties(
     out = filterClassicRowsForTouchedMonth(out, tripCalendarByPairingId, pairings, viewTag.year, viewTag.month);
     out = partitionRowsForClassicViewMonth(out, viewTag.year, viewTag.month);
   }
+
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const j1030Final = out.filter(
+      (r) =>
+        String(r.sourcePairingId).trim().toUpperCase() === 'J1030' &&
+        r.dateIso >= '2026-03-08' &&
+        r.dateIso <= '2026-03-10',
+    );
+    console.log(
+      '[J1030_SHIFT_CHECK]',
+      j1030Final.map((r) => ({
+        dateIso: r.dateIso,
+        pairingText: r.pairingText,
+        reportText: r.reportText,
+        cityText: r.cityText,
+        dutyEndText: r.dutyEndText,
+        layoverText: r.layoverText,
+        rowType: r.rowType,
+        syntheticGapNoDuty: r.syntheticGapNoDuty ?? false,
+      })),
+    );
+    const j3h95Final = out.filter(
+      (r) =>
+        String(r.sourcePairingId).trim().toUpperCase() === 'J3H95' &&
+        r.dateIso >= '2026-04-22' &&
+        r.dateIso <= '2026-04-24',
+    );
+    console.log(
+      '[J3H95_DASH_CHECK]',
+      j3h95Final.map((r) => ({
+        dateIso: r.dateIso,
+        pairingText: r.pairingText,
+        reportText: r.reportText,
+        cityText: r.cityText,
+        dutyEndText: r.dutyEndText,
+        layoverText: r.layoverText,
+        rowType: r.rowType,
+        syntheticGapNoDuty: r.syntheticGapNoDuty ?? false,
+      })),
+    );
+  }
+
   return out;
 }
 

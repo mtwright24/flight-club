@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, RADIUS, SHADOW, SPACING } from '../../../styles/theme';
 import type { FlicaSyncPromoItem } from './flicaSyncPromoConfig';
 
-type Variant = 'featured' | 'slim' | 'embedded';
+type Variant = 'featured' | 'slim' | 'embedded' | 'strip';
 
 export type FlicaSyncPromoPresentationMode = 'interactive' | 'sync';
 
@@ -74,19 +74,7 @@ function PromoInnerBody({
         <Text style={[styles.sub, isSlim && styles.subSlim]} numberOfLines={isSlim ? 1 : 2}>
           {item.subtitle}
         </Text>
-        {sync ? (
-          item.ctaVariant === 'outline' && item.ctaLabel ? (
-            <View style={[styles.outlinePill, isSlim && styles.outlinePillSlim, styles.decoMuted]}>
-              <Text style={[styles.outlinePillTxt, isSlim && styles.outlinePillTxtSlim]}>{item.ctaLabel}</Text>
-              <Ionicons name="chevron-forward" size={isSlim ? 14 : 16} color={COLORS.text2} />
-            </View>
-          ) : item.route || item.ctaLabel ? (
-            <View style={[styles.ctaRow, isSlim && styles.ctaRowSlim, styles.decoMuted]}>
-              <Text style={[styles.cta, isSlim && styles.ctaSlim, styles.ctaDeco]}>{isSlim ? 'Open' : 'Learn more'}</Text>
-              <Ionicons name="chevron-forward" size={isSlim ? 16 : 18} color={COLORS.text2} />
-            </View>
-          ) : null
-        ) : item.route && item.ctaVariant === 'outline' && item.ctaLabel ? (
+        {sync ? null : item.route && item.ctaVariant === 'outline' && item.ctaLabel ? (
           <View style={[styles.outlinePill, isSlim && styles.outlinePillSlim]}>
             <Text style={[styles.outlinePillTxt, isSlim && styles.outlinePillTxtSlim]}>{item.ctaLabel}</Text>
             <Ionicons name="chevron-forward" size={isSlim ? 14 : 16} color={COLORS.red} />
@@ -106,6 +94,7 @@ export default function FlicaSyncPromoBanner({ item, variant = 'featured', prese
   const router = useRouter();
   const isSlim = variant === 'slim';
   const isEmbedded = variant === 'embedded';
+  const isStrip = variant === 'strip';
   const sync = presentationMode === 'sync';
   const hasArt = item.bannerImage != null;
 
@@ -115,6 +104,31 @@ export default function FlicaSyncPromoBanner({ item, variant = 'featured', prese
   };
 
   if (hasArt && !isEmbedded) {
+    /** Sync flow: designed PNGs include copy — no overlays in sync mode. */
+    if (sync) {
+      const bannerAspectRatio = isStrip ? 72 / 20 : isSlim ? 320 / 112 : 392 / 148;
+      const syncFace = (
+        <View style={[styles.syncArtShell, isStrip && styles.syncArtShellStrip, isSlim && styles.syncArtShellSlim]}>
+          <Image
+            source={item.bannerImage!}
+            accessibilityIgnoresInvertColors
+            style={[styles.syncArtImage, { aspectRatio: bannerAspectRatio }]}
+            resizeMode="cover"
+          />
+        </View>
+      );
+
+      return (
+        <View
+          style={[styles.pressWrap, styles.pressWrapSyncArt, isStrip && styles.pressWrapSyncStrip]}
+          accessibilityRole="image"
+          accessibilityLabel={`${item.title}. ${item.subtitle}`}
+        >
+          {syncFace}
+        </View>
+      );
+    }
+
     const face = (
       <LinearGradient
         colors={
@@ -149,17 +163,6 @@ export default function FlicaSyncPromoBanner({ item, variant = 'featured', prese
       </LinearGradient>
     );
 
-    if (sync) {
-      return (
-        <View
-          style={styles.pressWrap}
-          accessibilityRole="text"
-          accessibilityLabel={`${item.title}. ${item.subtitle}`}
-        >
-          {face}
-        </View>
-      );
-    }
     return (
       <Pressable
         style={({ pressed }) => [styles.pressWrap, pressed && styles.pressed]}
@@ -259,6 +262,35 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.lg,
     overflow: 'hidden',
     ...SHADOW.card,
+  },
+  /** Sync static art: shadow only on shell; image has its own rounded mask. */
+  pressWrapSyncArt: {
+    elevation: 5,
+  },
+  syncArtShell: {
+    borderRadius: RADIUS.lg,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLORS.line + 'CC',
+    backgroundColor: COLORS.card,
+  },
+  syncArtShellSlim: {
+    borderRadius: RADIUS.md,
+    ...SHADOW.soft,
+  },
+  syncArtShellStrip: {
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.line,
+  },
+  syncArtImage: {
+    width: '100%',
+    height: undefined,
+  },
+  /** Compact sync strip — tighter shadow stack. */
+  pressWrapSyncStrip: {
+    ...SHADOW.soft,
+    elevation: 3,
   },
   pressed: { opacity: 0.94 },
   cardFace: {

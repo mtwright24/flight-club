@@ -1,18 +1,20 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Pressable, ScrollView, StyleSheet, Text, View, ActivityIndicator, Easing } from 'react-native';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { Animated, Image, Pressable, ScrollView, StyleSheet, Text, View, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, RADIUS, SHADOW, SPACING } from '../../../styles/theme';
 import FlicaSyncBrandedHero from './FlicaSyncBrandedHero';
 import FlicaSyncProgressSteps, { type FlicaSyncProgressPhase } from './FlicaSyncProgressSteps';
 import FlicaSyncPromoBanner from './FlicaSyncPromoBanner';
-import FlicaSyncSmartSuggestionStrip from './FlicaSyncSmartSuggestionStrip';
 import {
+  FLICA_SYNC_BANNER_IMPORT,
   FLICA_SYNC_BANNER_SUCCESS,
   FLICA_SYNC_BANNER_VERIFY,
   FLICA_SYNC_BANNER_VERIFY_PROGRESS,
-  FLICA_SYNC_IMPORT_ROTATING_PROMOS,
-  type FlicaSyncPromoItem,
+  FLICA_SYNC_PNG_FUELERLINX,
+  FLICA_SYNC_PNG_NONREV_LOADS,
+  FLICA_SYNC_STRIP_VERIFY,
+  FLICA_SYNC_STRIP_VERIFY_PROGRESS,
 } from './flicaSyncPromoConfig';
 
 export type FlicaSyncPresentationPanel = 'verify' | 'verifyProgress' | 'import' | 'success' | 'error';
@@ -30,7 +32,7 @@ const STAR_GOLD = '#EAB308';
 
 type VerifyRow = { key: string; label: string; state: 'active' | 'done' | 'pending' };
 
-function VerificationProgressPinkCard({ rows, tip }: { rows: VerifyRow[]; tip: string }) {
+function VerificationProgressPinkCard({ rows }: { rows: VerifyRow[] }) {
   return (
     <View style={pinkStyles.card}>
       <View style={pinkStyles.row}>
@@ -78,18 +80,14 @@ function VerificationProgressPinkCard({ rows, tip }: { rows: VerifyRow[]; tip: s
           ))}
         </View>
       </View>
-      <View style={pinkStyles.tip}>
-        <Ionicons name="bulb-outline" size={16} color="#EA580C" />
-        <Text style={pinkStyles.tipTxt}>{tip}</Text>
-      </View>
     </View>
   );
 }
 
 const pinkStyles = StyleSheet.create({
   card: {
-    marginTop: SPACING.sm,
-    borderRadius: RADIUS.md,
+    marginTop: 6,
+    borderRadius: RADIUS.lg,
     backgroundColor: '#FFF1F2',
     borderWidth: 1,
     borderColor: '#FECDD3',
@@ -126,115 +124,109 @@ const pinkStyles = StyleSheet.create({
     borderStyle: 'dashed',
     borderColor: COLORS.red,
   },
-  tip: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginTop: SPACING.sm,
-    backgroundColor: '#FFEDD5',
-    borderRadius: RADIUS.sm,
-    padding: SPACING.sm,
-    borderWidth: 1,
-    borderColor: '#FDBA74',
-  },
-  tipTxt: { flex: 1, fontSize: 11, fontWeight: '700', color: '#9A3412', lineHeight: 15 },
 });
 
-function ImportHoldShimmer() {
-  const shift = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.timing(shift, {
-        toValue: 1,
-        duration: 1800,
-        easing: Easing.inOut(Easing.quad),
-        useNativeDriver: true,
-      }),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [shift]);
-  const translateX = shift.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-140, 420],
-  });
+function ImportProgressMeter({ pct, stageLabel }: { pct: number; stageLabel: string }) {
+  const w = Math.min(100, Math.max(0, Math.round(pct)));
+  const labelTrim = stageLabel.trim() || 'Working…';
   return (
-    <View style={shimmerStyles.wrap}>
-      <View style={shimmerStyles.tracks}>
-        <View style={shimmerStyles.track} />
-        <View style={[shimmerStyles.track, { width: '72%' }]} />
-        <View style={[shimmerStyles.track, { width: '88%' }]} />
+    <View style={importMeterStyles.shell} accessibilityRole="progressbar" accessibilityValue={{ text: `${w}% ${labelTrim}` }}>
+      <View style={importMeterStyles.track}>
+        <View style={[importMeterStyles.fill, { width: `${w}%` }]} />
       </View>
-      <Animated.View style={[shimmerStyles.sheen, { transform: [{ translateX }] }]} />
-      <Text style={shimmerStyles.caption}>We&apos;re preparing your March–May schedule — trips, hotels, and duty rows.</Text>
+      <Text style={importMeterStyles.pctLine} numberOfLines={1}>{`${w}% · ${labelTrim}`}</Text>
+      <Text style={importMeterStyles.hint}>Your Flight Club calendar updates as soon as this finishes.</Text>
     </View>
   );
 }
 
-const shimmerStyles = StyleSheet.create({
-  wrap: {
-    marginTop: SPACING.sm,
-    borderRadius: RADIUS.md,
+const importMeterStyles = StyleSheet.create({
+  shell: { marginTop: 10, alignSelf: 'stretch', gap: 6 },
+  track: {
+    height: 12,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.bg,
     borderWidth: 1,
     borderColor: COLORS.line,
-    backgroundColor: COLORS.cardAlt,
     overflow: 'hidden',
-    paddingVertical: SPACING.sm,
-    paddingHorizontal: SPACING.sm,
   },
-  tracks: { gap: 8 },
-  track: {
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: COLORS.line + '66',
-    width: '100%',
+  fill: {
+    height: '100%',
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.red,
   },
-  sheen: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 72,
-    backgroundColor: 'rgba(255,255,255,0.5)',
-    opacity: 0.35,
-  },
-  caption: {
-    marginTop: SPACING.sm,
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.text2,
-    lineHeight: 15,
+  pctLine: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: COLORS.navy,
     textAlign: 'center',
+    letterSpacing: -0.2,
+  },
+  hint: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.text2,
+    textAlign: 'center',
+    lineHeight: 15,
   },
 });
 
-function FlicaSyncRotatingPromoBanners({ items }: { items: FlicaSyncPromoItem[] }) {
-  const [idx, setIdx] = useState(0);
-  const opacity = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    if (items.length <= 1) return;
-    const id = setInterval(() => {
-      Animated.timing(opacity, { toValue: 0.2, duration: 200, useNativeDriver: true }).start(({ finished }) => {
-        if (!finished) return;
-        setIdx((i) => (i + 1) % items.length);
-        Animated.timing(opacity, { toValue: 1, duration: 280, useNativeDriver: true }).start();
-      });
-    }, 5000);
-    return () => clearInterval(id);
-  }, [items.length, opacity]);
-  const item = items[idx] ?? items[0];
-  if (!item) return null;
+function FlicaImportTipCard() {
   return (
-    <Animated.View style={{ opacity }}>
-      <FlicaSyncPromoBanner item={item} presentationMode="sync" />
-    </Animated.View>
+    <View style={tipStyles.card} accessibilityRole="text">
+      <Text style={tipStyles.kicker}>Helpful tip</Text>
+      <Text style={tipStyles.title}>Pull to refresh Crew Schedule anytime</Text>
+      <Text style={tipStyles.body}>
+        After sync, swipe down on the schedule tab — we&apos;ll reopen this secure import automatically so keeping March–May
+        current stays one gesture.
+      </Text>
+    </View>
   );
 }
 
-function SyncContinueCta({ awaitingWeb }: { awaitingWeb: boolean }) {
+const tipStyles = StyleSheet.create({
+  card: {
+    alignSelf: 'stretch',
+    backgroundColor: '#FFFDFB',
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.red + '33',
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    ...SHADOW.soft,
+    gap: 4,
+    marginBottom: SPACING.sm,
+  },
+  kicker: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.85,
+    textTransform: 'uppercase',
+    color: COLORS.red,
+    textAlign: 'center',
+  },
+  title: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.navy,
+    textAlign: 'center',
+    letterSpacing: -0.25,
+    lineHeight: 19,
+  },
+  body: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.text2,
+    textAlign: 'center',
+    lineHeight: 17,
+  },
+});
+
+function SyncContinueCta({ verificationPending }: { verificationPending: boolean }) {
   const pulse = useRef(new Animated.Value(1)).current;
   useEffect(() => {
-    if (awaitingWeb) {
+    if (verificationPending) {
       pulse.setValue(1);
       return;
     }
@@ -246,88 +238,29 @@ function SyncContinueCta({ awaitingWeb }: { awaitingWeb: boolean }) {
     );
     loop.start();
     return () => loop.stop();
-  }, [awaitingWeb, pulse]);
+  }, [verificationPending, pulse]);
   return (
     <View style={styles.continueCtaShell}>
       <Animated.View
         style={[
           styles.continueCta,
-          awaitingWeb && styles.continueCtaDim,
+          verificationPending && styles.continueCtaDim,
           { transform: [{ scale: pulse }] },
         ]}
       >
-        {!awaitingWeb ? <ActivityIndicator color="#fff" style={styles.continueSpinner} /> : null}
+        {!verificationPending ? <ActivityIndicator color="#fff" style={styles.continueSpinner} /> : null}
         <Text style={styles.continueCtaText}>
-          {awaitingWeb ? 'Waiting for verification…' : 'Continuing automatically…'}
+          {verificationPending ? 'Waiting for verification…' : 'Continuing automatically…'}
         </Text>
       </Animated.View>
       <Text style={styles.continueFoot} numberOfLines={2}>
-        {awaitingWeb
+        {verificationPending
           ? 'Finish the prompt in the secure window below. Flight Club advances on its own when FLICA confirms you.'
           : 'Session secured — moving to your schedule.'}
       </Text>
     </View>
   );
 }
-
-function ImportMilestonePills({
-  parsing,
-  totals,
-  hotels,
-  crew,
-}: {
-  parsing: boolean;
-  totals: boolean;
-  hotels: boolean;
-  crew: boolean;
-}) {
-  const items = [
-    { k: 'p', label: 'Parsing pairings', on: parsing },
-    { k: 't', label: 'Loading totals', on: totals },
-    { k: 'h', label: 'Matching hotels', on: hotels },
-    { k: 'c', label: 'Preparing crew info', on: crew },
-  ];
-  return (
-    <View style={pillStyles.row}>
-      {items.map((it) => (
-        <View key={it.k} style={pillStyles.pill}>
-          <View style={[pillStyles.dot, it.on && pillStyles.dotOn]} />
-          <Text style={pillStyles.pillTxt} numberOfLines={1}>
-            {it.label}
-          </Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-const pillStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 8,
-  },
-  pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
-    borderRadius: 999,
-    backgroundColor: COLORS.bg,
-    borderWidth: 1,
-    borderColor: COLORS.line,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: COLORS.line,
-  },
-  dotOn: { backgroundColor: SUCCESS_GREEN },
-  pillTxt: { fontSize: 9, fontWeight: '800', color: COLORS.navy, maxWidth: 118 },
-});
 
 type Props = {
   panel: FlicaSyncPresentationPanel;
@@ -340,13 +273,16 @@ type Props = {
     hotels: boolean;
     crew: boolean;
   };
+  /** When panel is `import`, native HTTP/import progress (drive from `import-flica-direct` only). */
+  importProgressPct?: number;
+  importStageLabel?: string;
   errorMessage: string | null;
   success: FlicaSyncSuccessSnapshot | null;
   /** @deprecated Promos render below the card; kept for call-site compatibility */
   embedDiscovery?: boolean;
   omitBrandedStripe?: boolean;
   fuseBottomToWebChrome?: boolean;
-  /** When FLICA web verification UI is showing — drives pink-card “Contacting” row. */
+  /** When true, keep “Waiting for verification…” until engine `postCaptchaFinalizedRef` is committed (mirrored in parent). */
   webVerificationActive?: boolean;
   onOpenSchedule: () => void;
   onViewImported: () => void;
@@ -358,7 +294,9 @@ export default function FlicaSyncPresentationLayer({
   progressPhase,
   overlayMessage: _overlayMessage,
   statusLines,
-  importMilestones,
+  importMilestones: _importMilestones,
+  importProgressPct,
+  importStageLabel = '',
   errorMessage,
   success,
   embedDiscovery: _embedDiscovery,
@@ -373,6 +311,7 @@ export default function FlicaSyncPresentationLayer({
   void _embedDiscovery;
   void _omitBrandedStripe;
   void _onOpenSchedule;
+  void _importMilestones;
   const opacity = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     opacity.setValue(0.97);
@@ -437,11 +376,13 @@ export default function FlicaSyncPresentationLayer({
                   surface.
                 </Text>
               </View>
-              <SyncContinueCta awaitingWeb={webVerificationActive} />
+              <SyncContinueCta verificationPending={webVerificationActive} />
               {errorMessage ? <Text style={styles.err}>{errorMessage}</Text> : null}
             </View>
-            <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_VERIFY} presentationMode="sync" />
-            <FlicaSyncSmartSuggestionStrip presentationMode="sync" />
+            <View pointerEvents="none" style={styles.promoRail}>
+              <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_VERIFY} presentationMode="sync" />
+              <FlicaSyncPromoBanner variant="strip" item={FLICA_SYNC_STRIP_VERIFY} presentationMode="sync" />
+            </View>
           </>
         ) : null}
 
@@ -457,27 +398,26 @@ export default function FlicaSyncPresentationLayer({
                   <Text style={styles.recaptchaDoneTxt}>Verification complete</Text>
                 </View>
               ) : null}
-              <VerificationProgressPinkCard
-                rows={verifyRows}
-                tip="This will only take a few seconds. Please don’t close this screen."
-              />
+              <VerificationProgressPinkCard rows={verifyRows} />
             </View>
-            <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_VERIFY_PROGRESS} presentationMode="sync" />
+            <View pointerEvents="none" style={styles.promoRail}>
+              <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_VERIFY_PROGRESS} presentationMode="sync" />
+              <FlicaSyncPromoBanner variant="strip" item={FLICA_SYNC_STRIP_VERIFY_PROGRESS} presentationMode="sync" />
+            </View>
           </>
         ) : null}
 
         {panel === 'import' ? (
           <>
             <View style={[styles.card, styles.cardHero, styles.cardSyncDense]}>
-              <Text style={styles.cardTitle}>Importing your schedule</Text>
-              <Text style={styles.subTight}>Hang tight — we&apos;re curating your schedule inside Flight Club.</Text>
-              <FlicaSyncProgressSteps phase={stepsPhase} compact stepStyle="importMockup" />
-              <ImportHoldShimmer />
-              <ImportMilestonePills {...importMilestones} />
-              <View style={styles.importPromoSlot}>
-                <Text style={styles.importPromoKicker}>While you wait</Text>
-                <FlicaSyncRotatingPromoBanners items={FLICA_SYNC_IMPORT_ROTATING_PROMOS} />
-              </View>
+              <Text style={styles.cardTitleCenter}>Importing your schedule</Text>
+              <Text style={styles.subCenter}>Hang tight — we&apos;re curating your schedule inside Flight Club.</Text>
+              <FlicaSyncProgressSteps phase={stepsPhase} compact />
+              <ImportProgressMeter pct={importProgressPct ?? 0} stageLabel={importStageLabel} />
+              <FlicaImportTipCard />
+            </View>
+            <View pointerEvents="none" style={styles.promoRail}>
+              <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_IMPORT} presentationMode="sync" />
             </View>
           </>
         ) : null}
@@ -522,25 +462,33 @@ export default function FlicaSyncPresentationLayer({
               <Text style={styles.successQuietLine} numberOfLines={2}>
                 You don&apos;t need to tap anything — we&apos;ll switch you to Crew Schedule automatically.
               </Text>
-              <Pressable style={styles.secondaryOutline} onPress={onViewImported}>
-                <Text style={styles.secondaryOutlineTxt}>View Imported Trips</Text>
+              <Pressable style={styles.successTextLink} onPress={onViewImported} hitSlop={10}>
+                <Text style={styles.successTextLinkTxt}>View imported trips</Text>
               </Pressable>
             </View>
-            <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_SUCCESS} variant="slim" presentationMode="sync" />
+            <View pointerEvents="none" style={styles.promoRail}>
+              <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_SUCCESS} variant="slim" presentationMode="sync" />
+            </View>
           </>
         ) : null}
 
         {panel === 'error' ? (
-          <View style={styles.card}>
-            <View style={styles.errIcon}>
-              <Ionicons name="cloud-offline-outline" size={36} color={COLORS.red} />
+          <>
+            <View style={styles.card}>
+              <View style={styles.errIcon}>
+                <Ionicons name="cloud-offline-outline" size={36} color={COLORS.red} />
+              </View>
+              <Text style={styles.cardTitle}>We couldn&apos;t finish importing</Text>
+              <Text style={styles.subTight}>{errorMessage ?? 'Something went wrong. Try again in a moment.'}</Text>
+              <Pressable style={styles.primaryBtn} onPress={onRetryError}>
+                <Text style={styles.primaryBtnText}>Try again</Text>
+              </Pressable>
             </View>
-            <Text style={styles.cardTitle}>We couldn&apos;t finish importing</Text>
-            <Text style={styles.subTight}>{errorMessage ?? 'Something went wrong. Try again in a moment.'}</Text>
-            <Pressable style={styles.primaryBtn} onPress={onRetryError}>
-              <Text style={styles.primaryBtnText}>Try again</Text>
-            </Pressable>
-          </View>
+            <View style={styles.errEditorialPair} accessibilityRole="text" accessibilityLabel="Community previews">
+              <Image source={FLICA_SYNC_PNG_NONREV_LOADS} style={styles.errEditorialThumb} resizeMode="cover" />
+              <Image source={FLICA_SYNC_PNG_FUELERLINX} style={styles.errEditorialThumb} resizeMode="cover" />
+            </View>
+          </>
         ) : null}
       </View>
     </>
@@ -548,8 +496,8 @@ export default function FlicaSyncPresentationLayer({
 
   return (
     <LinearGradient
-      colors={[COLORS.red, '#E8E4E2', COLORS.bg]}
-      locations={[0, 0.28, 0.46]}
+      colors={[COLORS.red, COLORS.redDark, '#EDE9E7', COLORS.bg]}
+      locations={[0, 0.14, 0.32, 0.52]}
       start={{ x: 0.5, y: 0 }}
       end={{ x: 0.5, y: 1 }}
       style={styles.shellGrad}
@@ -567,8 +515,25 @@ export default function FlicaSyncPresentationLayer({
           </ScrollView>
         ) : (
           <View style={styles.noScrollColumn}>
-            <FlicaSyncBrandedHero compact={fuseBottomToWebChrome} syncTight />
-            <View style={styles.noScrollBody}>{stackBody}</View>
+            <FlicaSyncBrandedHero
+              compact={fuseBottomToWebChrome}
+              syncTight={fuseBottomToWebChrome}
+              premiumSync
+            />
+            <View style={styles.noScrollBody}>
+              {panel === 'import' ? (
+                <ScrollView
+                  style={styles.importScroll}
+                  contentContainerStyle={styles.importScrollContent}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {stackBody}
+                </ScrollView>
+              ) : (
+                stackBody
+              )}
+            </View>
           </View>
         )}
       </Animated.View>
@@ -600,38 +565,43 @@ const styles = StyleSheet.create({
   noScrollBody: {
     flex: 1,
     minHeight: 0,
-    paddingBottom: SPACING.sm,
+    paddingBottom: 4,
+    justifyContent: 'flex-start',
+  },
+  importScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  importScrollContent: {
+    flexGrow: 1,
+    paddingBottom: SPACING.md,
+    justifyContent: 'flex-start',
   },
   stack: {
-    gap: SPACING.sm,
+    flex: 1,
+    minHeight: 0,
+    gap: 6,
     justifyContent: 'flex-start',
+  },
+  promoRail: {
+    gap: 6,
+    flexShrink: 0,
   },
   card: {
     backgroundColor: COLORS.card,
-    borderRadius: RADIUS.xl,
+    borderRadius: 26,
     padding: SPACING.md,
     borderWidth: 1,
     borderColor: COLORS.line,
     ...SHADOW.card,
   },
   cardHero: {
-    borderTopLeftRadius: RADIUS.xl,
-    borderTopRightRadius: RADIUS.xl,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
   },
   cardSyncDense: {
-    paddingVertical: SPACING.sm,
+    paddingVertical: 10,
     paddingHorizontal: SPACING.sm,
-  },
-  importPromoSlot: {
-    marginTop: SPACING.sm,
-  },
-  importPromoKicker: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: COLORS.text2,
-    textTransform: 'uppercase',
-    letterSpacing: 0.65,
-    marginBottom: 6,
   },
   cardFusedBottom: {
     borderBottomLeftRadius: 5,
@@ -658,12 +628,13 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.xs,
   },
   secureFrame: {
-    marginTop: SPACING.sm,
-    borderRadius: RADIUS.md,
+    marginTop: 8,
+    borderRadius: 14,
     borderWidth: 2,
-    borderColor: COLORS.red + '44',
+    borderColor: COLORS.red + '55',
     backgroundColor: COLORS.cardAlt,
-    padding: SPACING.sm,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
   },
   secureFrameHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   shieldGlyph: {
@@ -754,17 +725,19 @@ const styles = StyleSheet.create({
     borderColor: COLORS.line,
   },
   autoNavHintTxt: { flex: 1, fontSize: 14, fontWeight: '800', color: COLORS.navy },
-  primaryBtnText: { color: '#fff', fontWeight: '900', fontSize: 16 },
-  secondaryOutline: {
-    marginTop: SPACING.sm,
-    paddingVertical: 13,
-    borderRadius: 999,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: COLORS.red,
-    backgroundColor: COLORS.card,
+  successTextLink: {
+    marginTop: 10,
+    paddingVertical: 8,
+    alignSelf: 'center',
   },
-  secondaryOutlineTxt: { color: COLORS.red, fontWeight: '900', fontSize: 15 },
+  successTextLinkTxt: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text2,
+    textDecorationLine: 'underline',
+  },
+  primaryBtnText: { color: '#fff', fontWeight: '900', fontSize: 16 },
+
   primaryBtn: {
     backgroundColor: COLORS.red,
     paddingVertical: 12,
@@ -773,4 +746,18 @@ const styles = StyleSheet.create({
     marginTop: SPACING.xs,
   },
   errIcon: { alignItems: 'center', marginBottom: SPACING.xs },
+  errEditorialPair: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: SPACING.sm,
+  },
+  errEditorialThumb: {
+    flex: 1,
+    height: 80,
+    borderRadius: RADIUS.md,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLORS.line,
+    backgroundColor: COLORS.card,
+  },
 });

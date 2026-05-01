@@ -386,6 +386,7 @@ export default function ScheduleTabScreen() {
               refreshKey={scheduleRefreshKey}
               trips={displayTrips}
               monthMetrics={displayMetrics}
+              tripLayerReady={monthLoadPending || !loading}
               onPressTrip={openTrip}
               onOpenManage={openManage}
             />

@@ -1,5 +1,5 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
 import {
   buildClassicRowsFromDuties,
@@ -9,6 +9,7 @@ import {
 import { mergeLayoverOntoLegDates } from '../scheduleTime';
 import { scheduleTheme as T } from '../scheduleTheme';
 import { isFlicaNonFlyingActivityId } from '../../../services/flicaScheduleHtmlParser';
+import { monthCalendarKey } from '../scheduleMonthCache';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
@@ -608,6 +609,52 @@ function BandBHeaderLabel({ children, align }: { children: string; align: 'left'
   );
 }
 
+/** Non-interactive shell while Layer-7 classic data is fetching — avoids trip grid + stale classic mismatches. */
+function ClassicScheduleSkeleton({ summary }: { summary: ReturnType<typeof buildSummaryStrip> }) {
+  return (
+    <View style={styles.tableWrap}>
+      <View style={styles.summaryStripRow}>
+        {summary.map((item) => (
+          <View key={item.id} style={styles.summaryMetricCell}>
+            <Text style={styles.summaryKey} numberOfLines={2}>
+              {item.label}
+            </Text>
+            <Text style={styles.summaryValue}>{item.value}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.headerRow}>
+        <View style={[styles.headerBandCell, styles.headerColDate]}>
+          <BandBHeaderLabel align="left">DATE</BandBHeaderLabel>
+        </View>
+        <View style={[styles.headerBandCell, styles.headerColPairing]}>
+          <BandBHeaderLabel align="left">PAIRING</BandBHeaderLabel>
+        </View>
+        <View style={[styles.headerBandCell, styles.headerColReport]}>
+          <BandBHeaderLabel align="left">REPORT</BandBHeaderLabel>
+        </View>
+        <View style={[styles.headerBandCell, styles.headerColRoute]}>
+          <BandBHeaderLabel align="left">CITY</BandBHeaderLabel>
+        </View>
+        <View style={[styles.headerBandCell, styles.headerColDetail]}>
+          <BandBHeaderLabel align="left">D-END</BandBHeaderLabel>
+        </View>
+        <View style={[styles.headerBandCell, styles.headerColLayover]}>
+          <BandBHeaderLabel align="center">LAYOVER</BandBHeaderLabel>
+        </View>
+        <View style={[styles.headerBandCell, styles.headerBandWx]}>
+          <BandBHeaderLabel align="center">WX</BandBHeaderLabel>
+        </View>
+      </View>
+
+      <View style={styles.skeletonBody}>
+        <ActivityIndicator size="large" color={T.accent} accessibilityLabel="Loading schedule grid" />
+      </View>
+    </View>
+  );
+}
+
 function EmptyMonth({ onOpenManage }: { onOpenManage?: () => void }) {
   return (
     <View style={styles.emptyMonth}>
@@ -632,6 +679,11 @@ type Props = {
   refreshKey?: number;
   /** Month header strip: stored metrics only (import/screenshot), never derived in the client. */
   monthMetrics?: ScheduleMonthMetrics | null;
+  /**
+   * Trip + stats layer hydrated for `{year, month}` (schedule hook finished for the month on screen).
+   * While swipe is holding the prior month (`monthLoadPending`), pass true so the held month still renders.
+   */
+  tripLayerReady: boolean;
   onPressTrip: (trip: CrewScheduleTrip) => void;
   /** Opens Crew Schedule → Manage (import + view mode). */
   onOpenManage?: () => void;
@@ -643,12 +695,20 @@ export default function ClassicListView({
   month,
   refreshKey,
   monthMetrics,
+  tripLayerReady,
   onPressTrip,
   onOpenManage,
 }: Props) {
   const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
-  const [classicRows, setClassicRows] = useState<ClassicScheduleRow[]>([]);
-  const classicFetchGen = useRef(0);
+  /** Committed Layer-7 grid for `ymKey` only — avoids painting prior month classics against new-month trips. */
+  /** Monotonic load generation — bumps in `useLayoutEffect` so we never paint stale classic rows for a new `{year, month, refreshKey}` (or same-month refresh). */
+  const loadEpochRef = useRef(0);
+  const [loadEpoch, setLoadEpoch] = useState(0);
+  const [classicCommit, setClassicCommit] = useState<{ ymKey: string; classicRows: ClassicScheduleRow[] } | null>(
+    null,
+  );
+  /** `loadEpoch` value that last wrote `classicCommit`; must equal current `loadEpoch` for a coherent grid. */
+  const [classicSettledEpoch, setClassicSettledEpoch] = useState(0);
   const onLongPressTrip = useCallback((t: CrewScheduleTrip) => setPreviewTrip(t), []);
   const closePreview = useCallback(() => setPreviewTrip(null), []);
   const openFullFromPreview = useCallback(() => {
@@ -657,26 +717,47 @@ export default function ClassicListView({
     if (t) onPressTrip(t);
   }, [previewTrip, onPressTrip]);
 
+  const ymKey = monthCalendarKey(year, month);
+
+  useLayoutEffect(() => {
+    loadEpochRef.current += 1;
+    setLoadEpoch(loadEpochRef.current);
+  }, [year, month, refreshKey]);
+
   useEffect(() => {
-    const gen = ++classicFetchGen.current;
+    const epoch = loadEpoch;
     const y = year;
     const m = month;
+    const key = ymKey;
     let cancelled = false;
     void (async () => {
       try {
         const { duties, pairings, pairingLegs } = await fetchScheduleDutiesAndPairingsForMonth(y, m);
-        if (cancelled || gen !== classicFetchGen.current) return;
-        setClassicRows(buildClassicRowsFromDuties(duties, pairings, pairingLegs));
+        if (cancelled || epoch !== loadEpochRef.current) return;
+        const rows = buildClassicRowsFromDuties(duties, pairings, pairingLegs);
+        if (__DEV__) {
+          console.log('[SCHEDULE_COMMIT]', key, epoch, {
+            duties: duties.length,
+            pairings: pairings.length,
+            legs: pairingLegs.length,
+            rows: rows.length,
+          });
+        }
+        setClassicCommit({ ymKey: key, classicRows: rows });
+        setClassicSettledEpoch(epoch);
       } catch {
-        if (!cancelled && gen === classicFetchGen.current) {
-          setClassicRows([]);
+        if (!cancelled && epoch === loadEpochRef.current) {
+          if (__DEV__)
+            console.log('[SCHEDULE_COMMIT]', key, epoch, { duties: 0, pairings: 0, legs: 0, rows: 0 });
+          setClassicCommit({ ymKey: key, classicRows: [] });
+          setClassicSettledEpoch(epoch);
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [year, month, refreshKey]);
+  }, [loadEpoch, year, month, ymKey]);
 
   const mergedTrips = useMemo(
     () =>
@@ -687,7 +768,31 @@ export default function ClassicListView({
     [trips],
   );
 
-  const displayRows = useMemo((): ClassicDisplayItem[] => {
+  const classicHydratedForRequest = classicSettledEpoch === loadEpoch;
+  const dutiesLoaded = classicCommit?.ymKey === ymKey && classicHydratedForRequest;
+  const pairingsLoaded = dutiesLoaded;
+  const legsLoaded = dutiesLoaded;
+  const statsLoaded = tripLayerReady;
+  const isReady = dutiesLoaded && pairingsLoaded && legsLoaded && statsLoaded;
+
+  useEffect(() => {
+    if (
+      __DEV__ &&
+      tripLayerReady &&
+      (!classicHydratedForRequest || classicCommit?.ymKey !== ymKey)
+    ) {
+      console.log('[SCHEDULE_READY_FALSE_BLOCK]', {
+        ymKey,
+        committedYm: classicCommit?.ymKey ?? null,
+        settledEpoch: classicSettledEpoch,
+        loadEpoch,
+      });
+    }
+  }, [tripLayerReady, classicCommit?.ymKey, ymKey, classicHydratedForRequest, classicSettledEpoch, loadEpoch]);
+
+  const viewModelRows = useMemo((): ClassicDisplayItem[] | null => {
+    if (!isReady || !classicCommit || classicCommit.ymKey !== ymKey) return null;
+    const classicRows = classicCommit.classicRows;
     const monthLastIso = viewMonthLastIso(year, month);
     const viewMonthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     const viewYm = `${year}-${String(month).padStart(2, '0')}`;
@@ -731,13 +836,17 @@ export default function ClassicListView({
       result.push({ dateIso, classic: r, trip: tripForDisplayDate(mergedTrips, dateIso, r) });
     }
 
+    if (__DEV__) {
+      console.log('[SCHEDULE_READY_TRUE_BUILD]', ymKey);
+    }
     return result;
-  }, [classicRows, mergedTrips, year, month]);
+  }, [isReady, classicCommit, ymKey, mergedTrips, year, month]);
 
   const rows = useMemo(() => {
+    if (!viewModelRows) return null;
     const todayIso = dateToIsoDateLocal(new Date());
     const dayRows = attachDayRowGrouping(
-      displayRows.map((item, rowIdx) => displayItemToDayRow(item, mergedTrips, todayIso, rowIdx)),
+      viewModelRows.map((item, rowIdx) => displayItemToDayRow(item, mergedTrips, todayIso, rowIdx)),
     );
 
     if (typeof __DEV__ !== 'undefined' && __DEV__ && month === 3) {
@@ -756,7 +865,7 @@ export default function ClassicListView({
       ]);
       const zipped = dayRows
         .map((dr, i) => {
-          const it = displayRows[i];
+          const it = viewModelRows[i];
           const di = dr.dateIso.slice(0, 10);
           if (!targets.has(di)) return null;
           return {
@@ -776,12 +885,16 @@ export default function ClassicListView({
     }
 
     return dayRows;
-  }, [displayRows, mergedTrips, year, month]);
+  }, [viewModelRows, mergedTrips, year, month]);
 
   const summary = useMemo(() => buildSummaryStrip(monthMetrics ?? null), [monthMetrics]);
 
-  if (!trips.length && !classicRows.length) {
+  if (isReady && !trips.length && (classicCommit?.classicRows.length ?? 0) === 0) {
     return <EmptyMonth onOpenManage={onOpenManage} />;
+  }
+
+  if (!isReady || !rows) {
+    return <ClassicScheduleSkeleton summary={summary} />;
   }
 
   return (
@@ -888,6 +1001,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0F172A',
     textAlign: 'center',
+  },
+  skeletonBody: {
+    minHeight: 260,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 40,
+    backgroundColor: '#FFFFFF',
   },
   /** Band B: lighter frosted neutral than Band A; not body white. */
   headerRow: {

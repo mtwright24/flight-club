@@ -5,6 +5,11 @@ const path = require('path');
 const projectRoot = __dirname;
 const config = getDefaultConfig(projectRoot);
 
+// iOS/macOS often ship PNGs as `.PNG`; default assetExts only lists lowercase `png`.
+if (!config.resolver.assetExts.includes('PNG')) {
+  config.resolver.assetExts.push('PNG');
+}
+
 const mapsWebShim = path.resolve(projectRoot, 'src/shims/react-native-maps.web.tsx');
 const upstreamResolveRequest = config.resolver.resolveRequest;
 
