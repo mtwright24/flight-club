@@ -119,6 +119,14 @@ function monthLastIso(year: number, month1to12: number): string {
   return `${year}-${m}-${String(lastDom).padStart(2, '0')}`;
 }
 
+/** Previous calendar month as `YYYY-MM` (e.g. April 2026 → `2026-03`). */
+function previousScheduleMonthKey(year: number, month1to12: number): string {
+  const d = new Date(year, month1to12 - 2, 1);
+  const y = d.getFullYear();
+  const mo = d.getMonth() + 1;
+  return `${y}-${String(mo).padStart(2, '0')}`;
+}
+
 function readClassicViewTag(duties: ScheduleDuty[]): ClassicViewMonthTag | null {
   const tag = (duties as ScheduleDuty[] & { __classicViewMonth?: ClassicViewMonthTag }).__classicViewMonth;
   if (!tag || !Number.isFinite(tag.year) || !Number.isFinite(tag.month)) return null;
@@ -1418,6 +1426,72 @@ export async function fetchScheduleDutiesAndPairingsForMonth(
 
   if (dErr) throw dErr;
   let mergedDuties = (dutyRows ?? []) as ScheduleDuty[];
+
+  /** Pairings starting before the viewed month: pull head duties + pairing rows from the previous month’s latest batch (carry-in; same import_id pattern as month-tail fetch). */
+  const prevMonthKey = previousScheduleMonthKey(year, month1to12);
+  const headFlicaUpper = new Set<string>();
+  let minHeadDutyStart: string | null = null;
+  for (const hp of overlapping) {
+    const st = pairingStartDateIso(hp);
+    if (st != null && st < start) {
+      headFlicaUpper.add(String(hp.pairing_id).trim().toUpperCase());
+      if (minHeadDutyStart == null || st < minHeadDutyStart) minHeadDutyStart = st;
+    }
+  }
+  if (headFlicaUpper.size > 0 && minHeadDutyStart != null) {
+    const { data: prevBatchPick } = await supabase
+      .from('schedule_import_batches')
+      .select('id')
+      .eq('user_id', uid)
+      .eq('month_key', prevMonthKey)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const prevImportId = prevBatchPick?.[0]?.id ?? null;
+    const headPidList = [...headFlicaUpper];
+    if (prevImportId) {
+      const { data: prevPairRows, error: ppe } = await supabase
+        .from('schedule_pairings')
+        .select(
+          'id, import_id, pairing_id, base_code, operate_start_date, pairing_start_date, operate_end_date, pairing_end_date',
+        )
+        .eq('user_id', uid)
+        .eq('import_id', prevImportId)
+        .in('pairing_id', headPidList);
+      const { data: prevDutyRows, error: pde } = await supabase
+        .from('schedule_duties')
+        .select('*')
+        .eq('user_id', uid)
+        .eq('import_id', prevImportId)
+        .in('pairing_id', headPidList)
+        .gte('duty_date', minHeadDutyStart)
+        .lt('duty_date', start);
+      if (!ppe && prevPairRows?.length) {
+        pairingsMerged = [...pairingsMerged, ...(prevPairRows as SchedulePairing[])];
+      }
+      if (!pde && prevDutyRows?.length) {
+        mergedDuties = [...mergedDuties, ...(prevDutyRows as ScheduleDuty[])];
+      }
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && headFlicaUpper.has('J1016')) {
+        console.log('[CARRYOVER_PRESERVE_CHECK]', {
+          pairingId: 'J1016',
+          prevMonthKey,
+          prevImportId,
+          prevPairingRows: prevPairRows?.length ?? 0,
+          prevDutyRows: prevDutyRows?.length ?? 0,
+          minHeadDutyStart,
+          monthFirst: start,
+          queryErrors: { pairings: ppe?.message ?? null, duties: pde?.message ?? null },
+        });
+      }
+    } else if (typeof __DEV__ !== 'undefined' && __DEV__ && headFlicaUpper.has('J1016')) {
+      console.log('[CARRYOVER_PRESERVE_CHECK]', {
+        pairingId: 'J1016',
+        prevMonthKey,
+        skipped: 'no_previous_month_batch',
+        headFlicaIds: headPidList,
+      });
+    }
+  }
 
   /** Pairings ending after the viewed month: pull continuation duties from next month’s latest batch (e.g. J4195 Apr trip → May 1–2). */
   const nxYear = month1to12 === 12 ? year + 1 : year;

@@ -742,6 +742,26 @@ export default function ClassicListView({
             legs: pairingLegs.length,
             rows: rows.length,
           });
+          if (y === 2026 && m === 4) {
+            const slice = rows.filter((r) => {
+              const d = String(r.dateIso).slice(0, 10);
+              return d >= '2026-03-28' && d <= '2026-04-04';
+            });
+            const j1016 = slice.filter((r) => String(r.sourcePairingId).trim().toUpperCase() === 'J1016');
+            console.log('[CARRYOVER_RENDER_CHECK]', {
+              aprilEarlyWindowRows: slice.map((r) => ({
+                dateIso: r.dateIso,
+                pairingText: r.pairingText,
+                rowType: r.rowType,
+                sourcePairingId: r.sourcePairingId,
+              })),
+              j1016InWindow: j1016.map((r) => ({
+                dateIso: r.dateIso,
+                pairingText: r.pairingText,
+                rowType: r.rowType,
+              })),
+            });
+          }
         }
         setClassicCommit({ ymKey: key, classicRows: rows });
         setClassicSettledEpoch(epoch);
