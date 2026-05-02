@@ -17,7 +17,13 @@ import {
   FLICA_SYNC_STRIP_VERIFY_PROGRESS,
 } from './flicaSyncPromoConfig';
 
-export type FlicaSyncPresentationPanel = 'verify' | 'verifyProgress' | 'import' | 'success' | 'error';
+export type FlicaSyncPresentationPanel =
+  | 'authenticating'
+  | 'verify'
+  | 'verifyProgress'
+  | 'import'
+  | 'success'
+  | 'error';
 
 export type FlicaSyncSuccessSnapshot = {
   monthLabel: string;
@@ -177,8 +183,8 @@ function FlicaImportTipCard() {
       <Text style={tipStyles.kicker}>Helpful tip</Text>
       <Text style={tipStyles.title}>Pull to refresh Crew Schedule anytime</Text>
       <Text style={tipStyles.body}>
-        After sync, swipe down on the schedule tab — we&apos;ll reopen this secure import automatically so keeping March–May
-        current stays one gesture.
+        After sync, pull to refresh on Crew Schedule — we can reopen this secure import so your FLICA months stay current in
+        one gesture.
       </Text>
     </View>
   );
@@ -307,7 +313,10 @@ export default function FlicaSyncPresentationLayer({
   onViewImported,
   onRetryError,
 }: Props) {
-  void _overlayMessage;
+  const subtitle =
+    typeof _overlayMessage === 'string' && _overlayMessage.trim().length > 0
+      ? _overlayMessage.trim()
+      : '';
   void _embedDiscovery;
   void _omitBrandedStripe;
   void _onOpenSchedule;
@@ -343,7 +352,8 @@ export default function FlicaSyncPresentationLayer({
   const cardChrome =
     fuseBottomToWebChrome && (panel === 'verify' || panel === 'verifyProgress') ? styles.cardFusedBottom : null;
 
-  const stepsPhase: FlicaSyncProgressPhase = panel === 'import' ? 'import' : progressPhase;
+  const stepsPhase: FlicaSyncProgressPhase =
+    panel === 'import' ? 'import' : panel === 'authenticating' ? 'signin' : progressPhase;
 
   const successBlurb = useMemo(() => {
     if (!success) return '';
@@ -356,12 +366,34 @@ export default function FlicaSyncPresentationLayer({
   const stackBody = (
     <>
       <View style={styles.stack}>
+        {panel === 'authenticating' ? (
+          <>
+            <View style={[styles.card, styles.cardHero, styles.cardSyncDense]}>
+              <Text style={styles.cardTitleCenter}>Authenticating with FLICA</Text>
+              <Text style={styles.subCenter}>
+                {subtitle || 'Signing you in to your airline portal — this stays on your device.'}
+              </Text>
+              <FlicaSyncProgressSteps phase={stepsPhase} compact />
+              <View style={styles.authNudgeRow}>
+                <ActivityIndicator size="small" color={COLORS.red} />
+                <Text style={styles.authNudgeTxt} numberOfLines={2}>
+                  Hang tight — Flight Club is finishing sign-in in the background.
+                </Text>
+              </View>
+              <FlicaImportTipCard />
+            </View>
+            <View pointerEvents="none" style={styles.promoRail}>
+              <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_VERIFY} presentationMode="sync" />
+            </View>
+          </>
+        ) : null}
+
         {panel === 'verify' ? (
           <>
             <View style={[styles.card, styles.cardHero, cardChrome]}>
-              <Text style={styles.cardTitleCenter}>Secure FLICA Verification</Text>
+              <Text style={styles.cardTitleCenter}>Verification in progress</Text>
               <Text style={styles.subCenter}>
-                For your security, a quick verification is required before we can import your schedule.
+                {subtitle || 'For your security, complete the airline verification when it appears.'}
               </Text>
               <FlicaSyncProgressSteps phase={stepsPhase} compact />
               <View style={styles.secureFrame}>
@@ -369,18 +401,16 @@ export default function FlicaSyncPresentationLayer({
                   <View style={styles.shieldGlyph}>
                     <Ionicons name="checkmark" size={12} color="#fff" />
                   </View>
-                  <Text style={styles.secureFrameHeadTxt}>Complete the verification below</Text>
+                  <Text style={styles.secureFrameHeadTxt}>Complete the prompt in the secure area below</Text>
                 </View>
-                <Text style={styles.secureFrameNote} numberOfLines={2}>
-                  Only the airline verification prompt below is shown — the rest stays inside the secure browser
-                  surface.
+                <Text style={styles.secureFrameNote} numberOfLines={3}>
+                  Only the verification challenge is exposed — not the full FLICA menu or login screen.
                 </Text>
               </View>
               <SyncContinueCta verificationPending={webVerificationActive} />
               {errorMessage ? <Text style={styles.err}>{errorMessage}</Text> : null}
             </View>
             <View pointerEvents="none" style={styles.promoRail}>
-              <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_VERIFY} presentationMode="sync" />
               <FlicaSyncPromoBanner variant="strip" item={FLICA_SYNC_STRIP_VERIFY} presentationMode="sync" />
             </View>
           </>
@@ -390,7 +420,9 @@ export default function FlicaSyncPresentationLayer({
           <>
             <View style={[styles.card, styles.cardHero, cardChrome]}>
               <Text style={styles.cardTitleCenter}>Verification in progress</Text>
-              <Text style={styles.subCenter}>We&apos;re confirming your verification with FLICA…</Text>
+              <Text style={styles.subCenter}>
+                {subtitle || 'We&apos;re confirming your session and opening your schedule…'}
+              </Text>
               <FlicaSyncProgressSteps phase={stepsPhase} compact />
               {statusLines.verified ? (
                 <View style={styles.recaptchaDoneCard}>
@@ -399,10 +431,10 @@ export default function FlicaSyncPresentationLayer({
                 </View>
               ) : null}
               <VerificationProgressPinkCard rows={verifyRows} />
+              <FlicaImportTipCard />
             </View>
             <View pointerEvents="none" style={styles.promoRail}>
               <FlicaSyncPromoBanner item={FLICA_SYNC_BANNER_VERIFY_PROGRESS} presentationMode="sync" />
-              <FlicaSyncPromoBanner variant="strip" item={FLICA_SYNC_STRIP_VERIFY_PROGRESS} presentationMode="sync" />
             </View>
           </>
         ) : null}
@@ -411,7 +443,7 @@ export default function FlicaSyncPresentationLayer({
           <>
             <View style={[styles.card, styles.cardHero, styles.cardSyncDense]}>
               <Text style={styles.cardTitleCenter}>Importing your schedule</Text>
-              <Text style={styles.subCenter}>Hang tight — we&apos;re curating your schedule inside Flight Club.</Text>
+              <Text style={styles.subCenter}>{subtitle || 'Hang tight — we&apos;re curating your schedule inside Flight Club.'}</Text>
               <FlicaSyncProgressSteps phase={stepsPhase} compact />
               <ImportProgressMeter pct={importProgressPct ?? 0} stageLabel={importStageLabel} />
               <FlicaImportTipCard />
@@ -521,7 +553,7 @@ export default function FlicaSyncPresentationLayer({
               premiumSync
             />
             <View style={styles.noScrollBody}>
-              {panel === 'import' ? (
+              {panel === 'import' || panel === 'authenticating' ? (
                 <ScrollView
                   style={styles.importScroll}
                   contentContainerStyle={styles.importScrollContent}
@@ -673,6 +705,19 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     textAlign: 'center',
   },
+  authNudgeRow: {
+    marginTop: SPACING.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: SPACING.sm,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.cardAlt,
+    borderWidth: 1,
+    borderColor: COLORS.line,
+  },
+  authNudgeTxt: { flex: 1, fontSize: 12, fontWeight: '700', color: COLORS.navy, lineHeight: 17 },
   recaptchaDoneCard: {
     marginTop: SPACING.sm,
     flexDirection: 'row',

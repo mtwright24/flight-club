@@ -23,4 +23,11 @@ export function writeScheduleMonthCache(key: string, data: ScheduleMonthCached):
 /** Drop cached trips + month metrics so the next view refetches DB (e.g. after FLICA persist updates `schedule_month_metrics`). */
 export function invalidateScheduleMonthCacheKeys(keys: string[]): void {
   for (const k of keys) store.delete(k);
+  queueMicrotask(() => {
+    import('./scheduleStableSnapshots')
+      .then((m) => {
+        m.invalidateCommittedMonthSnapshotsForKeys(keys);
+      })
+      .catch(() => {});
+  });
 }

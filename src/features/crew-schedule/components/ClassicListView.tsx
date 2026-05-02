@@ -10,6 +10,12 @@ import { mergeLayoverOntoLegDates } from '../scheduleTime';
 import { scheduleTheme as T } from '../scheduleTheme';
 import { isFlicaNonFlyingActivityId } from '../../../services/flicaScheduleHtmlParser';
 import { monthCalendarKey } from '../scheduleMonthCache';
+import {
+  canSaveScheduleMonthUISnapshot,
+  isScheduleMonthUISnapshotCoherent,
+  readScheduleMonthUISnapshot,
+  writeScheduleMonthUISnapshot,
+} from '../scheduleSnapshotCache';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
@@ -721,11 +727,23 @@ export default function ClassicListView({
 
   useLayoutEffect(() => {
     loadEpochRef.current += 1;
-    setLoadEpoch(loadEpochRef.current);
-  }, [year, month, refreshKey]);
+    const epoch = loadEpochRef.current;
+    setLoadEpoch(epoch);
+    const snap = readScheduleMonthUISnapshot(ymKey);
+    if (snap && isScheduleMonthUISnapshotCoherent(snap, year, month)) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[SCHEDULE_SNAPSHOT_HIT]', { key: ymKey, layer: 'classic_hydrate' });
+      }
+      setClassicCommit({ ymKey, classicRows: snap.classicRows });
+      setClassicSettledEpoch(epoch);
+    } else {
+      setClassicCommit(null);
+      setClassicSettledEpoch(0);
+    }
+  }, [year, month, ymKey]);
 
   useEffect(() => {
-    const epoch = loadEpoch;
+    const epoch = loadEpochRef.current;
     const y = year;
     const m = month;
     const key = ymKey;
@@ -769,6 +787,10 @@ export default function ClassicListView({
         if (!cancelled && epoch === loadEpochRef.current) {
           if (__DEV__)
             console.log('[SCHEDULE_COMMIT]', key, epoch, { duties: 0, pairings: 0, legs: 0, rows: 0 });
+          const fallback = readScheduleMonthUISnapshot(key);
+          if (fallback && isScheduleMonthUISnapshotCoherent(fallback, y, m)) {
+            return;
+          }
           setClassicCommit({ ymKey: key, classicRows: [] });
           setClassicSettledEpoch(epoch);
         }
@@ -777,7 +799,7 @@ export default function ClassicListView({
     return () => {
       cancelled = true;
     };
-  }, [loadEpoch, year, month, ymKey]);
+  }, [loadEpoch, year, month, ymKey, refreshKey]);
 
   const mergedTrips = useMemo(
     () =>
@@ -794,6 +816,36 @@ export default function ClassicListView({
   const legsLoaded = dutiesLoaded;
   const statsLoaded = tripLayerReady;
   const isReady = dutiesLoaded && pairingsLoaded && legsLoaded && statsLoaded;
+
+  useEffect(() => {
+    if (!isReady || !classicCommit || classicCommit.ymKey !== ymKey) return;
+    const prevSnap = readScheduleMonthUISnapshot(ymKey);
+    const metrics = monthMetrics ?? prevSnap?.monthMetrics ?? null;
+    if (
+      !canSaveScheduleMonthUISnapshot({
+        monthKey: ymKey,
+        trips,
+        classicRows: classicCommit.classicRows,
+        monthMetrics: metrics,
+      })
+    ) {
+      return;
+    }
+    writeScheduleMonthUISnapshot({
+      monthKey: ymKey,
+      generatedAt: Date.now(),
+      trips,
+      classicRows: classicCommit.classicRows,
+      monthMetrics: metrics,
+    });
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[SCHEDULE_SNAPSHOT_SAVE]', {
+        key: ymKey,
+        trips: trips.length,
+        classicRows: classicCommit.classicRows.length,
+      });
+    }
+  }, [isReady, ymKey, trips, classicCommit, monthMetrics]);
 
   useEffect(() => {
     if (
