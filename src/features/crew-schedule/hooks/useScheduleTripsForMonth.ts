@@ -280,6 +280,7 @@ export function useScheduleTripsForMonth(year: number, month: number) {
               genAtStart: buildGenAtStart,
               genNow: monthBuildGenerationRef.current,
             });
+            console.log('[PREVENTED_WRONG_KEY_RENDER]', { layer: 'month_fetch_stale', key });
           }
           return;
         }

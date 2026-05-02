@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip } from '../types';
 import { scheduleTheme as T } from '../scheduleTheme';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
+import { resolveFullPairingForHandoff } from '../pairingHandoff';
 
 type Props = {
   trips: CrewScheduleTrip[];
@@ -40,7 +41,7 @@ export default function SmartListView({ trips, onPressTrip, onPost, onChat, onMa
           <View key={trip.id} style={styles.card}>
             <Pressable
               onPress={() => onPressTrip(trip)}
-              onLongPress={() => setPreviewTrip(trip)}
+              onLongPress={() => setPreviewTrip(resolveFullPairingForHandoff(trip, trips))}
               delayLongPress={420}
               style={({ pressed }) => [pressed && { opacity: 0.92 }]}
               accessibilityHint="Long press for a quick preview of trip details."

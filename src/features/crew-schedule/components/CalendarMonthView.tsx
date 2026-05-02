@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip } from '../types';
 import { scheduleTheme as T } from '../scheduleTheme';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
+import { resolveFullPairingForHandoff } from '../pairingHandoff';
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
@@ -72,7 +73,7 @@ export default function CalendarMonthView({ year, month, trips, onPressDay, onOp
               <Pressable
                 key={iso}
                 onPress={() => onPressDay(iso)}
-                onLongPress={onOpenTrip && primary ? () => setPreviewTrip(primary) : undefined}
+                onLongPress={onOpenTrip && primary ? () => setPreviewTrip(resolveFullPairingForHandoff(primary, trips)) : undefined}
                 delayLongPress={420}
                 style={styles.cell}
                 accessibilityHint={onOpenTrip && primary ? 'Long press for trip preview.' : undefined}

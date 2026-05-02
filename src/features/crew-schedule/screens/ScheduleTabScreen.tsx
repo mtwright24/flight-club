@@ -236,7 +236,7 @@ export default function ScheduleTabScreen() {
 
   const openTrip = useCallback(
     (trip: CrewScheduleTrip) => {
-      stashTripForDetailNavigation(trip);
+      stashTripForDetailNavigation(trip, displayTrips);
       router.push({
         pathname: "/crew-schedule/trip-detail",
         params: {
@@ -247,7 +247,7 @@ export default function ScheduleTabScreen() {
         },
       });
     },
-    [router],
+    [router, displayTrips],
   );
 
   const openTradePost = useCallback(

@@ -29,7 +29,7 @@ import { dutiesToCrewScheduleLegs } from '../jetblueFlicaImport';
 import { entriesToSingleTrip } from '../tripMapper';
 import { getMockTripById } from '../mockScheduleData';
 import { tradePostPrefillParams } from '../tradePostPrefillParams';
-import { peekStashedPairingSnapshotKey, peekStashedTripForDetail } from '../tripDetailNavCache';
+import { peekStashedHandoffValid, peekStashedPairingSnapshotKey, peekStashedTripForDetail } from '../tripDetailNavCache';
 import { pairingNavigationSessionKey } from '../scheduleStableSnapshots';
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
@@ -137,8 +137,11 @@ export default function TripDetailScreen() {
 
   /** Pairing navigation session (trip group + dates + code) — must match before network refresh replaces UI. */
   const detailSessionKeyRef = useRef<string | null>(null);
+  /** Bumps on each `tripId` commit so late pairing fetches never apply after navigation. */
+  const pairingDetailFetchGenRef = useRef(0);
 
   useLayoutEffect(() => {
+    pairingDetailFetchGenRef.current += 1;
     activeDetailTripIdRef.current = tripId ?? '';
     setPairingHotels([]);
     if (!tripId) {
@@ -156,11 +159,12 @@ export default function TripDetailScreen() {
       return;
     }
     const peeked = peekStashedTripForDetail(tripId);
+    const handoffOk = peekStashedHandoffValid(tripId);
     detailSessionKeyRef.current =
       peekStashedPairingSnapshotKey(tripId) ?? (peeked ? pairingNavigationSessionKey(peeked) : null);
-    if (peeked) {
+    if (peeked && handoffOk) {
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_DETAIL_INITIAL_SNAPSHOT_USED]', {
+        console.log('[PAIRING_DETAIL_INITIAL_FULL_SNAPSHOT_USED]', {
           tripId,
           sessionKey: detailSessionKeyRef.current,
         });
@@ -168,6 +172,17 @@ export default function TripDetailScreen() {
       setTrip(peeked);
       setTripMeta(null);
       setLoadingTrip(false);
+    } else if (peeked && !handoffOk) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[PREVENTED_PARTIAL_PAIRING_RENDER]', {
+          screen: 'trip_detail_peek',
+          tripId,
+          sessionKey: detailSessionKeyRef.current,
+        });
+      }
+      setTrip(undefined);
+      setTripMeta(null);
+      setLoadingTrip(true);
     } else {
       setTrip(undefined);
       setTripMeta(null);
@@ -196,6 +211,7 @@ export default function TripDetailScreen() {
       if (sessionAtStart && detailSessionKeyRef.current !== sessionAtStart) {
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
           console.log('[PAIRING_DETAIL_REFRESH_REJECTED]', { kind: 'hotels', reason: 'session_key_changed' });
+          console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { kind: 'hotels', reason: 'session_key_changed' });
         }
         return;
       }
@@ -272,10 +288,11 @@ export default function TripDetailScreen() {
       if (!tripId || tripId.startsWith('demo-')) {
         return;
       }
+      const fetchGenAtStart = pairingDetailFetchGenRef.current;
       if (UUID_RE.test(tripId)) {
         const stashed = peekStashedTripForDetail(tripId);
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[PAIRING_DETAIL_REFRESH_START]', { tripId, hadPeek: Boolean(stashed) });
+          console.log('[PAIRING_DETAIL_REFRESH_START]', { tripId, hadPeek: Boolean(stashed), fetchGen: fetchGenAtStart });
         }
         try {
           let pairingDbId: string | undefined =
@@ -293,7 +310,13 @@ export default function TripDetailScreen() {
               })) ?? undefined;
           }
 
-          if (cancelled || activeDetailTripIdRef.current !== tripId) return;
+          if (cancelled || activeDetailTripIdRef.current !== tripId || fetchGenAtStart !== pairingDetailFetchGenRef.current) {
+            if (typeof __DEV__ !== 'undefined' && __DEV__ && fetchGenAtStart !== pairingDetailFetchGenRef.current) {
+              console.log('[PAIRING_DETAIL_REFRESH_REJECTED]', { tripId, reason: 'fetch_generation_stale' });
+              console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { tripId, reason: 'fetch_generation_stale' });
+            }
+            return;
+          }
 
           if (!pairingDbId && !stashed && UUID_RE.test(tripId)) {
             pairingDbId = tripId;
@@ -303,7 +326,13 @@ export default function TripDetailScreen() {
             pairingDbId ? fetchCrewScheduleTripByPairingUuid(pairingDbId) : Promise.resolve(null),
             fetchTripMetadataForGroup(tripId).catch(() => null),
           ]);
-          if (cancelled || activeDetailTripIdRef.current !== tripId) return;
+          if (cancelled || activeDetailTripIdRef.current !== tripId || fetchGenAtStart !== pairingDetailFetchGenRef.current) {
+            if (typeof __DEV__ !== 'undefined' && __DEV__ && fetchGenAtStart !== pairingDetailFetchGenRef.current) {
+              console.log('[PAIRING_DETAIL_REFRESH_REJECTED]', { tripId, reason: 'fetch_generation_stale_after_bundle' });
+              console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { tripId, reason: 'fetch_generation_stale_after_bundle' });
+            }
+            return;
+          }
           if (fromNormalized) {
             const schedulePairingId = fromNormalized.schedulePairingId ?? pairingDbId ?? fromNormalized.id;
             const mergedForKey: CrewScheduleTrip = {
@@ -320,6 +349,7 @@ export default function TripDetailScreen() {
                   expected: detailSessionKeyRef.current,
                   got: navKey,
                 });
+                console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { tripId, reason: 'navigation_session_mismatch', got: navKey });
               }
               return;
             }
@@ -376,7 +406,9 @@ export default function TripDetailScreen() {
                 };
               }
             }
-            if (cancelled || activeDetailTripIdRef.current !== tripId) return;
+            if (cancelled || activeDetailTripIdRef.current !== tripId || fetchGenAtStart !== pairingDetailFetchGenRef.current) {
+              return;
+            }
             if (next) {
               const navKey = pairingNavigationSessionKey(next);
               if (detailSessionKeyRef.current && navKey !== detailSessionKeyRef.current) {
@@ -387,6 +419,7 @@ export default function TripDetailScreen() {
                     expected: detailSessionKeyRef.current,
                     got: navKey,
                   });
+                  console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { tripId, reason: 'legacy_session_mismatch', got: navKey });
                 }
                 return;
               }
@@ -405,11 +438,13 @@ export default function TripDetailScreen() {
             console.log('[PREVENTED_BLANK_RENDER]', { screen: 'trip_detail', tripId, note: 'kept_stashed_or_peeked' });
           }
         } finally {
-          if (!cancelled && activeDetailTripIdRef.current === tripId) setLoadingTrip(false);
+          if (!cancelled && activeDetailTripIdRef.current === tripId && fetchGenAtStart === pairingDetailFetchGenRef.current) {
+            setLoadingTrip(false);
+          }
         }
         return;
       }
-      if (cancelled || activeDetailTripIdRef.current !== tripId) return;
+      if (cancelled || activeDetailTripIdRef.current !== tripId || fetchGenAtStart !== pairingDetailFetchGenRef.current) return;
       setTrip(getMockTripById(tripId));
       setTripMeta(null);
       setLoadingTrip(false);

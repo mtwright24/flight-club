@@ -1,6 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   fetchCrewScheduleTripByPairingUuid,
@@ -11,6 +20,8 @@ import {
 import { scheduleTheme as T } from '../scheduleTheme';
 import { buildTripDetailViewModel, type TripStatTile } from '../tripDetailViewModel';
 import type { CrewScheduleTrip } from '../types';
+import { pairingNavigationSessionKey } from '../scheduleStableSnapshots';
+import { devLogCarryoverOrInternationalCheck, validateFullPairingHandoff } from '../pairingHandoff';
 import TripCrewList from './TripCrewList';
 import TripStatTilesRow from './TripStatTilesRow';
 import { isFlicaNonFlyingActivityId } from '../../../services/flicaScheduleHtmlParser';
@@ -91,16 +102,39 @@ export default function TripQuickPreviewSheet({
   const { height: winH } = useWindowDimensions();
   const [enrichedTrip, setEnrichedTrip] = useState<CrewScheduleTrip | null>(null);
   const previewTargetTripIdRef = useRef<string>('');
+  const previewSessionKeyRef = useRef<string>('');
 
   useLayoutEffect(() => {
     if (!visible) {
       previewTargetTripIdRef.current = '';
+      previewSessionKeyRef.current = '';
       setEnrichedTrip(null);
       return;
     }
     previewTargetTripIdRef.current = trip?.id ?? '';
+    if (trip) {
+      previewSessionKeyRef.current = pairingNavigationSessionKey(trip);
+      const v = validateFullPairingHandoff(trip);
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        if (v.ok) {
+          console.log('[PAIRING_SUMMARY_FULL_SNAPSHOT_USED]', {
+            tripId: trip.id,
+            sessionKey: previewSessionKeyRef.current,
+          });
+          devLogCarryoverOrInternationalCheck(trip, 'summary_sheet');
+        } else {
+          console.log('[PREVENTED_PARTIAL_PAIRING_RENDER]', {
+            where: 'summary_sheet_open',
+            tripId: trip.id,
+            reason: v.reason ?? 'invalid_handoff',
+          });
+        }
+      }
+    } else {
+      previewSessionKeyRef.current = '';
+    }
     setEnrichedTrip(null);
-  }, [visible, trip?.id]);
+  }, [visible, trip?.id, trip]);
 
   useEffect(() => {
     if (!visible || !trip || !quickPreviewTripIsEnrichable(trip)) {
@@ -108,8 +142,12 @@ export default function TripQuickPreviewSheet({
     }
     const targetTripId = trip.id;
     const targetPairing = String(trip.pairingCode ?? '').trim().toUpperCase();
+    const targetSessionKey = trip ? pairingNavigationSessionKey(trip) : '';
     let cancel = false;
     (async () => {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[PAIRING_SUMMARY_REFRESH_START]', { tripId: targetTripId });
+      }
       const resolved = await resolveSchedulePairingIdForQuickPreview(trip, pairingUuid);
       if (typeof __DEV__ !== 'undefined' && __DEV__ && devLogPreviewPairing(trip)) {
         console.log('[quick-preview enrich]', {
@@ -134,8 +172,24 @@ export default function TripQuickPreviewSheet({
         }
         const withMeta = mergeTripWithMetadataRow(fetched, meta);
         const merged = mergeEnrichedPreviewTrip(withMeta, trip);
+        if (pairingNavigationSessionKey(merged) !== previewSessionKeyRef.current || targetSessionKey !== previewSessionKeyRef.current) {
+          if (typeof __DEV__ !== 'undefined' && __DEV__) {
+            console.log('[PAIRING_SUMMARY_REFRESH_REJECTED]', {
+              reason: 'session_key_mismatch',
+            });
+            console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { where: 'summary_sheet', reason: 'session_key_mismatch' });
+          }
+          return;
+        }
         if (previewTargetTripIdRef.current !== targetTripId) return;
         setEnrichedTrip(merged);
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.log('[PAIRING_SUMMARY_REFRESH_COMMIT]', { tripId: targetTripId });
+          const hv = validateFullPairingHandoff(merged);
+          if (hv.ok) {
+            devLogCarryoverOrInternationalCheck(merged, 'summary_refresh');
+          }
+        }
         if (typeof __DEV__ !== 'undefined' && __DEV__ && devLogPreviewPairing(trip)) {
           console.log('[quick-preview enrich]', {
             fetchResult: {
@@ -163,14 +217,26 @@ export default function TripQuickPreviewSheet({
     if (
       enrichedTrip &&
       enrichedTrip.id === trip.id &&
-      String(enrichedTrip.pairingCode ?? '').trim().toUpperCase() ===
-        String(trip.pairingCode ?? '').trim().toUpperCase()
+      pairingNavigationSessionKey(enrichedTrip) === pairingNavigationSessionKey(trip)
     ) {
       return enrichedTrip;
     }
     return trip;
   }, [trip, enrichedTrip]);
-  const vm = useMemo(() => (displayTrip ? buildTripDetailViewModel(displayTrip) : null), [displayTrip]);
+
+  const needsHydrationShell = Boolean(
+    visible &&
+      trip &&
+      quickPreviewTripIsEnrichable(trip) &&
+      enrichedTrip == null &&
+      !validateFullPairingHandoff(trip).ok,
+  );
+
+  const vm = useMemo(() => {
+    if (!displayTrip || needsHydrationShell) return null;
+    if (!validateFullPairingHandoff(displayTrip).ok) return null;
+    return buildTripDetailViewModel(displayTrip);
+  }, [displayTrip, needsHydrationShell]);
 
   const statTiles: TripStatTile[] = useMemo(() => (vm ? vm.statTiles : []), [vm]);
 
@@ -188,7 +254,7 @@ export default function TripQuickPreviewSheet({
     });
   }, [trip, vm, enrichedTrip]);
 
-  if (!trip || !vm || !displayTrip) return null;
+  if (!trip) return null;
 
   const sheetMaxH = Math.min(winH * 0.82, 720);
   /** Grabber + sheet padding above scroll (paddingTop + grabberWrap + grabber). */
@@ -196,8 +262,9 @@ export default function TripQuickPreviewSheet({
   const sheetPadBottom = Math.max(insets.bottom, 12) + 6;
   const scrollViewportMaxH = Math.max(260, sheetMaxH - sheetTopChromePx - sheetPadBottom);
   const scrollContentPadBottom = Math.max(insets.bottom, 12) + 14;
-  const legCount = displayTrip.legs.length;
-  const dayCount = vm.days.length;
+  const legCount = displayTrip?.legs.length ?? 0;
+  const dayCount = vm?.days.length ?? 0;
+  const showErrorStub = Boolean(visible && !needsHydrationShell && !vm && trip);
 
   return (
     <Modal
@@ -227,81 +294,134 @@ export default function TripQuickPreviewSheet({
             nestedScrollEnabled
             bounces
           >
-            <View style={styles.headerRow}>
-              <View style={styles.headerText}>
-                <Text style={styles.pairing}>{vm.pairingCode}</Text>
-                <Text style={styles.route} numberOfLines={2}>
-                  {vm.routeSummary}
-                </Text>
-                <View style={styles.badgeRow}>
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>{vm.statusLabel}</Text>
+            {needsHydrationShell ? (
+              <View style={styles.hydrateShell}>
+                <View style={styles.headerRow}>
+                  <View style={styles.headerText}>
+                    <Text style={styles.pairing}>{trip.pairingCode}</Text>
+                    <Text style={styles.routeMuted}>Loading full pairing…</Text>
                   </View>
+                  <Pressable onPress={onClose} style={styles.closeHit} hitSlop={12} accessibilityLabel="Close preview">
+                    <Ionicons name="close" size={20} color={T.textSecondary} />
+                  </Pressable>
                 </View>
+                <ActivityIndicator style={styles.hydrateSpinner} color={T.accent} />
+                <Pressable
+                  style={styles.primaryBtn}
+                  onPress={() => {
+                    onClose();
+                    onOpenFullTrip();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open full trip"
+                >
+                  <Text style={styles.primaryBtnText}>Open Full Trip</Text>
+                  <Ionicons name="chevron-forward" size={16} color="#fff" />
+                </Pressable>
               </View>
-              <Pressable onPress={onClose} style={styles.closeHit} hitSlop={12} accessibilityLabel="Close preview">
-                <Ionicons name="close" size={20} color={T.textSecondary} />
-              </Pressable>
-            </View>
-
-            <Text style={styles.dateRange}>{vm.dateRangeLabel}</Text>
-            <Text style={styles.summary}>{vm.summaryLine}</Text>
-
-            <View style={styles.statsBlock}>
-              <TripStatTilesRow tiles={statTiles} compact dense />
-            </View>
-
-            <View style={styles.section}>
-              <Text style={styles.previewTitle}>Crew</Text>
-              {vm.crewMembers.length > 0 ? (
-                <TripCrewList members={vm.crewMembers} maxVisible={4} showTitle={false} />
-              ) : (
-                <Text style={styles.emdash}>—</Text>
-              )}
-            </View>
-
-            <View style={styles.previewCard}>
-              <Text style={styles.previewTitle}>Layover & hotel</Text>
-              {vm.layoverHotelPreview && (vm.layoverHotelPreview.layoverLine || vm.layoverHotelPreview.hotelLine) ? (
-                <>
-                  {vm.layoverHotelPreview.layoverLine ? (
-                    <Text style={styles.previewLine}>
-                      <Text style={styles.previewMuted}>City </Text>
-                      {vm.layoverHotelPreview.layoverLine}
+            ) : showErrorStub ? (
+              <View style={styles.hydrateShell}>
+                <View style={styles.headerRow}>
+                  <View style={styles.headerText}>
+                    <Text style={styles.pairing}>{trip.pairingCode}</Text>
+                    <Text style={styles.routeMuted}>Preview unavailable for this assignment.</Text>
+                  </View>
+                  <Pressable onPress={onClose} style={styles.closeHit} hitSlop={12} accessibilityLabel="Close preview">
+                    <Ionicons name="close" size={20} color={T.textSecondary} />
+                  </Pressable>
+                </View>
+                <Pressable
+                  style={styles.primaryBtn}
+                  onPress={() => {
+                    onClose();
+                    onOpenFullTrip();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open full trip"
+                >
+                  <Text style={styles.primaryBtnText}>Open Full Trip</Text>
+                  <Ionicons name="chevron-forward" size={16} color="#fff" />
+                </Pressable>
+              </View>
+            ) : vm && displayTrip ? (
+              <>
+                <View style={styles.headerRow}>
+                  <View style={styles.headerText}>
+                    <Text style={styles.pairing}>{vm.pairingCode}</Text>
+                    <Text style={styles.route} numberOfLines={2}>
+                      {vm.routeSummary}
                     </Text>
-                  ) : null}
-                  {vm.layoverHotelPreview.hotelLine ? (
-                    <Text style={styles.previewLine} numberOfLines={3}>
-                      <Text style={styles.previewMuted}>Hotel </Text>
-                      {vm.layoverHotelPreview.hotelLine}
-                    </Text>
-                  ) : null}
-                </>
-              ) : (
-                <Text style={styles.emdash}>—</Text>
-              )}
-            </View>
+                    <View style={styles.badgeRow}>
+                      <View style={styles.badge}>
+                        <Text style={styles.badgeText}>{vm.statusLabel}</Text>
+                      </View>
+                    </View>
+                  </View>
+                  <Pressable onPress={onClose} style={styles.closeHit} hitSlop={12} accessibilityLabel="Close preview">
+                    <Ionicons name="close" size={20} color={T.textSecondary} />
+                  </Pressable>
+                </View>
 
-            <View style={styles.opsHint}>
-              <Text style={styles.opsHintText}>
-                {legCount > 0
-                  ? `${legCount} leg${legCount === 1 ? '' : 's'} · ${dayCount} operating day${dayCount === 1 ? '' : 's'}`
-                  : 'Open full trip for day-by-day legs and times'}
-              </Text>
-            </View>
+                <Text style={styles.dateRange}>{vm.dateRangeLabel}</Text>
+                <Text style={styles.summary}>{vm.summaryLine}</Text>
 
-            <Pressable
-              style={styles.primaryBtn}
-              onPress={() => {
-                onClose();
-                onOpenFullTrip();
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Open full trip"
-            >
-              <Text style={styles.primaryBtnText}>Open Full Trip</Text>
-              <Ionicons name="chevron-forward" size={16} color="#fff" />
-            </Pressable>
+                <View style={styles.statsBlock}>
+                  <TripStatTilesRow tiles={statTiles} compact dense />
+                </View>
+
+                <View style={styles.section}>
+                  <Text style={styles.previewTitle}>Crew</Text>
+                  {vm.crewMembers.length > 0 ? (
+                    <TripCrewList members={vm.crewMembers} maxVisible={4} showTitle={false} />
+                  ) : (
+                    <Text style={styles.emdash}>—</Text>
+                  )}
+                </View>
+
+                <View style={styles.previewCard}>
+                  <Text style={styles.previewTitle}>Layover & hotel</Text>
+                  {vm.layoverHotelPreview && (vm.layoverHotelPreview.layoverLine || vm.layoverHotelPreview.hotelLine) ? (
+                    <>
+                      {vm.layoverHotelPreview.layoverLine ? (
+                        <Text style={styles.previewLine}>
+                          <Text style={styles.previewMuted}>City </Text>
+                          {vm.layoverHotelPreview.layoverLine}
+                        </Text>
+                      ) : null}
+                      {vm.layoverHotelPreview.hotelLine ? (
+                        <Text style={styles.previewLine} numberOfLines={3}>
+                          <Text style={styles.previewMuted}>Hotel </Text>
+                          {vm.layoverHotelPreview.hotelLine}
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : (
+                    <Text style={styles.emdash}>—</Text>
+                  )}
+                </View>
+
+                <View style={styles.opsHint}>
+                  <Text style={styles.opsHintText}>
+                    {legCount > 0
+                      ? `${legCount} leg${legCount === 1 ? '' : 's'} · ${dayCount} operating day${dayCount === 1 ? '' : 's'}`
+                      : 'Open full trip for day-by-day legs and times'}
+                  </Text>
+                </View>
+
+                <Pressable
+                  style={styles.primaryBtn}
+                  onPress={() => {
+                    onClose();
+                    onOpenFullTrip();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open full trip"
+                >
+                  <Text style={styles.primaryBtnText}>Open Full Trip</Text>
+                  <Ionicons name="chevron-forward" size={16} color="#fff" />
+                </Pressable>
+              </>
+            ) : null}
           </ScrollView>
         </View>
       </View>
@@ -333,6 +453,9 @@ const styles = StyleSheet.create({
   sheetScrollContent: {},
   grabberWrap: { alignItems: 'center', paddingBottom: 6 },
   grabber: { width: 36, height: 4, borderRadius: 2, backgroundColor: T.line },
+  hydrateShell: { paddingBottom: 8 },
+  hydrateSpinner: { marginVertical: 24 },
+  routeMuted: { fontSize: 13, fontWeight: '600', color: T.textSecondary, marginTop: 4, lineHeight: 17 },
   headerRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   headerText: { flex: 1, paddingRight: 6 },
   closeHit: { padding: 2, marginTop: -2 },

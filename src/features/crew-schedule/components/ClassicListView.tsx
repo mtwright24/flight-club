@@ -17,6 +17,7 @@ import {
   writeScheduleMonthUISnapshot,
 } from '../scheduleSnapshotCache';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
+import { resolveFullPairingForHandoff } from '../pairingHandoff';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 /**
@@ -715,7 +716,10 @@ export default function ClassicListView({
   );
   /** `loadEpoch` value that last wrote `classicCommit`; must equal current `loadEpoch` for a coherent grid. */
   const [classicSettledEpoch, setClassicSettledEpoch] = useState(0);
-  const onLongPressTrip = useCallback((t: CrewScheduleTrip) => setPreviewTrip(t), []);
+  const onLongPressTrip = useCallback(
+    (t: CrewScheduleTrip) => setPreviewTrip(resolveFullPairingForHandoff(t, trips)),
+    [trips],
+  );
   const closePreview = useCallback(() => setPreviewTrip(null), []);
   const openFullFromPreview = useCallback(() => {
     const t = previewTrip;
