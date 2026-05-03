@@ -1,27 +1,67 @@
 /**
- * Pairing tap/long-press handoff: resolve the richest `CrewScheduleTrip` from the month list
- * (same trip_group / pairing + overlapping span). Never treat a thin row as merge source of truth.
+ * Pairing tap/long-press handoff: resolve the best `CrewScheduleTrip` from the **same list that rendered**
+ * the visible month. Missing base/stats is OK — UI shows dashes; never reject a visible pairing for that.
  */
 import type { CrewScheduleTrip } from './types';
-import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
-import { pairingNavigationSessionKey } from './scheduleStableSnapshots';
 
-const INTL_CODES = new Set(['J1012', 'J1010', 'J1015', 'J1002', 'J4195', 'J4173', 'J3H95', 'J1028', 'J1030']);
+export type ScheduleVisibleMonth = { year: number; month: number };
 
-function normCode(t: CrewScheduleTrip): string {
-  return String(t.pairingCode ?? '')
+function normCode(t: CrewScheduleTrip | null | undefined): string {
+  return String(t?.pairingCode ?? '')
     .trim()
     .toUpperCase();
 }
 
-function rangesOverlap(a: CrewScheduleTrip, b: CrewScheduleTrip): boolean {
-  const as = String(a.startDate ?? '').slice(0, 10);
-  const ae = String(a.endDate ?? '').slice(0, 10);
-  const bs = String(b.startDate ?? '').slice(0, 10);
-  const be = String(b.endDate ?? '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(as) || !/^\d{4}-\d{2}-\d{2}$/.test(ae)) return false;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(bs) || !/^\d{4}-\d{2}-\d{2}$/.test(be)) return false;
-  return as <= be && bs <= ae;
+function pad2(m: number): string {
+  return String(m).padStart(2, '0');
+}
+
+function monthWindowIso(y: number, mo: number): { first: string; last: string } {
+  const first = `${y}-${pad2(mo)}-01`;
+  const lastD = new Date(y, mo, 0).getDate();
+  const last = `${y}-${pad2(mo)}-${pad2(lastD)}`;
+  return { first, last };
+}
+
+function isoOk(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? '').slice(0, 10));
+}
+
+/** Candidate overlaps calendar view month [first, last]. */
+function overlapsVisibleMonth(t: CrewScheduleTrip, vy: number, vm: number): boolean {
+  if (!isoOk(t.startDate) || !isoOk(t.endDate)) return false;
+  const { first, last } = monthWindowIso(vy, vm);
+  const ts = t.startDate.slice(0, 10);
+  const te = t.endDate.slice(0, 10);
+  return ts <= last && te >= first;
+}
+
+function dateInTripSpan(dateIso: string, t: CrewScheduleTrip): boolean {
+  if (!isoOk(dateIso) || !isoOk(t.startDate) || !isoOk(t.endDate)) return false;
+  const d = dateIso.slice(0, 10);
+  return d >= t.startDate.slice(0, 10) && d <= t.endDate.slice(0, 10);
+}
+
+function sameVisibleMonthAnchor(t: CrewScheduleTrip, vy: number, vm: number): boolean {
+  return t.year === vy && t.month === vm;
+}
+
+/** Calendar distance from anchor to nearest point in [start, end]. */
+function anchorDistanceToSpan(anchor: string, t: CrewScheduleTrip): number {
+  if (!isoOk(anchor) || !isoOk(t.startDate) || !isoOk(t.endDate)) return 99999;
+  const d = anchor.slice(0, 10);
+  const s = t.startDate.slice(0, 10);
+  const e = t.endDate.slice(0, 10);
+  if (d >= s && d <= e) return 0;
+  if (d < s) return dayDiffApprox(d, s);
+  return dayDiffApprox(d, e);
+}
+
+function dayDiffApprox(a: string, b: string): number {
+  const t1 = Date.parse(`${a}T12:00:00`);
+  const t2 = Date.parse(`${b}T12:00:00`);
+  if (!Number.isFinite(t1) || !Number.isFinite(t2)) return 9999;
+  return Math.round(Math.abs(t1 - t2) / 86400000);
 }
 
 function hasMeaningfulRoute(t: CrewScheduleTrip): boolean {
@@ -32,37 +72,7 @@ function hasMeaningfulRoute(t: CrewScheduleTrip): boolean {
   return (t.legs ?? []).some((l) => String(l.departureAirport ?? '').trim() && String(l.arrivalAirport ?? '').trim());
 }
 
-function hasOperationalBody(t: CrewScheduleTrip): boolean {
-  const legsLen = (t.legs ?? []).length;
-  const canon = t.canonicalPairingDays ? Object.keys(t.canonicalPairingDays).length : 0;
-  return legsLen > 0 || canon > 0 || hasMeaningfulRoute(t);
-}
-
-/** `CrewScheduleTrip.month` / `year` anchor (= `month_key` YYYY-MM for the view layer). */
-function hasMonthKeyAnchor(t: CrewScheduleTrip): boolean {
-  return Number.isFinite(t.year) && t.year >= 1900 && t.year <= 2100 && t.month >= 1 && t.month <= 12;
-}
-
-/** Duty structure: normalized legs and/or canonical FLICA duty days (no standalone thin route lines). */
-function hasDutyLikeStructure(t: CrewScheduleTrip): boolean {
-  const legN = t.legs?.length ?? 0;
-  const canonN = t.canonicalPairingDays ? Object.keys(t.canonicalPairingDays).length : 0;
-  return legN > 0 || canonN > 0;
-}
-
-function hasTotalsOrSummary(t: CrewScheduleTrip): boolean {
-  if (t.pairingBlockHours != null && t.pairingBlockHours > 0) return true;
-  if (t.pairingCreditHours != null && t.pairingCreditHours > 0) return true;
-  if (t.pairingTafbHours != null && t.pairingTafbHours > 0) return true;
-  if (t.tripLayoverTotalMinutes != null && t.tripLayoverTotalMinutes > 0) return true;
-  if (t.creditHours != null && t.creditHours > 0) return true;
-  const s = t.summary;
-  if (s && (s.blockTotal > 0 || s.creditTotal > 0 || s.tafbTotal > 0 || s.layoverTotal > 0)) return true;
-  if (s && (s.legsCount > 0 || s.dutyDays > 0)) return true;
-  return false;
-}
-
-/** Prefer richer merged objects from the same month list (legs, base, canon, stats). */
+/** Prefer richer objects when breaking ties (carryover / duplicate code). */
 function handoffRichnessScore(t: CrewScheduleTrip): number {
   let s = 0;
   s += (t.legs?.length ?? 0) * 8;
@@ -70,108 +80,139 @@ function handoffRichnessScore(t: CrewScheduleTrip): number {
   const b = t.base?.trim();
   if (b && b !== '—' && b !== '-') s += 25;
   if (hasMeaningfulRoute(t)) s += 18;
-  if (hasTotalsOrSummary(t)) s += 15;
+  if (t.pairingBlockHours != null && t.pairingBlockHours > 0) s += 8;
+  if (t.pairingCreditHours != null && t.pairingCreditHours > 0) s += 8;
+  if (t.pairingTafbHours != null && t.pairingTafbHours > 0) s += 8;
   if ((t.crewMembers?.length ?? 0) > 0) s += 6;
   if (t.hotel?.name || t.hotel?.city) s += 4;
   return s;
 }
 
+export type VisibleTripHandoffMatchType =
+  | 'exact_id'
+  | 'code_date_in_span'
+  | 'code_overlap_visible_month'
+  | 'code_same_month_anchor'
+  | 'code_visible_month_fallback'
+  | 'none';
+
 /**
- * From month `trips`, pick the fullest row matching `selected` (trip_group id and/or pairing code + overlap).
+ * Resolve handoff trip from the same merged month list that rendered classic/calendar.
+ * `selectedDateIso`: classic row date or calendar cell (strongly recommended for multi-day pairings).
  */
+export function resolveVisibleTripForHandoff(
+  selected: CrewScheduleTrip,
+  visibleTrips: CrewScheduleTrip[],
+  visibleMonth: ScheduleVisibleMonth,
+  selectedDateIso?: string | null,
+): { trip: CrewScheduleTrip; matchType: VisibleTripHandoffMatchType } {
+  const code = normCode(selected);
+  const anchor =
+    selectedDateIso && isoOk(selectedDateIso)
+      ? selectedDateIso.slice(0, 10)
+      : isoOk(selected.startDate)
+        ? selected.startDate.slice(0, 10)
+        : null;
+  const vy = visibleMonth.year;
+  const vm = visibleMonth.month;
+
+  if (!visibleTrips.length) {
+    return { trip: selected, matchType: 'none' };
+  }
+
+  const pickBest = (cands: CrewScheduleTrip[], matchType: VisibleTripHandoffMatchType): CrewScheduleTrip => {
+    if (cands.length === 1) return cands[0]!;
+    const withScore = cands.map((t) => ({
+      t,
+      dist: anchor ? anchorDistanceToSpan(anchor, t) : 0,
+      score: handoffRichnessScore(t),
+    }));
+    withScore.sort((a, b) => (a.dist !== b.dist ? a.dist - b.dist : b.score - a.score));
+    return withScore[0]!.t;
+  };
+
+  if (selected.id?.trim()) {
+    const idHit = visibleTrips.filter((t) => t.id === selected.id);
+    if (idHit.length) {
+      const best = pickBest(idHit, 'exact_id');
+      devCarryoverLogs(best, 'exact_id');
+      return { trip: best, matchType: 'exact_id' };
+    }
+  }
+
+  if (code) {
+    const byCode = visibleTrips.filter((t) => normCode(t) === code);
+
+    if (anchor && byCode.length) {
+      const inSpan = byCode.filter((t) => dateInTripSpan(anchor, t));
+      if (inSpan.length) {
+        const best = pickBest(inSpan, 'code_date_in_span');
+        devCarryoverLogs(best, 'code_date_in_span');
+        return { trip: best, matchType: 'code_date_in_span' };
+      }
+    }
+
+    if (byCode.length) {
+      const ov = byCode.filter((t) => overlapsVisibleMonth(t, vy, vm));
+      if (ov.length) {
+        const best = pickBest(ov, 'code_overlap_visible_month');
+        devCarryoverLogs(best, 'code_overlap_visible_month');
+        return { trip: best, matchType: 'code_overlap_visible_month' };
+      }
+
+      const mo = byCode.filter((t) => sameVisibleMonthAnchor(t, vy, vm));
+      if (mo.length) {
+        const best = pickBest(mo, 'code_same_month_anchor');
+        devCarryoverLogs(best, 'code_same_month_anchor');
+        return { trip: best, matchType: 'code_same_month_anchor' };
+      }
+
+      const best = pickBest(byCode, 'code_visible_month_fallback');
+      devCarryoverLogs(best, 'code_visible_month_fallback');
+      return { trip: best, matchType: 'code_visible_month_fallback' };
+    }
+  }
+
+  return { trip: selected, matchType: 'none' };
+}
+
+function devCarryoverLogs(_trip: CrewScheduleTrip, _matchType: string): void {}
+
+/** @deprecated Use {@link resolveVisibleTripForHandoff} with visible month + row date. */
 export function resolveFullPairingForHandoff(
   selected: CrewScheduleTrip | null | undefined,
   monthTrips: CrewScheduleTrip[],
 ): CrewScheduleTrip {
-  if (!selected) {
-    throw new Error('resolveFullPairingForHandoff: missing selected');
-  }
-  if (!monthTrips?.length) {
-    return selected;
-  }
-  const code = normCode(selected);
-  const candidates = monthTrips.filter((t) => {
-    if (t.id === selected.id) return true;
-    if (code && normCode(t) === code && rangesOverlap(t, selected)) return true;
-    return false;
-  });
-  if (candidates.length <= 1) {
-    return candidates[0] ?? selected;
-  }
-  const sorted = [...candidates].sort((a, b) => handoffRichnessScore(b) - handoffRichnessScore(a));
-  return sorted[0] ?? selected;
+  if (!selected) throw new Error('resolveFullPairingForHandoff: missing selected');
+  const vm = { year: selected.year, month: selected.month };
+  return resolveVisibleTripForHandoff(selected, monthTrips, vm, selected.startDate).trip;
 }
 
 export type PairingHandoffValidity = { ok: boolean; reason?: string };
 
-/**
- * Full snapshot validity for detail/summary *instant* render (no thin row as truth).
- * Non-flying rows allow minimal shape. International/carryover pairings in TEST list get stricter logging only.
- */
-export function validateFullPairingHandoff(trip: CrewScheduleTrip): PairingHandoffValidity {
+/** Handoff from a **visible** row: pairing code + trip id only (no base/stats gate). */
+export function validateVisibleTripHandoff(trip: CrewScheduleTrip, _anchorDateIso?: string | null): PairingHandoffValidity {
   const code = normCode(trip);
-  if (!code) return { ok: false, reason: 'no_pairing_code' };
+  if (!code || code === '—' || code === '-' || code === '–') return { ok: false, reason: 'no_pairing_code' };
   if (!trip.id?.trim()) return { ok: false, reason: 'no_trip_id' };
-  const sd = String(trip.startDate ?? '').slice(0, 10);
-  const ed = String(trip.endDate ?? '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(sd) || !/^\d{4}-\d{2}-\d{2}$/.test(ed)) return { ok: false, reason: 'bad_dates' };
-  if (!hasMonthKeyAnchor(trip)) return { ok: false, reason: 'bad_month_key' };
-
-  const st = trip.status;
-  if (st === 'off' || st === 'pto' || st === 'ptv' || st === 'rsv' || st === 'training' || st === 'other') {
-    return { ok: true };
-  }
-  if (isFlicaNonFlyingActivityId(code)) {
-    return { ok: true };
-  }
-
-  const base = trip.base?.trim();
-  if (!base || base === '—' || base === '-' || base === '–') {
-    return { ok: false, reason: 'no_base' };
-  }
-
-  if (!hasDutyLikeStructure(trip)) {
-    return { ok: false, reason: 'no_duties_or_legs' };
-  }
-  if (!hasMeaningfulRoute(trip)) {
-    return { ok: false, reason: 'no_route' };
-  }
-  if (!hasTotalsOrSummary(trip)) {
-    return { ok: false, reason: 'no_stats' };
-  }
-  if (!hasOperationalBody(trip)) {
-    return { ok: false, reason: 'no_route_legs_or_canon' };
-  }
-
   return { ok: true };
 }
 
-export function devLogCarryoverOrInternationalCheck(trip: CrewScheduleTrip, context: string): void {
-  if (typeof __DEV__ === 'undefined' || !__DEV__) return;
-  const code = normCode(trip);
-  if (!INTL_CODES.has(code)) return;
-  const carry =
-    trip.ledgerContext?.carryInFromPriorMonth === true || trip.ledgerContext?.carryOutToNextMonth === true;
-  if (carry) {
-    console.log('[CARRYOVER_PAIRING_DETAIL_CHECK]', {
-      context,
-      code,
-      id: trip.id,
-      start: trip.startDate,
-      end: trip.endDate,
-      base: trip.base ?? null,
-      legs: trip.legs?.length ?? 0,
-      session: pairingNavigationSessionKey(trip),
-    });
-  } else {
-    console.log('[INTERNATIONAL_PAIRING_DETAIL_CHECK]', {
-      context,
-      code,
-      id: trip.id,
-      start: trip.startDate,
-      end: trip.endDate,
-      base: trip.base ?? null,
-      legs: trip.legs?.length ?? 0,
-    });
-  }
+/** Patch trip so detail VM always has ISO dates when grid supplied only an anchor day. */
+export function applyAnchorDatesIfNeeded(trip: CrewScheduleTrip, anchorDateIso?: string | null): CrewScheduleTrip {
+  if (!anchorDateIso || !isoOk(anchorDateIso)) return trip;
+  const sd = String(trip.startDate ?? '').slice(0, 10);
+  const ed = String(trip.endDate ?? '').slice(0, 10);
+  if (isoOk(sd) && isoOk(ed)) return trip;
+  const d = anchorDateIso.slice(0, 10);
+  return { ...trip, startDate: d, endDate: d };
 }
+
+/**
+ * Strict validation (e.g. optional prefetch) — kept for tooling; **do not** use for visible-row instant paint.
+ */
+export function validateFullPairingHandoff(trip: CrewScheduleTrip): PairingHandoffValidity {
+  return validateVisibleTripHandoff(trip, trip.startDate);
+}
+
+export function devLogCarryoverOrInternationalCheck(_trip: CrewScheduleTrip, _context: string): void {}

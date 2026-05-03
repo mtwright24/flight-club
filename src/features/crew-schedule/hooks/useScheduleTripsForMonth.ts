@@ -150,9 +150,6 @@ function prefetchAdjacentMonths(centerYear: number, centerMonth: number): void {
     for (const [y, m] of neighbors) {
       const k = monthCalendarKey(y, m);
       if (readScheduleMonthCache(k)) continue;
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[SCHEDULE_MONTH_PRELOAD_START]', { key: k, from: monthCalendarKey(centerYear, centerMonth) });
-      }
       void dedupFetchScheduleMonth(y, m).catch(() => {
         /* best-effort warmup */
       });
@@ -188,16 +185,9 @@ export function useScheduleTripsForMonth(year: number, month: number) {
     monthBuildGenerationRef.current += 1;
     const gen = monthBuildGenerationRef.current;
 
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[SCHEDULE_MONTH_BUILD_START]', { key, gen });
-    }
-
     if (userIdRef.current) {
       const c = readCommittedMonthSnapshot(key);
       if (c && c.userId === userIdRef.current) {
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[SCHEDULE_MONTH_SNAPSHOT_HIT]', { key, source: 'committed', identityKey: c.identityKey });
-        }
         setTrips(c.trips);
         setMonthMetrics(c.monthMetrics);
         setLoading(false);
@@ -208,9 +198,6 @@ export function useScheduleTripsForMonth(year: number, month: number) {
 
     const hit = readScheduleMonthCache(key);
     if (hit) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[SCHEDULE_MONTH_SNAPSHOT_HIT]', { key, source: 'month_cache' });
-      }
       setTrips(hit.trips);
       setMonthMetrics(hit.monthMetrics);
       setLoading(false);
@@ -219,17 +206,11 @@ export function useScheduleTripsForMonth(year: number, month: number) {
     }
     const uiSnap = readScheduleMonthUISnapshot(key);
     if (uiSnap && isScheduleMonthUISnapshotCoherent(uiSnap, year, month)) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[SCHEDULE_MONTH_SNAPSHOT_HIT]', { key, source: 'ui_snapshot' });
-      }
       setTrips(uiSnap.trips);
       setMonthMetrics(uiSnap.monthMetrics);
       setLoading(false);
       setError(null);
       return;
-    }
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[SCHEDULE_MONTH_SNAPSHOT_MISS]', { key });
     }
     if (gen === monthBuildGenerationRef.current) {
       setTrips([]);
@@ -245,9 +226,6 @@ export function useScheduleTripsForMonth(year: number, month: number) {
     if (targetMonthKeyRef.current !== key) return;
     const c = readCommittedMonthSnapshot(key);
     if (c?.userId === userId) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[SCHEDULE_MONTH_SNAPSHOT_HIT]', { key, source: 'committed_after_auth' });
-      }
       setTrips(c.trips);
       setMonthMetrics(c.monthMetrics);
       setLoading(false);
@@ -272,16 +250,6 @@ export function useScheduleTripsForMonth(year: number, month: number) {
       try {
         const data = await dedupFetchScheduleMonth(year, month);
         if (targetMonthKeyRef.current !== key || buildGenAtStart !== monthBuildGenerationRef.current) {
-          if (typeof __DEV__ !== 'undefined' && __DEV__) {
-            console.log('[SCHEDULE_MONTH_BUILD_REJECTED]', {
-              reason: 'stale_month_or_generation',
-              key,
-              targetNow: targetMonthKeyRef.current,
-              genAtStart: buildGenAtStart,
-              genNow: monthBuildGenerationRef.current,
-            });
-            console.log('[PREVENTED_WRONG_KEY_RENDER]', { layer: 'month_fetch_stale', key });
-          }
           return;
         }
         const { data: auth } = await supabase.auth.getUser();
@@ -303,21 +271,12 @@ export function useScheduleTripsForMonth(year: number, month: number) {
           trips: data.trips,
           monthMetrics: data.monthMetrics,
         });
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[SCHEDULE_MONTH_BUILD_COMMIT]', { key, identityKey, trips: data.trips.length });
-        }
         if (!silent && !isPull) prefetchAdjacentMonths(year, month);
       } catch (e) {
         setError(e instanceof Error ? e : new Error(String(e)));
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[SCHEDULE_MONTH_BUILD_REJECTED]', { key, err: String(e) });
-        }
         const uiSnap = readScheduleMonthUISnapshot(key);
         const stillTarget = targetMonthKeyRef.current === key;
         if (!stillTarget) {
-          if (typeof __DEV__ !== 'undefined' && __DEV__) {
-            console.log('[PREVENTED_WRONG_KEY_RENDER]', { reason: 'error_handler_month_changed', key });
-          }
           return;
         }
         if (!readScheduleMonthCache(key) && !(uiSnap && isScheduleMonthUISnapshotCoherent(uiSnap, year, month))) {
@@ -325,11 +284,6 @@ export function useScheduleTripsForMonth(year: number, month: number) {
           if (!committed) {
             setTrips([]);
             setMonthMetrics(null);
-            if (typeof __DEV__ !== 'undefined' && __DEV__) {
-              console.log('[PREVENTED_BLANK_RENDER]', { avoided: false, key, note: 'no_fallback_cache' });
-            }
-          } else if (typeof __DEV__ !== 'undefined' && __DEV__) {
-            console.log('[PREVENTED_BLANK_RENDER]', { avoided: true, key, source: 'committed_fallback' });
           }
         }
       } finally {

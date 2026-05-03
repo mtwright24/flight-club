@@ -18,6 +18,7 @@ import {
 import { buildCrewScheduleTripsFromNormalizedPack } from './tripMapper';
 import type { TripSummaryPackExtra } from './tripSummary';
 import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
+import { crewBaseFromPairingDbFields } from './pairingDetailResolve';
 
 export type ScheduleEntryRow = {
   id: string;
@@ -271,11 +272,6 @@ export async function invokeImportScheduleOcr(batchId: string): Promise<{
       data: { session },
     } = await supabase.auth.getSession());
   }
-  console.warn('[schedule-import] invokeImportScheduleOcr', {
-    batchId,
-    accessTokenPresent: !!session?.access_token,
-    urlHost: new URL(SUPABASE_URL).host,
-  });
   if (!session?.access_token) {
     throw new Error('No active session/access token. Sign out, sign in again, then retry import.');
   }
@@ -292,12 +288,6 @@ export async function invokeImportScheduleOcr(batchId: string): Promise<{
   });
 
   const text = await res.text();
-  console.warn('[schedule-import] Edge Function response', {
-    status: res.status,
-    ok: res.ok,
-    bodyPreview: text.slice(0, 500),
-    bodyLength: text.length,
-  });
   let parsed: unknown;
   try {
     parsed = text ? JSON.parse(text) : null;
@@ -872,39 +862,12 @@ export type PairingDetailBundle = {
   hotels: PairingDetailDbHotelRow[];
 };
 
-function devIsJ1015May2026(
-  pairingCode: string,
-  startIso?: string | null,
-  endIso?: string | null,
-): boolean {
-  if (String(pairingCode).trim().toUpperCase() !== 'J1015') return false;
-  const s = String(startIso ?? '').slice(0, 7);
-  const e = String(endIso ?? '').slice(0, 7);
-  return s <= '2026-05' && e >= '2026-05';
-}
-
 /** Merge FLICA pairing-detail table fields + crew/hotel rows into a normalized trip. */
 export function mergePairingDetailBundleIntoTrip(
   trip: CrewScheduleTrip,
   bundle: PairingDetailBundle,
 ): CrewScheduleTrip {
   const prow = bundle.pairing as Record<string, unknown>;
-  const pairingCodeStr = String(prow.pairing_id ?? trip.pairingCode ?? '').trim();
-  const opS = String(prow.operate_start_date ?? '').slice(0, 10);
-  const opE = String(prow.operate_end_date ?? '').slice(0, 10);
-  const devJ = typeof __DEV__ !== 'undefined' && __DEV__ && devIsJ1015May2026(pairingCodeStr, opS, opE);
-
-  const beforeStats = {
-    routeSummary: trip.routeSummary,
-    pairingBlockHours: trip.pairingBlockHours ?? null,
-    pairingCreditHours: trip.pairingCreditHours ?? null,
-    pairingTafbHours: trip.pairingTafbHours ?? null,
-    tripLayoverTotalMinutes: trip.tripLayoverTotalMinutes ?? null,
-    crewLen: trip.crewMembers?.length ?? 0,
-    legsLen: trip.legs?.length ?? 0,
-    firstLegRelease: trip.legs[0]?.releaseLocal ?? null,
-    lastLegRelease: trip.legs.length ? trip.legs[trip.legs.length - 1]!.releaseLocal ?? null : null,
-  };
 
   const routeDb = typeof prow.route_summary === 'string' ? prow.route_summary.trim() : '';
   const blockMin = prow.pairing_block_minutes;
@@ -914,6 +877,11 @@ export function mergePairingDetailBundleIntoTrip(
 
   const next: CrewScheduleTrip = { ...trip };
   if (routeDb) next.routeSummary = routeDb;
+
+  const baseFromDb = crewBaseFromPairingDbFields(routeDb, (prow.base_code as string | null | undefined) ?? null);
+  if (baseFromDb) {
+    next.base = baseFromDb;
+  }
 
   if (blockMin != null && Number.isFinite(Number(blockMin))) {
     next.pairingBlockHours = Number(blockMin) / 60;
@@ -955,38 +923,6 @@ export function mergePairingDetailBundleIntoTrip(
     next.hotel = hotel;
     const c = first.layover_city?.trim();
     if (c && !next.layoverCity) next.layoverCity = c;
-  }
-
-  if (devJ) {
-    console.log('[pairing-detail merge] J1015 before', {
-      tripId: trip.id,
-      pairingCode: trip.pairingCode,
-      ...beforeStats,
-      bundlePairing: {
-        route_summary: prow.route_summary ?? null,
-        pairing_block_minutes: prow.pairing_block_minutes ?? null,
-        pairing_credit_minutes: prow.pairing_credit_minutes ?? null,
-        pairing_tafb_minutes: prow.pairing_tafb_minutes ?? null,
-        layover_total_minutes: prow.layover_total_minutes ?? null,
-      },
-      bundleCrewLen: bundle.crew.length,
-      bundleHotelsLen: bundle.hotels.length,
-      note: 'merge does not mutate legs (D-END comes from trip.legs / schedule_pairing_legs only)',
-    });
-    console.log('[pairing-detail merge] J1015 after', {
-      tripId: next.id,
-      pairingCode: next.pairingCode,
-      routeSummary: next.routeSummary,
-      pairingBlockHours: next.pairingBlockHours ?? null,
-      pairingCreditHours: next.pairingCreditHours ?? null,
-      pairingTafbHours: next.pairingTafbHours ?? null,
-      tripLayoverTotalMinutes: next.tripLayoverTotalMinutes ?? null,
-      crewLen: next.crewMembers?.length ?? 0,
-      legsLen: next.legs.length,
-      firstLegRelease: next.legs[0]?.releaseLocal ?? null,
-      hotelName: next.hotel?.name ?? null,
-      hotelPhone: next.hotel?.phone ?? null,
-    });
   }
 
   return next;
@@ -1058,10 +994,6 @@ export async function fetchPairingDetailByPairingUuid(pairingUuid: string): Prom
   if (ue || !u.user) return null;
   const uid = u.user.id;
 
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    console.log('[pairing-detail read] input pairingUuid', pairingUuid);
-  }
-
   const { data: pairingRow, error: pe } = await supabase
     .from('schedule_pairings')
     .select(PAIRING_DETAIL_PAIRING_SELECT)
@@ -1070,15 +1002,9 @@ export async function fetchPairingDetailByPairingUuid(pairingUuid: string): Prom
     .maybeSingle();
 
   if (pe) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[pairing-detail read] schedule_pairings select error', pe.message);
-    }
     return null;
   }
   if (!pairingRow) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[pairing-detail read] no schedule_pairings row for uuid', { pairingUuid });
-    }
     return null;
   }
 
@@ -1086,21 +1012,7 @@ export async function fetchPairingDetailByPairingUuid(pairingUuid: string): Prom
   const pairingCode = String((pairingRow as { pairing_id?: string | null }).pairing_id ?? '').trim();
 
   if (!pairingCode) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[pairing-detail read] pairing row missing pairing_id text', { pairingUuid });
-    }
     return null;
-  }
-
-  const opS = String((pairingRow as { operate_start_date?: string | null }).operate_start_date ?? '').slice(0, 10);
-  const opE = String((pairingRow as { operate_end_date?: string | null }).operate_end_date ?? '').slice(0, 10);
-  const devJ = typeof __DEV__ !== 'undefined' && __DEV__ && devIsJ1015May2026(pairingCode, opS, opE);
-
-  if (!batchId && typeof __DEV__ !== 'undefined' && __DEV__) {
-    console.warn(
-      '[pairing-detail read] schedule_pairings.import_id empty — using pairing_db_id for crew/hotels; duties by pairing_id only',
-      { pairingUuid, pairingCode },
-    );
   }
 
   let dutyQ = supabase.from('schedule_duties').select('*').eq('user_id', uid).eq('pairing_id', pairingCode);
@@ -1136,63 +1048,6 @@ export async function fetchPairingDetailByPairingUuid(pairingUuid: string): Prom
   if (crewRes.error) throw crewRes.error;
   if (hotelRes.error) throw hotelRes.error;
 
-  const pr = pairingRow as Record<string, unknown>;
-  if (devJ) {
-    const legsArr = (legRes.data ?? []) as SchedulePairingLegLite[];
-    const firstL = legsArr[0];
-    const lastL = legsArr.length ? legsArr[legsArr.length - 1]! : undefined;
-    console.log('[pairing-detail read] J1015 pairing row + join keys', {
-      pairingUuid,
-      import_id_used_as_batch: batchId || null,
-      pairing_id_text: pairingCode,
-      operate_start: opS,
-      operate_end: opE,
-      route_summary: pr.route_summary ?? null,
-      pairing_block_minutes: pr.pairing_block_minutes ?? null,
-      pairing_credit_minutes: pr.pairing_credit_minutes ?? null,
-      pairing_tafb_minutes: pr.pairing_tafb_minutes ?? null,
-      layover_total_minutes: pr.layover_total_minutes ?? null,
-      raw_pairing_html_len: typeof pr.raw_pairing_html === 'string' ? pr.raw_pairing_html.length : 0,
-      raw_pairing_text_len: typeof pr.raw_pairing_text === 'string' ? pr.raw_pairing_text.length : 0,
-      dutiesCount: (dutyRes.data ?? []).length,
-      legsCount: legsArr.length,
-      crewCount: (crewRes.data ?? []).length,
-      crewSample: (crewRes.data ?? []).slice(0, 2),
-      hotelsCount: (hotelRes.data ?? []).length,
-      hotelsSample: (hotelRes.data ?? []).slice(0, 3).map((h) => ({
-        duty_date: h.duty_date,
-        hotel_name: h.hotel_name,
-        hotel_phone: h.hotel_phone,
-      })),
-      firstLeg: firstL
-        ? {
-            duty_date: firstL.duty_date,
-            release_time_local: firstL.release_time_local,
-            flica_d_end_local: firstL.normalized_json?.flica_d_end_local,
-            hotel_name: firstL.hotel_name,
-            hotel_phone: firstL.hotel_phone,
-            normalized_json_hotel_phone: (firstL.normalized_json as { hotel_phone?: string } | undefined)?.hotel_phone,
-          }
-        : null,
-      lastLeg: lastL
-        ? {
-            duty_date: lastL.duty_date,
-            release_time_local: lastL.release_time_local,
-            flica_d_end_local: lastL.normalized_json?.flica_d_end_local,
-            hotel_phone: lastL.hotel_phone,
-            normalized_json_hotel_phone: (lastL.normalized_json as { hotel_phone?: string } | undefined)?.hotel_phone,
-          }
-        : null,
-    });
-    console.log('[pairing-detail read] J1015 bundle returned', {
-      duties: (dutyRes.data ?? []).length,
-      legs: legsArr.length,
-      crew: (crewRes.data ?? []).length,
-      hotels: (hotelRes.data ?? []).length,
-    });
-    console.log('[pairing-detail read] J1015 schedule_pairing_hotels phone sample', (hotelRes.data ?? []).slice(0, 4));
-  }
-
   return {
     pairing: pairingRow as PairingDetailBundle['pairing'],
     duties: (dutyRes.data ?? []) as NormScheduleDuty[],
@@ -1206,9 +1061,6 @@ export async function fetchPairingDetailByPairingUuid(pairingUuid: string): Prom
 export async function fetchCrewScheduleTripByPairingUuid(pairingUuid: string): Promise<CrewScheduleTrip | null> {
   const bundle = await fetchPairingDetailByPairingUuid(pairingUuid);
   if (!bundle) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[pairing-detail fetch trip] fetchPairingDetailByPairingUuid returned null', { pairingUuid });
-    }
     return null;
   }
 
@@ -1288,24 +1140,5 @@ export function mergeTripWithMetadataRow(trip: CrewScheduleTrip, m: ScheduleTrip
     tripLayoverTotalMinutes: m.layover_total_minutes ?? trip.tripLayoverTotalMinutes,
     crewMembers: m.crew?.length ? m.crew : trip.crewMembers,
   };
-  if (
-    typeof __DEV__ !== 'undefined' &&
-    __DEV__ &&
-    devIsJ1015May2026(trip.pairingCode, trip.startDate, trip.endDate)
-  ) {
-    console.log('[pairing-detail ui-meta] mergeTripWithMetadataRow J1015', {
-      metaHasRow: true,
-      meta_pairing_block_hours: m.pairing_block_hours ?? null,
-      meta_pairing_credit_hours: m.pairing_credit_hours ?? null,
-      meta_pairing_tafb_hours: m.pairing_tafb_hours ?? null,
-      meta_layover_total_minutes: m.layover_total_minutes ?? null,
-      meta_crew_array_length: Array.isArray(m.crew) ? m.crew.length : null,
-      trip_before_pairingBlockHours: trip.pairingBlockHours ?? null,
-      out_pairingBlockHours: out.pairingBlockHours ?? null,
-      trip_before_crewLen: trip.crewMembers?.length ?? 0,
-      out_crewLen: out.crewMembers?.length ?? 0,
-      note: 'If meta_crew_array_length > 0, metadata crew replaces trip crew (see pairing_block_hours ?? pattern)',
-    });
-  }
   return out;
 }

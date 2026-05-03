@@ -127,22 +127,6 @@ function splitFlatLegsIntoDendDutySegments(legs: FlicaLeg[]): FlicaLeg[][] {
   return out.length ? out : [legs.slice()];
 }
 
-const DEBUG_NORM_PAIRINGS = new Set(['J4173', 'J4195', 'J1016', 'J3H95']);
-
-function dbgNormDuty(pairingId: string, duty: NormalizedDutyDay) {
-  if (!DEBUG_NORM_PAIRINGS.has(String(pairingId).trim().toUpperCase())) return;
-  console.log('[NORM_DUTY]', {
-    pairingId,
-    dutyDateIso: duty.dutyDateIso,
-    reportTime: duty.reportTime,
-    dutyOffTime: duty.dutyOffTime,
-    layoverCity: duty.layoverCity,
-    layoverTime: duty.layoverTime,
-    legsCount: duty.legs.length,
-    legRoutes: duty.legs.map((l) => `${l.depAirport}-${l.arrAirport}`),
-  });
-}
-
 function flicaRouteToAirports(route: string): { dep: string; arr: string } {
   const raw = (route ?? '').trim();
   if (!raw) return { dep: '', arr: '' };
@@ -358,7 +342,6 @@ export function normalizeFlicaParsedPairing(pairing: FlicaPairing): NormalizedTr
       isContinuation: dutyDays.length > 0,
       isOvernightDuty,
     };
-    dbgNormDuty(pairing.id, dd);
     dutyDays.push(dd);
   }
 

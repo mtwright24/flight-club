@@ -4,11 +4,11 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip } from '../types';
 import { scheduleTheme as T } from '../scheduleTheme';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
-import { resolveFullPairingForHandoff } from '../pairingHandoff';
+import { stashTripForDetailNavigation } from '../tripDetailNavCache';
 
 type Props = {
   trips: CrewScheduleTrip[];
-  onPressTrip: (trip: CrewScheduleTrip) => void;
+  onPressTrip: (trip: CrewScheduleTrip, rowDateIso?: string) => void;
   onPost?: (trip: CrewScheduleTrip) => void;
   onChat?: (trip: CrewScheduleTrip) => void;
   /** Open module Manage (replaces former hotel shortcut). */
@@ -41,7 +41,13 @@ export default function SmartListView({ trips, onPressTrip, onPost, onChat, onMa
           <View key={trip.id} style={styles.card}>
             <Pressable
               onPress={() => onPressTrip(trip)}
-              onLongPress={() => setPreviewTrip(resolveFullPairingForHandoff(trip, trips))}
+              onLongPress={() => {
+                stashTripForDetailNavigation(trip, trips, {
+                  visibleMonth: { year: trip.year, month: trip.month },
+                  rowDateIso: trip.startDate,
+                });
+                setPreviewTrip(trip);
+              }}
               delayLongPress={420}
               style={({ pressed }) => [pressed && { opacity: 0.92 }]}
               accessibilityHint="Long press for a quick preview of trip details."
@@ -77,6 +83,7 @@ export default function SmartListView({ trips, onPressTrip, onPost, onChat, onMa
       <TripQuickPreviewSheet
         visible={previewTrip != null}
         trip={previewTrip}
+        pairingUuid={previewTrip?.schedulePairingId}
         onClose={closePreview}
         onOpenFullTrip={openFullFromPreview}
       />

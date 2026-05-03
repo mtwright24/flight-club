@@ -34,6 +34,14 @@ import {
     canGoToPreviousScheduleMonth,
     tryStepScheduleMonth,
 } from "../scheduleMonthWindow";
+import {
+    canGoToNextImportedMonth,
+    canGoToPreviousImportedMonth,
+    clampYearMonthToImportedScheduleMonths,
+    getAvailableImportedScheduleMonths,
+    tryStepImportedScheduleMonth,
+    type ScheduleYearMonth,
+} from "../scheduleAvailableMonths";
 import { monthCalendarKey } from "../scheduleMonthCache";
 import { scheduleTheme as T } from "../scheduleTheme";
 import {
@@ -94,6 +102,28 @@ export default function ScheduleTabScreen() {
       }
     });
   }, []);
+
+  const [importedMonths, setImportedMonths] = useState<ScheduleYearMonth[]>([]);
+
+  React.useEffect(() => {
+    void getAvailableImportedScheduleMonths()
+      .then((months) => {
+        setImportedMonths(months);
+      })
+      .catch(() => setImportedMonths([]));
+  }, [scheduleRefreshKey]);
+
+  React.useEffect(() => {
+    if (!importedMonths.length) return;
+    const ok = importedMonths.some((x) => x.year === year && x.month === month);
+    if (ok) return;
+    const c = clampYearMonthToImportedScheduleMonths(year, month, importedMonths);
+    if (c && (c.year !== year || c.month !== month)) {
+      setYear(c.year);
+      setMonth(c.month);
+      void saveLastMonthCursor(c.year, c.month);
+    }
+  }, [importedMonths, year, month]);
 
   const { trips, monthMetrics, loading, refresh, refreshSilent } =
     useScheduleTripsForMonth(year, month);
@@ -159,6 +189,9 @@ export default function ScheduleTabScreen() {
     loadFlicaDirectFlag();
   }, [loadFlicaDirectFlag]);
 
+  const importedMonthsRef = useRef<ScheduleYearMonth[]>([]);
+  importedMonthsRef.current = importedMonths;
+
   useFocusEffect(
     useCallback(() => {
       void loadScheduleViewMode().then(setViewMode);
@@ -168,43 +201,85 @@ export default function ScheduleTabScreen() {
       loadFlicaDirectFlagRef.current();
       const anchor = new Date();
       const { year: yy, month: mm } = ymRef.current;
-      const c = clampYearMonthToScheduleWindow(yy, mm, anchor);
-      if (c.year !== yy || c.month !== mm) {
-        setYear(c.year);
-        setMonth(c.month);
-        void saveLastMonthCursor(c.year, c.month);
+      const im = importedMonthsRef.current;
+      if (im.length > 0) {
+        const ok = im.some((x) => x.year === yy && x.month === mm);
+        if (!ok) {
+          const snap = clampYearMonthToImportedScheduleMonths(yy, mm, im);
+          if (snap && (snap.year !== yy || snap.month !== mm)) {
+            setYear(snap.year);
+            setMonth(snap.month);
+            void saveLastMonthCursor(snap.year, snap.month);
+          }
+        }
+      } else {
+        const c = clampYearMonthToScheduleWindow(yy, mm, anchor);
+        if (c.year !== yy || c.month !== mm) {
+          setYear(c.year);
+          setMonth(c.month);
+          void saveLastMonthCursor(c.year, c.month);
+        }
       }
     }, []),
   );
 
   const monthLabel = `${MONTH_NAMES[displayMonth - 1]} ${displayYear}`;
 
-  const persistMonth = useCallback((y: number, m: number) => {
-    const c = clampYearMonthToScheduleWindow(y, m);
-    setYear(c.year);
-    setMonth(c.month);
-    void saveLastMonthCursor(c.year, c.month);
-  }, []);
+  const persistMonth = useCallback(
+    (y: number, m: number) => {
+      if (importedMonths.length > 0) {
+        const inList = importedMonths.some((x) => x.year === y && x.month === m);
+        const target = inList ? { year: y, month: m } : clampYearMonthToImportedScheduleMonths(y, m, importedMonths);
+        if (target) {
+          setYear(target.year);
+          setMonth(target.month);
+          void saveLastMonthCursor(target.year, target.month);
+        }
+        return;
+      }
+      const c = clampYearMonthToScheduleWindow(y, m);
+      setYear(c.year);
+      setMonth(c.month);
+      void saveLastMonthCursor(c.year, c.month);
+    },
+    [importedMonths],
+  );
 
   const goPrevMonth = useCallback(() => {
     const anchor = new Date();
+    if (importedMonths.length > 0) {
+      const n = tryStepImportedScheduleMonth(year, month, -1, importedMonths);
+      if (n) persistMonth(n.year, n.month);
+      return;
+    }
     const n = tryStepScheduleMonth(year, month, -1, anchor);
     if (n) persistMonth(n.year, n.month);
-  }, [year, month, persistMonth]);
+  }, [year, month, importedMonths, persistMonth]);
 
   const goNextMonth = useCallback(() => {
     const anchor = new Date();
+    if (importedMonths.length > 0) {
+      const n = tryStepImportedScheduleMonth(year, month, 1, importedMonths);
+      if (n) persistMonth(n.year, n.month);
+      return;
+    }
     const n = tryStepScheduleMonth(year, month, 1, anchor);
     if (n) persistMonth(n.year, n.month);
-  }, [year, month, persistMonth]);
+  }, [year, month, importedMonths, persistMonth]);
 
   const canPrevMonth = useMemo(
-    () => canGoToPreviousScheduleMonth(year, month),
-    [year, month],
+    () =>
+      importedMonths.length > 0
+        ? canGoToPreviousImportedMonth(year, month, importedMonths)
+        : canGoToPreviousScheduleMonth(year, month),
+    [year, month, importedMonths],
   );
   const canNextMonth = useMemo(
-    () => canGoToNextScheduleMonth(year, month),
-    [year, month],
+    () =>
+      importedMonths.length > 0
+        ? canGoToNextImportedMonth(year, month, importedMonths)
+        : canGoToNextScheduleMonth(year, month),
+    [year, month, importedMonths],
   );
 
   /**
@@ -235,8 +310,11 @@ export default function ScheduleTabScreen() {
   );
 
   const openTrip = useCallback(
-    (trip: CrewScheduleTrip) => {
-      stashTripForDetailNavigation(trip, displayTrips);
+    (trip: CrewScheduleTrip, rowDateIso?: string) => {
+      stashTripForDetailNavigation(trip, displayTrips, {
+        visibleMonth: { year: displayYear, month: displayMonth },
+        rowDateIso: rowDateIso ?? null,
+      });
       router.push({
         pathname: "/crew-schedule/trip-detail",
         params: {
@@ -247,7 +325,7 @@ export default function ScheduleTabScreen() {
         },
       });
     },
-    [router, displayTrips],
+    [router, displayTrips, displayYear, displayMonth],
   );
 
   const openTradePost = useCallback(
@@ -267,7 +345,7 @@ export default function ScheduleTabScreen() {
   const onPressCalendarDay = useCallback(
     (iso: string) => {
       const onDay = displayTrips.filter((t) => iso >= t.startDate && iso <= t.endDate);
-      if (onDay.length > 0) openTrip(onDay[0]);
+      if (onDay.length > 0) openTrip(onDay[0]!, iso);
     },
     [displayTrips, openTrip],
   );

@@ -15,21 +15,25 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  fetchCrewScheduleTripByPairingUuid,
-  fetchPairingDutiesForScheduleEntries,
   fetchPairingDetailByPairingUuid,
-  fetchTripGroupEntries,
-  fetchTripMetadataForGroup,
   mergeTripWithMetadataRow,
-  resolveSchedulePairingDbIdByOverlap,
   type PairingDetailDbHotelRow,
   type ScheduleTripMetadataRow,
 } from '../scheduleApi';
-import { dutiesToCrewScheduleLegs } from '../jetblueFlicaImport';
-import { entriesToSingleTrip } from '../tripMapper';
 import { getMockTripById } from '../mockScheduleData';
 import { tradePostPrefillParams } from '../tradePostPrefillParams';
-import { peekStashedHandoffValid, peekStashedPairingSnapshotKey, peekStashedTripForDetail } from '../tripDetailNavCache';
+import {
+  peekStashedDetailPointer,
+  peekStashedPairingSnapshotKey,
+  peekStashedTripForDetail,
+  shouldRejectWeakerPairingRender,
+} from '../tripDetailNavCache';
+import { validatePairingSummaryPaintReady } from '../pairingRenderableGate';
+import {
+  resolveRenderablePairingSnapshot,
+  trySyncRenderablePairingSnapshot,
+} from '../resolveRenderablePairingSnapshot';
+import { scorePairingCompleteness } from '../pairingDetailResolve';
 import { pairingNavigationSessionKey } from '../scheduleStableSnapshots';
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
@@ -112,6 +116,15 @@ function firstRouteParam(v: string | string[] | undefined): string | undefined {
   return undefined;
 }
 
+/** Same trip group + pairing code after canonical merge may widen start/end vs. tap fragment. */
+function pairingNavKeysSameTripAndCode(expected: string | null, got: string): boolean {
+  if (!expected) return true;
+  const e = expected.split('|');
+  const g = got.split('|');
+  if (e.length < 4 || g.length < 4) return expected === got;
+  return e[0] === g[0] && e[3] === g[3];
+}
+
 export default function TripDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -139,6 +152,8 @@ export default function TripDetailScreen() {
   const detailSessionKeyRef = useRef<string | null>(null);
   /** Bumps on each `tripId` commit so late pairing fetches never apply after navigation. */
   const pairingDetailFetchGenRef = useRef(0);
+  /** Persisted completeness — network hydrate must not downgrade the merged pairing. */
+  const detailRenderScoreRef = useRef(0);
 
   useLayoutEffect(() => {
     pairingDetailFetchGenRef.current += 1;
@@ -146,6 +161,7 @@ export default function TripDetailScreen() {
     setPairingHotels([]);
     if (!tripId) {
       detailSessionKeyRef.current = null;
+      detailRenderScoreRef.current = 0;
       setTrip(undefined);
       setTripMeta(null);
       setLoadingTrip(false);
@@ -153,41 +169,37 @@ export default function TripDetailScreen() {
     }
     if (tripId.startsWith('demo-')) {
       detailSessionKeyRef.current = null;
+      detailRenderScoreRef.current = 0;
       setTrip(getMockTripById(tripId));
       setTripMeta(null);
       setLoadingTrip(false);
       return;
     }
-    const peeked = peekStashedTripForDetail(tripId);
-    const handoffOk = peekStashedHandoffValid(tripId);
-    detailSessionKeyRef.current =
-      peekStashedPairingSnapshotKey(tripId) ?? (peeked ? pairingNavigationSessionKey(peeked) : null);
-    if (peeked && handoffOk) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_DETAIL_INITIAL_FULL_SNAPSHOT_USED]', {
-          tripId,
-          sessionKey: detailSessionKeyRef.current,
-        });
-      }
-      setTrip(peeked);
-      setTripMeta(null);
+
+    detailSessionKeyRef.current = peekStashedPairingSnapshotKey(tripId) ?? null;
+    detailRenderScoreRef.current = 0;
+    setTripMeta(null);
+
+    const instant = trySyncRenderablePairingSnapshot(tripId);
+    if (instant) {
+      const navKey = pairingNavigationSessionKey(instant);
+      detailSessionKeyRef.current = navKey;
+      detailRenderScoreRef.current = scorePairingCompleteness(instant);
+      setTrip(instant);
       setLoadingTrip(false);
-    } else if (peeked && !handoffOk) {
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PREVENTED_PARTIAL_PAIRING_RENDER]', {
-          screen: 'trip_detail_peek',
-          tripId,
-          sessionKey: detailSessionKeyRef.current,
-        });
+        console.log('[PAIRING_RENDER_FULL_SNAPSHOT_FIRST_PAINT]', { tripId, pairingCode: instant.pairingCode });
       }
-      setTrip(undefined);
-      setTripMeta(null);
-      setLoadingTrip(true);
-    } else {
-      setTrip(undefined);
-      setTripMeta(null);
-      setLoadingTrip(true);
+      return;
     }
+
+    const partialPeek = peekStashedTripForDetail(tripId);
+    if (partialPeek && typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[PAIRING_RENDER_BLOCKED_PARTIAL_FIRST_PAINT]', { tripId, pairingCode: partialPeek.pairingCode });
+    }
+
+    setTrip(undefined);
+    setLoadingTrip(true);
   }, [tripId]);
 
   const display = useMemo(
@@ -203,22 +215,16 @@ export default function TripDetailScreen() {
     if (!pid || !UUID_RE.test(pid)) return;
     const sessionAtStart = detailSessionKeyRef.current;
     let cancelled = false;
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_DETAIL_REFRESH_START]', { kind: 'hotels', tripId, pairingUuid: pid });
-    }
     void fetchPairingDetailByPairingUuid(pid).then((b) => {
       if (cancelled || activeDetailTripIdRef.current !== tripId) return;
-      if (sessionAtStart && detailSessionKeyRef.current !== sessionAtStart) {
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[PAIRING_DETAIL_REFRESH_REJECTED]', { kind: 'hotels', reason: 'session_key_changed' });
-          console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { kind: 'hotels', reason: 'session_key_changed' });
-        }
+      if (
+        sessionAtStart &&
+        detailSessionKeyRef.current &&
+        !pairingNavKeysSameTripAndCode(sessionAtStart, detailSessionKeyRef.current)
+      ) {
         return;
       }
       if (b?.hotels?.length) {
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[PAIRING_DETAIL_REFRESH_COMMIT]', { kind: 'hotels', count: b.hotels.length });
-        }
         setPairingHotels(b.hotels);
       }
     });
@@ -289,165 +295,54 @@ export default function TripDetailScreen() {
         return;
       }
       const fetchGenAtStart = pairingDetailFetchGenRef.current;
-      if (UUID_RE.test(tripId)) {
-        const stashed = peekStashedTripForDetail(tripId);
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[PAIRING_DETAIL_REFRESH_START]', { tripId, hadPeek: Boolean(stashed), fetchGen: fetchGenAtStart });
+
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        const partialPeek = peekStashedTripForDetail(tripId);
+        const anchor = peekStashedDetailPointer(tripId)?.selectedDateIso ?? null;
+        if (partialPeek && !validatePairingSummaryPaintReady(partialPeek, anchor).ok) {
+          console.log('[PAIRING_RENDER_WAITING_FOR_DB_FULL]', { tripId, pairingCode: partialPeek.pairingCode });
         }
-        try {
-          let pairingDbId: string | undefined =
-            (pairingUuidFromRoute && UUID_RE.test(pairingUuidFromRoute) ? pairingUuidFromRoute : undefined) ??
-            (stashed?.schedulePairingId && UUID_RE.test(stashed.schedulePairingId)
-              ? stashed.schedulePairingId
-              : undefined);
+      }
 
-          if (!pairingDbId && stashed) {
-            pairingDbId =
-              (await resolveSchedulePairingDbIdByOverlap({
-                pairingCode: stashed.pairingCode,
-                rangeStart: stashed.startDate,
-                rangeEnd: stashed.endDate,
-              })) ?? undefined;
-          }
+      const resolved = await resolveRenderablePairingSnapshot(tripId, pairingUuidFromRoute ?? null, null);
 
-          if (cancelled || activeDetailTripIdRef.current !== tripId || fetchGenAtStart !== pairingDetailFetchGenRef.current) {
-            if (typeof __DEV__ !== 'undefined' && __DEV__ && fetchGenAtStart !== pairingDetailFetchGenRef.current) {
-              console.log('[PAIRING_DETAIL_REFRESH_REJECTED]', { tripId, reason: 'fetch_generation_stale' });
-              console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { tripId, reason: 'fetch_generation_stale' });
-            }
-            return;
-          }
-
-          if (!pairingDbId && !stashed && UUID_RE.test(tripId)) {
-            pairingDbId = tripId;
-          }
-
-          const [fromNormalized, meta] = await Promise.all([
-            pairingDbId ? fetchCrewScheduleTripByPairingUuid(pairingDbId) : Promise.resolve(null),
-            fetchTripMetadataForGroup(tripId).catch(() => null),
-          ]);
-          if (cancelled || activeDetailTripIdRef.current !== tripId || fetchGenAtStart !== pairingDetailFetchGenRef.current) {
-            if (typeof __DEV__ !== 'undefined' && __DEV__ && fetchGenAtStart !== pairingDetailFetchGenRef.current) {
-              console.log('[PAIRING_DETAIL_REFRESH_REJECTED]', { tripId, reason: 'fetch_generation_stale_after_bundle' });
-              console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { tripId, reason: 'fetch_generation_stale_after_bundle' });
-            }
-            return;
-          }
-          if (fromNormalized) {
-            const schedulePairingId = fromNormalized.schedulePairingId ?? pairingDbId ?? fromNormalized.id;
-            const mergedForKey: CrewScheduleTrip = {
-              ...fromNormalized,
-              id: tripId,
-              schedulePairingId,
-            };
-            const navKey = pairingNavigationSessionKey(mergedForKey);
-            if (detailSessionKeyRef.current && navKey !== detailSessionKeyRef.current) {
-              if (typeof __DEV__ !== 'undefined' && __DEV__) {
-                console.log('[PAIRING_DETAIL_REFRESH_REJECTED]', {
-                  tripId,
-                  reason: 'navigation_session_mismatch',
-                  expected: detailSessionKeyRef.current,
-                  got: navKey,
-                });
-                console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { tripId, reason: 'navigation_session_mismatch', got: navKey });
-              }
-              return;
-            }
-            if (
-              typeof __DEV__ !== 'undefined' &&
-              __DEV__ &&
-              String(fromNormalized.pairingCode).trim().toUpperCase() === 'J1015' &&
-              String(fromNormalized.startDate).slice(0, 7) <= '2026-05' &&
-              String(fromNormalized.endDate).slice(0, 7) >= '2026-05'
-            ) {
-              console.log('[pairing-detail ui] TripDetailScreen fetchCrewScheduleTripByPairingUuid OK J1015', {
-                tripGroupId: tripId,
-                schedulePairingId,
-                pairingBlockHours: fromNormalized.pairingBlockHours ?? null,
-                crewLen: fromNormalized.crewMembers?.length ?? 0,
-                hotelName: fromNormalized.hotel?.name ?? null,
-                legsLen: fromNormalized.legs.length,
-                firstLegRelease: fromNormalized.legs[0]?.releaseLocal ?? null,
-              });
-            }
-            setTrip(mergedForKey);
-            setTripMeta(meta);
-            if (typeof __DEV__ !== 'undefined' && __DEV__) {
-              console.log('[PAIRING_DETAIL_REFRESH_COMMIT]', { tripId, navKey });
-            }
-          } else if (!fromNormalized && stashed) {
-            if (
-              typeof __DEV__ !== 'undefined' &&
-              __DEV__ &&
-              UUID_RE.test(tripId) &&
-              String(stashed.pairingCode).trim().toUpperCase() === 'J1015' &&
-              String(stashed.startDate).slice(0, 7) <= '2026-05' &&
-              String(stashed.endDate).slice(0, 7) >= '2026-05'
-            ) {
-              console.warn(
-                '[pairing-detail ui] TripDetailScreen kept stashed trip — fetchCrewScheduleTripByPairingUuid was null (no DB bundle merge)',
-                { tripId, pairingDbId: pairingDbId ?? null, stashedLegs: stashed.legs.length },
-              );
-            }
-          }
-          if (!fromNormalized && !stashed) {
-            const [rows, metaLegacy] = await Promise.all([
-              fetchTripGroupEntries(tripId),
-              fetchTripMetadataForGroup(tripId).catch(() => null),
-            ]);
-            const base = entriesToSingleTrip(rows);
-            let next = base;
-            if (base) {
-              const duties = await fetchPairingDutiesForScheduleEntries(rows);
-              if (duties?.length) {
-                next = {
-                  ...base,
-                  legs: dutiesToCrewScheduleLegs(duties, base.id, base.base?.trim().toUpperCase() || 'JFK'),
-                };
-              }
-            }
-            if (cancelled || activeDetailTripIdRef.current !== tripId || fetchGenAtStart !== pairingDetailFetchGenRef.current) {
-              return;
-            }
-            if (next) {
-              const navKey = pairingNavigationSessionKey(next);
-              if (detailSessionKeyRef.current && navKey !== detailSessionKeyRef.current) {
-                if (typeof __DEV__ !== 'undefined' && __DEV__) {
-                  console.log('[PAIRING_DETAIL_REFRESH_REJECTED]', {
-                    tripId,
-                    reason: 'legacy_session_mismatch',
-                    expected: detailSessionKeyRef.current,
-                    got: navKey,
-                  });
-                  console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { tripId, reason: 'legacy_session_mismatch', got: navKey });
-                }
-                return;
-              }
-              if (typeof __DEV__ !== 'undefined' && __DEV__) {
-                console.log('[PAIRING_DETAIL_REFRESH_COMMIT]', { tripId, path: 'legacy_entries', navKey });
-              }
-            }
-            setTrip(next);
-            setTripMeta(metaLegacy);
-          }
-        } catch {
-          if (!stashed && activeDetailTripIdRef.current === tripId) {
-            setTrip(undefined);
-            setTripMeta(null);
-          } else if (typeof __DEV__ !== 'undefined' && __DEV__ && stashed) {
-            console.log('[PREVENTED_BLANK_RENDER]', { screen: 'trip_detail', tripId, note: 'kept_stashed_or_peeked' });
-          }
-        } finally {
-          if (!cancelled && activeDetailTripIdRef.current === tripId && fetchGenAtStart === pairingDetailFetchGenRef.current) {
-            setLoadingTrip(false);
-          }
-        }
+      if (cancelled || activeDetailTripIdRef.current !== tripId || fetchGenAtStart !== pairingDetailFetchGenRef.current) {
         return;
       }
-      if (cancelled || activeDetailTripIdRef.current !== tripId || fetchGenAtStart !== pairingDetailFetchGenRef.current) return;
-      setTrip(getMockTripById(tripId));
-      setTripMeta(null);
-      setLoadingTrip(false);
+
+      if (resolved) {
+        const navKey = pairingNavigationSessionKey(resolved.trip);
+        if (detailSessionKeyRef.current && !pairingNavKeysSameTripAndCode(detailSessionKeyRef.current, navKey)) {
+          setLoadingTrip(false);
+          return;
+        }
+        setTrip((prev) => {
+          if (prev && shouldRejectWeakerPairingRender(prev, resolved.trip)) {
+            return prev;
+          }
+          if (typeof __DEV__ !== 'undefined' && __DEV__ && prev) {
+            console.log('[PAIRING_RENDER_DB_FULL_COMMIT]', {
+              source: resolved.source,
+              pairingCode: resolved.trip.pairingCode,
+              oldScore: scorePairingCompleteness(prev),
+              newScore: scorePairingCompleteness(resolved.trip),
+            });
+          }
+          detailRenderScoreRef.current = Math.max(
+            detailRenderScoreRef.current,
+            scorePairingCompleteness(resolved.trip),
+          );
+          detailSessionKeyRef.current = navKey;
+          return resolved.trip;
+        });
+        setTripMeta(resolved.meta);
+      } else {
+        setTrip((prev) => (prev ? prev : undefined));
+      }
+
+      if (!cancelled && activeDetailTripIdRef.current === tripId && fetchGenAtStart === pairingDetailFetchGenRef.current) {
+        setLoadingTrip(false);
+      }
     }
     void run();
     return () => {
@@ -513,31 +408,6 @@ export default function TripDetailScreen() {
     },
     [router]
   );
-
-  useEffect(() => {
-    if (typeof __DEV__ === 'undefined' || !__DEV__) return;
-    if (!vm || !display) return;
-    if (String(display.pairingCode).trim().toUpperCase() !== 'J1015') return;
-    const ds = String(display.startDate).slice(0, 7);
-    const de = String(display.endDate).slice(0, 7);
-    if (ds > '2026-05' || de < '2026-05') return;
-    console.log('[pairing-detail ui] TripDetailScreen final vm J1015', {
-      block: vm.statTiles.find((x) => x.id === 'block')?.value ?? null,
-      credit: vm.statTiles.find((x) => x.id === 'credit')?.value ?? null,
-      tafb: vm.statTiles.find((x) => x.id === 'tafb')?.value ?? null,
-      layover: vm.statTiles.find((x) => x.id === 'layover')?.value ?? null,
-      routeSummary: vm.routeSummary,
-      crewCount: vm.crewMembers.length,
-      layoverHotelPreview: vm.layoverHotelPreview,
-      dayPanels: vm.days.length,
-      firstDayLegs:
-        vm.days[0]?.legs.map((l) => ({
-          releaseLocal: l.releaseLocal ?? null,
-          block: l.blockTimeLocal ?? null,
-          equip: l.equipmentCode ?? null,
-        })) ?? [],
-    });
-  }, [vm, display]);
 
   if (!tripId) {
     return (

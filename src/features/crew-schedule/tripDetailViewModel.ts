@@ -317,24 +317,6 @@ export function buildTripDetailViewModel(trip: CrewScheduleTrip): TripDetailView
   const pairingCode = trip.pairingCode !== '—' && trip.pairingCode ? trip.pairingCode : 'Duty';
   const routeFromCanon = routeSummaryFromCanonicalLedgerCities(trip)?.trim();
   const days = buildTripDays(trip);
-  if (typeof __DEV__ !== 'undefined' && __DEV__ && String(trip.pairingCode).trim().toUpperCase() === 'J4173') {
-    console.log('[detail operating panels]', {
-      panelCount: days.length,
-      panels: days.map((p) => ({
-        date: p.dateIso,
-        report: p.legs[0]?.reportLocal ?? null,
-        legs: p.legs.length,
-        route: p.legs.map((l) => `${l.departureAirport}→${l.arrivalAirport}`).join(', '),
-        dEnd: p.legs[p.legs.length - 1]?.releaseLocal ?? null,
-        layover:
-          p.legs
-            .map((l) => l.layoverRestDisplay ?? l.layoverCityLeg)
-            .filter(Boolean)
-            .join('; ') || null,
-        hotel: trip.hotel?.name ?? null,
-      })),
-    });
-  }
   return {
     trip,
     pairingCode,

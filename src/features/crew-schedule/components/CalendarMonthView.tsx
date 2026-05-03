@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { CrewScheduleTrip } from '../types';
 import { scheduleTheme as T } from '../scheduleTheme';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
-import { resolveFullPairingForHandoff } from '../pairingHandoff';
+import { stashTripForDetailNavigation } from '../tripDetailNavCache';
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
@@ -13,7 +13,7 @@ type Props = {
   trips: CrewScheduleTrip[];
   onPressDay: (isoDate: string) => void;
   /** When set, long-press a day with a trip opens a quick preview before full detail. */
-  onOpenTrip?: (trip: CrewScheduleTrip) => void;
+  onOpenTrip?: (trip: CrewScheduleTrip, cellIso?: string) => void;
 };
 
 function tripsForDay(ymd: string, trips: CrewScheduleTrip[]): CrewScheduleTrip[] {
@@ -21,13 +21,13 @@ function tripsForDay(ymd: string, trips: CrewScheduleTrip[]): CrewScheduleTrip[]
 }
 
 export default function CalendarMonthView({ year, month, trips, onPressDay, onOpenTrip }: Props) {
-  const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
-  const closePreview = useCallback(() => setPreviewTrip(null), []);
+  const [preview, setPreview] = useState<{ trip: CrewScheduleTrip; dateIso: string } | null>(null);
+  const closePreview = useCallback(() => setPreview(null), []);
   const openFullFromPreview = useCallback(() => {
-    const t = previewTrip;
-    setPreviewTrip(null);
-    if (t && onOpenTrip) onOpenTrip(t);
-  }, [previewTrip, onOpenTrip]);
+    const p = preview;
+    setPreview(null);
+    if (p && onOpenTrip) onOpenTrip(p.trip, p.dateIso);
+  }, [preview, onOpenTrip]);
 
   const { cells, rowCount } = useMemo(() => {
     const first = new Date(year, month - 1, 1);
@@ -73,7 +73,17 @@ export default function CalendarMonthView({ year, month, trips, onPressDay, onOp
               <Pressable
                 key={iso}
                 onPress={() => onPressDay(iso)}
-                onLongPress={onOpenTrip && primary ? () => setPreviewTrip(resolveFullPairingForHandoff(primary, trips)) : undefined}
+                onLongPress={
+                  onOpenTrip && primary
+                    ? () => {
+                        stashTripForDetailNavigation(primary, trips, {
+                          visibleMonth: { year, month },
+                          rowDateIso: iso,
+                        });
+                        setPreview({ trip: primary, dateIso: iso });
+                      }
+                    : undefined
+                }
                 delayLongPress={420}
                 style={styles.cell}
                 accessibilityHint={onOpenTrip && primary ? 'Long press for trip preview.' : undefined}
@@ -93,8 +103,9 @@ export default function CalendarMonthView({ year, month, trips, onPressDay, onOp
       ))}
       {onOpenTrip ? (
         <TripQuickPreviewSheet
-          visible={previewTrip != null}
-          trip={previewTrip}
+          visible={preview != null}
+          trip={preview?.trip ?? null}
+          pairingUuid={preview?.trip?.schedulePairingId}
           onClose={closePreview}
           onOpenFullTrip={openFullFromPreview}
         />

@@ -11,9 +11,6 @@ import { canSaveScheduleMonthUISnapshot, writeScheduleMonthUISnapshot } from './
 export async function warmScheduleMonthUISnapshot(year: number, month: number): Promise<boolean> {
   const key = monthCalendarKey(year, month);
   try {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[SCHEDULE_BACKGROUND_REFRESH_START]', { key, source: 'warmup' });
-    }
     const data = await prefetchScheduleMonthSnapshot(year, month);
     const { duties, pairings, pairingLegs } = await fetchScheduleDutiesAndPairingsForMonth(year, month);
     const classicRows = buildClassicRowsFromDuties(duties, pairings, pairingLegs);
@@ -25,9 +22,6 @@ export async function warmScheduleMonthUISnapshot(year: number, month: number): 
         monthMetrics: data.monthMetrics,
       })
     ) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[SCHEDULE_BACKGROUND_REFRESH_REJECTED]', { key, reason: 'sanity' });
-      }
       return false;
     }
     writeScheduleMonthUISnapshot({
@@ -37,19 +31,8 @@ export async function warmScheduleMonthUISnapshot(year: number, month: number): 
       classicRows,
       monthMetrics: data.monthMetrics,
     });
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[SCHEDULE_BACKGROUND_REFRESH_COMMIT]', {
-        key,
-        source: 'warmup',
-        trips: data.trips.length,
-        classicRows: classicRows.length,
-      });
-    }
     return true;
-  } catch (e) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[SCHEDULE_BACKGROUND_REFRESH_REJECTED]', { key, error: String(e) });
-    }
+  } catch {
     return false;
   }
 }

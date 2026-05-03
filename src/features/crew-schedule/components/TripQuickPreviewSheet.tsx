@@ -11,75 +11,14 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import {
-  fetchCrewScheduleTripByPairingUuid,
-  fetchTripMetadataForGroup,
-  mergeTripWithMetadataRow,
-  resolveSchedulePairingDbIdByOverlap,
-} from '../scheduleApi';
 import { scheduleTheme as T } from '../scheduleTheme';
 import { buildTripDetailViewModel, type TripStatTile } from '../tripDetailViewModel';
 import type { CrewScheduleTrip } from '../types';
-import { pairingNavigationSessionKey } from '../scheduleStableSnapshots';
-import { devLogCarryoverOrInternationalCheck, validateFullPairingHandoff } from '../pairingHandoff';
+import { validateVisibleTripHandoff } from '../pairingHandoff';
+import { isExemptFromStrictPairingPaint } from '../pairingRenderableGate';
+import { resolveRenderablePairingSnapshot } from '../resolveRenderablePairingSnapshot';
 import TripCrewList from './TripCrewList';
 import TripStatTilesRow from './TripStatTilesRow';
-import { isFlicaNonFlyingActivityId } from '../../../services/flicaScheduleHtmlParser';
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function quickPreviewTripIsEnrichable(t: CrewScheduleTrip): boolean {
-  const code = String(t.pairingCode ?? '').trim().toUpperCase();
-  if (!code || code === '—' || code === 'CONT' || code === 'RDO') return false;
-  if (isFlicaNonFlyingActivityId(code)) return false;
-  if (t.status === 'off' || t.status === 'pto' || t.status === 'ptv' || t.status === 'rsv') return false;
-  if (t.status === 'training' || t.status === 'other') return false;
-  return true;
-}
-
-/**
- * Same resolution order as TripDetailScreen, except we never treat `trip.id` (trip_group_id) as
- * schedule_pairings.id — overlap resolver must supply the DB UUID for classic/list trips.
- */
-async function resolveSchedulePairingIdForQuickPreview(
-  trip: CrewScheduleTrip,
-  pairingUuidProp?: string | null,
-): Promise<string | null> {
-  const fromProp =
-    pairingUuidProp && String(pairingUuidProp).trim().length > 0 && UUID_RE.test(String(pairingUuidProp).trim())
-      ? String(pairingUuidProp).trim()
-      : null;
-  const fromTrip =
-    trip.schedulePairingId && UUID_RE.test(String(trip.schedulePairingId).trim())
-      ? String(trip.schedulePairingId).trim()
-      : null;
-  if (fromTrip) return fromTrip;
-  if (fromProp) return fromProp;
-  const overlap =
-    (await resolveSchedulePairingDbIdByOverlap({
-      pairingCode: trip.pairingCode,
-      rangeStart: trip.startDate,
-      rangeEnd: trip.endDate,
-    })) ?? null;
-  return overlap;
-}
-
-function mergeEnrichedPreviewTrip(enrf: CrewScheduleTrip, classic: CrewScheduleTrip): CrewScheduleTrip {
-  return {
-    ...enrf,
-    id: classic.id,
-    month: classic.month,
-    year: classic.year,
-    schedulePairingId: enrf.schedulePairingId ?? classic.schedulePairingId ?? null,
-    ledgerContext: classic.ledgerContext ?? enrf.ledgerContext,
-  };
-}
-
-function devLogPreviewPairing(trip: CrewScheduleTrip): boolean {
-  const c = String(trip.pairingCode ?? '').trim().toUpperCase();
-  return c === 'J4173' || c === 'J1015';
-}
 
 /**
  * Quick trip preview: scrollable bottom-sheet style modal (not full operational detail).
@@ -100,159 +39,87 @@ export default function TripQuickPreviewSheet({
 }) {
   const insets = useSafeAreaInsets();
   const { height: winH } = useWindowDimensions();
-  const [enrichedTrip, setEnrichedTrip] = useState<CrewScheduleTrip | null>(null);
+  const [resolvedTrip, setResolvedTrip] = useState<CrewScheduleTrip | null>(null);
+  const [resolveSettled, setResolveSettled] = useState(false);
   const previewTargetTripIdRef = useRef<string>('');
-  const previewSessionKeyRef = useRef<string>('');
 
   useLayoutEffect(() => {
     if (!visible) {
       previewTargetTripIdRef.current = '';
-      previewSessionKeyRef.current = '';
-      setEnrichedTrip(null);
+      setResolvedTrip(null);
+      setResolveSettled(false);
       return;
     }
-    previewTargetTripIdRef.current = trip?.id ?? '';
-    if (trip) {
-      previewSessionKeyRef.current = pairingNavigationSessionKey(trip);
-      const v = validateFullPairingHandoff(trip);
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        if (v.ok) {
-          console.log('[PAIRING_SUMMARY_FULL_SNAPSHOT_USED]', {
-            tripId: trip.id,
-            sessionKey: previewSessionKeyRef.current,
-          });
-          devLogCarryoverOrInternationalCheck(trip, 'summary_sheet');
-        } else {
-          console.log('[PREVENTED_PARTIAL_PAIRING_RENDER]', {
-            where: 'summary_sheet_open',
-            tripId: trip.id,
-            reason: v.reason ?? 'invalid_handoff',
-          });
-        }
-      }
-    } else {
-      previewSessionKeyRef.current = '';
+    if (!trip) {
+      setResolvedTrip(null);
+      setResolveSettled(false);
+      return;
     }
-    setEnrichedTrip(null);
+    previewTargetTripIdRef.current = trip.id;
+    setResolvedTrip(null);
+    setResolveSettled(isExemptFromStrictPairingPaint(trip));
   }, [visible, trip?.id, trip]);
 
   useEffect(() => {
-    if (!visible || !trip || !quickPreviewTripIsEnrichable(trip)) {
+    if (!visible || !trip || isExemptFromStrictPairingPaint(trip)) {
       return;
     }
     const targetTripId = trip.id;
     const targetPairing = String(trip.pairingCode ?? '').trim().toUpperCase();
-    const targetSessionKey = trip ? pairingNavigationSessionKey(trip) : '';
-    let cancel = false;
-    (async () => {
+    let cancelled = false;
+    void (async () => {
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_SUMMARY_REFRESH_START]', { tripId: targetTripId });
+        console.log('[PAIRING_RENDER_WAITING_FOR_DB_FULL]', { tripId: targetTripId, pairingCode: trip.pairingCode });
       }
-      const resolved = await resolveSchedulePairingIdForQuickPreview(trip, pairingUuid);
-      if (typeof __DEV__ !== 'undefined' && __DEV__ && devLogPreviewPairing(trip)) {
-        console.log('[quick-preview enrich]', {
-          inputTripId: trip.id,
-          schedulePairingId: trip.schedulePairingId ?? null,
-          propPairingUuid: pairingUuid ?? null,
-          resolvedPairingUuid: resolved,
-        });
-      }
-      if (!resolved || cancel) return;
       try {
-        const [fetched, meta] = await Promise.all([
-          fetchCrewScheduleTripByPairingUuid(resolved),
-          fetchTripMetadataForGroup(trip.id).catch(() => null),
-        ]);
-        if (cancel || !fetched) return;
+        const r = await resolveRenderablePairingSnapshot(targetTripId, pairingUuid ?? null, trip);
+        if (cancelled) return;
         if (
           previewTargetTripIdRef.current !== targetTripId ||
           String(trip.pairingCode ?? '').trim().toUpperCase() !== targetPairing
         ) {
           return;
         }
-        const withMeta = mergeTripWithMetadataRow(fetched, meta);
-        const merged = mergeEnrichedPreviewTrip(withMeta, trip);
-        if (pairingNavigationSessionKey(merged) !== previewSessionKeyRef.current || targetSessionKey !== previewSessionKeyRef.current) {
+        if (r) {
+          setResolvedTrip(r.trip);
           if (typeof __DEV__ !== 'undefined' && __DEV__) {
-            console.log('[PAIRING_SUMMARY_REFRESH_REJECTED]', {
-              reason: 'session_key_mismatch',
-            });
-            console.log('[PREVENTED_WRONG_PAIRING_RENDER]', { where: 'summary_sheet', reason: 'session_key_mismatch' });
-          }
-          return;
-        }
-        if (previewTargetTripIdRef.current !== targetTripId) return;
-        setEnrichedTrip(merged);
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[PAIRING_SUMMARY_REFRESH_COMMIT]', { tripId: targetTripId });
-          const hv = validateFullPairingHandoff(merged);
-          if (hv.ok) {
-            devLogCarryoverOrInternationalCheck(merged, 'summary_refresh');
+            console.log('[PAIRING_RENDER_DB_FULL_COMMIT]', { source: r.source, tripId: targetTripId });
           }
         }
-        if (typeof __DEV__ !== 'undefined' && __DEV__ && devLogPreviewPairing(trip)) {
-          console.log('[quick-preview enrich]', {
-            fetchResult: {
-              block: withMeta.pairingBlockHours ?? withMeta.summary?.blockTotal ?? null,
-              credit: withMeta.pairingCreditHours ?? withMeta.summary?.creditTotal ?? null,
-              tafb: withMeta.pairingTafbHours ?? (withMeta.summary ? withMeta.summary.tafbTotal / 60 : null),
-              layoverMin: withMeta.tripLayoverTotalMinutes ?? withMeta.summary?.layoverTotal ?? null,
-              crewLen: withMeta.crewMembers?.length ?? 0,
-              hotelName: withMeta.hotel?.name ?? null,
-              hotelPhone: withMeta.hotel?.phone ?? null,
-            },
-          });
+      } finally {
+        if (!cancelled) {
+          setResolveSettled(true);
         }
-      } catch {
-        /* keep classic fallback */
       }
     })();
     return () => {
-      cancel = true;
+      cancelled = true;
     };
   }, [visible, trip, pairingUuid]);
 
-  const displayTrip = useMemo((): CrewScheduleTrip | null => {
+  const paintTrip = useMemo((): CrewScheduleTrip | null => {
     if (!trip) return null;
-    if (
-      enrichedTrip &&
-      enrichedTrip.id === trip.id &&
-      pairingNavigationSessionKey(enrichedTrip) === pairingNavigationSessionKey(trip)
-    ) {
-      return enrichedTrip;
-    }
-    return trip;
-  }, [trip, enrichedTrip]);
+    if (isExemptFromStrictPairingPaint(trip)) return trip;
+    return resolvedTrip;
+  }, [trip, resolvedTrip]);
 
-  const needsHydrationShell = Boolean(
-    visible &&
-      trip &&
-      quickPreviewTripIsEnrichable(trip) &&
-      enrichedTrip == null &&
-      !validateFullPairingHandoff(trip).ok,
+  const showLoadingShell = Boolean(
+    visible && trip && !isExemptFromStrictPairingPaint(trip) && !resolveSettled,
+  );
+
+  const showErrorStub = Boolean(
+    visible && trip && !isExemptFromStrictPairingPaint(trip) && resolveSettled && !resolvedTrip,
   );
 
   const vm = useMemo(() => {
-    if (!displayTrip || needsHydrationShell) return null;
-    if (!validateFullPairingHandoff(displayTrip).ok) return null;
-    return buildTripDetailViewModel(displayTrip);
-  }, [displayTrip, needsHydrationShell]);
+    if (!visible || !trip || showLoadingShell || showErrorStub) return null;
+    if (!paintTrip) return null;
+    if (!paintTrip.id?.trim()) return null;
+    if (!isExemptFromStrictPairingPaint(trip) && !validateVisibleTripHandoff(paintTrip).ok) return null;
+    return buildTripDetailViewModel(paintTrip);
+  }, [visible, trip, paintTrip, showLoadingShell, showErrorStub]);
 
   const statTiles: TripStatTile[] = useMemo(() => (vm ? vm.statTiles : []), [vm]);
-
-  useEffect(() => {
-    if (typeof __DEV__ === 'undefined' || !__DEV__ || !trip || !vm || !devLogPreviewPairing(trip)) return;
-    console.log('[quick-preview final vm]', {
-      enriched: enrichedTrip != null,
-      block: vm.statTiles.find((x) => x.id === 'block')?.value ?? null,
-      credit: vm.statTiles.find((x) => x.id === 'credit')?.value ?? null,
-      tafb: vm.statTiles.find((x) => x.id === 'tafb')?.value ?? null,
-      layover: vm.statTiles.find((x) => x.id === 'layover')?.value ?? null,
-      crewLen: vm.crewMembers.length,
-      hotelLine: vm.layoverHotelPreview?.hotelLine ?? null,
-      routeSummary: vm.routeSummary,
-    });
-  }, [trip, vm, enrichedTrip]);
 
   if (!trip) return null;
 
@@ -262,9 +129,8 @@ export default function TripQuickPreviewSheet({
   const sheetPadBottom = Math.max(insets.bottom, 12) + 6;
   const scrollViewportMaxH = Math.max(260, sheetMaxH - sheetTopChromePx - sheetPadBottom);
   const scrollContentPadBottom = Math.max(insets.bottom, 12) + 14;
-  const legCount = displayTrip?.legs.length ?? 0;
+  const legCount = paintTrip?.legs.length ?? 0;
   const dayCount = vm?.days.length ?? 0;
-  const showErrorStub = Boolean(visible && !needsHydrationShell && !vm && trip);
 
   return (
     <Modal
@@ -294,7 +160,7 @@ export default function TripQuickPreviewSheet({
             nestedScrollEnabled
             bounces
           >
-            {needsHydrationShell ? (
+            {showLoadingShell ? (
               <View style={styles.hydrateShell}>
                 <View style={styles.headerRow}>
                   <View style={styles.headerText}>
@@ -343,7 +209,7 @@ export default function TripQuickPreviewSheet({
                   <Ionicons name="chevron-forward" size={16} color="#fff" />
                 </Pressable>
               </View>
-            ) : vm && displayTrip ? (
+            ) : vm && paintTrip ? (
               <>
                 <View style={styles.headerRow}>
                   <View style={styles.headerText}>

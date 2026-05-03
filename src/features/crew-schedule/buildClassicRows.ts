@@ -1130,34 +1130,6 @@ export function buildClassicRowsFromDuties(
         const pushDutyEnd = isFirstDutyDayImmediatelyAfterHeaderLead ? null : dutyEndMerged;
         const pushLayover = isFirstDutyDayImmediatelyAfterHeaderLead ? null : layoverText;
 
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          const pk = String(flicaPairingKey).trim().toUpperCase();
-          if (pk === 'J4173' && dateIso >= '2026-04-06' && dateIso <= '2026-04-09') {
-            console.log('[J4173_CITY_CHECK]', {
-              dateIso,
-              hasRealOutstationLayoverForThisDuty,
-              isLastLeg,
-              hasSyntheticNextDay,
-              lay,
-              legHintStation,
-              cityText,
-              rowType,
-            });
-          }
-          if (pk === 'J3H95' && dateIso >= '2026-04-22' && dateIso <= '2026-04-24') {
-            console.log('[J3H95_DASH_CHECK]', {
-              dateIso,
-              hasRealOutstationLayoverForThisDuty,
-              isLastLeg,
-              hasSyntheticNextDay,
-              lay,
-              legHintStation,
-              cityText,
-              rowType,
-            });
-          }
-        }
-
         rows.push({
           dateIso,
           pairingText: activityCityCode
@@ -1310,47 +1282,6 @@ export function buildClassicRowsFromDuties(
     out = partitionRowsForClassicViewMonth(out, viewTag.year, viewTag.month);
   }
 
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    const j1030Final = out.filter(
-      (r) =>
-        String(r.sourcePairingId).trim().toUpperCase() === 'J1030' &&
-        r.dateIso >= '2026-03-08' &&
-        r.dateIso <= '2026-03-10',
-    );
-    console.log(
-      '[J1030_SHIFT_CHECK]',
-      j1030Final.map((r) => ({
-        dateIso: r.dateIso,
-        pairingText: r.pairingText,
-        reportText: r.reportText,
-        cityText: r.cityText,
-        dutyEndText: r.dutyEndText,
-        layoverText: r.layoverText,
-        rowType: r.rowType,
-        syntheticGapNoDuty: r.syntheticGapNoDuty ?? false,
-      })),
-    );
-    const j3h95Final = out.filter(
-      (r) =>
-        String(r.sourcePairingId).trim().toUpperCase() === 'J3H95' &&
-        r.dateIso >= '2026-04-22' &&
-        r.dateIso <= '2026-04-24',
-    );
-    console.log(
-      '[J3H95_DASH_CHECK]',
-      j3h95Final.map((r) => ({
-        dateIso: r.dateIso,
-        pairingText: r.pairingText,
-        reportText: r.reportText,
-        cityText: r.cityText,
-        dutyEndText: r.dutyEndText,
-        layoverText: r.layoverText,
-        rowType: r.rowType,
-        syntheticGapNoDuty: r.syntheticGapNoDuty ?? false,
-      })),
-    );
-  }
-
   return out;
 }
 
@@ -1471,25 +1402,6 @@ export async function fetchScheduleDutiesAndPairingsForMonth(
       if (!pde && prevDutyRows?.length) {
         mergedDuties = [...mergedDuties, ...(prevDutyRows as ScheduleDuty[])];
       }
-      if (typeof __DEV__ !== 'undefined' && __DEV__ && headFlicaUpper.has('J1016')) {
-        console.log('[CARRYOVER_PRESERVE_CHECK]', {
-          pairingId: 'J1016',
-          prevMonthKey,
-          prevImportId,
-          prevPairingRows: prevPairRows?.length ?? 0,
-          prevDutyRows: prevDutyRows?.length ?? 0,
-          minHeadDutyStart,
-          monthFirst: start,
-          queryErrors: { pairings: ppe?.message ?? null, duties: pde?.message ?? null },
-        });
-      }
-    } else if (typeof __DEV__ !== 'undefined' && __DEV__ && headFlicaUpper.has('J1016')) {
-      console.log('[CARRYOVER_PRESERVE_CHECK]', {
-        pairingId: 'J1016',
-        prevMonthKey,
-        skipped: 'no_previous_month_batch',
-        headFlicaIds: headPidList,
-      });
     }
   }
 

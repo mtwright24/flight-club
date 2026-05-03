@@ -17,7 +17,7 @@ import {
   writeScheduleMonthUISnapshot,
 } from '../scheduleSnapshotCache';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
-import { resolveFullPairingForHandoff } from '../pairingHandoff';
+import { stashTripForDetailNavigation } from '../tripDetailNavCache';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 /**
@@ -299,117 +299,6 @@ function classicToDayRow(
   };
 }
 
-/** TEMP: diagnose PTV Classic row — remove when PTV pipeline verified. */
-const PTV_DEBUG_DATE_ISO = '2026-05-23';
-
-function logClassicPtvDebug20260523(params: {
-  dateIso: string;
-  mergedTrips: CrewScheduleTrip[];
-  classic: ClassicScheduleRow | undefined;
-  itemTrip: CrewScheduleTrip | null;
-  finalRow: DayRow;
-}) {
-  if (typeof __DEV__ === 'undefined' || !__DEV__) return;
-  const { dateIso, mergedTrips, classic, itemTrip, finalRow } = params;
-  if (dateIso !== PTV_DEBUG_DATE_ISO) return;
-
-  const overlapping = mergedTrips.filter((t) => dateIso >= t.startDate && dateIso <= t.endDate);
-  const overlapSummaries = overlapping.map((t) => ({
-    id: t.id,
-    pairingCode: t.pairingCode ?? '',
-    status: t.status,
-    startDate: t.startDate,
-    endDate: t.endDate,
-  }));
-
-  for (const t of overlapping) {
-    const pc = String(t.pairingCode ?? '')
-      .trim()
-      .toUpperCase();
-    if (pc === 'PTV' && t.status !== 'ptv') {
-      console.warn('[Classic PTV DEBUG] pairingCode is PTV but status is not `ptv`:', t.status, {
-        id: t.id,
-        startDate: t.startDate,
-        endDate: t.endDate,
-      });
-    }
-  }
-
-  const ptvFromFinder = findPtvTripForDate(mergedTrips, dateIso);
-  const blocksOverlay = classicRowBlocksPtvTripOverlay(classic);
-  const wouldPtvOverlay = Boolean(ptvFromFinder) && !blocksOverlay;
-
-  console.log('[Classic PTV DEBUG] date', dateIso);
-  console.log('[Classic PTV DEBUG] 1) mergedTrips overlapping this date:', JSON.stringify(overlapSummaries));
-  console.log(
-    '[Classic PTV DEBUG] 2) findPtvTripForDate (status must be exactly "ptv"):',
-    ptvFromFinder
-      ? JSON.stringify({
-          id: ptvFromFinder.id,
-          pairingCode: ptvFromFinder.pairingCode,
-          status: ptvFromFinder.status,
-          startDate: ptvFromFinder.startDate,
-          endDate: ptvFromFinder.endDate,
-        })
-      : 'null',
-  );
-  console.log(
-    '[Classic PTV DEBUG] 3) classic row (winner for date):',
-    classic == null
-      ? 'undefined'
-      : JSON.stringify({
-          dateIso: classic.dateIso,
-          rowType: classic.rowType,
-          sourcePairingId: classic.sourcePairingId,
-          pairingText: classic.pairingText,
-          reportText: classic.reportText,
-          cityText: classic.cityText,
-          dutyEndText: classic.dutyEndText,
-          layoverText: classic.layoverText,
-          syntheticGapNoDuty: classic.syntheticGapNoDuty ?? false,
-        }),
-  );
-  console.log('[Classic PTV DEBUG] 4) classicRowBlocksPtvTripOverlay:', blocksOverlay);
-  console.log(
-    '[Classic PTV DEBUG] 5) item.trip (from tripForDisplayDate, navigation target):',
-    itemTrip
-      ? JSON.stringify({
-          id: itemTrip.id,
-          pairingCode: itemTrip.pairingCode,
-          status: itemTrip.status,
-          startDate: itemTrip.startDate,
-          endDate: itemTrip.endDate,
-        })
-      : 'null',
-  );
-  console.log(
-    '[Classic PTV DEBUG] 6) final DayRow:',
-    JSON.stringify({
-      id: finalRow.id,
-      kind: finalRow.kind,
-      pairingText: finalRow.pairingText,
-      tripAttached: finalRow.trip
-        ? {
-            id: finalRow.trip.id,
-            pairingCode: finalRow.trip.pairingCode,
-            status: finalRow.trip.status,
-          }
-        : null,
-    }),
-  );
-  console.log('[Classic PTV DEBUG] ptvToDayRow called:', wouldPtvOverlay && finalRow.kind === 'ptv');
-  if (!wouldPtvOverlay) {
-    console.log(
-      '[Classic PTV DEBUG] ptvToDayRow NOT used because:',
-      !ptvFromFinder
-        ? 'findPtvTripForDate is null (no trip with status==="ptv" spanning date, or dates exclude this day).'
-        : blocksOverlay
-          ? 'classicRowBlocksPtvTripOverlay===true (classic looks like another pairing flying duty).'
-          : 'unexpected',
-    );
-  }
-}
-
 function displayItemToDayRow(
   item: ClassicDisplayItem,
   mergedTrips: CrewScheduleTrip[],
@@ -425,7 +314,6 @@ function displayItemToDayRow(
   } else {
     finalRow = classicToDayRow(dateIso, classic, trip, todayIso, rowIdx);
   }
-  logClassicPtvDebug20260523({ dateIso, mergedTrips, classic, itemTrip: trip, finalRow: finalRow });
   return finalRow;
 }
 
@@ -488,10 +376,12 @@ const ScheduleRow = memo(function ScheduleRow({
   row,
   onPressTrip,
   onLongPressTrip,
+  rowDateIso,
 }: {
   row: DayRow;
-  onPressTrip?: (trip: CrewScheduleTrip) => void;
-  onLongPressTrip?: (trip: CrewScheduleTrip) => void;
+  onPressTrip?: (trip: CrewScheduleTrip, rowDateIso?: string) => void;
+  onLongPressTrip?: (trip: CrewScheduleTrip, rowDateIso?: string) => void;
+  rowDateIso: string;
 }) {
   const isEmpty = row.kind === 'empty';
   const isPtv = row.kind === 'ptv';
@@ -585,8 +475,8 @@ const ScheduleRow = memo(function ScheduleRow({
     return (
       <Pressable
         style={({ pressed }) => [styles.rowPressHost, pressed && styles.rowPressed]}
-        onPress={() => onPressTrip!(row.trip!)}
-        onLongPress={onLongPressTrip ? () => onLongPressTrip(row.trip!) : undefined}
+        onPress={() => onPressTrip!(row.trip!, rowDateIso)}
+        onLongPress={onLongPressTrip ? () => onLongPressTrip(row.trip!, rowDateIso) : undefined}
         delayLongPress={420}
         accessibilityRole="button"
         accessibilityHint="Opens trip detail. Long press for a quick preview."
@@ -691,7 +581,7 @@ type Props = {
    * While swipe is holding the prior month (`monthLoadPending`), pass true so the held month still renders.
    */
   tripLayerReady: boolean;
-  onPressTrip: (trip: CrewScheduleTrip) => void;
+  onPressTrip: (trip: CrewScheduleTrip, rowDateIso?: string) => void;
   /** Opens Crew Schedule → Manage (import + view mode). */
   onOpenManage?: () => void;
 };
@@ -717,8 +607,11 @@ export default function ClassicListView({
   /** `loadEpoch` value that last wrote `classicCommit`; must equal current `loadEpoch` for a coherent grid. */
   const [classicSettledEpoch, setClassicSettledEpoch] = useState(0);
   const onLongPressTrip = useCallback(
-    (t: CrewScheduleTrip) => setPreviewTrip(resolveFullPairingForHandoff(t, trips)),
-    [trips],
+    (t: CrewScheduleTrip, rowDateIso?: string) => {
+      stashTripForDetailNavigation(t, trips, { visibleMonth: { year, month }, rowDateIso: rowDateIso ?? null });
+      setPreviewTrip(t);
+    },
+    [trips, year, month],
   );
   const closePreview = useCallback(() => setPreviewTrip(null), []);
   const openFullFromPreview = useCallback(() => {
@@ -735,9 +628,6 @@ export default function ClassicListView({
     setLoadEpoch(epoch);
     const snap = readScheduleMonthUISnapshot(ymKey);
     if (snap && isScheduleMonthUISnapshotCoherent(snap, year, month)) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[SCHEDULE_SNAPSHOT_HIT]', { key: ymKey, layer: 'classic_hydrate' });
-      }
       setClassicCommit({ ymKey, classicRows: snap.classicRows });
       setClassicSettledEpoch(epoch);
     } else {
@@ -757,40 +647,10 @@ export default function ClassicListView({
         const { duties, pairings, pairingLegs } = await fetchScheduleDutiesAndPairingsForMonth(y, m);
         if (cancelled || epoch !== loadEpochRef.current) return;
         const rows = buildClassicRowsFromDuties(duties, pairings, pairingLegs);
-        if (__DEV__) {
-          console.log('[SCHEDULE_COMMIT]', key, epoch, {
-            duties: duties.length,
-            pairings: pairings.length,
-            legs: pairingLegs.length,
-            rows: rows.length,
-          });
-          if (y === 2026 && m === 4) {
-            const slice = rows.filter((r) => {
-              const d = String(r.dateIso).slice(0, 10);
-              return d >= '2026-03-28' && d <= '2026-04-04';
-            });
-            const j1016 = slice.filter((r) => String(r.sourcePairingId).trim().toUpperCase() === 'J1016');
-            console.log('[CARRYOVER_RENDER_CHECK]', {
-              aprilEarlyWindowRows: slice.map((r) => ({
-                dateIso: r.dateIso,
-                pairingText: r.pairingText,
-                rowType: r.rowType,
-                sourcePairingId: r.sourcePairingId,
-              })),
-              j1016InWindow: j1016.map((r) => ({
-                dateIso: r.dateIso,
-                pairingText: r.pairingText,
-                rowType: r.rowType,
-              })),
-            });
-          }
-        }
         setClassicCommit({ ymKey: key, classicRows: rows });
         setClassicSettledEpoch(epoch);
       } catch {
         if (!cancelled && epoch === loadEpochRef.current) {
-          if (__DEV__)
-            console.log('[SCHEDULE_COMMIT]', key, epoch, { duties: 0, pairings: 0, legs: 0, rows: 0 });
           const fallback = readScheduleMonthUISnapshot(key);
           if (fallback && isScheduleMonthUISnapshotCoherent(fallback, y, m)) {
             return;
@@ -842,29 +702,7 @@ export default function ClassicListView({
       classicRows: classicCommit.classicRows,
       monthMetrics: metrics,
     });
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[SCHEDULE_SNAPSHOT_SAVE]', {
-        key: ymKey,
-        trips: trips.length,
-        classicRows: classicCommit.classicRows.length,
-      });
-    }
   }, [isReady, ymKey, trips, classicCommit, monthMetrics]);
-
-  useEffect(() => {
-    if (
-      __DEV__ &&
-      tripLayerReady &&
-      (!classicHydratedForRequest || classicCommit?.ymKey !== ymKey)
-    ) {
-      console.log('[SCHEDULE_READY_FALSE_BLOCK]', {
-        ymKey,
-        committedYm: classicCommit?.ymKey ?? null,
-        settledEpoch: classicSettledEpoch,
-        loadEpoch,
-      });
-    }
-  }, [tripLayerReady, classicCommit?.ymKey, ymKey, classicHydratedForRequest, classicSettledEpoch, loadEpoch]);
 
   const viewModelRows = useMemo((): ClassicDisplayItem[] | null => {
     if (!isReady || !classicCommit || classicCommit.ymKey !== ymKey) return null;
@@ -912,56 +750,16 @@ export default function ClassicListView({
       result.push({ dateIso, classic: r, trip: tripForDisplayDate(mergedTrips, dateIso, r) });
     }
 
-    if (__DEV__) {
-      console.log('[SCHEDULE_READY_TRUE_BUILD]', ymKey);
-    }
     return result;
   }, [isReady, classicCommit, ymKey, mergedTrips, year, month]);
 
   const rows = useMemo(() => {
     if (!viewModelRows) return null;
     const todayIso = dateToIsoDateLocal(new Date());
-    const dayRows = attachDayRowGrouping(
+    return attachDayRowGrouping(
       viewModelRows.map((item, rowIdx) => displayItemToDayRow(item, mergedTrips, todayIso, rowIdx)),
     );
-
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && month === 3) {
-      const ym = `${year}-${String(month).padStart(2, '0')}`;
-      const targets = new Set<string>([
-        `${ym}-07`,
-        `${ym}-08`,
-        `${ym}-12`,
-        `${ym}-13`,
-        `${ym}-14`,
-        `${ym}-18`,
-        `${ym}-20`,
-        `${ym}-30`,
-        `${ym}-31`,
-        `${year}-04-01`,
-      ]);
-      const zipped = dayRows
-        .map((dr, i) => {
-          const it = viewModelRows[i];
-          const di = dr.dateIso.slice(0, 10);
-          if (!targets.has(di)) return null;
-          return {
-            dateIso: di,
-            pairing: dr.pairingText,
-            report: dr.reportText,
-            city: dr.cityText,
-            dEnd: dr.dEndText,
-            layover: dr.layoverText,
-            rowKind: dr.kind,
-            rowType: it?.classic?.rowType ?? null,
-            sourcePairingId: it?.classic?.sourcePairingId ?? '',
-          };
-        })
-        .filter((x): x is NonNullable<typeof x> => x != null);
-      console.log('[march classic target check]', JSON.stringify(zipped, null, 2));
-    }
-
-    return dayRows;
-  }, [viewModelRows, mergedTrips, year, month]);
+  }, [viewModelRows, mergedTrips]);
 
   const summary = useMemo(() => buildSummaryStrip(monthMetrics ?? null), [monthMetrics]);
 
@@ -1016,6 +814,7 @@ export default function ClassicListView({
         renderItem={({ item }) => (
           <ScheduleRow
             row={item}
+            rowDateIso={item.dateIso}
             onPressTrip={item.trip ? onPressTrip : undefined}
             onLongPressTrip={item.trip ? onLongPressTrip : undefined}
           />
@@ -1031,6 +830,7 @@ export default function ClassicListView({
       <TripQuickPreviewSheet
         visible={previewTrip != null}
         trip={previewTrip}
+        pairingUuid={previewTrip?.schedulePairingId}
         onClose={closePreview}
         onOpenFullTrip={openFullFromPreview}
       />
