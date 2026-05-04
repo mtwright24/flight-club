@@ -37,6 +37,10 @@ export interface CrewScheduleLeg {
   blockTimeLocal?: string;
   /** Aircraft / equipment (e.g. 32N, 3NS) from the pairing leg row. */
   equipmentCode?: string;
+  /** Preformatted dep terminal/gate line when import provides it (e.g. "T5 · G515"). */
+  departureTerminalGate?: string;
+  /** Preformatted arr terminal/gate (e.g. "T5"). */
+  arrivalTerminalGate?: string;
   /** Layover station from leg row when present. */
   layoverCityLeg?: string;
   /** FLICA layover / rest display (e.g. 4-digit HHMM) when present. */

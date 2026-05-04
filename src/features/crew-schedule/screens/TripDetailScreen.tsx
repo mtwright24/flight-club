@@ -60,8 +60,11 @@ import CrewScheduleHeader from '../components/CrewScheduleHeader';
 
 /** Mockup pairing detail — header, day chips, leg accents */
 const FC_PREMIUM_RED = '#C4121A';
+/** Brick / off-red for track CTA (lighter than hero #C4121A; must read red on device, not near-black). */
+const FC_TRACK_MUTED_RED = '#B04447';
+/** Inline so tint always wins over any cached StyleSheet flattening. */
+const TRACK_LEG_TITLE_COLOR: TextStyle = { color: FC_TRACK_MUTED_RED };
 const FC_TIMELINE_BLUE = '#2563EB';
-const FC_LEG_BLOCK_PURPLE = '#7C3AED';
 const FC_LEG_BLOCK_GREEN = '#15803D';
 /** Layover card: deep forest green + faint lighter bubble (mockup 2) */
 const FC_HOTEL_GREEN = '#0E3D2F';
@@ -258,8 +261,21 @@ function formatFlightNumberForDisplay(raw: string | null | undefined): string {
   if (alNum) return `${alNum[1]!.toUpperCase()} ${alNum[2]}`;
   const spaced = s.match(/^([A-Za-z]{1,2})(\d{2,5})$/);
   if (spaced) return `${spaced[1]!.toUpperCase()} ${spaced[2]}`;
+  const digitsOnly = s.match(/^0*(\d{2,5})$/);
+  if (digitsOnly) return `B6 ${digitsOnly[1]}`;
   if (s.length <= 20 && /^[\w\s\-/]+$/i.test(s)) return s;
   return '—';
+}
+
+function formatBlockStatForLegGrid(raw: string | null | undefined): string {
+  const s = raw?.trim();
+  if (!s) return '—';
+  if (/^\d{4}$/.test(s)) return `${s.slice(0, 2)}:${s.slice(2)}`;
+  if (/^\d{1,2}:\d{2}$/.test(s)) {
+    const [a, b] = s.split(':');
+    return `${String(Number(a)).padStart(2, '0')}:${b}`;
+  }
+  return s;
 }
 
 function formatBlockDurationCenter(block: string | null | undefined): string | null {
@@ -305,8 +321,12 @@ function heroContextCitiesLine(citiesByPanel: string[], selectedDayIndex: number
   return ctx.join(' • ');
 }
 
-/** Narrow phones (e.g. mini / SE): slightly denser leg tile without changing hierarchy. */
-const DETAIL_COMPACT_WIDTH_BREAKPOINT = 390;
+/** Phones at or below “standard” width (not Pro Max): slightly denser leg tile, same hierarchy. */
+const DETAIL_COMPACT_MAX_WIDTH = 393;
+
+/** Horizontal gap between operating-day chips; width computed so ~4 fit in the viewport. */
+const OPERATING_DAY_CHIP_GAP = 6;
+const OPERATING_DAY_SCROLL_PAD_X = 12;
 
 function PremiumFlightLegCard({
   leg,
@@ -321,114 +341,196 @@ function PremiumFlightLegCard({
   onTrackLeg: (leg: CrewScheduleLeg) => void;
   layoutCompact: boolean;
 }) {
+  const [legMainHeight, setLegMainHeight] = useState(0);
   const dep = String(leg.departureAirport ?? '').trim() || '—';
   const arr = String(leg.arrivalAirport ?? '').trim() || '—';
   const fnDisplay = formatFlightNumberForDisplay(leg.flightNumber);
-  const block = leg.blockTimeLocal?.trim();
   const blockDuration = formatBlockDurationCenter(leg.blockTimeLocal);
   const equip = leg.equipmentCode?.trim() ? leg.equipmentCode.trim() : '—';
-  const blockStat = block && block.length > 0 ? block : '—';
-  const gateStat = '—';
+  const blockStat = formatBlockStatForLegGrid(leg.blockTimeLocal);
+  const diffStat = leg.isDeadhead ? '—' : '+0';
+  const dutyEndStat = formatTimeForLegCard(leg.releaseLocal);
   const tailStat = equip !== '—' ? equip : '—';
-  const loadStat = '—';
+  const depTG = (leg.departureTerminalGate ?? '').trim();
+  const arrTG = (leg.arrivalTerminalGate ?? '').trim();
+  const showTerminalRow = depTG.length > 0 || arrTG.length > 0;
   const legStatusGreen = /on\s*time|✓|delayed?\s*ok/i.test(String(legStatusLine ?? ''));
-  const blockValueColorStyle = leg.isDeadhead ? detailStyles.legMetaVGreen : detailStyles.legMetaVPurple;
+  const blockValueColorStyle = leg.isDeadhead ? undefined : detailStyles.legMetaVGreen;
+  const showTrack = Boolean(leg.flightNumber?.trim());
+  const accentH =
+    legMainHeight > 0 ? Math.max(44, Math.round(legMainHeight * 0.25)) : 52;
 
   const c = layoutCompact;
 
-  return (
-    <View style={detailStyles.legCard}>
-      <View style={detailStyles.legCardAccent} />
-      <View
-        style={[
-          detailStyles.legCardBody,
-          c && { paddingHorizontal: 12, paddingVertical: 12 },
-        ]}
-      >
-        <View style={[detailStyles.legTopStrip, c && { marginBottom: 4, gap: 6 }]}>
-          <View style={[detailStyles.legTopLeft, c && { gap: 6 }]}>
-            <Text style={[detailStyles.legFlightNum, c && { fontSize: 13 }]}>{fnDisplay}</Text>
-            {leg.isDeadhead ? (
-              <View style={detailStyles.dhPill}>
-                <Text style={detailStyles.dhPillText}>DH</Text>
-              </View>
-            ) : (
-              <View style={detailStyles.workingPill}>
-                <Text style={detailStyles.workingPillText}>Working</Text>
-              </View>
-            )}
-          </View>
-          {legStatusLine ? (
+  const legMain = (
+    <View
+      style={detailStyles.legCardMainMeasure}
+      onLayout={(e) => setLegMainHeight(e.nativeEvent.layout.height)}
+    >
+      <View style={[detailStyles.legTopStrip, c && { gap: 5 }]}>
+        <View style={[detailStyles.legTopLeft, c && { gap: 5 }]}>
+          <Text style={[detailStyles.legFlightNum, c && { fontSize: 11 }]}>{fnDisplay}</Text>
+          {leg.isDeadhead ? (
+            <View style={[detailStyles.dhPill, c && detailStyles.legPillCompact]}>
+              <Text style={[detailStyles.dhPillText, c && { fontSize: 10 }]}>DH</Text>
+            </View>
+          ) : (
+            <View style={[detailStyles.workingPill, c && detailStyles.legPillCompact]}>
+              <Text style={[detailStyles.workingPillText, c && { fontSize: 9 }]}>Working</Text>
+            </View>
+          )}
+        </View>
+        {legStatusLine ? (
+          <View style={detailStyles.legStatusRightCluster}>
             <Text
               style={[detailStyles.legStatusRight, legStatusGreen ? detailStyles.legStatusOnTime : detailStyles.legStatusPay]}
-              numberOfLines={2}
+              numberOfLines={1}
             >
               {legStatusLine}
             </Text>
-          ) : (
-            <View style={detailStyles.legStatusRightSpacer} />
-          )}
-        </View>
-
-        <View style={detailStyles.legAirportRow}>
-          <View style={detailStyles.legAirportCol}>
-            <Text style={detailStyles.legAirportCode}>{dep}</Text>
-            <Text style={detailStyles.legTime}>{formatTimeForLegCard(leg.departLocal)}</Text>
+            {legStatusGreen ? <Ionicons name="checkmark-circle" size={c ? 13 : 14} color="#15803D" /> : null}
           </View>
-          <View style={[detailStyles.legPlaneColumn, !blockDuration && detailStyles.legPlaneColumnTight]}>
-            {blockDuration ? <Text style={detailStyles.legDurationCenter}>{blockDuration}</Text> : null}
-            <View style={detailStyles.legPlaneRail}>
-              <View style={detailStyles.legTimelineDot} />
-              <View style={detailStyles.legPlaneLine} />
-              <Ionicons name="airplane" size={14} color={FC_TIMELINE_BLUE} style={{ marginHorizontal: 4 }} />
-              <View style={detailStyles.legPlaneLine} />
-              <View style={detailStyles.legTimelineDot} />
-            </View>
-            <Text style={detailStyles.legNonStop}>Non-stop</Text>
-          </View>
-          <View style={[detailStyles.legAirportCol, { alignItems: 'flex-end' }]}>
-            <Text style={detailStyles.legAirportCode}>{arr}</Text>
-            <Text style={detailStyles.legTime}>{formatTimeForLegCard(leg.arriveLocal)}</Text>
-          </View>
-        </View>
-
-        <View style={detailStyles.legMetaRow}>
-          <View style={detailStyles.legMetaCell}>
-            <Text style={detailStyles.legMetaK}>BLOCK</Text>
-            <Text style={[detailStyles.legMetaV, blockValueColorStyle]}>{blockStat}</Text>
-          </View>
-          <View style={[detailStyles.legMetaCell, detailStyles.legMetaCellDivider]}>
-            <Text style={detailStyles.legMetaK}>GATE</Text>
-            <Text style={detailStyles.legMetaV}>{gateStat}</Text>
-          </View>
-          <View style={[detailStyles.legMetaCell, detailStyles.legMetaCellDivider]}>
-            <Text style={detailStyles.legMetaK}>TAIL</Text>
-            <Text style={detailStyles.legMetaV}>{tailStat}</Text>
-          </View>
-          <View style={[detailStyles.legMetaCell, detailStyles.legMetaCellDivider]}>
-            <Text style={detailStyles.legMetaK}>LOAD</Text>
-            <Text style={detailStyles.legMetaV}>{loadStat}</Text>
-          </View>
-        </View>
-
-        {leg.flightNumber?.trim() ? (
-          <Pressable
-            style={detailStyles.trackLegRow}
-            onPress={() => onTrackLeg(leg)}
-            disabled={trackingLegId === leg.id}
-          >
-            {trackingLegId === leg.id ? (
-              <ActivityIndicator size="small" color={FC_PREMIUM_RED} />
-            ) : (
-              <Ionicons name="location-outline" size={18} color={FC_PREMIUM_RED} />
-            )}
-            <Text style={detailStyles.trackLegText}>
-              {trackingLegId === leg.id ? 'Opening flight tracker…' : 'Track this leg live'}
-            </Text>
-            <Ionicons name="chevron-forward" size={18} color={FC_PREMIUM_RED} />
-          </Pressable>
-        ) : null}
+        ) : (
+          <View style={detailStyles.legStatusRightSpacer} />
+        )}
       </View>
+
+      <View style={detailStyles.legHeaderDivider} />
+
+      <View style={detailStyles.legAirportRow}>
+        <View style={detailStyles.legAirportCol}>
+          <Text
+            style={[detailStyles.legAirportCode, c && { fontSize: 18, letterSpacing: -0.18 }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit={c}
+            minimumFontScale={c ? 0.82 : 1}
+          >
+            {dep}
+          </Text>
+          <Text style={[detailStyles.legTime, c && { fontSize: 13, marginTop: 2 }]}>
+            {formatTimeForLegCard(leg.departLocal)}
+          </Text>
+          {showTerminalRow ? (
+            <Text style={[detailStyles.legTerminalGate, { textAlign: 'left' }]} numberOfLines={1}>
+              {depTG || ' '}
+            </Text>
+          ) : null}
+        </View>
+        <View
+          style={[
+            detailStyles.legPlaneColumn,
+            !blockDuration && detailStyles.legPlaneColumnTight,
+            c ? detailStyles.legPlaneColumnCompact : null,
+          ]}
+        >
+          {blockDuration ? (
+            <Text style={[detailStyles.legDurationCenter, c && { fontSize: 10, marginBottom: 4, lineHeight: 13 }]}>
+              {blockDuration}
+            </Text>
+          ) : null}
+          <View style={detailStyles.legPlaneRail}>
+            <View style={detailStyles.legTimelineDot} />
+            <View style={detailStyles.legPlaneLine} />
+            <Ionicons name="airplane" size={c ? 12 : 13} color={FC_TIMELINE_BLUE} style={{ marginHorizontal: c ? 3 : 4 }} />
+            <View style={detailStyles.legPlaneLine} />
+            <View style={detailStyles.legTimelineDot} />
+          </View>
+          <Text style={[detailStyles.legNonStop, c && { fontSize: 9, marginTop: 3, lineHeight: 12 }]}>Non-stop</Text>
+        </View>
+        <View style={[detailStyles.legAirportCol, { alignItems: 'flex-end' }]}>
+          <Text
+            style={[detailStyles.legAirportCode, c && { fontSize: 18, letterSpacing: -0.18 }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit={c}
+            minimumFontScale={c ? 0.82 : 1}
+          >
+            {arr}
+          </Text>
+          <Text style={[detailStyles.legTime, c && { fontSize: 13, marginTop: 2 }]}>
+            {formatTimeForLegCard(leg.arriveLocal)}
+          </Text>
+          {showTerminalRow ? (
+            <Text style={[detailStyles.legTerminalGate, { textAlign: 'right' }]} numberOfLines={1}>
+              {arrTG || ' '}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+
+      <View style={[detailStyles.legMetaRow, c && { marginTop: 10, paddingTop: 10 }]}>
+        <View style={detailStyles.legMetaCell}>
+          <Text style={[detailStyles.legMetaK, c && { fontSize: 9 }]}>BLOCK</Text>
+          <Text
+            style={[
+              detailStyles.legMetaV,
+              blockValueColorStyle,
+              c && { fontSize: 11, marginTop: 3 },
+            ]}
+          >
+            {blockStat}
+          </Text>
+        </View>
+        <View style={[detailStyles.legMetaCell, detailStyles.legMetaCellDivider]}>
+          <Text style={[detailStyles.legMetaK, c && { fontSize: 9 }]}>DIFF</Text>
+          <Text style={[detailStyles.legMetaV, c && { fontSize: 11, marginTop: 3 }]}>{diffStat}</Text>
+        </View>
+        <View style={[detailStyles.legMetaCell, detailStyles.legMetaCellDivider]}>
+          <Text style={[detailStyles.legMetaK, c && { fontSize: 9 }]}>D-END</Text>
+          <Text style={[detailStyles.legMetaV, c && { fontSize: 11, marginTop: 3 }]}>{dutyEndStat}</Text>
+        </View>
+        <View style={[detailStyles.legMetaCell, detailStyles.legMetaCellDivider]}>
+          <Text style={[detailStyles.legMetaK, c && { fontSize: 9 }]}>TAIL</Text>
+          <Text style={[detailStyles.legMetaV, c && { fontSize: 11, marginTop: 3 }]}>{tailStat}</Text>
+        </View>
+      </View>
+    </View>
+  );
+
+  return (
+    <View style={detailStyles.legCard}>
+      <View style={detailStyles.legCardUpperRow}>
+        <View style={detailStyles.legCardAccentRail}>
+          <View style={[detailStyles.legCardAccent, { height: accentH }]} />
+        </View>
+        <View
+          style={[
+            detailStyles.legCardBody,
+            c && { paddingHorizontal: 11, paddingVertical: 11 },
+          ]}
+        >
+          {legMain}
+        </View>
+      </View>
+      {showTrack ? (
+        <Pressable
+          style={[detailStyles.trackLegInCard, c && detailStyles.trackLegInCardCompact]}
+          onPress={() => onTrackLeg(leg)}
+          disabled={trackingLegId === leg.id}
+        >
+          {trackingLegId === leg.id ? (
+            <View style={detailStyles.trackLegLoadingRow}>
+              <ActivityIndicator size="small" color={FC_TRACK_MUTED_RED} />
+              <Text style={[detailStyles.trackLegTitle, TRACK_LEG_TITLE_COLOR, { flex: 1 }]}>
+                Opening flight tracker…
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={detailStyles.trackLegIconCluster}>
+                <Ionicons name="pin" size={c ? 16 : 17} color={FC_TRACK_MUTED_RED} />
+                <Ionicons name="airplane" size={c ? 14 : 15} color={FC_TIMELINE_BLUE} />
+              </View>
+              <View style={detailStyles.trackLegCopy}>
+                <Text style={[detailStyles.trackLegTitle, TRACK_LEG_TITLE_COLOR, c && { fontSize: 13 }]}>
+                  Track This Leg Live
+                </Text>
+                <Text style={detailStyles.trackLegSub}>Real-time · Gate alerts · Delay status</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={c ? 16 : 17} color={FC_TRACK_MUTED_RED} />
+            </>
+          )}
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -464,15 +566,23 @@ function OperatingDayLegsPage({
   trackingLegId,
   onTrackLeg,
   panelWidth,
+  layoutCompact,
 }: {
   day: TripDayViewModel;
   legStatuses: Record<string, string>;
   trackingLegId: string | null;
   onTrackLeg: (leg: CrewScheduleLeg) => void;
   panelWidth: number;
+  layoutCompact: boolean;
 }) {
   return (
-    <View style={{ width: panelWidth, paddingHorizontal: 16, paddingTop: 12 }}>
+    <View
+      style={{
+        width: panelWidth,
+        paddingHorizontal: layoutCompact ? 14 : 16,
+        paddingTop: layoutCompact ? 6 : 8,
+      }}
+    >
       {day.legs.length === 0 ? (
         <Text style={detailStyles.emptyLegs}>No flight legs on file for this day.</Text>
       ) : (
@@ -483,6 +593,7 @@ function OperatingDayLegsPage({
             legStatusLine={legStatuses[leg.id]}
             trackingLegId={trackingLegId}
             onTrackLeg={onTrackLeg}
+            layoutCompact={layoutCompact}
           />
         ))
       )}
@@ -511,6 +622,16 @@ export default function TripDetailScreen() {
   const panelPagerRef = useRef<FlatList<TripDayViewModel>>(null);
   const panelScrollAnimatedRef = useRef(false);
   const { width: panelWidth } = useWindowDimensions();
+  const detailLayoutCompact = panelWidth > 0 && panelWidth <= DETAIL_COMPACT_MAX_WIDTH;
+  const operatingDayChipWidth = useMemo(() => {
+    const scrollPad = OPERATING_DAY_SCROLL_PAD_X * 2;
+    if (panelWidth <= scrollPad + 32) return 76;
+    return Math.max(
+      76,
+      Math.floor((panelWidth - scrollPad - 3 * OPERATING_DAY_CHIP_GAP) / 4),
+    );
+  }, [panelWidth]);
+  const operatingDaySnapInterval = operatingDayChipWidth + OPERATING_DAY_CHIP_GAP;
   /** Dismiss stale async detail merges when `tripId` changes before paint. */
   const activeDetailTripIdRef = useRef<string>('');
 
@@ -1024,9 +1145,17 @@ export default function TripDetailScreen() {
         <Text style={detailStyles.sectionLabel}>Operating days</Text>
         <ScrollView
           horizontal
+          nestedScrollEnabled
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={detailStyles.dayChipScroll}
           keyboardShouldPersistTaps="handled"
+          decelerationRate="fast"
+          snapToInterval={operatingDaySnapInterval}
+          snapToAlignment="start"
+          disableIntervalMomentum
+          contentContainerStyle={[
+            detailStyles.dayChipScroll,
+            { gap: OPERATING_DAY_CHIP_GAP, paddingHorizontal: OPERATING_DAY_SCROLL_PAD_X },
+          ]}
         >
           {vm.days.map((d, i) => {
             const sel = i === selectedDayIndex;
@@ -1037,7 +1166,11 @@ export default function TripDetailScreen() {
                   panelScrollAnimatedRef.current = false;
                   setSelectedDayIndex(i);
                 }}
-                style={[detailStyles.dayChip, sel ? detailStyles.dayChipSelected : undefined]}
+                style={[
+                  detailStyles.dayChip,
+                  { width: operatingDayChipWidth },
+                  sel ? detailStyles.dayChipSelected : undefined,
+                ]}
               >
                 <Text style={[detailStyles.dayChipTitle, sel && detailStyles.dayChipTitleSel]}>
                   DAY {d.dayIndex}
@@ -1045,7 +1178,10 @@ export default function TripDetailScreen() {
                 <Text style={[detailStyles.dayChipDate, sel && detailStyles.dayChipDateSel]}>
                   {chipDateLabel(d.dateIso)}
                 </Text>
-                <Text style={[detailStyles.dayChipLayover, sel && detailStyles.dayChipLayoverSel]} numberOfLines={2}>
+                <Text
+                  style={[detailStyles.dayChipLayover, sel && detailStyles.dayChipLayoverSel]}
+                  numberOfLines={1}
+                >
                   {layoverCityOnlyForDayChip(d, t)}
                 </Text>
               </Pressable>
@@ -1056,14 +1192,24 @@ export default function TripDetailScreen() {
         <DayProgressWithThumb dayCount={vm.days.length} selectedIndex={selectedDayIndex} />
 
         {vm.days[Math.min(selectedDayIndex, vm.days.length - 1)] ? (
-          <View style={detailStyles.selectedDayBar}>
+          <View
+            style={[
+              detailStyles.selectedDayBar,
+              detailLayoutCompact && detailStyles.selectedDayBarCompact,
+            ]}
+          >
             <View style={detailStyles.selectedDayBarLeft}>
               <View style={detailStyles.dayIndexPill}>
                 <Text style={detailStyles.dayIndexPillText}>
-                  Day {vm.days[Math.min(selectedDayIndex, vm.days.length - 1)]!.dayIndex}
+                  {`DAY ${vm.days[Math.min(selectedDayIndex, vm.days.length - 1)]!.dayIndex}`}
                 </Text>
               </View>
-              <Text style={detailStyles.selectedDayBarDate}>
+              <Text
+                style={[
+                  detailStyles.selectedDayBarDate,
+                  detailLayoutCompact && detailStyles.selectedDayBarDateCompact,
+                ]}
+              >
                 {(() => {
                   const d = vm.days[Math.min(selectedDayIndex, vm.days.length - 1)]!;
                   const iso = d.dateIso.slice(0, 10);
@@ -1073,7 +1219,12 @@ export default function TripDetailScreen() {
                 })()}
               </Text>
             </View>
-            <Text style={detailStyles.selectedDayBarRpt}>
+            <Text
+              style={[
+                detailStyles.selectedDayBarRpt,
+                detailLayoutCompact && detailStyles.selectedDayBarRptCompact,
+              ]}
+            >
               {reportForSelectedDay !== '—' ? `Rpt ${reportForSelectedDay}` : ''}
             </Text>
           </View>
@@ -1098,6 +1249,7 @@ export default function TripDetailScreen() {
                 trackingLegId={trackingLegId}
                 onTrackLeg={(leg) => void trackLeg(leg, t)}
                 panelWidth={panelWidth}
+                layoutCompact={detailLayoutCompact}
               />
             )}
             onMomentumScrollEnd={onOperatingPanelMomentumEnd}
@@ -1161,7 +1313,7 @@ export default function TripDetailScreen() {
                     <Text style={detailStyles.hotelRestHoursLabel}>REST HOURS</Text>
                   </View>
                   <View style={detailStyles.hotelPreviewCard}>
-                    <Ionicons name="partly-sunny-outline" size={22} color="rgba(255,255,255,0.92)" />
+                    <Ionicons name="partly-sunny-outline" size={18} color="rgba(255,255,255,0.92)" />
                     <Text style={detailStyles.hotelPreviewTitle} numberOfLines={2}>
                       {previewLine}
                     </Text>
@@ -1169,7 +1321,7 @@ export default function TripDetailScreen() {
                   </View>
                 </View>
                 <View style={detailStyles.hotelHotelPanel}>
-                  <Ionicons name="bed-outline" size={26} color="rgba(255,255,255,0.92)" />
+                  <Ionicons name="bed-outline" size={20} color="rgba(255,255,255,0.92)" />
                   <View style={detailStyles.hotelHotelPanelText}>
                     <Text style={detailStyles.hotelHotelName} numberOfLines={2}>
                       {hotelVal}
@@ -1183,7 +1335,7 @@ export default function TripDetailScreen() {
                     </Text>
                     {infoVal !== '—' ? (
                       <View style={detailStyles.hotelPhoneRow}>
-                        <Ionicons name="call-outline" size={16} color="#4ADE80" />
+                        <Ionicons name="call-outline" size={14} color="#4ADE80" />
                         <Text style={detailStyles.hotelPhoneText}>{infoVal}</Text>
                       </View>
                     ) : null}
@@ -1428,12 +1580,11 @@ const detailStyles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 8,
   },
-  dayChipScroll: { paddingHorizontal: 12, gap: 10, paddingBottom: 2 },
+  dayChipScroll: { paddingBottom: 3 },
   dayChip: {
-    width: 132,
-    borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     backgroundColor: '#FFFFFF',
@@ -1457,10 +1608,10 @@ const detailStyles = StyleSheet.create({
   },
   dayChipTitle: {
     ...TYPE_FACE,
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: FONT.semibold,
     color: '#64748B',
-    letterSpacing: 0.5,
+    letterSpacing: 0.35,
     textTransform: 'uppercase',
     textAlign: 'left',
     alignSelf: 'stretch',
@@ -1468,30 +1619,30 @@ const detailStyles = StyleSheet.create({
   dayChipTitleSel: { color: 'rgba(255,255,255,0.95)' },
   dayChipDate: {
     ...TYPE_FACE,
-    fontSize: 14,
+    fontSize: 11,
     fontWeight: FONT.semibold,
     color: '#0F172A',
-    marginTop: 6,
+    marginTop: 4,
     textAlign: 'left',
     alignSelf: 'stretch',
-    letterSpacing: -0.3,
+    letterSpacing: -0.25,
     ...MOCKUP_TABULAR,
   },
   dayChipDateSel: { color: '#FFFFFF' },
   dayChipLayover: {
     ...TYPE_FACE,
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: FONT.medium,
     color: '#64748B',
-    marginTop: 5,
+    marginTop: 3,
     textAlign: 'left',
     alignSelf: 'stretch',
-    letterSpacing: 0.15,
+    letterSpacing: 0.1,
   },
   dayChipLayoverSel: { color: 'rgba(255,255,255,0.88)' },
   progressWrap: {
     marginHorizontal: 16,
-    marginBottom: 18,
+    marginBottom: 12,
     marginTop: 4,
   },
   progressTrackBg: {
@@ -1525,43 +1676,60 @@ const detailStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    marginBottom: 22,
-    marginTop: 10,
+    marginBottom: 8,
+    marginTop: 6,
+    gap: 8,
   },
-  selectedDayBarLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 },
+  selectedDayBarCompact: {
+    marginTop: 4,
+    marginBottom: 6,
+    paddingHorizontal: 14,
+    gap: 6,
+  },
+  selectedDayBarLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 },
   dayIndexPill: {
-    backgroundColor: 'rgba(196,18,26,0.14)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
+    backgroundColor: FC_PREMIUM_RED,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
   },
   dayIndexPillText: {
     ...TYPE_FACE,
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: FONT.semibold,
-    color: FC_PREMIUM_RED,
-    ...MOCKUP_TABULAR,
+    color: '#FFFFFF',
+    letterSpacing: 0.35,
   },
   selectedDayBarDate: {
     ...TYPE_FACE,
-    fontSize: 15,
-    fontWeight: FONT.semibold,
+    fontSize: 13,
+    fontWeight: FONT.medium,
     color: '#0F172A',
     flex: 1,
-    letterSpacing: -0.3,
+    minWidth: 0,
+    marginRight: 6,
+    letterSpacing: -0.25,
     ...MOCKUP_TABULAR,
+  },
+  selectedDayBarDateCompact: {
+    fontSize: 12,
+    marginRight: 4,
   },
   selectedDayBarRpt: {
     ...TYPE_FACE,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: FONT.medium,
     color: '#64748B',
+    flexShrink: 0,
+    marginLeft: 4,
     ...MOCKUP_TABULAR,
+  },
+  selectedDayBarRptCompact: {
+    fontSize: 11,
   },
   emptyLegs: { ...TYPE_FACE, fontSize: 14, fontWeight: FONT.regular, color: T.textSecondary, paddingVertical: 12 },
   legCard: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
+    flexDirection: 'column',
     borderRadius: 16,
     marginBottom: 12,
     borderWidth: 1,
@@ -1579,62 +1747,90 @@ const detailStyles = StyleSheet.create({
       default: {},
     }),
   },
-  legCardAccent: {
-    width: 3,
-    backgroundColor: FC_PREMIUM_RED,
-    alignSelf: 'stretch',
+  legCardUpperRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
   },
+  legCardAccentRail: {
+    width: 2,
+    alignItems: 'flex-start',
+  },
+  legCardAccent: {
+    width: 2,
+    backgroundColor: FC_PREMIUM_RED,
+    borderTopLeftRadius: 15,
+  },
+  legCardMainMeasure: { alignSelf: 'stretch' },
   legCardBody: {
     flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
     minWidth: 0,
   },
   legTopStrip: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
-    marginBottom: 6,
+    marginBottom: 0,
   },
-  legTopLeft: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, flex: 1, minWidth: 0 },
+  legHeaderDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(15,23,42,0.06)',
+    marginTop: 6,
+    marginBottom: 8,
+    alignSelf: 'stretch',
+  },
+  legTopLeft: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5, flex: 1, minWidth: 0 },
   legFlightNum: {
     ...TYPE_FACE,
-    fontSize: 14,
-    fontWeight: FONT.semibold,
+    fontSize: 12,
+    fontWeight: FONT.medium,
     color: FC_PREMIUM_RED,
-    letterSpacing: -0.3,
+    letterSpacing: -0.2,
     ...MOCKUP_TABULAR,
   },
   workingPill: {
     backgroundColor: '#FFE4E6',
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: 8,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 5,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(196,18,26,0.22)',
+    borderColor: 'rgba(196,18,26,0.18)',
   },
   workingPillText: {
     ...TYPE_FACE,
-    fontSize: 12,
-    fontWeight: FONT.semibold,
+    fontSize: 10,
+    fontWeight: FONT.medium,
     color: FC_PREMIUM_RED,
     ...MOCKUP_TABULAR,
   },
-  dhPill: { backgroundColor: '#EDE9FE', paddingHorizontal: 9, paddingVertical: 3, borderRadius: 8 },
+  legPillCompact: {
+    paddingHorizontal: 4,
+    paddingVertical: 0,
+  },
+  dhPill: { backgroundColor: '#EDE9FE', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 5 },
   dhPillText: {
     ...TYPE_FACE,
-    fontSize: 12,
-    fontWeight: FONT.semibold,
+    fontSize: 10,
+    fontWeight: FONT.medium,
     color: '#5B21B6',
     ...MOCKUP_TABULAR,
   },
+  legStatusRightCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexShrink: 0,
+    maxWidth: '48%',
+    gap: 2,
+  },
   legStatusRight: {
     ...TYPE_FACE,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: FONT.medium,
     textAlign: 'right',
-    maxWidth: '46%',
+    flexShrink: 1,
   },
   legStatusOnTime: { color: '#15803D' },
   legStatusPay: { color: '#6B21A8' },
@@ -1648,31 +1844,49 @@ const detailStyles = StyleSheet.create({
   legAirportCol: { flex: 1, minWidth: 0 },
   legAirportCode: {
     ...TYPE_FACE,
-    fontSize: 27,
-    fontWeight: FONT.bold,
+    fontSize: 20,
+    fontWeight: FONT.semibold,
     color: '#0F172A',
     letterSpacing: -0.3,
-    ...MOCKUP_TABULAR,
   },
   legTime: {
     ...STATS_VALUE_FONT,
-    fontSize: 16,
-    fontWeight: FONT.medium,
+    fontSize: 15,
+    fontWeight: FONT.regular,
     color: FC_STAT_BLACK,
-    marginTop: 4,
-    letterSpacing: -0.3,
+    marginTop: 2,
+    letterSpacing: -0.08,
+    ...MOCKUP_TABULAR,
   },
-  legPlaneColumn: { alignItems: 'center', flexShrink: 0, paddingHorizontal: 2, maxWidth: 92, marginTop: 0 },
+  legTerminalGate: {
+    ...TYPE_FACE,
+    fontSize: 9,
+    fontWeight: FONT.regular,
+    color: '#94A3B8',
+    marginTop: 2,
+    letterSpacing: 0.15,
+  },
+  legPlaneColumn: {
+    alignItems: 'center',
+    flexShrink: 0,
+    flexGrow: 0,
+    width: 132,
+    paddingHorizontal: 4,
+    marginTop: 1,
+  },
+  legPlaneColumnCompact: {
+    width: 116,
+    paddingHorizontal: 2,
+  },
   legPlaneColumnTight: { paddingTop: 0 },
   legDurationCenter: {
     ...STATS_VALUE_FONT,
-    fontSize: 13,
-    fontWeight: FONT.medium,
-    color: '#64748B',
-    opacity: 0.8,
+    fontSize: 11,
+    fontWeight: FONT.regular,
+    color: '#94A3B8',
     marginBottom: 5,
-    lineHeight: 16,
-    letterSpacing: -0.3,
+    lineHeight: 14,
+    letterSpacing: -0.12,
   },
   legPlaneRail: {
     flexDirection: 'row',
@@ -1681,211 +1895,234 @@ const detailStyles = StyleSheet.create({
     justifyContent: 'center',
   },
   legTimelineDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
     backgroundColor: FC_PREMIUM_RED,
   },
-  legPlaneLine: { flex: 1, height: 1, backgroundColor: '#CBD5E1', minWidth: 6 },
+  legPlaneLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(15,23,42,0.12)', minWidth: 28 },
   legNonStop: {
     ...TYPE_FACE,
-    fontSize: 12,
+    fontSize: 9,
     fontWeight: FONT.regular,
-    color: '#64748B',
-    opacity: 0.6,
+    color: '#94A3B8',
     marginTop: 5,
-    lineHeight: 15,
+    lineHeight: 12,
   },
   legMetaRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(15,23,42,0.08)',
   },
-  legMetaCell: { flex: 1, minWidth: 0, paddingHorizontal: 4, justifyContent: 'flex-start', alignItems: 'center' },
+  legMetaCell: { flex: 1, minWidth: 0, paddingHorizontal: 3, justifyContent: 'flex-start', alignItems: 'center' },
   legMetaCellDivider: {
-    borderLeftWidth: 1,
-    borderColor: 'rgba(0,0,0,0.06)',
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15,23,42,0.08)',
   },
   legMetaK: {
     ...TYPE_FACE,
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: FONT.medium,
     color: '#94A3B8',
-    opacity: 0.6,
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
     textTransform: 'uppercase',
     textAlign: 'center',
   },
   legMetaV: {
     ...STATS_VALUE_FONT,
-    fontSize: 14,
-    fontWeight: FONT.semibold,
+    fontSize: 12,
+    fontWeight: FONT.medium,
     color: FC_STAT_BLACK,
-    marginTop: 5,
+    marginTop: 3,
     textAlign: 'center',
-    letterSpacing: -0.3,
+    letterSpacing: -0.15,
   },
-  legMetaVPurple: { color: FC_LEG_BLOCK_PURPLE },
   legMetaVGreen: { color: FC_LEG_BLOCK_GREEN },
-  trackLegRow: {
-    marginTop: 12,
+  trackLegInCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    backgroundColor: '#FEF2F2',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(196,18,26,0.14)',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(15,23,42,0.07)',
+    backgroundColor: '#FFFFFF',
   },
-  trackLegText: {
+  trackLegInCardCompact: {
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 11,
+  },
+  trackLegIconCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  trackLegCopy: { flex: 1, minWidth: 0 },
+  trackLegTitle: {
+    fontSize: 14,
+    fontWeight: FONT.semibold,
+    letterSpacing: -0.28,
+    color: FC_TRACK_MUTED_RED,
+    ...(Platform.OS === 'ios'
+      ? ({ fontFamily: 'SF Pro Text' } as TextStyle)
+      : ({ fontFamily: 'sans-serif' } as TextStyle)),
+  },
+  trackLegSub: {
     ...TYPE_FACE,
+    fontSize: 10,
+    fontWeight: FONT.regular,
+    color: '#94A3B8',
+    marginTop: 2,
+    letterSpacing: -0.05,
+  },
+  trackLegLoadingRow: {
     flex: 1,
-    fontSize: 16,
-    fontWeight: FONT.bold,
-    color: FC_PREMIUM_RED,
-    letterSpacing: -0.3,
-    ...MOCKUP_TABULAR,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   hotelCard: {
     marginHorizontal: 16,
     backgroundColor: FC_HOTEL_GREEN,
-    borderRadius: 20,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
     marginBottom: 2,
     overflow: 'hidden',
     position: 'relative',
   },
   hotelBubble: {
     position: 'absolute',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
+    width: 148,
+    height: 148,
+    borderRadius: 74,
     backgroundColor: FC_HOTEL_BUBBLE,
-    right: -58,
-    top: 8,
+    right: -44,
+    top: 4,
   },
   hotelKicker: {
     ...TYPE_FACE,
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: FONT.medium,
-    color: 'rgba(255,255,255,0.7)',
-    letterSpacing: 0.5,
-    marginBottom: 6,
+    color: 'rgba(255,255,255,0.65)',
+    letterSpacing: 0.45,
+    marginBottom: 4,
   },
   hotelCardTitle: {
     ...TYPE_FACE,
-    fontSize: 23,
-    fontWeight: FONT.bold,
+    fontSize: 18,
+    fontWeight: FONT.semibold,
     color: '#fff',
-    marginBottom: 4,
+    marginBottom: 3,
+    letterSpacing: -0.35,
   },
   hotelSubtitle: {
     ...TYPE_FACE,
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: FONT.regular,
-    color: 'rgba(255,255,255,0.85)',
-    marginBottom: 14,
+    color: 'rgba(255,255,255,0.82)',
+    marginBottom: 10,
+    lineHeight: 15,
   },
   hotelMidRow: {
     flexDirection: 'row',
-    alignItems: 'stretch',
-    gap: 10,
-    marginBottom: 10,
+    alignItems: 'flex-start',
+    gap: 8,
+    marginBottom: 8,
   },
   hotelRestCol: {
     flex: 1,
     minWidth: 0,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
+    paddingTop: 2,
     paddingBottom: 2,
   },
   hotelRestBig: {
     ...TYPE_FACE,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: FONT.semibold,
     color: '#FFFFFF',
-    lineHeight: 20,
-    letterSpacing: -0.3,
+    lineHeight: 18,
+    letterSpacing: -0.25,
     ...MOCKUP_TABULAR,
   },
   hotelRestHoursLabel: {
     ...TYPE_FACE,
-    marginTop: 6,
-    fontSize: 13,
+    marginTop: 3,
+    fontSize: 9,
     fontWeight: FONT.medium,
-    color: 'rgba(255,255,255,0.7)',
-    letterSpacing: 0.5,
+    color: 'rgba(255,255,255,0.62)',
+    letterSpacing: 0.4,
     textTransform: 'uppercase',
   },
   hotelPreviewCard: {
     flex: 1,
     minWidth: 0,
     backgroundColor: FC_HOTEL_INNER,
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 4,
   },
   hotelPreviewTitle: {
     ...TYPE_FACE,
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: FONT.semibold,
     color: '#FFFFFF',
     textAlign: 'center',
-    lineHeight: 19,
-    letterSpacing: -0.3,
+    lineHeight: 16,
+    letterSpacing: -0.25,
   },
   hotelPreviewSub: {
     ...TYPE_FACE,
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: FONT.medium,
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(255,255,255,0.65)',
     textAlign: 'center',
   },
   hotelHotelPanel: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 12,
+    gap: 10,
     backgroundColor: FC_HOTEL_INNER_DEEP,
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 11,
   },
   hotelHotelPanelText: { flex: 1, minWidth: 0 },
   hotelHotelName: {
     ...TYPE_FACE,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: FONT.semibold,
     color: '#FFFFFF',
-    lineHeight: 21,
+    lineHeight: 18,
   },
   hotelHotelMeta: {
     ...TYPE_FACE,
-    marginTop: 4,
-    fontSize: 13,
+    marginTop: 3,
+    fontSize: 11,
     fontWeight: FONT.regular,
-    color: 'rgba(255,255,255,0.6)',
-    lineHeight: 17,
+    color: 'rgba(255,255,255,0.58)',
+    lineHeight: 15,
   },
   hotelPhoneRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginTop: 10,
+    gap: 6,
+    marginTop: 8,
   },
   hotelPhoneText: {
     ...TYPE_FACE,
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: FONT.semibold,
     color: FC_HOTEL_PHONE_NUM,
-    letterSpacing: -0.3,
+    letterSpacing: -0.25,
     ...MOCKUP_TABULAR,
   },
   crewWrap: { paddingHorizontal: 16, marginBottom: 6 },
