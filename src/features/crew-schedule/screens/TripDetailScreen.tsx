@@ -813,32 +813,6 @@ export default function TripDetailScreen() {
     setLegStatuses({});
   }, [tripId]);
 
-  const legsForSelectedCount = vm?.days.length
-    ? vm.days[Math.min(selectedDayIndex, vm.days.length - 1)]?.legs.length ?? 0
-    : 0;
-
-  useEffect(() => {
-    if (!__DEV__ || !vm) return;
-    console.log('[PAIRING_DETAIL_FINAL_POLISH_RENDER]', {
-      pairingCode: vm.pairingCode,
-      selectedDayIndex,
-      activeCity,
-      contextCities: contextCitiesLine,
-      legsForDay: legsForSelectedCount,
-      hasHotel: !!(layoverHotelActive.hotel?.name?.trim() || layoverHotelActive.hotel?.city?.trim()),
-      crewCount: vm.crewMembers.length,
-    });
-  }, [
-    vm?.pairingCode,
-    selectedDayIndex,
-    activeCity,
-    legsForSelectedCount,
-    layoverHotelActive.hotel?.name,
-    layoverHotelActive.hotel?.city,
-    contextCitiesLine,
-    vm?.crewMembers.length,
-  ]);
-
   const trackLeg = useCallback(
     async (leg: CrewScheduleLeg, t: CrewScheduleTrip) => {
       if (!leg.flightNumber) return;
