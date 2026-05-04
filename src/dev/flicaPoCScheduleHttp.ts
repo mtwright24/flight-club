@@ -136,22 +136,9 @@ export function extractScheduleTokenFromMainmenuHtml(html: string): string | nul
   return null;
 }
 
-function logMainmenuHtmlPreviewForMetro(mainMenuHtml: string): void {
-  const chunk = (mainMenuHtml ?? '').slice(0, 3000);
-  console.log('[FLICA mainmenu HTML: first 3000 chars]');
-  console.log(chunk);
-}
+function logMainmenuHtmlPreviewForMetro(_mainMenuHtml: string): void {}
 
-function logLeftmenuHtmlForMetro(html: string): void {
-  const t = html ?? '';
-  console.log('[FLICA leftmenu HTML] total length:', t.length);
-  console.log('[FLICA leftmenu HTML: 0-3000]');
-  console.log(t.slice(0, 3000));
-  if (t.length > 3000) {
-    console.log('[FLICA leftmenu HTML: 3000-6000]');
-    console.log(t.slice(3000, 6000));
-  }
-}
+function logLeftmenuHtmlForMetro(_html: string): void {}
 
 function looksCaptchaLike(text: string): boolean {
   const t = (text ?? '').toLowerCase();
@@ -240,9 +227,7 @@ async function runScheduledetailGo1MultiMonth(
     }
   | { ok: false; error: string; captchaRequired?: boolean }
 > {
-  try {
   const goToken = extractGo1TokenFromScheduledetailStep1Html(step1Html);
-  console.log('[FLICA TOKEN2]', goToken ?? 'NOT FOUND');
   if (!goToken) {
     return {
       ok: false,
@@ -284,9 +269,6 @@ async function runScheduledetailGo1MultiMonth(
     }
     const html = (await r.text()) ?? '';
     const finalUrl = typeof r.url === 'string' && r.url.length > 0 ? r.url : u;
-    if (blockDate === '0326') console.log('[FLICA MARCH]', r.status);
-    if (blockDate === '0426') console.log('[FLICA APRIL]', r.status);
-    if (blockDate === '0526') console.log('[FLICA MAY]', r.status);
     multiMonthSchedule.push({
       blockDate,
       monthLabel,
@@ -309,10 +291,6 @@ async function runScheduledetailGo1MultiMonth(
     multiMonthSchedule,
     aprilPreview3000: aprilHtml.slice(0, 3000),
   };
-  } catch (err) {
-    console.log('[FLICA ERROR]', err instanceof Error ? err.message : String(err));
-    throw err;
-  }
 }
 
 /**
