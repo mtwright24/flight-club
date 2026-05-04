@@ -2,6 +2,7 @@ import type { Session } from "@supabase/supabase-js";
 import { Stack, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Linking, LogBox, View } from "react-native";
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-url-polyfill/auto';
 import { DmBadgeNavigationSync } from '../src/components/DmBadgeNavigationSync';
 import FloatingBackButton from '../src/components/FloatingBackButton';
@@ -179,8 +180,9 @@ export default function RootLayout() {
   // Show a simple loading overlay while initial session is being resolved.
   return (
     <ThemeProvider>
-      <>
-        <Stack screenOptions={{ headerShown: false }}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <>
+          <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen
@@ -229,6 +231,7 @@ export default function RootLayout() {
           </View>
         )}
       </>
+      </GestureHandlerRootView>
     </ThemeProvider>
   );
 }

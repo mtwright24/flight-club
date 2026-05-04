@@ -93,6 +93,7 @@ export function isDetailReadyPairing(t: CrewScheduleTrip): boolean {
 }
 
 /** Alias: only seal when detail-ready (or exempt). */
-export function canSealPairingSurface(t: CrewScheduleTrip): boolean {
+export function canSealPairingSurface(t: CrewScheduleTrip | null | undefined): boolean {
+  if (t == null) return false;
   return isDetailReadyPairing(t);
 }

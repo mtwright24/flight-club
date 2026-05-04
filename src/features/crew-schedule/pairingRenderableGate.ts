@@ -25,7 +25,8 @@ function isoOk(s: string | null | undefined): boolean {
 }
 
 /** Non-operational / non-flying rows: strict paint rules do not apply. */
-export function isExemptFromStrictPairingPaint(t: CrewScheduleTrip): boolean {
+export function isExemptFromStrictPairingPaint(t: CrewScheduleTrip | null | undefined): boolean {
+  if (t == null) return true;
   const code = normCode(t.pairingCode);
   if (!code || code === '—' || code === '-' || code === '–') return true;
   if (isFlicaNonFlyingActivityId(code)) return true;

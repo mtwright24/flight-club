@@ -19,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ScrollView as GHScrollView } from 'react-native-gesture-handler';
 import { spacing } from '../../../styles/theme';
 import {
   fetchPairingDetailByPairingUuid,
@@ -54,7 +55,8 @@ import {
   getDisplaySpanAndDutyDayCount,
   type TripDayViewModel,
 } from '../tripDetailViewModel';
-import { formatLayoverColumnDisplay } from '../scheduleTime';
+import { extractLayoverRestFourDigits, formatLayoverColumnDisplay } from '../scheduleTime';
+import { metroCityForIata } from '../layoverMetroLookup';
 import type { CrewScheduleHotelStub, CrewScheduleLeg, CrewScheduleTrip, ScheduleCrewMember } from '../types';
 import CrewScheduleHeader from '../components/CrewScheduleHeader';
 
@@ -144,6 +146,38 @@ function layoverRestRawForActivePanel(day: TripDayViewModel, trip: CrewScheduleT
   return raw || null;
 }
 
+/** Last in-day arrival station IATA, else explicit layover station / leg city when 3-letter. */
+function resolveLayoverAirportCode(day: TripDayViewModel, trip: CrewScheduleTrip): string | null {
+  const legs = day.legs;
+  for (let i = legs.length - 1; i >= 0; i--) {
+    const arr = String(legs[i]?.arrivalAirport ?? '')
+      .trim()
+      .toUpperCase();
+    if (/^[A-Z]{3}$/.test(arr)) return arr;
+  }
+  const st = trip.layoverStationByDate?.[day.dateIso]?.trim().toUpperCase() ?? '';
+  if (/^[A-Z]{3}$/.test(st)) return st;
+  for (let i = legs.length - 1; i >= 0; i--) {
+    const ly = String(legs[i]?.layoverCityLeg ?? '')
+      .trim()
+      .toUpperCase();
+    if (/^[A-Z]{3}$/.test(ly)) return ly;
+  }
+  return null;
+}
+
+function formatRestClockForLayoverCard(restRaw: string | null | undefined): string {
+  const raw = String(restRaw ?? '').trim();
+  if (!raw) return '—';
+  const four = extractLayoverRestFourDigits(raw) ?? formatLayoverColumnDisplay(raw);
+  if (four && /^\d{4}$/.test(four)) return `${four.slice(0, 2)}:${four.slice(2)}`;
+  if (/^\d{1,2}:\d{2}$/.test(raw)) {
+    const [h, m] = raw.split(':');
+    return `${String(Number(h)).padStart(2, '0')}:${m}`;
+  }
+  return four && four !== '' ? four : '—';
+}
+
 function dbHotelRowToStub(h: PairingDetailDbHotelRow): CrewScheduleHotelStub {
   return {
     name: h.hotel_name?.trim() || undefined,
@@ -158,15 +192,24 @@ function hotelStubForActivePanel(
   activeLayoverCity: string | null,
   activeDateIso: string,
   tripLevelHotel: CrewScheduleHotelStub | undefined,
+  extraMatchTokens: (string | null | undefined)[] = [],
 ): CrewScheduleHotelStub | null {
+  const tokenSet = new Set<string>();
+  const pushTok = (v: string | null | undefined) => {
+    const t = normLayoverCityKey(v);
+    if (t) tokenSet.add(t);
+  };
+  pushTok(activeLayoverCity);
+  for (const x of extraMatchTokens) pushTok(x);
+
   if (!hotels.length) {
     return tripLevelHotel?.name || tripLevelHotel?.city ? tripLevelHotel! : null;
   }
   if (hotels.length === 1) {
     return dbHotelRowToStub(hotels[0]!);
   }
-  const ac = normLayoverCityKey(activeLayoverCity);
-  const byCity = hotels.filter((h) => normLayoverCityKey(h.layover_city) === ac);
+  const tokens = [...tokenSet];
+  const byCity = hotels.filter((h) => tokens.includes(normLayoverCityKey(h.layover_city)));
   if (!byCity.length) {
     return null;
   }
@@ -201,6 +244,8 @@ function visibleRowFallbackForDetail(tripId: string) {
 }
 
 function layoverCityOnlyForDayChip(day: TripDayViewModel, trip: CrewScheduleTrip): string {
+  const code = resolveLayoverAirportCode(day, trip);
+  if (code) return code;
   const c = layoverCityForActivePanel(day, trip)?.trim();
   return c && c.length > 0 ? c : '—';
 }
@@ -302,6 +347,41 @@ function looksLikeScheduleNoteHotel(text: string | null | undefined): boolean {
   return false;
 }
 
+function buildLayoverSubline(args: {
+  airportCode: string | null;
+  metroCity: string | null;
+  hotel: CrewScheduleHotelStub | null;
+}): string | null {
+  const { airportCode, metroCity, hotel } = args;
+  if (!airportCode) return null;
+  const code = airportCode.toUpperCase();
+  const hc = hotel?.city?.trim();
+  const hn = hotel?.name?.trim();
+  let area: string | null = null;
+  if (hc) {
+    const cityPart = hc.split(',')[0]!.trim();
+    if (metroCity && cityPart.toLowerCase() !== metroCity.toLowerCase()) {
+      area = `${cityPart} area`;
+    }
+  }
+  if (!area && hn && !looksLikeScheduleNoteHotel(hn)) {
+    const stripped = hn
+      .replace(
+        /^(MDR|Hyatt|Marriott|Hilton Garden Inn|Hilton|Westin|Sheraton|Courtyard|Holiday Inn|HI)\s+/i,
+        '',
+      )
+      .trim();
+    if (stripped.length > 3 && stripped.toLowerCase() !== (metroCity ?? '').toLowerCase()) {
+      area = `${stripped} area`;
+    }
+  }
+  if (metroCity) {
+    if (area) return `${code} · ${area}`;
+    return `${code} · Overnight`;
+  }
+  return '—';
+}
+
 /** Dot-separated remaining stations: unique cities in panel order, excluding the active city. */
 function heroContextCitiesLine(citiesByPanel: string[], selectedDayIndex: number): string {
   if (!citiesByPanel.length) return '';
@@ -329,6 +409,8 @@ const DETAIL_COMPACT_MAX_WIDTH = 393;
 /** Horizontal gap between operating-day chips; width computed so ~4 fit in the viewport. */
 const OPERATING_DAY_CHIP_GAP = 6;
 const OPERATING_DAY_SCROLL_PAD_X = 12;
+/** Must match `detailStyles.progressWrap` marginHorizontal (×2 subtracted from screen width for track). */
+const PROGRESS_TRACK_MARGIN_H = 16;
 
 function PremiumFlightLegCard({
   leg,
@@ -546,16 +628,12 @@ function DayProgressWithThumb({
 }) {
   if (dayCount <= 0) return null;
   const segWidthPct = 100 / dayCount;
-  const centerPct = (selectedIndex + 0.5) * segWidthPct;
+  const centerPct = (Math.min(Math.max(0, selectedIndex), dayCount - 1) + 0.5) * segWidthPct;
+  const fillPct = Math.min(100, (Math.min(Math.max(0, selectedIndex), dayCount - 1) + 1) * segWidthPct);
   return (
-    <View style={detailStyles.progressWrap}>
+    <View style={detailStyles.progressWrap} pointerEvents="none">
       <View style={detailStyles.progressTrackBg}>
-        <View
-          style={[
-            detailStyles.progressTrackFill,
-            { width: `${Math.min(100, (selectedIndex + 1) * segWidthPct)}%` },
-          ]}
-        />
+        <View style={[detailStyles.progressTrackFill, { width: `${fillPct}%` }]} />
         <View style={[detailStyles.progressThumb, { left: `${centerPct}%` }]} />
       </View>
     </View>
@@ -622,6 +700,8 @@ export default function TripDetailScreen() {
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
   const [pairingHotels, setPairingHotels] = useState<PairingDetailDbHotelRow[]>([]);
   const panelPagerRef = useRef<FlatList<TripDayViewModel>>(null);
+  const operatingDayChipsRef = useRef<React.ComponentRef<typeof GHScrollView>>(null);
+  const selectionSourceRef = useRef<'pager' | 'chip' | 'tap' | 'programmatic'>('programmatic');
   const panelScrollAnimatedRef = useRef(false);
   const { width: panelWidth } = useWindowDimensions();
   const detailLayoutCompact = panelWidth > 0 && panelWidth <= DETAIL_COMPACT_MAX_WIDTH;
@@ -828,21 +908,51 @@ export default function TripDetailScreen() {
       return {
         layoverCityLine: null as string | null,
         layoverRestLine: '—' as string,
+        restClock: '—',
         hotel: null as CrewScheduleHotelStub | null,
+        airportCode: null as string | null,
+        metroCity: null as string | null,
+        primaryCityHeadline: '—',
+        layoverSubline: null as string | null,
       };
     }
     const idx = Math.min(Math.max(0, selectedDayIndex), vm.days.length - 1);
     const activeDay = vm.days[idx]!;
+    const airportCode = resolveLayoverAirportCode(activeDay, display);
+    const metroCity = airportCode ? metroCityForIata(airportCode) : null;
     const layCity = layoverCityForActivePanel(activeDay, display);
+    const hotel = hotelStubForActivePanel(pairingHotels, layCity, activeDay.dateIso, display.hotel, [
+      airportCode,
+      metroCity,
+    ]);
     const restRaw = layoverRestRawForActivePanel(activeDay, display);
+    const restClock = formatRestClockForLayoverCard(restRaw);
     const restLine = restRaw?.trim() ? formatLayoverColumnDisplay(restRaw) : '—';
-    const hotel = hotelStubForActivePanel(pairingHotels, layCity, activeDay.dateIso, display.hotel);
-    return { layoverCityLine: layCity, layoverRestLine: restLine, hotel };
+
+    let primaryCityHeadline: string;
+    if (metroCity) primaryCityHeadline = metroCity;
+    else if (airportCode) primaryCityHeadline = airportCode;
+    else if (layCity && !/^[A-Z]{3}$/.test(layCity.trim().toUpperCase())) primaryCityHeadline = layCity.trim();
+    else primaryCityHeadline = '—';
+
+    const layoverSubline = buildLayoverSubline({ airportCode, metroCity, hotel });
+
+    return {
+      layoverCityLine: layCity,
+      layoverRestLine: restLine,
+      restClock,
+      hotel,
+      airportCode,
+      metroCity,
+      primaryCityHeadline,
+      layoverSubline,
+    };
   }, [vm, display, selectedDayIndex, pairingHotels]);
 
   useLayoutEffect(() => {
     setSelectedDayIndex(0);
     panelScrollAnimatedRef.current = false;
+    selectionSourceRef.current = 'programmatic';
   }, [tripId]);
 
   useEffect(() => {
@@ -858,6 +968,43 @@ export default function TripDetailScreen() {
     panelPagerRef.current?.scrollToOffset({ offset: idx * panelWidth, animated });
   }, [selectedDayIndex, vm?.days.length, panelWidth]);
 
+  useEffect(() => {
+    if (!vm?.days.length || operatingDaySnapInterval <= 0) return;
+    if (selectionSourceRef.current === 'chip') {
+      selectionSourceRef.current = 'programmatic';
+      return;
+    }
+    const x = Math.min(
+      Math.max(0, selectedDayIndex) * operatingDaySnapInterval,
+      Math.max(0, vm.days.length - 1) * operatingDaySnapInterval,
+    );
+    operatingDayChipsRef.current?.scrollTo({ x, y: 0, animated: true });
+  }, [selectedDayIndex, operatingDaySnapInterval, vm?.days.length]);
+
+  const syncSelectedDayFromPager = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (!vm?.days.length || panelWidth <= 0) return;
+      const idx = Math.round(e.nativeEvent.contentOffset.x / panelWidth);
+      const clamped = Math.max(0, Math.min(idx, vm.days.length - 1));
+      panelScrollAnimatedRef.current = false;
+      selectionSourceRef.current = 'pager';
+      setSelectedDayIndex((prev) => (clamped === prev ? prev : clamped));
+    },
+    [vm?.days.length, panelWidth],
+  );
+
+  const syncDayFromChipStrip = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (!vm?.days.length || operatingDaySnapInterval <= 0) return;
+      const idx = Math.round(e.nativeEvent.contentOffset.x / operatingDaySnapInterval);
+      const clamped = Math.max(0, Math.min(idx, vm.days.length - 1));
+      panelScrollAnimatedRef.current = false;
+      selectionSourceRef.current = 'chip';
+      setSelectedDayIndex((prev) => (clamped === prev ? prev : clamped));
+    },
+    [vm?.days.length, operatingDaySnapInterval],
+  );
+
   const getOperatingPanelLayout = useCallback(
     (_data: ArrayLike<TripDayViewModel> | null | undefined, index: number) => ({
       length: panelWidth,
@@ -865,17 +1012,6 @@ export default function TripDetailScreen() {
       index,
     }),
     [panelWidth],
-  );
-
-  const onOperatingPanelMomentumEnd = useCallback(
-    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (!vm?.days.length || panelWidth <= 0) return;
-      const idx = Math.round(e.nativeEvent.contentOffset.x / panelWidth);
-      if (idx < 0 || idx >= vm.days.length || idx === selectedDayIndex) return;
-      panelScrollAnimatedRef.current = false;
-      setSelectedDayIndex(idx);
-    },
-    [vm?.days.length, panelWidth, selectedDayIndex],
   );
 
   useEffect(() => {
@@ -905,8 +1041,8 @@ export default function TripDetailScreen() {
         }
         let applied = false;
         setTrip((prev) => {
-          if (detailPaintSealedRef.current && canSealPairingSurface(prev!)) {
-            return prev!;
+          if (detailPaintSealedRef.current && prev != null && canSealPairingSurface(prev)) {
+            return prev;
           }
           if (prev && shouldRejectWeakerPairingRender(prev, resolved.trip)) {
             if (canSealPairingSurface(prev)) {
@@ -1064,7 +1200,10 @@ export default function TripDetailScreen() {
         contentContainerStyle={{ paddingBottom: insets.bottom + 22 }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        {...(Platform.OS === 'ios' ? { contentInsetAdjustmentBehavior: 'never' as const } : {})}
+        nestedScrollEnabled
+        {...(Platform.OS === 'ios'
+          ? ({ contentInsetAdjustmentBehavior: 'never' as const, directionalLockEnabled: true } as const)
+          : {})}
       >
         <View style={[detailStyles.heroSafe, { paddingTop: insets.top + 6 }]}>
           <View style={detailStyles.heroContent}>
@@ -1145,7 +1284,8 @@ export default function TripDetailScreen() {
         </View>
 
         <Text style={detailStyles.sectionLabel}>Operating days</Text>
-        <ScrollView
+        <GHScrollView
+          ref={operatingDayChipsRef}
           horizontal
           nestedScrollEnabled
           showsHorizontalScrollIndicator={false}
@@ -1154,6 +1294,9 @@ export default function TripDetailScreen() {
           snapToInterval={operatingDaySnapInterval}
           snapToAlignment="start"
           disableIntervalMomentum
+          bounces={false}
+          onMomentumScrollEnd={syncDayFromChipStrip}
+          onScrollEndDrag={syncDayFromChipStrip}
           contentContainerStyle={[
             detailStyles.dayChipScroll,
             { gap: OPERATING_DAY_CHIP_GAP, paddingHorizontal: OPERATING_DAY_SCROLL_PAD_X },
@@ -1166,6 +1309,7 @@ export default function TripDetailScreen() {
                 key={d.panelId}
                 onPress={() => {
                   panelScrollAnimatedRef.current = false;
+                  selectionSourceRef.current = 'tap';
                   setSelectedDayIndex(i);
                 }}
                 style={[
@@ -1189,7 +1333,7 @@ export default function TripDetailScreen() {
               </Pressable>
             );
           })}
-        </ScrollView>
+        </GHScrollView>
 
         <DayProgressWithThumb dayCount={vm.days.length} selectedIndex={selectedDayIndex} />
 
@@ -1254,7 +1398,8 @@ export default function TripDetailScreen() {
                 layoutCompact={detailLayoutCompact}
               />
             )}
-            onMomentumScrollEnd={onOperatingPanelMomentumEnd}
+            onMomentumScrollEnd={syncSelectedDayFromPager}
+            onScrollEndDrag={syncSelectedDayFromPager}
             onScrollToIndexFailed={({ index }) => {
               setTimeout(() => {
                 panelPagerRef.current?.scrollToOffset({
@@ -1266,79 +1411,83 @@ export default function TripDetailScreen() {
           />
         ) : null}
 
-        <Text style={detailStyles.sectionLabel}>Layover & hotel</Text>
+        <Text style={detailStyles.sectionLabel}>LAYOVER & HOTEL</Text>
         <View style={detailStyles.hotelCard}>
           <View style={detailStyles.hotelBubble} pointerEvents="none" />
           <Text style={detailStyles.hotelKicker}>LAYOVER CITY</Text>
-          <Text style={detailStyles.hotelCardTitle}>
-            {layoverHotelActive.layoverCityLine?.trim()
-              ? layoverHotelActive.layoverCityLine.trim()
-              : layoverHotelActive.hotel?.city?.trim() || 'Layover'}
+          <Text style={detailStyles.hotelPrimaryCity} numberOfLines={2}>
+            {layoverHotelActive.primaryCityHeadline}
           </Text>
-          {layoverHotelActive.hotel?.city?.trim() &&
-          layoverHotelActive.layoverCityLine?.trim() &&
-          layoverHotelActive.hotel.city.trim().toUpperCase() !==
-            layoverHotelActive.layoverCityLine.trim().toUpperCase() ? (
-            <Text style={detailStyles.hotelSubtitle}>
-              {layoverHotelActive.layoverCityLine.trim()} · {layoverHotelActive.hotel.city.trim()}
+          {layoverHotelActive.layoverSubline ? (
+            <Text style={detailStyles.hotelAirportSub} numberOfLines={2}>
+              {layoverHotelActive.layoverSubline}
             </Text>
           ) : null}
           {(() => {
-            const restText =
-              layoverHotelActive.layoverRestLine === '—'
-                ? 'Not available'
-                : layoverHotelActive.layoverRestLine || '—';
             const rawName = layoverHotelActive.hotel?.name?.trim();
-            const hotelVal = !rawName
-              ? 'Not listed'
-              : looksLikeScheduleNoteHotel(rawName)
-                ? formatLayoverColumnDisplay(rawName)
+            const noteMode = Boolean(rawName && looksLikeScheduleNoteHotel(rawName));
+            const restClock = layoverHotelActive.restClock;
+            const weatherPrimary = noteMode
+              ? formatLayoverColumnDisplay(rawName!) || rawName!.slice(0, 160)
+              : '—° / —°';
+            const weatherSecondary = noteMode ? 'Schedule note' : 'Forecasts unavailable';
+            const weatherIcon = noteMode ? ('document-text-outline' as const) : ('partly-sunny-outline' as const);
+
+            const codeForHotelFile =
+              layoverHotelActive.airportCode ??
+              layoverHotelActive.layoverCityLine?.trim() ??
+              'Layover';
+            const hotelTitle = noteMode
+              ? `${codeForHotelFile} · Hotel on file`
+              : !rawName
+                ? 'Not listed'
                 : rawName;
-            const infoVal =
+            const hotelMeta = noteMode
+              ? null
+              : layoverHotelActive.hotel?.city?.trim()
+                ? `${layoverHotelActive.hotel.city.trim()} · Hotel on file`
+                : `${codeForHotelFile} · Hotel on file`;
+            const phone =
               rawName && !looksLikeScheduleNoteHotel(rawName) && layoverHotelActive.hotel?.phone?.trim()
                 ? layoverHotelActive.hotel.phone.trim()
-                : '—';
-            const previewLine =
-              hotelVal !== 'Not listed' ? hotelVal : '—';
-            const previewSub = !rawName
-              ? ''
-              : looksLikeScheduleNoteHotel(rawName)
-                ? 'Schedule note'
-                : 'Hotel on file';
+                : null;
+
             return (
               <>
                 <View style={detailStyles.hotelMidRow}>
                   <View style={detailStyles.hotelRestCol}>
-                    <Text style={detailStyles.hotelRestBig} numberOfLines={2}>
-                      {restText}
+                    <Text style={detailStyles.hotelRestBig} numberOfLines={1}>
+                      {restClock}
                     </Text>
                     <Text style={detailStyles.hotelRestHoursLabel}>REST HOURS</Text>
                   </View>
-                  <View style={detailStyles.hotelPreviewCard}>
-                    <Ionicons name="partly-sunny-outline" size={18} color="rgba(255,255,255,0.92)" />
-                    <Text style={detailStyles.hotelPreviewTitle} numberOfLines={2}>
-                      {previewLine}
-                    </Text>
-                    {previewSub ? <Text style={detailStyles.hotelPreviewSub}>{previewSub}</Text> : null}
+                  <View style={detailStyles.hotelWeatherCard}>
+                    <Ionicons name={weatherIcon} size={22} color="rgba(255,255,255,0.92)" />
+                    <View style={detailStyles.hotelWeatherTextBlock}>
+                      <Text style={detailStyles.hotelWeatherTemp} numberOfLines={noteMode ? 4 : 2}>
+                        {weatherPrimary}
+                      </Text>
+                      <Text style={detailStyles.hotelWeatherCond} numberOfLines={2}>
+                        {weatherSecondary}
+                      </Text>
+                    </View>
                   </View>
                 </View>
                 <View style={detailStyles.hotelHotelPanel}>
                   <Ionicons name="bed-outline" size={20} color="rgba(255,255,255,0.92)" />
                   <View style={detailStyles.hotelHotelPanelText}>
                     <Text style={detailStyles.hotelHotelName} numberOfLines={2}>
-                      {hotelVal}
+                      {hotelTitle}
                     </Text>
-                    <Text style={detailStyles.hotelHotelMeta} numberOfLines={2}>
-                      {layoverHotelActive.hotel?.city?.trim()
-                        ? `${layoverHotelActive.hotel.city.trim()} · Hotel on file`
-                        : layoverHotelActive.layoverCityLine?.trim()
-                          ? `${layoverHotelActive.layoverCityLine.trim()} · Hotel on file`
-                          : 'Hotel on file'}
-                    </Text>
-                    {infoVal !== '—' ? (
+                    {hotelMeta ? (
+                      <Text style={detailStyles.hotelHotelMeta} numberOfLines={2}>
+                        {hotelMeta}
+                      </Text>
+                    ) : null}
+                    {phone ? (
                       <View style={detailStyles.hotelPhoneRow}>
-                        <Ionicons name="call-outline" size={14} color="#4ADE80" />
-                        <Text style={detailStyles.hotelPhoneText}>{infoVal}</Text>
+                        <Ionicons name="call-outline" size={14} color={FC_HOTEL_PHONE_NUM} />
+                        <Text style={detailStyles.hotelPhoneText}>{phone}</Text>
                       </View>
                     ) : null}
                   </View>
@@ -1643,7 +1792,7 @@ const detailStyles = StyleSheet.create({
   },
   dayChipLayoverSel: { color: 'rgba(255,255,255,0.88)' },
   progressWrap: {
-    marginHorizontal: 16,
+    marginHorizontal: PROGRESS_TRACK_MARGIN_H,
     marginBottom: 12,
     marginTop: 4,
   },
@@ -2014,6 +2163,24 @@ const detailStyles = StyleSheet.create({
     letterSpacing: 0.45,
     marginBottom: 4,
   },
+  hotelPrimaryCity: {
+    ...TYPE_FACE,
+    fontSize: 24,
+    fontWeight: FONT.bold,
+    color: '#fff',
+    marginBottom: 4,
+    letterSpacing: -0.5,
+    lineHeight: 28,
+  },
+  hotelAirportSub: {
+    ...TYPE_FACE,
+    fontSize: 12,
+    fontWeight: FONT.medium,
+    color: 'rgba(255,255,255,0.8)',
+    marginBottom: 12,
+    lineHeight: 16,
+    letterSpacing: -0.15,
+  },
   hotelCardTitle: {
     ...TYPE_FACE,
     fontSize: 18,
@@ -2045,11 +2212,11 @@ const detailStyles = StyleSheet.create({
   },
   hotelRestBig: {
     ...TYPE_FACE,
-    fontSize: 15,
+    fontSize: 26,
     fontWeight: FONT.semibold,
     color: '#FFFFFF',
-    lineHeight: 18,
-    letterSpacing: -0.25,
+    lineHeight: 30,
+    letterSpacing: -0.45,
     ...MOCKUP_TABULAR,
   },
   hotelRestHoursLabel: {
@@ -2061,32 +2228,36 @@ const detailStyles = StyleSheet.create({
     letterSpacing: 0.4,
     textTransform: 'uppercase',
   },
-  hotelPreviewCard: {
+  hotelWeatherCard: {
     flex: 1,
     minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
     backgroundColor: FC_HOTEL_INNER,
     borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
   },
-  hotelPreviewTitle: {
+  hotelWeatherTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  hotelWeatherTemp: {
     ...TYPE_FACE,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: FONT.semibold,
     color: '#FFFFFF',
-    textAlign: 'center',
-    lineHeight: 16,
-    letterSpacing: -0.25,
+    lineHeight: 17,
+    letterSpacing: -0.2,
   },
-  hotelPreviewSub: {
+  hotelWeatherCond: {
     ...TYPE_FACE,
+    marginTop: 3,
     fontSize: 10,
     fontWeight: FONT.medium,
-    color: 'rgba(255,255,255,0.65)',
-    textAlign: 'center',
+    color: 'rgba(255,255,255,0.72)',
+    lineHeight: 14,
   },
   hotelHotelPanel: {
     flexDirection: 'row',
