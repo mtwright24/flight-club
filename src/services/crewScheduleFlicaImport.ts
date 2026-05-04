@@ -41,15 +41,6 @@ export async function persistFlicaMultiMonthToCrewSchedule(
       if (!monthKey || !row.html) continue;
 
       const parsed = parseFlicaScheduleHtml(row.html, monthKey);
-      if (monthKey.endsWith('-03')) {
-        console.log('[PARSED MARCH]', JSON.stringify(parsed, null, 2));
-      }
-      if (monthKey.endsWith('-04')) {
-        console.log('[PARSED APRIL]', JSON.stringify(parsed, null, 2));
-      }
-      if (monthKey.endsWith('-05')) {
-        console.log('[PARSED MAY]', JSON.stringify(parsed, null, 2));
-      }
 
       const statsPayload = {
         block: parsed.stats.block,

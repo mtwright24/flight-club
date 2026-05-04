@@ -29,7 +29,6 @@ import {
   fetchFlicaScheduleAllMonths,
   FLICA_CONSTANTS,
   FLICA_URLS,
-  flicaBlockDateToYYYYmm,
   formatFlicaImportedMonthRangeLabel,
   loadFlicaAirlineSubdomain,
   loadFlicaCookies,
@@ -392,13 +391,6 @@ export default function ImportFlicaDirectScreen() {
   }, []);
 
   useEffect(() => {
-    const prev = prevCaptchaVisibleRef.current;
-    if (captchaWebVisible && !prev) {
-      console.log('[WEBVIEW_VISIBLE_FOR_CAPTCHA_ONLY]');
-    }
-    if (!captchaWebVisible && prev) {
-      console.log('[WEBVIEW_REHIDDEN_AFTER_CAPTCHA]');
-    }
     prevCaptchaVisibleRef.current = captchaWebVisible;
   }, [captchaWebVisible]);
 
@@ -645,12 +637,7 @@ export default function ImportFlicaDirectScreen() {
           return;
         }
         const availableBlockDates = extractAvailableFlicaScheduleBlockDatesFromHtml(loadSchedulePageHtml);
-        const monthKeysAvail = availableBlockDates
-          .map((b) => flicaBlockDateToYYYYmm(b))
-          .filter((k): k is string => k != null);
-        console.log('[FLICA_AVAILABLE_MONTHS]', { blockDates: availableBlockDates, monthKeys: monthKeysAvail });
         if (availableBlockDates.length === 0) {
-          console.log('[FLICA_IMPORT_FAIL_REASON]', { reason: 'no_blockdates_in_capture_html' });
           setLastError(
             'Could not find schedule months on the FLICA page. Open the schedule / Load Schedule view and try “Sync schedule” again.',
           );
@@ -668,7 +655,6 @@ export default function ImportFlicaDirectScreen() {
           toPersist.push({ monthKey: row.monthKey, html: row.html });
         }
         if (toPersist.length === 0) {
-          console.log('[FLICA_IMPORT_FAIL_REASON]', { reason: 'no_valid_months_after_fetch' });
           setLastError('No schedule months could be imported. Check FLICA and try again.');
           stopSync();
           return;
@@ -693,10 +679,6 @@ export default function ImportFlicaDirectScreen() {
         router.replace('/crew-schedule' as Href);
         stopSync();
       } catch (e) {
-        console.log('[FLICA_IMPORT_FAIL_REASON]', {
-          reason: 'exception',
-          message: e instanceof Error ? e.message : String(e),
-        });
         setLastError(e instanceof Error ? e.message : String(e));
         stopSync();
       } finally {
@@ -911,9 +893,6 @@ export default function ImportFlicaDirectScreen() {
     setSyncActive(true);
     setStatusLine('Starting sync…');
     setOverlayMessage('Securely signing you in…');
-    console.log('[IMPORT_WRAPPER_VISIBLE]');
-    console.log('[WEBVIEW_HIDDEN_BEHIND_WRAPPER]');
-    console.log('[OLD_FLICA_SYNC_UI_DISABLED]', { replacedBy: 'flight_club_ad_wrapper' });
   }, [setFlicaVerificationFinalized]);
 
   /** Schedule tab pull-to-refresh (FLICA months) opens this screen with `autoSync=1` — start the same flow as “Sync schedule”. */

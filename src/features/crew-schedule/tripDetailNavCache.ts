@@ -156,20 +156,6 @@ export function consumeStashedTripForDetail(tripId: string): CrewScheduleTrip | 
   return t;
 }
 
-function pairingEnrichmentLogPayload(current: CrewScheduleTrip | undefined, candidate: CrewScheduleTrip) {
-  return {
-    pairingCode: candidate.pairingCode,
-    oldScore: current != null ? scorePairingCompleteness(current) : null,
-    newScore: scorePairingCompleteness(candidate),
-    oldBase: current?.base ?? null,
-    newBase: candidate.base ?? null,
-    oldRoute: current?.routeSummary ?? null,
-    newRoute: candidate.routeSummary ?? null,
-    oldStatsPresent: current != null ? statFieldsPresent(current) : 0,
-    newStatsPresent: statFieldsPresent(candidate),
-  };
-}
-
 /** Reject hydrated/network trip only when it would downgrade a stronger same-session render (never block DB authority over partial visible snapshots). */
 export function shouldRejectWeakerPairingRender(
   currentTrip: CrewScheduleTrip | undefined,
@@ -178,22 +164,10 @@ export function shouldRejectWeakerPairingRender(
   if (!currentTrip) return false;
 
   if (isThinScheduleOnlyPairing(currentTrip) && canSealPairingSurface(candidate)) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_DB_ENRICHMENT_ALLOWED]', {
-        reason: 'thin_to_detail_ready',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return false;
   }
 
   if (canSealPairingSurface(currentTrip) && isThinScheduleOnlyPairing(candidate)) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_DB_ENRICHMENT_BLOCKED_REASON]', {
-        reason: 'would_downgrade_full_to_thin',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return true;
   }
 
@@ -202,14 +176,6 @@ export function shouldRejectWeakerPairingRender(
     canSealPairingSurface(currentTrip) &&
     routeAirportCount(candidate) < routeAirportCount(currentTrip)
   ) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_DB_ENRICHMENT_BLOCKED_REASON]', {
-        reason: 'candidate_route_more_fragmented',
-        oldRouteAirports: routeAirportCount(currentTrip),
-        newRouteAirports: routeAirportCount(candidate),
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return true;
   }
 
@@ -217,12 +183,6 @@ export function shouldRejectWeakerPairingRender(
     canSealPairingSurface(currentTrip) &&
     statFieldsPresent(candidate) < statFieldsPresent(currentTrip)
   ) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_DB_ENRICHMENT_BLOCKED_REASON]', {
-        reason: 'stats_downgrade',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return true;
   }
 
@@ -231,12 +191,6 @@ export function shouldRejectWeakerPairingRender(
     (currentTrip.crewMembers?.length ?? 0) > 0 &&
     (candidate.crewMembers?.length ?? 0) < (currentTrip.crewMembers?.length ?? 0)
   ) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_DB_ENRICHMENT_BLOCKED_REASON]', {
-        reason: 'crew_downgrade',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return true;
   }
 
@@ -250,12 +204,6 @@ export function shouldRejectWeakerPairingRender(
     isScheduleInstantPaintablePairing(candidate);
 
   if (curPaint && !nextPaint && !canSealPairingSurface(candidate)) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_REJECTED_WEAKER_PARTIAL_UPDATE]', {
-        reason: 'candidate_not_instant_or_strict_paint_ready',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return true;
   }
 
@@ -265,81 +213,33 @@ export function shouldRejectWeakerPairingRender(
 
   if (curPaint && nextPaint && wouldRejectOnScore) {
     if (sameTripGroupAndPairingCode(currentTrip, candidate) && isDbEnrichedPairing(candidate)) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_ENRICHMENT_OVERRIDES_PARTIAL]', {
-          reason: 'same_trip_db_authority',
-          ...pairingEnrichmentLogPayload(currentTrip, candidate),
-        });
-      }
       return false;
     }
 
     if (isPartialVisiblePairing(currentTrip) && isDbEnrichedPairing(candidate)) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_ENRICHMENT_OVERRIDES_PARTIAL]', {
-          reason: 'partial_visible_vs_db',
-          ...pairingEnrichmentLogPayload(currentTrip, candidate),
-        });
-      }
       return false;
     }
 
     if (dbEnrichmentAddsAuthoritativeFields(currentTrip, candidate)) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_ENRICHMENT_OVERRIDES_PARTIAL]', {
-          reason: 'authoritative_fields',
-          ...pairingEnrichmentLogPayload(currentTrip, candidate),
-        });
-      }
       return false;
     }
 
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_REJECTED_WEAKER_PARTIAL_UPDATE]', {
-        reason: 'lower_completeness_after_full_paint',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return true;
   }
 
   if (sameTripGroupAndPairingCode(currentTrip, candidate) && isDbEnrichedPairing(candidate)) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && wouldRejectOnScore) {
-      console.log('[PAIRING_ENRICHMENT_OVERRIDES_PARTIAL]', {
-        reason: 'same_trip_db_authority',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return false;
   }
 
   if (isPartialVisiblePairing(currentTrip) && isDbEnrichedPairing(candidate)) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && wouldRejectOnScore) {
-      console.log('[PAIRING_ENRICHMENT_OVERRIDES_PARTIAL]', {
-        reason: 'partial_visible_vs_db',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return false;
   }
 
   if (dbEnrichmentAddsAuthoritativeFields(currentTrip, candidate)) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && wouldRejectOnScore) {
-      console.log('[PAIRING_ENRICHMENT_OVERRIDES_PARTIAL]', {
-        reason: 'authoritative_fields',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return false;
   }
 
   if (wouldRejectOnScore) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_REJECTED_WEAKER_PARTIAL_UPDATE]', {
-        reason: 'lower_completeness_score',
-        ...pairingEnrichmentLogPayload(currentTrip, candidate),
-      });
-    }
     return true;
   }
   return false;

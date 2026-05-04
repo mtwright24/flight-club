@@ -577,7 +577,6 @@ export default function FlicaTestScreen() {
           setAutoRefreshOpen(false);
           setBackupMode(false);
           setCaptchaLayerVisible(false);
-          console.log('[FLICA IMPORTING OVERLAY SET]', true);
           setIsImportingSchedule(true);
         }
 
@@ -612,7 +611,6 @@ export default function FlicaTestScreen() {
         setStatusLine('import_failed');
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.log('[FLICA ERROR]', msg);
         setLastError(msg);
         setStatusLine('import_failed');
       } finally {
@@ -637,12 +635,9 @@ export default function FlicaTestScreen() {
   const runPostCaptchaCookieCaptureAndNavigate = useCallback(
     async (fullMainmenuUrl: string) => {
       if (postCaptchaFiredRef.current) {
-        console.log('[FLICA] handler already fired, skipping');
         return;
       }
       postCaptchaFiredRef.current = true;
-      console.log('[FLICA POST-CAPTCHA TRIGGERED]', fullMainmenuUrl);
-      console.log('[FLICA IMPORTING OVERLAY SET]', true);
       setIsImportingSchedule(true);
       setAutoImportHideWebView(true);
       setCaptchaLayerVisible(false);
@@ -698,7 +693,6 @@ export default function FlicaTestScreen() {
       schedulePageExtractTimeoutRef.current = null;
       if (completingWebImportRef.current) return;
       autoWebViewRef.current?.injectJavaScript(INJECT_POST_LOADSCHEDULE_HTML);
-      console.log('[FLICA] postMessage injected for loadschedule_html');
     }, 2000);
   }, []);
 
@@ -780,7 +774,6 @@ export default function FlicaTestScreen() {
 
       n.htmlAttempt = 0;
       if (refKind === 'auto') {
-        console.log('[FLICA] LoadSchedule detected, waiting 2000ms then injecting postMessage');
         schedulePostLoadscheduleHtmlAuto();
       } else {
         schedulePostHtmlExtraction(refKind);
@@ -793,16 +786,6 @@ export default function FlicaTestScreen() {
     (nav: WebViewNavigation, refKind: 'auto' | 'backup') => {
       const url = nav.url ?? '';
       const loading = nav.loading;
-      console.log('[FLICA NAV]', url, 'loading:', loading);
-      console.log(
-        '[FLICA GOHM CHECK]',
-        'hasMainmenu:',
-        url.includes('mainmenu.cgi'),
-        'hasGOHM:',
-        url.includes('GOHM=1'),
-        'hasLoadSchedule:',
-        url.includes('LoadSchedule'),
-      );
       if (completingWebImportRef.current) return;
       const low = url.toLowerCase();
 
@@ -824,11 +807,6 @@ export default function FlicaTestScreen() {
 
   const onWebViewMessage = useCallback(
     (event: WebViewMessageEvent, refKind: 'auto' | 'backup') => {
-      try {
-        console.log('[FLICA onMessage]', JSON.parse(event.nativeEvent.data).type);
-      } catch {
-        /* ignore */
-      }
       if (completingWebImportRef.current) return;
       const n = navByRef.current[refKind];
       let data: { type?: string; html?: string; url?: string };
@@ -879,7 +857,6 @@ export default function FlicaTestScreen() {
         data.type === 'loadschedule_html'
           ? extractToken1FromHtml(data.html)
           : extractTokenFromWebViewHtml(data.html);
-      console.log('[FLICA TOKEN1]', token ?? 'NOT FOUND');
       const pageUrl = (data.url ?? '').trim();
       if (token) {
         void completeScheduleImportWithToken(token, pageUrl, refKind);

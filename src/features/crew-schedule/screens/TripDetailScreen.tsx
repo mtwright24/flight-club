@@ -29,9 +29,8 @@ import {
   peekStashedTripForDetail,
   shouldRejectWeakerPairingRender,
 } from '../tripDetailNavCache';
-import { isDangerousPartialPairing, isInstantPaintablePairing } from '../pairingRenderableGate';
 import { buildPairingFirstPaintDecision, resolveRenderablePairingSnapshot } from '../resolveRenderablePairingSnapshot';
-import { scorePairingCompleteness, statFieldsPresent } from '../pairingDetailResolve';
+import { scorePairingCompleteness } from '../pairingDetailResolve';
 import { canSealPairingSurface } from '../pairingDetailReadiness';
 import { monthCalendarKey } from '../scheduleMonthCache';
 import {
@@ -229,26 +228,15 @@ export default function TripDetailScreen() {
         pairingDetailRegisterFrozenSurface(tripId);
         setTrip(cached);
         setLoadingTrip(false);
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[PAIRING_FULL_DATA_SEALED]', {
-            source: 'month_cache',
-            tripId,
-            monthKey,
-            pairingCode: cached.pairingCode,
-          });
-        }
         return;
       }
     }
 
-    const { pick: instantPick, decision: firstPaintDecision } = buildPairingFirstPaintDecision(
+    const { pick: instantPick } = buildPairingFirstPaintDecision(
       tripId,
       anchor,
       rowFallback,
     );
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_DETAIL_FIRST_PAINT_DECISION]', firstPaintDecision);
-    }
     if (instantPick && canSealPairingSurface(instantPick.trip)) {
       const navKey = pairingNavigationSessionKey(instantPick.trip);
       detailSessionKeyRef.current = navKey;
@@ -257,28 +245,7 @@ export default function TripDetailScreen() {
       pairingDetailRegisterFrozenSurface(tripId);
       setTrip(instantPick.trip);
       setLoadingTrip(false);
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_FULL_DATA_SEALED]', {
-          source: 'sync_snapshot',
-          tripId,
-          pairingCode: instantPick.trip.pairingCode,
-        });
-      }
       return;
-    }
-    if (instantPick && typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_THIN_DATA_NOT_SEALED]', {
-        tripId,
-        pairingCode: instantPick.trip.pairingCode,
-        source: 'instant_pick',
-      });
-    }
-
-    const partialPeek = peekStashedTripForDetail(tripId);
-    if (partialPeek && isDangerousPartialPairing(partialPeek) && typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_BLOCKED_DANGEROUS_PARTIAL]', { tripId, pairingCode: partialPeek.pairingCode });
-    } else if (partialPeek && typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_RENDER_BLOCKED_PARTIAL_FIRST_PAINT]', { tripId, pairingCode: partialPeek.pairingCode });
     }
 
     setTrip(undefined);
@@ -378,21 +345,10 @@ export default function TripDetailScreen() {
         return;
       }
       if (detailPaintSealedRef.current) {
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[PAIRING_AFTER_OPEN_MUTATION_BLOCKED]', { scope: 'resolveRenderablePairingSnapshot' });
-        }
         setLoadingTrip(false);
         return;
       }
       const fetchGenAtStart = pairingDetailFetchGenRef.current;
-
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        const partialPeek = peekStashedTripForDetail(tripId);
-        const anchor = peekStashedDetailPointer(tripId)?.selectedDateIso ?? null;
-        if (partialPeek && !isInstantPaintablePairing(partialPeek)) {
-          console.log('[PAIRING_RENDER_WAITING_FOR_DB_FULL]', { tripId, pairingCode: partialPeek.pairingCode });
-        }
-      }
 
       const rowFallback = visibleRowFallbackForDetail(tripId);
       const resolved = await resolveRenderablePairingSnapshot(tripId, pairingUuidFromRoute ?? null, rowFallback);
@@ -404,21 +360,12 @@ export default function TripDetailScreen() {
       if (resolved) {
         const navKey = pairingNavigationSessionKey(resolved.trip);
         if (detailSessionKeyRef.current && !pairingNavKeysSameTripAndCode(detailSessionKeyRef.current, navKey)) {
-          if (typeof __DEV__ !== 'undefined' && __DEV__) {
-            console.log('[PAIRING_DB_ENRICHMENT_BLOCKED_REASON]', {
-              reason: 'navigation_session_mismatch',
-              tripId,
-            });
-          }
           setLoadingTrip(false);
           return;
         }
         let applied = false;
         setTrip((prev) => {
           if (detailPaintSealedRef.current && canSealPairingSurface(prev!)) {
-            if (typeof __DEV__ !== 'undefined' && __DEV__) {
-              console.log('[PAIRING_AFTER_OPEN_MUTATION_BLOCKED]', { scope: 'resolve_merge_trip' });
-            }
             return prev!;
           }
           if (prev && shouldRejectWeakerPairingRender(prev, resolved.trip)) {
@@ -427,37 +374,6 @@ export default function TripDetailScreen() {
               pairingDetailRegisterFrozenSurface(tripId);
             }
             return prev;
-          }
-          if (typeof __DEV__ !== 'undefined' && __DEV__) {
-            console.log('[PAIRING_DB_ENRICHMENT_ALLOWED]', {
-              tripId,
-              source: resolved.source,
-              hadPrev: Boolean(prev),
-            });
-            if (prev) {
-              console.log('[PAIRING_RENDER_DB_FULL_COMMIT]', {
-                source: resolved.source,
-                pairingCode: resolved.trip.pairingCode,
-                oldScore: scorePairingCompleteness(prev),
-                newScore: scorePairingCompleteness(resolved.trip),
-              });
-            }
-            if (prev) {
-              if (statFieldsPresent(resolved.trip) > statFieldsPresent(prev)) {
-                console.log('[PAIRING_STATS_RESTORED]', {
-                  tripId,
-                  from: statFieldsPresent(prev),
-                  to: statFieldsPresent(resolved.trip),
-                });
-              }
-              const cr = resolved.trip.crewMembers?.length ?? 0;
-              const pr = prev.crewMembers?.length ?? 0;
-              const hn = resolved.trip.hotel?.name?.trim() || resolved.trip.hotel?.city?.trim();
-              const ho = prev.hotel?.name?.trim() || prev.hotel?.city?.trim();
-              if (cr > pr || (Boolean(hn) && !ho)) {
-                console.log('[PAIRING_CREW_HOTEL_RESTORED]', { tripId, crewTo: cr, crewFrom: pr });
-              }
-            }
           }
           detailRenderScoreRef.current = Math.max(
             detailRenderScoreRef.current,
@@ -472,22 +388,8 @@ export default function TripDetailScreen() {
             const mk = pointer?.selectedMonthKey ?? monthCalendarKey(resolved.trip.year, resolved.trip.month);
             const idk = readCommittedMonthSnapshot(mk)?.identityKey ?? 'enriched';
             storeDetailReadyPairingInMonthCaches(resolved.trip, idk, pointer?.selectedMonthKey ?? null);
-            if (typeof __DEV__ !== 'undefined' && __DEV__) {
-              console.log('[PAIRING_FULL_DATA_SEALED]', {
-                source: 'db_resolve',
-                tripId,
-                pairingCode: resolved.trip.pairingCode,
-              });
-            }
           } else {
             pairingDetailRegisterFrozenSurface(null);
-            if (typeof __DEV__ !== 'undefined' && __DEV__) {
-              console.log('[PAIRING_THIN_DATA_NOT_SEALED]', {
-                source: 'db_resolve',
-                tripId,
-                pairingCode: resolved.trip.pairingCode,
-              });
-            }
           }
           applied = true;
           return resolved.trip;

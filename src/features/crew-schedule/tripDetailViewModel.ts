@@ -423,19 +423,6 @@ export function buildTripDetailViewModel(trip: CrewScheduleTrip): TripDetailView
   const days = buildTripDays(trip);
   const thinSummary = shouldHideOperationalStatsPlaceholders(trip);
   const displaySpan = getDisplaySpanAndDutyDayCount(trip);
-  const operatingDates = getOperatingDutyDatesIso(trip);
-
-  if (typeof __DEV__ !== 'undefined' && __DEV__ && !isExemptFromStrictPairingPaint(trip)) {
-    console.log('[TRIP_DETAIL_DISPLAY_SPAN]', {
-      pairingCode: trip.pairingCode,
-      rawStartDate: trip.startDate,
-      rawEndDate: trip.endDate,
-      operatingDates,
-      displayStartDate: displaySpan.displayStartDate,
-      displayEndDate: displaySpan.displayEndDate,
-      dutyDayCount: displaySpan.dutyDayCount,
-    });
-  }
 
   return {
     trip,

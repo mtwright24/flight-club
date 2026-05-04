@@ -83,43 +83,19 @@ export default function TripQuickPreviewSheet({
       previewPaintSealedRef.current = true;
       setResolvedTrip(cached);
       setResolveSettled(true);
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_FULL_DATA_SEALED]', {
-          surface: 'preview',
-          source: 'month_cache',
-          tripId: tripRow.id,
-        });
-      }
       return;
     }
     const anchor = rowDate;
-    const { pick: instant, decision: firstPaintDecision } = buildPairingFirstPaintDecision(
+    const { pick: instant } = buildPairingFirstPaintDecision(
       tripRow.id,
       anchor,
       tripRow,
     );
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_SUMMARY_FIRST_PAINT_DECISION]', firstPaintDecision);
-    }
     if (instant && canSealPairingSurface(instant.trip)) {
       previewPaintSealedRef.current = true;
       setResolvedTrip(instant.trip);
       setResolveSettled(true);
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_FULL_DATA_SEALED]', {
-          surface: 'preview',
-          source: 'sync_snapshot',
-          tripId: tripRow.id,
-        });
-      }
       return;
-    }
-    if (instant && typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_THIN_DATA_NOT_SEALED]', {
-        surface: 'preview',
-        source: 'instant_pick',
-        tripId: tripRow.id,
-      });
     }
     setResolvedTrip(null);
     setResolveSettled(false);
@@ -130,9 +106,6 @@ export default function TripQuickPreviewSheet({
       return;
     }
     if (previewPaintSealedRef.current) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_AFTER_OPEN_MUTATION_BLOCKED]', { scope: 'preview_resolve' });
-      }
       return;
     }
     const targetTripId = trip.id;
@@ -140,17 +113,7 @@ export default function TripQuickPreviewSheet({
     let cancelled = false;
     void (async () => {
       if (previewPaintSealedRef.current) {
-        if (typeof __DEV__ !== 'undefined' && __DEV__) {
-          console.log('[PAIRING_AFTER_OPEN_MUTATION_BLOCKED]', { scope: 'preview_resolve_async' });
-        }
         return;
-      }
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        const anchor =
-          trip.startDate && /^\d{4}-\d{2}-\d{2}/.test(trip.startDate) ? trip.startDate.slice(0, 10) : null;
-        if (!buildPairingFirstPaintDecision(trip.id, anchor, trip).pick) {
-          console.log('[PAIRING_RENDER_WAITING_FOR_DB_FULL]', { tripId: targetTripId, pairingCode: trip.pairingCode });
-        }
       }
       try {
         const r = await resolveRenderablePairingSnapshot(targetTripId, pairingUuid ?? null, trip);
@@ -164,9 +127,6 @@ export default function TripQuickPreviewSheet({
         if (r) {
           setResolvedTrip((prev) => {
             if (previewPaintSealedRef.current && prev && canSealPairingSurface(prev)) {
-              if (typeof __DEV__ !== 'undefined' && __DEV__) {
-                console.log('[PAIRING_AFTER_OPEN_MUTATION_BLOCKED]', { scope: 'preview_set_resolved' });
-              }
               return prev;
             }
             if (prev && shouldRejectWeakerPairingRender(prev, r.trip)) {
@@ -175,29 +135,12 @@ export default function TripQuickPreviewSheet({
               }
               return prev;
             }
-            if (typeof __DEV__ !== 'undefined' && __DEV__) {
-              console.log('[PAIRING_DB_ENRICHMENT_ALLOWED]', { surface: 'preview', tripId: targetTripId, source: r.source });
-              console.log('[PAIRING_RENDER_DB_FULL_COMMIT]', { source: r.source, tripId: targetTripId });
-            }
             const seal = canSealPairingSurface(r.trip);
             previewPaintSealedRef.current = seal;
             if (seal) {
               const mk = monthCalendarKey(r.trip.year, r.trip.month);
               const idk = readCommittedMonthSnapshot(mk)?.identityKey ?? 'preview-enriched';
               storeDetailReadyPairingInMonthCaches(r.trip, idk, mk);
-              if (typeof __DEV__ !== 'undefined' && __DEV__) {
-                console.log('[PAIRING_FULL_DATA_SEALED]', {
-                  surface: 'preview',
-                  source: 'db_resolve',
-                  tripId: targetTripId,
-                });
-              }
-            } else if (typeof __DEV__ !== 'undefined' && __DEV__) {
-              console.log('[PAIRING_THIN_DATA_NOT_SEALED]', {
-                surface: 'preview',
-                source: 'db_resolve',
-                tripId: targetTripId,
-              });
             }
             return r.trip;
           });

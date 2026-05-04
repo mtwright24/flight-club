@@ -120,42 +120,6 @@ function withTripId(tripId: string, t: CrewScheduleTrip): CrewScheduleTrip {
   return { ...t, id: tripId };
 }
 
-function dutyOrCanonDayCount(t: CrewScheduleTrip): number {
-  const c = t.canonicalPairingDays ? Object.keys(t.canonicalPairingDays).length : 0;
-  if (c > 0) return c;
-  const ds = new Set<string>();
-  for (const l of t.legs ?? []) {
-    const d = String(l.dutyDate ?? '').slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) ds.add(d);
-  }
-  return ds.size;
-}
-
-function logInstantCandidateRejected(
-  source: string,
-  t: CrewScheduleTrip,
-  reason: string,
-): void {
-  if (typeof __DEV__ === 'undefined' || !__DEV__) return;
-  console.log('[PAIRING_INSTANT_CANDIDATE_REJECTED]', {
-    source,
-    reason,
-    id: t.id,
-    pairingCode: t.pairingCode,
-    startDate: t.startDate,
-    endDate: t.endDate,
-    base: t.base ?? null,
-    routeSummary: t.routeSummary ?? null,
-    block: t.pairingBlockHours ?? null,
-    credit: t.pairingCreditHours ?? t.creditHours ?? null,
-    tafb: t.pairingTafbHours ?? null,
-    layoverMin: t.tripLayoverTotalMinutes ?? null,
-    layover: t.layoverCity?.trim() || null,
-    legsCount: t.legs?.length ?? 0,
-    dutyOrCanonDayCount: dutyOrCanonDayCount(t),
-  });
-}
-
 function scoreCandidate(
   tripId: string,
   pointerAnchor: string | null | undefined,
@@ -201,15 +165,12 @@ function scoreCandidate(
   let bestScore = -1;
   for (const { t, source } of candidates) {
     if (useAnchor && pointerAnchor && !anchorInSpan(t, pointerAnchor)) {
-      logInstantCandidateRejected(source, t, 'anchor_outside_span');
       continue;
     }
     if (isUnsafeFirstPaintPairing(t)) {
-      logInstantCandidateRejected(source, t, 'unsafe_first_paint');
       continue;
     }
     if (!isScheduleInstantPaintablePairing(t)) {
-      logInstantCandidateRejected(source, t, 'not_schedule_instant_paintable');
       continue;
     }
     const sc = scorePairingCompleteness(t);

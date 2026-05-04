@@ -136,21 +136,10 @@ export default function ScheduleTabScreen() {
       stableMonthFallback?.trips?.length &&
       trips.length === 0
     ) {
-      if (typeof __DEV__ !== "undefined" && __DEV__) {
-        console.log("[MONTH_INSTANT_SNAPSHOT_PAINT]", {
-          key: requestedKey,
-          trips: stableMonthFallback.trips.length,
-        });
-      }
       return {
         displayTrips: stableMonthFallback.trips,
         displayMetrics: stableMonthFallback.monthMetrics,
       };
-    }
-    if (loading && !stableMonthFallback?.trips?.length && trips.length === 0) {
-      if (typeof __DEV__ !== "undefined" && __DEV__) {
-        console.log("[MONTH_LOADING_ONLY_NO_SNAPSHOT]", { key: requestedKey });
-      }
     }
     return { displayTrips: trips, displayMetrics: monthMetrics };
   }, [loading, stableMonthFallback, trips, monthMetrics, requestedKey]);

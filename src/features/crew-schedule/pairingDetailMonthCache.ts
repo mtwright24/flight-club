@@ -6,11 +6,8 @@ type CacheRow = { trip: CrewScheduleTrip; identityKey: string };
 
 const store = new Map<string, CacheRow>();
 
-let activeFrozenDetailTripId: string | null = null;
-
-export function pairingDetailRegisterFrozenSurface(tripId: string | null): void {
-  activeFrozenDetailTripId = tripId?.trim() ? tripId : null;
-}
+/** Reserved for future frozen-surface bookkeeping; pairing detail cache uses committed snapshots only. */
+export function pairingDetailRegisterFrozenSurface(_tripId: string | null): void {}
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
@@ -67,53 +64,18 @@ export function storeDetailReadyPairingInMonthCaches(
   const id = String(trip.id ?? '').trim();
   if (!id) return;
   if (!canSealPairingSurface(trip)) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_CACHE_THIN_REJECTED]', {
-        reason: 'not_detail_ready_for_store',
-        tripId: id,
-        pairingCode: trip.pairingCode,
-      });
-    }
     return;
   }
 
   const payload = cloneTrip(trip);
   const months = new Set<string>(monthKeysTouchingTripSpan(trip));
   if (stashMonthKey) months.add(stashMonthKey);
-  let carryoverMultiMonth = months.size > 1;
 
   for (const mk of months) {
     store.set(cacheKey(mk, id, '*'), { trip: cloneTrip(payload), identityKey });
     for (const iso of isoDaysInSpanForMonth(trip, mk)) {
       store.set(cacheKey(mk, id, iso), { trip: cloneTrip(payload), identityKey });
     }
-  }
-
-  if (
-    carryoverMultiMonth &&
-    typeof __DEV__ !== 'undefined' &&
-    __DEV__
-  ) {
-    console.log('[CARRYOVER_FULL_PAIRING_RESTORED]', {
-      tripId: id,
-      pairingCode: trip.pairingCode,
-      startDate: trip.startDate,
-      endDate: trip.endDate,
-      months: [...months].sort(),
-    });
-  }
-
-  if (
-    activeFrozenDetailTripId &&
-    id === activeFrozenDetailTripId &&
-    typeof __DEV__ !== 'undefined' &&
-    __DEV__
-  ) {
-    console.log('[PAIRING_BACKGROUND_REFRESH_STORED_FOR_NEXT_OPEN]', {
-      tripId: id,
-      identityKey,
-      months: [...months].sort(),
-    });
   }
 }
 
@@ -122,14 +84,6 @@ function readInternal(monthKey: string, id: string, anchor: string): CrewSchedul
   if (!row) return undefined;
   if (!isDetailReadyPairing(row.trip)) {
     store.delete(cacheKey(monthKey, id, anchor));
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_CACHE_THIN_REJECTED]', {
-        reason: 'stale_non_ready_entry',
-        tripId: id,
-        monthKey,
-        anchor,
-      });
-    }
     return undefined;
   }
   return cloneTrip(row.trip);
@@ -142,9 +96,6 @@ export function readPairingDetailFromMonthCache(
 ): CrewScheduleTrip | undefined {
   const id = String(tripId ?? '').trim();
   if (!id || !monthKey) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_CACHE_DETAIL_READY_MISS]', { tripId, monthKey, reason: 'bad_key' });
-    }
     return undefined;
   }
   const d =
@@ -154,21 +105,12 @@ export function readPairingDetailFromMonthCache(
   if (d) {
     const hit = readInternal(monthKey, id, d);
     if (hit) {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_CACHE_DETAIL_READY_HIT]', { tripId: id, monthKey, rowDateIso: d });
-      }
       return hit;
     }
   }
   const wild = readInternal(monthKey, id, '*');
   if (wild) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_CACHE_DETAIL_READY_HIT]', { tripId: id, monthKey, rowDateIso: rowDateIso ?? null, wildcard: true });
-    }
     return wild;
-  }
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    console.log('[PAIRING_CACHE_DETAIL_READY_MISS]', { tripId: id, monthKey, rowDateIso: d });
   }
   return undefined;
 }
