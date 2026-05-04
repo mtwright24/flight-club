@@ -47,7 +47,7 @@ export function routeHasJfkBookend(route: string | null | undefined): boolean {
   return ap.length >= 2 && ap[0] === 'JFK' && ap[ap.length - 1] === 'JFK';
 }
 
-function routeAirportCount(t: CrewScheduleTrip): number {
+export function routeAirportCount(t: CrewScheduleTrip): number {
   const fromRoute = String(t.routeSummary ?? '')
     .split(/[–—\-/→]+/)
     .map((x) => x.trim())

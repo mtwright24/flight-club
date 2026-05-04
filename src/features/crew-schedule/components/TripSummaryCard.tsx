@@ -19,11 +19,11 @@ export default function TripSummaryCard({ vm, showStats = true }: Props) {
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{vm.statusLabel}</Text>
         </View>
-        <View style={[styles.badge, styles.badgeMuted]}>
-          <Text style={styles.badgeTextMuted}>
-            {vm.trip.base ? `Base ${vm.trip.base}` : '⚠️ No Base'}
-          </Text>
-        </View>
+        {vm.trip.base?.trim() ? (
+          <View style={[styles.badge, styles.badgeMuted]}>
+            <Text style={styles.badgeTextMuted}>Base {vm.trip.base}</Text>
+          </View>
+        ) : null}
       </View>
       <Text style={styles.meta}>{vm.dateRangeLabel}</Text>
       <Text style={styles.meta}>{vm.summaryLine}</Text>

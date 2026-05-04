@@ -43,6 +43,7 @@ import {
     type ScheduleYearMonth,
 } from "../scheduleAvailableMonths";
 import { monthCalendarKey } from "../scheduleMonthCache";
+import { readCommittedMonthSnapshot } from "../scheduleStableSnapshots";
 import { scheduleTheme as T } from "../scheduleTheme";
 import {
     loadLastMonthCursor,
@@ -52,13 +53,6 @@ import {
 import { tradePostPrefillParams } from "../tradePostPrefillParams";
 import { stashTripForDetailNavigation } from "../tripDetailNavCache";
 import type { CrewScheduleTrip, ScheduleMonthMetrics, ScheduleViewMode } from "../types";
-
-function parseMonthCalendarKey(key: string): { year: number; month: number } {
-  const [ys, ms] = key.split("-");
-  const year = parseInt(ys ?? "", 10);
-  const month = parseInt(ms ?? "", 10);
-  return { year: Number.isFinite(year) ? year : 2026, month: Number.isFinite(month) ? month : 1 };
-}
 
 const MONTH_NAMES = [
   "January",
@@ -129,49 +123,53 @@ export default function ScheduleTabScreen() {
     useScheduleTripsForMonth(year, month);
   const [, setFlicaDirectForMonth] = useState(false);
 
-  const [committedMonth, setCommittedMonth] = useState<{
-    key: string;
-    trips: CrewScheduleTrip[];
-    monthMetrics: ScheduleMonthMetrics | null;
-  } | null>(null);
-
   const requestedKey = useMemo(() => monthCalendarKey(year, month), [year, month]);
 
-  useEffect(() => {
-    if (loading) return;
-    setCommittedMonth({
-      key: monthCalendarKey(year, month),
-      trips,
-      monthMetrics,
-    });
-  }, [loading, year, month, trips, monthMetrics]);
+  const stableMonthFallback = useMemo(
+    () => readCommittedMonthSnapshot(requestedKey),
+    [requestedKey],
+  );
 
-  const monthLoadPending =
-    committedMonth != null && loading && committedMonth.key !== requestedKey;
+  const { displayTrips, displayMetrics } = useMemo(() => {
+    if (
+      loading &&
+      stableMonthFallback?.trips?.length &&
+      trips.length === 0
+    ) {
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log("[MONTH_INSTANT_SNAPSHOT_PAINT]", {
+          key: requestedKey,
+          trips: stableMonthFallback.trips.length,
+        });
+      }
+      return {
+        displayTrips: stableMonthFallback.trips,
+        displayMetrics: stableMonthFallback.monthMetrics,
+      };
+    }
+    if (loading && !stableMonthFallback?.trips?.length && trips.length === 0) {
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log("[MONTH_LOADING_ONLY_NO_SNAPSHOT]", { key: requestedKey });
+      }
+    }
+    return { displayTrips: trips, displayMetrics: monthMetrics };
+  }, [loading, stableMonthFallback, trips, monthMetrics, requestedKey]);
 
-  const { displayYear, displayMonth, displayTrips, displayMetrics } = useMemo(() => {
-    const dk = monthLoadPending ? committedMonth!.key : requestedKey;
-    const ym = parseMonthCalendarKey(dk);
-    return {
-      displayYear: ym.year,
-      displayMonth: ym.month,
-      displayTrips: monthLoadPending ? committedMonth!.trips : trips,
-      displayMetrics: monthLoadPending ? committedMonth!.monthMetrics : monthMetrics,
-    };
-  }, [monthLoadPending, committedMonth, requestedKey, trips, monthMetrics]);
+  const monthBodyLoadingOverlay =
+    loading && displayTrips.length === 0 && !(stableMonthFallback?.trips?.length);
 
   const loadFlicaDirectFlag = useCallback(() => {
-    void hasFlicaDirectImportForMonth(displayYear, displayMonth).then(setFlicaDirectForMonth);
-  }, [displayYear, displayMonth]);
+    void hasFlicaDirectImportForMonth(year, month).then(setFlicaDirectForMonth);
+  }, [year, month]);
 
   const loadFlicaRow = useCallback(async () => {
     try {
-      const row = await fetchCrewScheduleFlicaForMonth(displayYear, displayMonth);
+      const row = await fetchCrewScheduleFlicaForMonth(year, month);
       setFlicaRow(row);
     } catch {
       setFlicaRow(null);
     }
-  }, [displayYear, displayMonth]);
+  }, [year, month]);
 
   /** Refs: useFocusEffect must use a stable callback ([] deps). Otherwise any identity churn re-fires focus → setScheduleRefreshKey loops (maximum update depth). */
   const refreshSilentRef = useRef(refreshSilent);
@@ -223,7 +221,7 @@ export default function ScheduleTabScreen() {
     }, []),
   );
 
-  const monthLabel = `${MONTH_NAMES[displayMonth - 1]} ${displayYear}`;
+  const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
 
   const persistMonth = useCallback(
     (y: number, m: number) => {
@@ -312,7 +310,7 @@ export default function ScheduleTabScreen() {
   const openTrip = useCallback(
     (trip: CrewScheduleTrip, rowDateIso?: string) => {
       stashTripForDetailNavigation(trip, displayTrips, {
-        visibleMonth: { year: displayYear, month: displayMonth },
+        visibleMonth: { year, month },
         rowDateIso: rowDateIso ?? null,
       });
       router.push({
@@ -325,7 +323,7 @@ export default function ScheduleTabScreen() {
         },
       });
     },
-    [router, displayTrips, displayYear, displayMonth],
+    [router, displayTrips, year, month],
   );
 
   const openTradePost = useCallback(
@@ -445,7 +443,7 @@ export default function ScheduleTabScreen() {
         }
       >
         <View style={styles.readingArea}>
-          {monthLoadPending ? (
+          {monthBodyLoadingOverlay ? (
             <View style={styles.monthTransitionOverlay} pointerEvents="none">
               <ActivityIndicator size="small" color={T.accent} />
             </View>
@@ -459,20 +457,20 @@ export default function ScheduleTabScreen() {
           ) : null}
           {viewMode === "classic" && (
             <ClassicListView
-              year={displayYear}
-              month={displayMonth}
+              year={year}
+              month={month}
               refreshKey={scheduleRefreshKey}
               trips={displayTrips}
               monthMetrics={displayMetrics}
-              tripLayerReady={monthLoadPending || !loading}
+              tripLayerReady={!loading || displayTrips.length > 0}
               onPressTrip={openTrip}
               onOpenManage={openManage}
             />
           )}
           {viewMode === "calendar" && (
             <CalendarMonthView
-              year={displayYear}
-              month={displayMonth}
+              year={year}
+              month={month}
               trips={displayTrips}
               onPressDay={onPressCalendarDay}
               onOpenTrip={openTrip}

@@ -16,7 +16,12 @@ import { buildTripDetailViewModel, type TripStatTile } from '../tripDetailViewMo
 import type { CrewScheduleTrip } from '../types';
 import { validateVisibleTripHandoff } from '../pairingHandoff';
 import { isExemptFromStrictPairingPaint } from '../pairingRenderableGate';
-import { resolveRenderablePairingSnapshot } from '../resolveRenderablePairingSnapshot';
+import { buildPairingFirstPaintDecision, resolveRenderablePairingSnapshot } from '../resolveRenderablePairingSnapshot';
+import { monthCalendarKey } from '../scheduleMonthCache';
+import { readPairingDetailFromMonthCache, storeDetailReadyPairingInMonthCaches } from '../pairingDetailMonthCache';
+import { readCommittedMonthSnapshot } from '../scheduleStableSnapshots';
+import { canSealPairingSurface } from '../pairingDetailReadiness';
+import { shouldRejectWeakerPairingRender } from '../tripDetailNavCache';
 import TripCrewList from './TripCrewList';
 import TripStatTilesRow from './TripStatTilesRow';
 
@@ -42,34 +47,110 @@ export default function TripQuickPreviewSheet({
   const [resolvedTrip, setResolvedTrip] = useState<CrewScheduleTrip | null>(null);
   const [resolveSettled, setResolveSettled] = useState(false);
   const previewTargetTripIdRef = useRef<string>('');
+  const previewPaintSealedRef = useRef(false);
+
+  const tripRef = useRef(trip);
+  tripRef.current = trip;
 
   useLayoutEffect(() => {
+    const tripRow = tripRef.current;
     if (!visible) {
+      previewPaintSealedRef.current = false;
       previewTargetTripIdRef.current = '';
       setResolvedTrip(null);
       setResolveSettled(false);
       return;
     }
-    if (!trip) {
+    if (!tripRow) {
       setResolvedTrip(null);
       setResolveSettled(false);
       return;
     }
-    previewTargetTripIdRef.current = trip.id;
+    previewTargetTripIdRef.current = tripRow.id;
+    if (isExemptFromStrictPairingPaint(tripRow)) {
+      previewPaintSealedRef.current = true;
+      setResolvedTrip(null);
+      setResolveSettled(true);
+      return;
+    }
+    const monthKey = monthCalendarKey(tripRow.year, tripRow.month);
+    const rowDate =
+      tripRow.startDate && /^\d{4}-\d{2}-\d{2}/.test(tripRow.startDate)
+        ? tripRow.startDate.slice(0, 10)
+        : null;
+    const cached = readPairingDetailFromMonthCache(tripRow.id, monthKey, rowDate);
+    if (cached) {
+      previewPaintSealedRef.current = true;
+      setResolvedTrip(cached);
+      setResolveSettled(true);
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[PAIRING_FULL_DATA_SEALED]', {
+          surface: 'preview',
+          source: 'month_cache',
+          tripId: tripRow.id,
+        });
+      }
+      return;
+    }
+    const anchor = rowDate;
+    const { pick: instant, decision: firstPaintDecision } = buildPairingFirstPaintDecision(
+      tripRow.id,
+      anchor,
+      tripRow,
+    );
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[PAIRING_SUMMARY_FIRST_PAINT_DECISION]', firstPaintDecision);
+    }
+    if (instant && canSealPairingSurface(instant.trip)) {
+      previewPaintSealedRef.current = true;
+      setResolvedTrip(instant.trip);
+      setResolveSettled(true);
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[PAIRING_FULL_DATA_SEALED]', {
+          surface: 'preview',
+          source: 'sync_snapshot',
+          tripId: tripRow.id,
+        });
+      }
+      return;
+    }
+    if (instant && typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[PAIRING_THIN_DATA_NOT_SEALED]', {
+        surface: 'preview',
+        source: 'instant_pick',
+        tripId: tripRow.id,
+      });
+    }
     setResolvedTrip(null);
-    setResolveSettled(isExemptFromStrictPairingPaint(trip));
-  }, [visible, trip?.id, trip]);
+    setResolveSettled(false);
+  }, [visible, trip?.id]);
 
   useEffect(() => {
     if (!visible || !trip || isExemptFromStrictPairingPaint(trip)) {
+      return;
+    }
+    if (previewPaintSealedRef.current) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[PAIRING_AFTER_OPEN_MUTATION_BLOCKED]', { scope: 'preview_resolve' });
+      }
       return;
     }
     const targetTripId = trip.id;
     const targetPairing = String(trip.pairingCode ?? '').trim().toUpperCase();
     let cancelled = false;
     void (async () => {
+      if (previewPaintSealedRef.current) {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.log('[PAIRING_AFTER_OPEN_MUTATION_BLOCKED]', { scope: 'preview_resolve_async' });
+        }
+        return;
+      }
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[PAIRING_RENDER_WAITING_FOR_DB_FULL]', { tripId: targetTripId, pairingCode: trip.pairingCode });
+        const anchor =
+          trip.startDate && /^\d{4}-\d{2}-\d{2}/.test(trip.startDate) ? trip.startDate.slice(0, 10) : null;
+        if (!buildPairingFirstPaintDecision(trip.id, anchor, trip).pick) {
+          console.log('[PAIRING_RENDER_WAITING_FOR_DB_FULL]', { tripId: targetTripId, pairingCode: trip.pairingCode });
+        }
       }
       try {
         const r = await resolveRenderablePairingSnapshot(targetTripId, pairingUuid ?? null, trip);
@@ -81,10 +162,45 @@ export default function TripQuickPreviewSheet({
           return;
         }
         if (r) {
-          setResolvedTrip(r.trip);
-          if (typeof __DEV__ !== 'undefined' && __DEV__) {
-            console.log('[PAIRING_RENDER_DB_FULL_COMMIT]', { source: r.source, tripId: targetTripId });
-          }
+          setResolvedTrip((prev) => {
+            if (previewPaintSealedRef.current && prev && canSealPairingSurface(prev)) {
+              if (typeof __DEV__ !== 'undefined' && __DEV__) {
+                console.log('[PAIRING_AFTER_OPEN_MUTATION_BLOCKED]', { scope: 'preview_set_resolved' });
+              }
+              return prev;
+            }
+            if (prev && shouldRejectWeakerPairingRender(prev, r.trip)) {
+              if (canSealPairingSurface(prev)) {
+                previewPaintSealedRef.current = true;
+              }
+              return prev;
+            }
+            if (typeof __DEV__ !== 'undefined' && __DEV__) {
+              console.log('[PAIRING_DB_ENRICHMENT_ALLOWED]', { surface: 'preview', tripId: targetTripId, source: r.source });
+              console.log('[PAIRING_RENDER_DB_FULL_COMMIT]', { source: r.source, tripId: targetTripId });
+            }
+            const seal = canSealPairingSurface(r.trip);
+            previewPaintSealedRef.current = seal;
+            if (seal) {
+              const mk = monthCalendarKey(r.trip.year, r.trip.month);
+              const idk = readCommittedMonthSnapshot(mk)?.identityKey ?? 'preview-enriched';
+              storeDetailReadyPairingInMonthCaches(r.trip, idk, mk);
+              if (typeof __DEV__ !== 'undefined' && __DEV__) {
+                console.log('[PAIRING_FULL_DATA_SEALED]', {
+                  surface: 'preview',
+                  source: 'db_resolve',
+                  tripId: targetTripId,
+                });
+              }
+            } else if (typeof __DEV__ !== 'undefined' && __DEV__) {
+              console.log('[PAIRING_THIN_DATA_NOT_SEALED]', {
+                surface: 'preview',
+                source: 'db_resolve',
+                tripId: targetTripId,
+              });
+            }
+            return r.trip;
+          });
         }
       } finally {
         if (!cancelled) {

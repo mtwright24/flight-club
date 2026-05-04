@@ -9,9 +9,18 @@ import {
   sameTripGroupAndPairingCode,
   scorePairingCompleteness,
   statFieldsPresent,
+  routeAirportCount,
 } from './pairingDetailResolve';
 import { devLogCarryoverOrInternationalCheck, type ScheduleVisibleMonth, validateVisibleTripHandoff } from './pairingHandoff';
-import { validatePairingSummaryPaintReady } from './pairingRenderableGate';
+import {
+  validatePairingSummaryPaintReady,
+  isInstantPaintablePairing,
+  isScheduleInstantPaintablePairing,
+} from './pairingRenderableGate';
+import {
+  canSealPairingSurface,
+  isThinScheduleOnlyPairing,
+} from './pairingDetailReadiness';
 import { pairingNavigationSessionKey, warmPairingDetailSnapshot } from './scheduleStableSnapshots';
 
 const UUID_RE_STASH =
@@ -91,7 +100,7 @@ export function stashTripForDetailNavigation(
 
   stashByTripId.set(selected.id, { pointer, overlayTrips: overlay });
 
-  if (validatePairingSummaryPaintReady(canonical, pointer.selectedDateIso).ok) {
+  if (isInstantPaintablePairing(canonical) || validatePairingSummaryPaintReady(canonical, pointer.selectedDateIso).ok) {
     warmPairingDetailSnapshot(deepCloneTrip(canonical));
   }
 }
@@ -168,13 +177,82 @@ export function shouldRejectWeakerPairingRender(
 ): boolean {
   if (!currentTrip) return false;
 
-  const curPaint = validatePairingSummaryPaintReady(currentTrip, null);
-  const nextPaint = validatePairingSummaryPaintReady(candidate, null);
-
-  if (curPaint.ok && !nextPaint.ok) {
+  if (isThinScheduleOnlyPairing(currentTrip) && canSealPairingSurface(candidate)) {
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_RENDER_REJECTED_WEAKER_UPDATE]', {
-        reason: 'candidate_not_paint_ready',
+      console.log('[PAIRING_DB_ENRICHMENT_ALLOWED]', {
+        reason: 'thin_to_detail_ready',
+        ...pairingEnrichmentLogPayload(currentTrip, candidate),
+      });
+    }
+    return false;
+  }
+
+  if (canSealPairingSurface(currentTrip) && isThinScheduleOnlyPairing(candidate)) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[PAIRING_DB_ENRICHMENT_BLOCKED_REASON]', {
+        reason: 'would_downgrade_full_to_thin',
+        ...pairingEnrichmentLogPayload(currentTrip, candidate),
+      });
+    }
+    return true;
+  }
+
+  if (
+    sameTripGroupAndPairingCode(currentTrip, candidate) &&
+    canSealPairingSurface(currentTrip) &&
+    routeAirportCount(candidate) < routeAirportCount(currentTrip)
+  ) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[PAIRING_DB_ENRICHMENT_BLOCKED_REASON]', {
+        reason: 'candidate_route_more_fragmented',
+        oldRouteAirports: routeAirportCount(currentTrip),
+        newRouteAirports: routeAirportCount(candidate),
+        ...pairingEnrichmentLogPayload(currentTrip, candidate),
+      });
+    }
+    return true;
+  }
+
+  if (
+    canSealPairingSurface(currentTrip) &&
+    statFieldsPresent(candidate) < statFieldsPresent(currentTrip)
+  ) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[PAIRING_DB_ENRICHMENT_BLOCKED_REASON]', {
+        reason: 'stats_downgrade',
+        ...pairingEnrichmentLogPayload(currentTrip, candidate),
+      });
+    }
+    return true;
+  }
+
+  if (
+    canSealPairingSurface(currentTrip) &&
+    (currentTrip.crewMembers?.length ?? 0) > 0 &&
+    (candidate.crewMembers?.length ?? 0) < (currentTrip.crewMembers?.length ?? 0)
+  ) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[PAIRING_DB_ENRICHMENT_BLOCKED_REASON]', {
+        reason: 'crew_downgrade',
+        ...pairingEnrichmentLogPayload(currentTrip, candidate),
+      });
+    }
+    return true;
+  }
+
+  const curPaint =
+    validatePairingSummaryPaintReady(currentTrip, null).ok ||
+    isInstantPaintablePairing(currentTrip) ||
+    isScheduleInstantPaintablePairing(currentTrip);
+  const nextPaint =
+    validatePairingSummaryPaintReady(candidate, null).ok ||
+    isInstantPaintablePairing(candidate) ||
+    isScheduleInstantPaintablePairing(candidate);
+
+  if (curPaint && !nextPaint && !canSealPairingSurface(candidate)) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[PAIRING_REJECTED_WEAKER_PARTIAL_UPDATE]', {
+        reason: 'candidate_not_instant_or_strict_paint_ready',
         ...pairingEnrichmentLogPayload(currentTrip, candidate),
       });
     }
@@ -185,7 +263,7 @@ export function shouldRejectWeakerPairingRender(
   const nextS = scorePairingCompleteness(candidate);
   const wouldRejectOnScore = nextS < curS - 1;
 
-  if (curPaint.ok && nextPaint.ok && wouldRejectOnScore) {
+  if (curPaint && nextPaint && wouldRejectOnScore) {
     if (sameTripGroupAndPairingCode(currentTrip, candidate) && isDbEnrichedPairing(candidate)) {
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
         console.log('[PAIRING_ENRICHMENT_OVERRIDES_PARTIAL]', {
@@ -217,7 +295,7 @@ export function shouldRejectWeakerPairingRender(
     }
 
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_RENDER_REJECTED_WEAKER_UPDATE]', {
+      console.log('[PAIRING_REJECTED_WEAKER_PARTIAL_UPDATE]', {
         reason: 'lower_completeness_after_full_paint',
         ...pairingEnrichmentLogPayload(currentTrip, candidate),
       });
@@ -257,7 +335,7 @@ export function shouldRejectWeakerPairingRender(
 
   if (wouldRejectOnScore) {
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.log('[PAIRING_DB_ENRICHMENT_REJECTED_REASON]', {
+      console.log('[PAIRING_REJECTED_WEAKER_PARTIAL_UPDATE]', {
         reason: 'lower_completeness_score',
         ...pairingEnrichmentLogPayload(currentTrip, candidate),
       });

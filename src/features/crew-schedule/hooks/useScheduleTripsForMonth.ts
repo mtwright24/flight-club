@@ -185,9 +185,10 @@ export function useScheduleTripsForMonth(year: number, month: number) {
     monthBuildGenerationRef.current += 1;
     const gen = monthBuildGenerationRef.current;
 
-    if (userIdRef.current) {
-      const c = readCommittedMonthSnapshot(key);
-      if (c && c.userId === userIdRef.current) {
+    const c = readCommittedMonthSnapshot(key);
+    if (c?.trips?.length) {
+      const uid = userIdRef.current;
+      if (!uid || c.userId === uid) {
         setTrips(c.trips);
         setMonthMetrics(c.monthMetrics);
         setLoading(false);
@@ -225,7 +226,7 @@ export function useScheduleTripsForMonth(year: number, month: number) {
     const key = monthCalendarKey(year, month);
     if (targetMonthKeyRef.current !== key) return;
     const c = readCommittedMonthSnapshot(key);
-    if (c?.userId === userId) {
+    if (c?.trips?.length && c.userId === userId) {
       setTrips(c.trips);
       setMonthMetrics(c.monthMetrics);
       setLoading(false);
@@ -242,8 +243,15 @@ export function useScheduleTripsForMonth(year: number, month: number) {
 
       if (!silent) {
         if (isPull) setRefreshing(true);
-        else if (!readScheduleMonthCache(key) && !readScheduleMonthUISnapshot(key) && !readCommittedMonthSnapshot(key)) {
-          setLoading(true);
+        else {
+          const uiSnap = readScheduleMonthUISnapshot(key);
+          const uiOk = uiSnap && isScheduleMonthUISnapshotCoherent(uiSnap, year, month);
+          const com = readCommittedMonthSnapshot(key);
+          const uidRef = userIdRef.current;
+          const comOk = Boolean(com?.trips?.length && (!uidRef || com.userId === uidRef));
+          if (!readScheduleMonthCache(key) && !uiOk && !comOk) {
+            setLoading(true);
+          }
         }
       }
       setError(null);

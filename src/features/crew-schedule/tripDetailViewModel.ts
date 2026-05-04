@@ -6,8 +6,86 @@
 import { routeSummaryFromCanonicalLedgerCities } from './pairingDayApply';
 import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
 import { formatLayoverColumnDisplay } from './scheduleTime';
+import { normBaseForScoring, statFieldsPresent } from './pairingDetailResolve';
+import { isExemptFromStrictPairingPaint } from './pairingRenderableGate';
 import type { PairingDay } from './pairingDayModel';
 import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleCrewMember, ScheduleDutyStatus } from './types';
+
+type TripWithDuties = CrewScheduleTrip & { duties?: { duty_date?: string | null }[] };
+
+function normDutyIso(raw: string | null | undefined): string | null {
+  const t = String(raw ?? '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null;
+}
+
+function uniqSortIsos(dates: string[]): string[] {
+  const unique = Array.from(new Set(dates));
+  unique.sort((a, b) => a.localeCompare(b));
+  return unique;
+}
+
+function datesFromCanonicalPairingDays(trip: CrewScheduleTrip): string[] {
+  const canon = trip.canonicalPairingDays;
+  if (!canon || Object.keys(canon).length === 0) return [];
+  const dates: string[] = [];
+  for (const k of Object.keys(canon)) {
+    const iso = normDutyIso(k);
+    if (iso) dates.push(iso);
+  }
+  return uniqSortIsos(dates);
+}
+
+/**
+ * Operating duty dates only (no widened trip.startDate/endDate, no gap/blank days).
+ * Uses `duties` when present; else leg `dutyDate` / `departure_date`; if legs exist but no dated legs,
+ * falls back to {@link CrewScheduleTrip.canonicalPairingDays} keys (FLICA duty days).
+ */
+export function getOperatingDutyDatesIso(trip: CrewScheduleTrip): string[] {
+  const duties = (trip as TripWithDuties).duties;
+  if (duties?.length) {
+    const dates: string[] = [];
+    for (const d of duties) {
+      const iso = normDutyIso(d.duty_date);
+      if (iso) dates.push(iso);
+    }
+    return uniqSortIsos(dates);
+  }
+
+  if (trip.legs?.length) {
+    const dates: string[] = [];
+    for (const l of trip.legs) {
+      const legAny = l as CrewScheduleLeg & { departure_date?: string | null };
+      const iso = normDutyIso(l.dutyDate ?? legAny.departure_date);
+      if (iso) dates.push(iso);
+    }
+    const fromLegs = uniqSortIsos(dates);
+    if (fromLegs.length > 0) return fromLegs;
+  }
+
+  return datesFromCanonicalPairingDays(trip);
+}
+
+export function getDisplaySpanAndDutyDayCount(trip: CrewScheduleTrip): {
+  displayStartDate: string;
+  displayEndDate: string;
+  dutyDayCount: number;
+} {
+  const operating = getOperatingDutyDatesIso(trip);
+  if (operating.length === 0) {
+    const sd = String(trip.startDate ?? '').slice(0, 10);
+    const ed = String(trip.endDate ?? '').slice(0, 10);
+    return {
+      displayStartDate: sd,
+      displayEndDate: ed,
+      dutyDayCount: trip.dutyDays != null && trip.dutyDays > 0 ? trip.dutyDays : 0,
+    };
+  }
+  return {
+    displayStartDate: operating[0]!,
+    displayEndDate: operating[operating.length - 1]!,
+    dutyDayCount: operating.length,
+  };
+}
 
 export type TripStatTile = { id: string; label: string; value: string };
 
@@ -69,12 +147,19 @@ export function statusLabelFromTrip(trip: CrewScheduleTrip): string {
   }
 }
 
-export function formatTripDateRange(trip: CrewScheduleTrip): string {
-  const a = new Date(`${trip.startDate}T12:00:00`);
-  const b = new Date(`${trip.endDate}T12:00:00`);
+function formatDisplayDateRangeLabel(displayStartDate: string, displayEndDate: string): string {
+  const sd = String(displayStartDate ?? '').slice(0, 10);
+  const ed = String(displayEndDate ?? '').slice(0, 10);
+  const a = new Date(`${sd}T12:00:00`);
+  const b = new Date(`${ed}T12:00:00`);
   const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' };
-  if (trip.startDate === trip.endDate) return a.toLocaleDateString(undefined, opts);
+  if (sd === ed) return a.toLocaleDateString(undefined, opts);
   return `${a.toLocaleDateString(undefined, opts)} → ${b.toLocaleDateString(undefined, opts)}`;
+}
+
+export function formatTripDateRange(trip: CrewScheduleTrip): string {
+  const { displayStartDate, displayEndDate } = getDisplaySpanAndDutyDayCount(trip);
+  return formatDisplayDateRangeLabel(displayStartDate, displayEndDate);
 }
 
 export function formatHoursH(h: number | null | undefined | string): string {
@@ -270,16 +355,35 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
   return panels;
 }
 
-function buildSummaryLine(trip: CrewScheduleTrip): string {
+export function shouldHideOperationalStatsPlaceholders(trip: CrewScheduleTrip): boolean {
+  if (isExemptFromStrictPairingPaint(trip)) return false;
+  return statFieldsPresent(trip) < 1 && normBaseForScoring(trip.base) == null;
+}
+
+function buildSummaryLineMinimal(trip: CrewScheduleTrip): string {
+  const { dutyDayCount } = getDisplaySpanAndDutyDayCount(trip);
   const parts: string[] = [];
-  parts.push(`${trip.dutyDays} duty day${trip.dutyDays === 1 ? '' : 's'}`);
+  if (dutyDayCount > 0) {
+    parts.push(`${dutyDayCount} duty day${dutyDayCount === 1 ? '' : 's'}`);
+  }
+  const legCount = trip.legs?.length ?? 0;
+  if (legCount > 0) parts.push(`${legCount} leg${legCount === 1 ? '' : 's'}`);
+  return parts.length > 0 ? parts.join(' · ') : 'Operating details';
+}
+
+function buildSummaryLine(trip: CrewScheduleTrip): string {
+  const { dutyDayCount } = getDisplaySpanAndDutyDayCount(trip);
+  const parts: string[] = [];
+  if (dutyDayCount > 0) {
+    parts.push(`${dutyDayCount} duty day${dutyDayCount === 1 ? '' : 's'}`);
+  }
   const block = trip.pairingBlockHours;
   const credit = trip.pairingCreditHours ?? trip.creditHours;
   const legCount = trip.legs?.length ?? 0;
   if (legCount > 0) parts.push(`${legCount} leg${legCount === 1 ? '' : 's'}`);
   if (block != null && Number.isFinite(block)) parts.push(`${block.toFixed(2)} block`);
   if (credit != null && Number.isFinite(Number(credit))) parts.push(`${Number(credit).toFixed(2)} credit`);
-  return parts.join(' · ');
+  return parts.length > 0 ? parts.join(' · ') : 'Operating details';
 }
 
 function buildStatTiles(trip: CrewScheduleTrip): TripStatTile[] {
@@ -317,14 +421,30 @@ export function buildTripDetailViewModel(trip: CrewScheduleTrip): TripDetailView
   const pairingCode = trip.pairingCode !== '—' && trip.pairingCode ? trip.pairingCode : 'Duty';
   const routeFromCanon = routeSummaryFromCanonicalLedgerCities(trip)?.trim();
   const days = buildTripDays(trip);
+  const thinSummary = shouldHideOperationalStatsPlaceholders(trip);
+  const displaySpan = getDisplaySpanAndDutyDayCount(trip);
+  const operatingDates = getOperatingDutyDatesIso(trip);
+
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && !isExemptFromStrictPairingPaint(trip)) {
+    console.log('[TRIP_DETAIL_DISPLAY_SPAN]', {
+      pairingCode: trip.pairingCode,
+      rawStartDate: trip.startDate,
+      rawEndDate: trip.endDate,
+      operatingDates,
+      displayStartDate: displaySpan.displayStartDate,
+      displayEndDate: displaySpan.displayEndDate,
+      dutyDayCount: displaySpan.dutyDayCount,
+    });
+  }
+
   return {
     trip,
     pairingCode,
     routeSummary: routeFromCanon || trip.routeSummary || pairingCode,
     status: trip.status,
     statusLabel: statusLabelFromTrip(trip),
-    dateRangeLabel: formatTripDateRange(trip),
-    summaryLine: buildSummaryLine(trip),
+    dateRangeLabel: formatDisplayDateRangeLabel(displaySpan.displayStartDate, displaySpan.displayEndDate),
+    summaryLine: thinSummary ? buildSummaryLineMinimal(trip) : buildSummaryLine(trip),
     statTiles: buildStatTiles(trip),
     crewMembers: trip.crewMembers ?? [],
     layoverHotelPreview: buildLayoverHotelPreview(trip),
