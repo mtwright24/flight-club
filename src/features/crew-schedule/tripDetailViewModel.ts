@@ -157,6 +157,17 @@ function formatDisplayDateRangeLabel(displayStartDate: string, displayEndDate: s
   return `${a.toLocaleDateString(undefined, opts)} → ${b.toLocaleDateString(undefined, opts)}`;
 }
 
+/** Long trip detail hero / header copy (weekday + short month + day + year). Display-only. */
+export function formatDisplayDateRangeLabelWithDow(displayStartDate: string, displayEndDate: string): string {
+  const sd = String(displayStartDate ?? '').slice(0, 10);
+  const ed = String(displayEndDate ?? '').slice(0, 10);
+  const a = new Date(`${sd}T12:00:00`);
+  const b = new Date(`${ed}T12:00:00`);
+  const opts: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' };
+  if (sd === ed) return a.toLocaleDateString(undefined, opts);
+  return `${a.toLocaleDateString(undefined, opts)} → ${b.toLocaleDateString(undefined, opts)}`;
+}
+
 export function formatTripDateRange(trip: CrewScheduleTrip): string {
   const { displayStartDate, displayEndDate } = getDisplaySpanAndDutyDayCount(trip);
   return formatDisplayDateRangeLabel(displayStartDate, displayEndDate);

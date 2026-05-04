@@ -67,10 +67,20 @@ const AuthTextField = forwardRef<TextInput, AuthTextFieldProps>(function AuthTex
           {leftIcon && (
             <Ionicons name={leftIcon as never} size={20} color="#888888" style={styles.leftIcon} />
           )}
-          <View style={[styles.inputClip, !multiline && styles.inputClipSingle]}>
+          <View
+            style={[
+              styles.inputClip,
+              !multiline && styles.inputClipSingle,
+              Platform.OS === 'ios' && !multiline && styles.inputClipSingleIos,
+            ]}
+          >
             <TextInput
               ref={ref}
-              style={[styles.input, !multiline && styles.inputSingleLine]}
+              style={[
+                styles.input,
+                !multiline && styles.inputSingleLine,
+                Platform.OS === 'ios' && !multiline && styles.inputSingleLineIos,
+              ]}
               value={value}
               onChangeText={handleChange}
               placeholder={placeholder}
@@ -130,7 +140,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: authTheme.spacing.lg,
-    height: 54,
+    minHeight: 52,
+    paddingVertical: 10,
     position: 'relative',
     /** Must sit above innerHighlight / innerStroke / bottomShade (they use zIndex 1) or text looks stacked when blurred */
     zIndex: 3,
@@ -146,7 +157,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   inputClipSingle: {
-    height: 54,
+    minHeight: 40,
+    justifyContent: 'center',
+  },
+  /** iOS: avoid clipping + vertical drift from overflow + fixed lineHeight on TextInput */
+  inputClipSingleIos: {
+    overflow: 'visible',
+    minHeight: 40,
   },
   leftIcon: {
     marginRight: 10,
@@ -171,10 +188,24 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
   inputSingleLine: {
-    maxHeight: 54,
-    lineHeight: 22,
-    paddingTop: Platform.OS === 'ios' ? 16 : 0,
-    paddingBottom: Platform.OS === 'ios' ? 16 : 0,
+    ...Platform.select({
+      android: {
+        lineHeight: 22,
+        paddingVertical: 2,
+        textAlignVertical: 'center' as const,
+      },
+      default: {},
+    }),
+  },
+  /** iOS: `lineHeight` + `flex:1` TextInput often pins glyphs low and clips against `overflow:hidden` parents */
+  inputSingleLineIos: {
+    flex: 0,
+    flexGrow: 0,
+    alignSelf: 'stretch',
+    width: '100%',
+    minHeight: 44,
+    paddingTop: 12,
+    paddingBottom: 12,
   },
   innerHighlight: {
     position: 'absolute',

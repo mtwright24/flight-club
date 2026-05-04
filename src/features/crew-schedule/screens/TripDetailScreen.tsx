@@ -2,6 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -13,7 +15,10 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { colors, radius, spacing } from '../../../styles/theme';
+import { useNotificationsBadge } from '../../../hooks/useNotificationsBadge';
+import { useDmUnreadBadge } from '../../../hooks/useDmUnreadBadge';
 import {
   fetchPairingDetailByPairingUuid,
   mergeTripWithMetadataRow,
@@ -42,14 +47,22 @@ import { pairingNavigationSessionKey, readCommittedMonthSnapshot } from '../sche
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
-import { buildTripDetailViewModel, type TripDayViewModel } from '../tripDetailViewModel';
+import {
+  buildTripDetailViewModel,
+  formatDisplayDateRangeLabelWithDow,
+  getDisplaySpanAndDutyDayCount,
+  type TripDayViewModel,
+} from '../tripDetailViewModel';
 import { formatLayoverColumnDisplay } from '../scheduleTime';
-import type { CrewScheduleHotelStub, CrewScheduleLeg, CrewScheduleTrip } from '../types';
+import type { CrewScheduleHotelStub, CrewScheduleLeg, CrewScheduleTrip, ScheduleCrewMember } from '../types';
 import CrewScheduleHeader from '../components/CrewScheduleHeader';
-import TripCrewList from '../components/TripCrewList';
-import TripDayDetailPanel from '../components/TripDayDetailPanel';
-import TripDayTimelineNav from '../components/TripDayTimelineNav';
-import TripSummaryCard from '../components/TripSummaryCard';
+
+const FC_PREMIUM_RED = '#C8102E';
+const FC_HOTEL_GREEN = '#0B3D2E';
+const FC_HOTEL_GREEN_PANEL = 'rgba(255,255,255,0.08)';
+const FC_STAT_REPORT = '#EA580C';
+const FC_STAT_CREDIT = '#15803D';
+const FC_STAT_MUTED = '#334155';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -135,6 +148,237 @@ function visibleRowFallbackForDetail(tripId: string) {
   const entry = getDetailNavigationStashForResolve(tripId);
   const fromOverlay = entry?.overlayTrips.find((t) => String(t.id) === String(tripId));
   return fromOverlay ?? peekStashedTripForDetail(tripId) ?? null;
+}
+
+function routeSnippetForDay(day: TripDayViewModel): string {
+  const legs = day.legs;
+  if (!legs.length) return '—';
+  const parts: string[] = [];
+  for (let i = 0; i < legs.length; i++) {
+    const l = legs[i]!;
+    if (i === 0) parts.push(String(l.departureAirport ?? '').trim() || '—');
+    parts.push(String(l.arrivalAirport ?? '').trim() || '—');
+  }
+  return parts.join('→');
+}
+
+function primaryCityForPanel(
+  day: TripDayViewModel,
+  trip: CrewScheduleTrip,
+  panelIndex: number,
+  totalPanels: number,
+): string {
+  const lay = layoverCityForActivePanel(day, trip)?.trim();
+  if (lay) return lay;
+  const legs = day.legs;
+  if (legs.length) {
+    const last = legs[legs.length - 1]!;
+    const arr = String(last.arrivalAirport ?? '').trim();
+    if (arr) {
+      const base = trip.base?.trim().toUpperCase() ?? '';
+      const isLastPanel = totalPanels > 0 && panelIndex === totalPanels - 1;
+      if (isLastPanel && base && arr.toUpperCase() === base) return trip.base!.trim();
+      return arr;
+    }
+  }
+  return '—';
+}
+
+function statTileValue(tiles: { id: string; value: string }[], id: string): string {
+  return tiles.find((x) => x.id === id)?.value ?? '—';
+}
+
+function formatTimeForLegCard(raw: string | null | undefined): string {
+  const s = raw?.trim();
+  if (!s) return '—';
+  if (/^\d{4}$/.test(s)) return `${s.slice(0, 2)}:${s.slice(2)}`;
+  return s;
+}
+
+function DetailHeroHeaderRow(props: { onBack: () => void }) {
+  const router = useRouter();
+  const unread = useNotificationsBadge();
+  const { count: dmUnread } = useDmUnreadBadge();
+  const { onBack } = props;
+
+  return (
+    <View style={detailStyles.heroHeaderRow}>
+      <Pressable
+        onPress={onBack}
+        style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
+        accessibilityLabel="Back to schedule"
+        hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
+      >
+        <Text style={detailStyles.heroBackLabel}>‹ Schedule</Text>
+      </Pressable>
+      <View style={detailStyles.heroHeaderRight}>
+        <Pressable
+          onPress={() => router.push('/search')}
+          style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
+          accessibilityLabel="Search"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="search-outline" size={24} color="#fff" />
+        </Pressable>
+        <Pressable
+          onPress={() => router.push('/notifications')}
+          style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
+          accessibilityLabel="Notifications"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="notifications-outline" size={24} color="#fff" />
+          {unread > 0 ? (
+            <View style={detailStyles.heroBadge}>
+              <Text style={detailStyles.heroBadgeText}>{unread > 99 ? '99+' : unread}</Text>
+            </View>
+          ) : null}
+        </Pressable>
+        <Pressable
+          onPress={() => router.push('/messages-inbox')}
+          style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
+          accessibilityLabel="Messages"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="chatbubble-ellipses-outline" size={24} color="#fff" />
+          {dmUnread > 0 ? (
+            <View style={detailStyles.heroBadge}>
+              <Text style={detailStyles.heroBadgeText}>{dmUnread > 99 ? '99+' : dmUnread}</Text>
+            </View>
+          ) : null}
+        </Pressable>
+        <Pressable
+          onPress={() => router.push('/menu')}
+          style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
+          accessibilityLabel="Menu"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="menu" size={24} color="#fff" />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function PremiumFlightLegCard({
+  leg,
+  legStatusLine,
+  trackingLegId,
+  onTrackLeg,
+}: {
+  leg: CrewScheduleLeg;
+  legStatusLine: string | null | undefined;
+  trackingLegId: string | null;
+  onTrackLeg: (leg: CrewScheduleLeg) => void;
+}) {
+  const dep = String(leg.departureAirport ?? '').trim() || '—';
+  const arr = String(leg.arrivalAirport ?? '').trim() || '—';
+  const fn = leg.flightNumber?.trim();
+  const block = leg.blockTimeLocal?.trim();
+
+  return (
+    <View style={detailStyles.legCard}>
+      <View style={detailStyles.legCardTop}>
+        <View style={detailStyles.legCardTitleRow}>
+          <Text style={detailStyles.legFlightNum}>{fn ? fn : '—'}</Text>
+          {leg.isDeadhead ? (
+            <View style={detailStyles.dhPill}>
+              <Text style={detailStyles.dhPillText}>DH</Text>
+            </View>
+          ) : null}
+        </View>
+        {legStatusLine ? <Text style={detailStyles.legStatus}>{legStatusLine}</Text> : null}
+      </View>
+
+      <View style={detailStyles.legAirportRow}>
+        <View style={detailStyles.legAirportCol}>
+          <Text style={detailStyles.legAirportCode}>{dep}</Text>
+          <Text style={detailStyles.legTime}>{formatTimeForLegCard(leg.departLocal)}</Text>
+        </View>
+        <View style={detailStyles.legPlaneRail}>
+          <View style={detailStyles.legPlaneLine} />
+          <Ionicons name="airplane" size={18} color={FC_PREMIUM_RED} style={{ marginHorizontal: 6 }} />
+          <View style={detailStyles.legPlaneLine} />
+        </View>
+        <View style={[detailStyles.legAirportCol, { alignItems: 'flex-end' }]}>
+          <Text style={detailStyles.legAirportCode}>{arr}</Text>
+          <Text style={detailStyles.legTime}>{formatTimeForLegCard(leg.arriveLocal)}</Text>
+        </View>
+      </View>
+
+      {(block || leg.releaseLocal || leg.equipmentCode) && (
+        <View style={detailStyles.legMetaGrid}>
+          {block ? (
+            <View style={detailStyles.legMetaItem}>
+              <Text style={detailStyles.legMetaK}>Block</Text>
+              <Text style={detailStyles.legMetaV}>{block}</Text>
+            </View>
+          ) : null}
+          {leg.releaseLocal?.trim() ? (
+            <View style={detailStyles.legMetaItem}>
+              <Text style={detailStyles.legMetaK}>D-END</Text>
+              <Text style={detailStyles.legMetaV}>{formatTimeForLegCard(leg.releaseLocal)}</Text>
+            </View>
+          ) : null}
+          {leg.equipmentCode?.trim() ? (
+            <View style={detailStyles.legMetaItem}>
+              <Text style={detailStyles.legMetaK}>Equipment</Text>
+              <Text style={detailStyles.legMetaV}>{leg.equipmentCode.trim()}</Text>
+            </View>
+          ) : null}
+        </View>
+      )}
+
+      {fn ? (
+        <Pressable
+          style={detailStyles.trackLegRow}
+          onPress={() => onTrackLeg(leg)}
+          disabled={trackingLegId === leg.id}
+        >
+          {trackingLegId === leg.id ? (
+            <ActivityIndicator size="small" color={FC_PREMIUM_RED} />
+          ) : (
+            <Ionicons name="navigate-circle-outline" size={20} color={FC_PREMIUM_RED} />
+          )}
+          <Text style={detailStyles.trackLegText}>
+            {trackingLegId === leg.id ? 'Opening flight tracker…' : 'Track this leg live'}
+          </Text>
+          <Ionicons name="chevron-forward" size={18} color={FC_PREMIUM_RED} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function OperatingDayLegsPage({
+  day,
+  legStatuses,
+  trackingLegId,
+  onTrackLeg,
+  panelWidth,
+}: {
+  day: TripDayViewModel;
+  legStatuses: Record<string, string>;
+  trackingLegId: string | null;
+  onTrackLeg: (leg: CrewScheduleLeg) => void;
+  panelWidth: number;
+}) {
+  return (
+    <View style={{ width: panelWidth, paddingHorizontal: 16 }}>
+      {day.legs.length === 0 ? (
+        <Text style={detailStyles.emptyLegs}>No flight legs on file for this day.</Text>
+      ) : (
+        day.legs.map((leg) => (
+          <PremiumFlightLegCard
+            key={leg.id}
+            leg={leg}
+            legStatusLine={legStatuses[leg.id]}
+            trackingLegId={trackingLegId}
+            onTrackLeg={onTrackLeg}
+          />
+        ))
+      )}
+    </View>
+  );
 }
 
 export default function TripDetailScreen() {
@@ -232,11 +476,7 @@ export default function TripDetailScreen() {
       }
     }
 
-    const { pick: instantPick } = buildPairingFirstPaintDecision(
-      tripId,
-      anchor,
-      rowFallback,
-    );
+    const { pick: instantPick } = buildPairingFirstPaintDecision(tripId, anchor, rowFallback);
     if (instantPick && canSealPairingSurface(instantPick.trip)) {
       const navKey = pairingNavigationSessionKey(instantPick.trip);
       detailSessionKeyRef.current = navKey;
@@ -258,6 +498,53 @@ export default function TripDetailScreen() {
   );
 
   const vm = useMemo(() => (display ? buildTripDetailViewModel(display) : null), [display]);
+
+  const citiesByPanel = useMemo(() => {
+    if (!vm?.days.length || !display) return [];
+    const n = vm.days.length;
+    return vm.days.map((d, i) => primaryCityForPanel(d, display, i, n));
+  }, [vm?.days, display]);
+
+  const activeCity = citiesByPanel[selectedDayIndex] ?? '—';
+  const contextCitiesLine = useMemo(() => {
+    if (!citiesByPanel.length) return '';
+    return citiesByPanel
+      .filter((_, i) => i !== selectedDayIndex)
+      .map((c) => c.trim())
+      .filter(Boolean)
+      .join(' • ');
+  }, [citiesByPanel, selectedDayIndex]);
+
+  const displaySpan = useMemo(
+    () => (display ? getDisplaySpanAndDutyDayCount(display) : null),
+    [display],
+  );
+  const dateRangeHero = useMemo(
+    () =>
+      displaySpan
+        ? formatDisplayDateRangeLabelWithDow(displaySpan.displayStartDate, displaySpan.displayEndDate)
+        : '—',
+    [displaySpan],
+  );
+
+  const dutyDayCount = displaySpan?.dutyDayCount ?? 0;
+  const metadataLine =
+    dutyDayCount > 0
+      ? `${vm?.pairingCode ?? '—'} • ${dutyDayCount}-Day Pairing`
+      : `${vm?.pairingCode ?? '—'} • Pairing`;
+
+  const selectedDayHasDh = useMemo(() => {
+    if (!vm?.days.length) return false;
+    const idx = Math.min(Math.max(0, selectedDayIndex), vm.days.length - 1);
+    return (vm.days[idx]?.legs ?? []).some((l) => l.isDeadhead);
+  }, [vm?.days, selectedDayIndex]);
+
+  const reportForSelectedDay = useMemo(() => {
+    if (!vm?.days.length) return '—';
+    const idx = Math.min(Math.max(0, selectedDayIndex), vm.days.length - 1);
+    const rep = vm.days[idx]!.legs.find((l) => l.reportLocal?.trim())?.reportLocal?.trim();
+    return rep ? formatTimeForLegCard(rep) : '—';
+  }, [vm?.days, selectedDayIndex]);
 
   useEffect(() => {
     setPairingHotels([]);
@@ -415,6 +702,30 @@ export default function TripDetailScreen() {
     setLegStatuses({});
   }, [tripId]);
 
+  const legsForSelectedCount = vm?.days.length
+    ? vm.days[Math.min(selectedDayIndex, vm.days.length - 1)]?.legs.length ?? 0
+    : 0;
+
+  useEffect(() => {
+    if (!__DEV__ || !vm) return;
+    console.log('[PAIRING_DETAIL_REDESIGN_RENDER]', {
+      pairingCode: vm.pairingCode,
+      selectedDayIndex,
+      activeCity,
+      legsForDay: legsForSelectedCount,
+      hasHotel: !!(layoverHotelActive.hotel?.name?.trim() || layoverHotelActive.hotel?.city?.trim()),
+      crewCount: vm.crewMembers.length,
+    });
+  }, [
+    vm?.pairingCode,
+    selectedDayIndex,
+    activeCity,
+    legsForSelectedCount,
+    layoverHotelActive.hotel?.name,
+    layoverHotelActive.hotel?.city,
+    vm?.crewMembers.length,
+  ]);
+
   const trackLeg = useCallback(
     async (leg: CrewScheduleLeg, t: CrewScheduleTrip) => {
       if (!leg.flightNumber) return;
@@ -457,28 +768,36 @@ export default function TripDetailScreen() {
         },
       });
     },
-    [router]
+    [router],
   );
 
   const openPost = useCallback(
-    (t: CrewScheduleTrip) => {
+    (tr: CrewScheduleTrip) => {
       router.push({
         pathname: '/crew-exchange/create-post',
-        params: tradePostPrefillParams(t),
+        params: tradePostPrefillParams(tr),
       });
     },
-    [router]
+    [router],
   );
+
+  const goBackSchedule = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)');
+    }
+  }, [router]);
 
   if (!tripId) {
     return (
-      <View style={styles.shell}>
+      <View style={detailStyles.shell}>
         <CrewScheduleHeader title="Trip detail" />
-        <View style={styles.empty}>
-          <Text style={styles.emptyTitle}>Trip not found</Text>
-          <Text style={styles.emptySub}>Missing trip id.</Text>
-          <Pressable style={styles.primaryBtn} onPress={() => router.back()}>
-            <Text style={styles.primaryBtnText}>Go back</Text>
+        <View style={detailStyles.empty}>
+          <Text style={detailStyles.emptyTitle}>Trip not found</Text>
+          <Text style={detailStyles.emptySub}>Missing trip id.</Text>
+          <Pressable style={detailStyles.primaryBtn} onPress={() => router.back()}>
+            <Text style={detailStyles.primaryBtnText}>Go back</Text>
           </Pressable>
         </View>
       </View>
@@ -487,25 +806,25 @@ export default function TripDetailScreen() {
 
   if (loadingTrip && !trip) {
     return (
-      <View style={styles.shell}>
+      <View style={detailStyles.shell}>
         <CrewScheduleHeader title="Trip detail" />
-        <View style={styles.empty}>
-          <Text style={styles.emptyTitle}>Loading…</Text>
-          <Text style={styles.emptySub}>Loading trip details.</Text>
+        <View style={detailStyles.empty}>
+          <Text style={detailStyles.emptyTitle}>Loading…</Text>
+          <Text style={detailStyles.emptySub}>Loading trip details.</Text>
         </View>
       </View>
     );
   }
 
-  if (!trip || !vm) {
+  if (!trip || !vm || !display) {
     return (
-      <View style={styles.shell}>
+      <View style={detailStyles.shell}>
         <CrewScheduleHeader title="Trip detail" />
-        <View style={styles.empty}>
-          <Text style={styles.emptyTitle}>Trip not found</Text>
-          <Text style={styles.emptySub}>This trip may be outside the current month or was removed.</Text>
-          <Pressable style={styles.primaryBtn} onPress={() => router.back()}>
-            <Text style={styles.primaryBtnText}>Go back</Text>
+        <View style={detailStyles.empty}>
+          <Text style={detailStyles.emptyTitle}>Trip not found</Text>
+          <Text style={detailStyles.emptySub}>This trip may be outside the current month or was removed.</Text>
+          <Pressable style={detailStyles.primaryBtn} onPress={() => router.back()}>
+            <Text style={detailStyles.primaryBtnText}>Go back</Text>
           </Pressable>
         </View>
       </View>
@@ -513,24 +832,108 @@ export default function TripDetailScreen() {
   }
 
   const t = display as CrewScheduleTrip;
-  const headerTitle = vm.pairingCode.length > 18 ? `${vm.pairingCode.slice(0, 17)}…` : vm.pairingCode;
+  const blockVal = statTileValue(vm.statTiles, 'block');
+  const creditVal = statTileValue(vm.statTiles, 'credit');
+  const tafbVal = statTileValue(vm.statTiles, 'tafb');
 
   return (
-    <View style={styles.shell}>
-      <CrewScheduleHeader title={headerTitle} />
+    <View style={detailStyles.shell}>
       <ScrollView
-        style={styles.scroll}
+        style={detailStyles.scroll}
         contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
-        <TripSummaryCard vm={vm} showStats />
+        <SafeAreaView edges={['top', 'left', 'right']} style={detailStyles.heroSafe}>
+          <View style={detailStyles.heroBlock}>
+            <DetailHeroHeaderRow onBack={goBackSchedule} />
+            <Text style={detailStyles.heroMeta}>{metadataLine}</Text>
+            <Text style={detailStyles.heroCity}>{activeCity}</Text>
+            {contextCitiesLine.length > 0 ? (
+              <Text style={detailStyles.heroContext} numberOfLines={2}>
+                {contextCitiesLine}
+              </Text>
+            ) : null}
+            <Text style={detailStyles.heroDates}>{dateRangeHero}</Text>
+            <View style={detailStyles.heroPills}>
+              {t.status === 'flying' ? (
+                <View style={detailStyles.pill}>
+                  <Text style={detailStyles.pillText}>Flying</Text>
+                </View>
+              ) : null}
+              {selectedDayHasDh ? (
+                <View style={[detailStyles.pill, detailStyles.pillDh]}>
+                  <Text style={detailStyles.pillText}>DH</Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        </SafeAreaView>
 
-        <Text style={styles.h2}>Operating duties</Text>
-        <TripDayTimelineNav
-          days={vm.days}
-          selectedDayIndex={selectedDayIndex}
-          onSelectDay={setSelectedDayIndex}
-        />
+        <View style={detailStyles.statsCardWrap}>
+          <View style={detailStyles.statsCard}>
+            <View style={detailStyles.statsCol}>
+              <Text style={detailStyles.statsLabel}>REPORT</Text>
+              <Text style={[detailStyles.statsValue, { color: FC_STAT_REPORT }]}>{reportForSelectedDay}</Text>
+            </View>
+            <View style={detailStyles.statsDivider} />
+            <View style={detailStyles.statsCol}>
+              <Text style={detailStyles.statsLabel}>BLOCK</Text>
+              <Text style={[detailStyles.statsValue, { color: FC_STAT_MUTED }]}>{blockVal}</Text>
+            </View>
+            <View style={detailStyles.statsDivider} />
+            <View style={detailStyles.statsCol}>
+              <Text style={detailStyles.statsLabel}>CREDIT</Text>
+              <Text style={[detailStyles.statsValue, { color: FC_STAT_CREDIT }]}>{creditVal}</Text>
+            </View>
+            <View style={detailStyles.statsDivider} />
+            <View style={detailStyles.statsCol}>
+              <Text style={detailStyles.statsLabel}>TAFB</Text>
+              <Text style={[detailStyles.statsValue, { color: FC_STAT_MUTED }]}>{tafbVal}</Text>
+            </View>
+          </View>
+        </View>
+
+        <Text style={detailStyles.sectionLabel}>Operating days</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={detailStyles.dayChipScroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          {vm.days.map((d, i) => {
+            const sel = i === selectedDayIndex;
+            return (
+              <Pressable
+                key={d.panelId}
+                onPress={() => {
+                  panelScrollAnimatedRef.current = false;
+                  setSelectedDayIndex(i);
+                }}
+                style={[detailStyles.dayChip, sel ? detailStyles.dayChipSelected : undefined]}
+              >
+                <Text style={[detailStyles.dayChipTitle, sel && detailStyles.dayChipTitleSel]}>
+                  DAY {d.dayIndex}
+                </Text>
+                <Text style={[detailStyles.dayChipDate, sel && detailStyles.dayChipDateSel]}>
+                  {d.dayLabel} {d.dateShort}
+                </Text>
+                <Text style={[detailStyles.dayChipRoute, sel && detailStyles.dayChipRouteSel]} numberOfLines={1}>
+                  {routeSnippetForDay(d)}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        <View style={detailStyles.progressSegments}>
+          {vm.days.map((d, i) => (
+            <View
+              key={`prog-${d.panelId}`}
+              style={[detailStyles.progressSegment, i === selectedDayIndex ? detailStyles.progressSegmentOn : undefined]}
+            />
+          ))}
+        </View>
 
         {vm.days.length > 0 ? (
           <FlatList
@@ -545,14 +948,13 @@ export default function TripDetailScreen() {
             decelerationRate="fast"
             getItemLayout={getOperatingPanelLayout}
             renderItem={({ item }) => (
-              <View style={{ width: panelWidth }}>
-                <TripDayDetailPanel
-                  day={item}
-                  legStatuses={legStatuses}
-                  trackingLegId={trackingLegId}
-                  onTrackLeg={(leg) => void trackLeg(leg, t)}
-                />
-              </View>
+              <OperatingDayLegsPage
+                day={item}
+                legStatuses={legStatuses}
+                trackingLegId={trackingLegId}
+                onTrackLeg={(leg) => void trackLeg(leg, t)}
+                panelWidth={panelWidth}
+              />
             )}
             onMomentumScrollEnd={onOperatingPanelMomentumEnd}
             onScrollToIndexFailed={({ index }) => {
@@ -566,69 +968,69 @@ export default function TripDetailScreen() {
           />
         ) : null}
 
-        <Text style={styles.h2}>Layover & hotel</Text>
-        <View style={styles.card}>
-          <View style={styles.kv}>
-            <Text style={styles.k}>Layover city</Text>
-            <Text style={styles.v}>{layoverHotelActive.layoverCityLine?.trim() ? layoverHotelActive.layoverCityLine : '—'}</Text>
-          </View>
-          <View style={styles.kv}>
-            <Text style={styles.k}>Layover total</Text>
-            <Text style={styles.v}>{layoverHotelActive.layoverRestLine}</Text>
+        <Text style={detailStyles.sectionLabel}>Layover & hotel</Text>
+        <View style={detailStyles.hotelCard}>
+          <Text style={detailStyles.hotelCardTitle}>
+            {layoverHotelActive.layoverCityLine?.trim() ? layoverHotelActive.layoverCityLine.trim() : '—'}
+          </Text>
+          <View style={detailStyles.hotelPanel}>
+            <Text style={detailStyles.hotelPanelK}>Rest / layover</Text>
+            <Text style={detailStyles.hotelPanelV}>{layoverHotelActive.layoverRestLine}</Text>
           </View>
           {layoverHotelActive.hotel?.name ? (
-            <>
-              <Text style={styles.hotelName}>{layoverHotelActive.hotel.name}</Text>
-              {[layoverHotelActive.hotel.city, layoverHotelActive.hotel.address].filter(Boolean).length > 0 ? (
-                <Text style={styles.meta}>
-                  {[layoverHotelActive.hotel.city, layoverHotelActive.hotel.address].filter(Boolean).join(' · ')}
-                </Text>
-              ) : null}
+            <View style={detailStyles.hotelPanel}>
+              <Text style={detailStyles.hotelPanelK}>Hotel</Text>
+              <Text style={detailStyles.hotelPanelV}>{layoverHotelActive.hotel.name}</Text>
               {layoverHotelActive.hotel.phone?.trim() ? (
-                <Text style={styles.meta}>{layoverHotelActive.hotel.phone.trim()}</Text>
+                <Text style={detailStyles.hotelPhone}>{layoverHotelActive.hotel.phone.trim()}</Text>
               ) : null}
-              {layoverHotelActive.hotel.shuttleNotes ? (
-                <Text style={styles.note}>Shuttle · {layoverHotelActive.hotel.shuttleNotes}</Text>
-              ) : null}
-            </>
+            </View>
           ) : (
-            <Text style={styles.muted}>—</Text>
+            <Text style={detailStyles.hotelMuted}>No hotel on file for this layover.</Text>
           )}
         </View>
 
-        <View style={styles.crewSection}>
-          <Text style={styles.h2}>Crew</Text>
-          <View style={styles.card}>
-            {vm.crewMembers.length > 0 ? (
-              <TripCrewList members={vm.crewMembers} showTitle={false} />
-            ) : (
-              <Text style={styles.muted}>—</Text>
-            )}
-            {t.tripChatThreadId ? (
-              <Text style={styles.mono}>Trip chat: {t.tripChatThreadId}</Text>
-            ) : null}
-          </View>
+        <Text style={detailStyles.sectionLabel}>Crew</Text>
+        <View style={detailStyles.crewWrap}>
+          {t.base?.trim() ? (
+            <Text style={detailStyles.crewBaseLine}>Base · {t.base.trim()}</Text>
+          ) : null}
+          {vm.crewMembers.length > 0 ? (
+            vm.crewMembers.map((c, i) => (
+              <DetailCrewCard key={crewKey(c, i)} member={c} />
+            ))
+          ) : (
+            <Text style={detailStyles.muted}></Text>
+          )}
         </View>
 
-        <Text style={styles.h2}>Actions</Text>
-        <View style={styles.actions}>
-          <ActionTile icon="swap-horizontal" label="Post trip" onPress={() => openPost(t)} />
-          <ActionTile
-            icon="chatbubbles-outline"
-            label="Trip chat"
+        <Text style={detailStyles.sectionLabel}>Actions</Text>
+        <View style={detailStyles.actionsCol}>
+          <Pressable
+            style={({ pressed }) => [detailStyles.ctaPrimary, pressed && detailStyles.ctaPrimaryPressed]}
+            onPress={() => openPost(t)}
+          >
+            <Text style={detailStyles.ctaPrimaryText}>Post to Tradeboard</Text>
+            <Ionicons name="arrow-forward" size={20} color="#fff" />
+          </Pressable>
+          <View style={detailStyles.secondaryRow}>
+            <SecondaryAction
+              icon="chatbubbles-outline"
+              label="Trip Chat"
+              onPress={() => router.push({ pathname: '/crew-schedule/trip-chat', params: { tripId: t.id } })}
+            />
+            <SecondaryAction
+              icon="alarm-outline"
+              label="Set Alert"
+              onPress={() => router.push({ pathname: '/crew-schedule/alerts', params: { tripId: t.id } })}
+            />
+          </View>
+          <SecondaryAction
+            icon="car-outline"
+            label="Commute"
             onPress={() =>
-              router.push({ pathname: '/crew-schedule/trip-chat', params: { tripId: t.id } })
+              Alert.alert('Commute', 'Commute assist for this trip is not available yet.', [{ text: 'OK' }])
             }
-          />
-          <ActionTile
-            icon="options-outline"
-            label="Manage"
-            onPress={() => router.push({ pathname: '/crew-schedule/manage', params: { tripId: t.id } })}
-          />
-          <ActionTile
-            icon="alarm-outline"
-            label="Set alert"
-            onPress={() => router.push({ pathname: '/crew-schedule/alerts', params: { tripId: t.id } })}
           />
         </View>
       </ScrollView>
@@ -636,7 +1038,27 @@ export default function TripDetailScreen() {
   );
 }
 
-function ActionTile({
+function crewKey(c: ScheduleCrewMember, i: number) {
+  return `${c.name}-${c.employeeId ?? ''}-${c.position}-${i}`;
+}
+
+function DetailCrewCard({ member }: { member: ScheduleCrewMember }) {
+  return (
+    <View style={detailStyles.crewCard}>
+      <Text style={detailStyles.crewPos}>{member.position?.trim() || '—'}</Text>
+      <View style={detailStyles.crewMid}>
+        <Text style={detailStyles.crewName} numberOfLines={2}>
+          {member.name?.trim() || '—'}
+        </Text>
+        {member.employeeId?.trim() ? (
+          <Text style={detailStyles.crewEmp}>#{member.employeeId.trim()}</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function SecondaryAction({
   icon,
   label,
   onPress,
@@ -646,92 +1068,322 @@ function ActionTile({
   onPress: () => void;
 }) {
   return (
-    <View style={styles.actionTileOuter}>
-      <Pressable
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        style={({ pressed }) => [styles.actionTilePressable, pressed && styles.actionTilePressed]}
-      >
-        <View style={styles.actionTileInner}>
-          <Ionicons name={icon} size={22} color={T.accent} />
-          <Text style={styles.actionLabel}>{label}</Text>
-        </View>
-      </Pressable>
-    </View>
+    <Pressable
+      style={({ pressed }) => [detailStyles.secondaryBtn, pressed && detailStyles.secondaryBtnPressed]}
+      onPress={onPress}
+    >
+      <Ionicons name={icon} size={20} color={FC_PREMIUM_RED} />
+      <Text style={detailStyles.secondaryBtnText}>{label}</Text>
+    </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
+const detailStyles = StyleSheet.create({
   shell: { flex: 1, backgroundColor: T.bg },
   scroll: { flex: 1 },
-  h2: {
-    fontSize: 12,
+  heroSafe: {
+    backgroundColor: FC_PREMIUM_RED,
+  },
+  heroBlock: {
+    backgroundColor: FC_PREMIUM_RED,
+    paddingHorizontal: spacing.lg,
+    paddingTop: 4,
+    paddingBottom: 36,
+    borderBottomLeftRadius: radius.md,
+    borderBottomRightRadius: radius.md,
+  },
+  heroHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+    minHeight: 44,
+  },
+  heroBackLabel: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  heroHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  heroIconBtn: {
+    minWidth: 40,
+    minHeight: 40,
+    padding: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  heroIconBtnPressed: { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 22 },
+  heroBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: colors.dangerRed,
+    minWidth: 14,
+    height: 14,
+    borderRadius: 7,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 2,
+    zIndex: 2,
+  },
+  heroBadgeText: {
+    color: colors.cardBg,
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  heroMeta: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  heroCity: {
+    color: '#fff',
+    fontSize: 44,
+    fontWeight: '900',
+    marginTop: 10,
+    letterSpacing: -0.5,
+  },
+  heroContext: {
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 15,
+    fontWeight: '700',
+    marginTop: 8,
+    letterSpacing: 0.5,
+  },
+  heroDates: {
+    color: 'rgba(255,255,255,0.95)',
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 14,
+  },
+  heroPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
+  pill: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  pillDh: { backgroundColor: 'rgba(255,255,255,0.28)' },
+  pillText: { color: '#fff', fontSize: 12, fontWeight: '800', letterSpacing: 0.4 },
+  statsCardWrap: {
+    marginTop: -22,
+    paddingHorizontal: 16,
+    zIndex: 2,
+    marginBottom: 8,
+  },
+  statsCard: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15,23,42,0.06)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOpacity: 0.12,
+        shadowRadius: 14,
+        shadowOffset: { width: 0, height: 6 },
+      },
+      android: { elevation: 4 },
+      default: {},
+    }),
+  },
+  statsCol: { flex: 1, alignItems: 'center', minWidth: 0, paddingHorizontal: 2 },
+  statsDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: T.line,
+    marginVertical: 4,
+  },
+  statsLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: T.textSecondary,
+    letterSpacing: 0.6,
+    marginBottom: 6,
+  },
+  statsValue: { fontSize: 14, fontWeight: '900' },
+  sectionLabel: {
+    fontSize: 11,
     fontWeight: '800',
     color: T.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.55,
     paddingHorizontal: 16,
     marginTop: 18,
-    marginBottom: 8,
+    marginBottom: 10,
   },
-  card: {
-    marginHorizontal: 16,
-    marginBottom: 4,
-    padding: 14,
+  dayChipScroll: { paddingHorizontal: 12, gap: 10, paddingBottom: 4 },
+  dayChip: {
+    width: 128,
     borderRadius: 14,
-    backgroundColor: T.surface,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
+    backgroundColor: '#fff',
   },
-  kv: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
-  k: { fontSize: 13, color: T.textSecondary, fontWeight: '600', width: '40%' },
-  v: { fontSize: 14, color: T.text, fontWeight: '800', flex: 1, textAlign: 'right' },
-  hotelName: { fontSize: 17, fontWeight: '800', color: T.text, marginTop: 8 },
-  meta: { fontSize: 14, color: T.text, marginTop: 6, lineHeight: 20 },
-  note: { fontSize: 13, color: T.text, marginTop: 8 },
-  muted: { fontSize: 14, color: T.textSecondary },
-  mono: { fontSize: 11, color: T.textSecondary, marginTop: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
-  crewSection: { marginTop: 4 },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingHorizontal: 16, paddingBottom: 8 },
-  actionTileOuter: {
-    width: '47%',
-    minWidth: 140,
-    flexGrow: 1,
-    alignSelf: 'stretch',
-    minHeight: 52,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: T.actionTileBorder,
-    backgroundColor: T.surface,
-    overflow: 'hidden',
+  dayChipSelected: {
+    backgroundColor: FC_PREMIUM_RED,
+    borderColor: FC_PREMIUM_RED,
+  },
+  dayChipTitle: { fontSize: 11, fontWeight: '800', color: T.textSecondary, letterSpacing: 0.6 },
+  dayChipTitleSel: { color: 'rgba(255,255,255,0.9)' },
+  dayChipDate: { fontSize: 13, fontWeight: '800', color: T.text, marginTop: 6 },
+  dayChipDateSel: { color: '#fff' },
+  dayChipRoute: { fontSize: 12, fontWeight: '700', color: T.textSecondary, marginTop: 4 },
+  dayChipRouteSel: { color: 'rgba(255,255,255,0.92)' },
+  progressSegments: {
+    flexDirection: 'row',
+    gap: 4,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    marginTop: 4,
+  },
+  progressSegment: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#CBD5E1',
+  },
+  progressSegmentOn: {
+    backgroundColor: FC_PREMIUM_RED,
+  },
+  emptyLegs: { fontSize: 14, color: T.textSecondary, paddingVertical: 12 },
+  legCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: T.line,
     ...Platform.select({
       ios: {
         shadowColor: '#0F172A',
-        shadowOpacity: 0.08,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
       },
-      android: { elevation: 0 },
+      android: { elevation: 2 },
       default: {},
     }),
   },
-  actionTilePressable: {
-    width: '100%',
-    minHeight: 52,
-    flexGrow: 1,
-    backgroundColor: T.surface,
+  legCardTop: { marginBottom: 8 },
+  legCardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  legFlightNum: { fontSize: 16, fontWeight: '900', color: T.text },
+  dhPill: { backgroundColor: '#EEF2FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  dhPillText: { fontSize: 11, fontWeight: '800', color: '#3730A3' },
+  legStatus: { fontSize: 12, fontWeight: '700', color: '#1D4ED8', marginTop: 4 },
+  legAirportRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
   },
-  actionTilePressed: { opacity: 0.96, backgroundColor: '#FFF1F2' },
-  actionTileInner: {
+  legAirportCol: { flex: 1, minWidth: 0 },
+  legAirportCode: { fontSize: 26, fontWeight: '900', color: T.text, letterSpacing: -0.5 },
+  legTime: { fontSize: 14, fontWeight: '700', color: T.textSecondary, marginTop: 4 },
+  legPlaneRail: { flexDirection: 'row', alignItems: 'center', flexShrink: 0, paddingHorizontal: 4 },
+  legPlaneLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: T.line, minWidth: 12 },
+  legMetaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: T.line,
+  },
+  legMetaItem: { minWidth: '28%' },
+  legMetaK: { fontSize: 10, fontWeight: '800', color: T.textSecondary, textTransform: 'uppercase' },
+  legMetaV: { fontSize: 13, fontWeight: '800', color: T.text, marginTop: 2 },
+  trackLegRow: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#FFF5F5',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(200,16,46,0.25)',
+  },
+  trackLegText: { flex: 1, fontSize: 14, fontWeight: '800', color: FC_PREMIUM_RED },
+  hotelCard: {
+    marginHorizontal: 16,
+    backgroundColor: FC_HOTEL_GREEN,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 4,
+  },
+  hotelCardTitle: { fontSize: 22, fontWeight: '900', color: '#fff', marginBottom: 12 },
+  hotelPanel: {
+    backgroundColor: FC_HOTEL_GREEN_PANEL,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+  },
+  hotelPanelK: { fontSize: 10, fontWeight: '800', color: 'rgba(255,255,255,0.7)', letterSpacing: 0.5 },
+  hotelPanelV: { fontSize: 15, fontWeight: '800', color: '#fff', marginTop: 6 },
+  hotelPhone: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.95)', marginTop: 8 },
+  hotelMuted: { fontSize: 14, color: 'rgba(255,255,255,0.75)', fontStyle: 'italic' },
+  crewWrap: { paddingHorizontal: 16, marginBottom: 8 },
+  crewBaseLine: { fontSize: 12, fontWeight: '700', color: T.textSecondary, marginBottom: 10 },
+  crewCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: T.line,
+    gap: 12,
+  },
+  crewPos: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: FC_PREMIUM_RED,
+    minWidth: 36,
+  },
+  crewMid: { flex: 1, minWidth: 0 },
+  crewName: { fontSize: 14, fontWeight: '800', color: T.text },
+  crewEmp: { fontSize: 12, fontWeight: '700', color: T.textSecondary, marginTop: 4 },
+  muted: { fontSize: 14, color: T.textSecondary },
+  actionsCol: { paddingHorizontal: 16, gap: 12, paddingBottom: 8 },
+  ctaPrimary: {
+    backgroundColor: FC_PREMIUM_RED,
+    borderRadius: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  ctaPrimaryPressed: { opacity: 0.92 },
+  ctaPrimaryText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  secondaryRow: { flexDirection: 'row', gap: 10 },
+  secondaryBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
     paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(200,16,46,0.35)',
   },
-  actionLabel: { flex: 1, minWidth: 0, fontSize: 14, fontWeight: '800', color: T.text },
+  secondaryBtnPressed: { backgroundColor: '#FFF5F5' },
+  secondaryBtnText: { fontSize: 14, fontWeight: '800', color: T.text },
   empty: { flex: 1, padding: 24, justifyContent: 'center' },
   emptyTitle: { fontSize: 18, fontWeight: '800', color: T.text },
   emptySub: { fontSize: 14, color: T.textSecondary, marginTop: 8, marginBottom: 20 },
