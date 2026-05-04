@@ -1,5 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useNavigation } from '@react-navigation/native';
+import { setStatusBarStyle } from 'expo-status-bar';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -12,13 +14,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  type TextStyle,
   useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, radius, spacing } from '../../../styles/theme';
-import { useNotificationsBadge } from '../../../hooks/useNotificationsBadge';
-import { useDmUnreadBadge } from '../../../hooks/useDmUnreadBadge';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { spacing } from '../../../styles/theme';
 import {
   fetchPairingDetailByPairingUuid,
   mergeTripWithMetadataRow,
@@ -57,12 +58,49 @@ import { formatLayoverColumnDisplay } from '../scheduleTime';
 import type { CrewScheduleHotelStub, CrewScheduleLeg, CrewScheduleTrip, ScheduleCrewMember } from '../types';
 import CrewScheduleHeader from '../components/CrewScheduleHeader';
 
-const FC_PREMIUM_RED = '#C8102E';
-const FC_HOTEL_GREEN = '#0B3D2E';
-const FC_HOTEL_GREEN_PANEL = 'rgba(255,255,255,0.08)';
-const FC_STAT_REPORT = '#EA580C';
-const FC_STAT_CREDIT = '#15803D';
-const FC_STAT_MUTED = '#334155';
+/** Mockup pairing detail — header, day chips, leg accents */
+const FC_PREMIUM_RED = '#C4121A';
+const FC_TIMELINE_BLUE = '#2563EB';
+const FC_LEG_BLOCK_PURPLE = '#7C3AED';
+const FC_LEG_BLOCK_GREEN = '#15803D';
+/** Layover card: deep forest green + faint lighter bubble (mockup 2) */
+const FC_HOTEL_GREEN = '#0E3D2F';
+const FC_HOTEL_BUBBLE = 'rgba(46, 168, 135, 0.22)';
+const FC_HOTEL_INNER = 'rgba(0, 0, 0, 0.2)';
+const FC_HOTEL_INNER_DEEP = 'rgba(0, 0, 0, 0.28)';
+const FC_HOTEL_PHONE_NUM = '#7DD3FC';
+const FC_STAT_REPORT = '#C4621A';
+const FC_STAT_CREDIT = '#166534';
+const FC_STAT_BLACK = '#000000';
+
+/** Mockup weight tokens — use these instead of ad-hoc bold. */
+const FONT = {
+  regular: '400',
+  medium: '500',
+  semibold: '600',
+  bold: '700',
+} as const;
+
+/** iOS system scale per mockup (SF Pro Display on iOS). */
+const TYPE_FACE: TextStyle = Platform.select<TextStyle>({
+  ios: { fontFamily: 'SF Pro Display' },
+  android: { fontFamily: 'sans-serif' },
+  default: {},
+});
+
+/** Tabular lining figures for times (non-stats rows). */
+const MOCKUP_TABULAR: TextStyle = Platform.select<TextStyle>({
+  ios: { fontVariant: ['tabular-nums'] },
+  android: { fontFeatureSettings: 'tnum' },
+  default: {},
+});
+
+/** Monospace stack for stats values (aviation-style times). */
+const STATS_VALUE_FONT: TextStyle = Platform.select<TextStyle>({
+  ios: { fontFamily: 'Menlo' },
+  android: { fontFamily: 'monospace' },
+  default: { fontFamily: 'monospace' },
+});
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -150,16 +188,9 @@ function visibleRowFallbackForDetail(tripId: string) {
   return fromOverlay ?? peekStashedTripForDetail(tripId) ?? null;
 }
 
-function routeSnippetForDay(day: TripDayViewModel): string {
-  const legs = day.legs;
-  if (!legs.length) return '—';
-  const parts: string[] = [];
-  for (let i = 0; i < legs.length; i++) {
-    const l = legs[i]!;
-    if (i === 0) parts.push(String(l.departureAirport ?? '').trim() || '—');
-    parts.push(String(l.arrivalAirport ?? '').trim() || '—');
-  }
-  return parts.join('→');
+function layoverCityOnlyForDayChip(day: TripDayViewModel, trip: CrewScheduleTrip): string {
+  const c = layoverCityForActivePanel(day, trip)?.trim();
+  return c && c.length > 0 ? c : '—';
 }
 
 function primaryCityForPanel(
@@ -191,72 +222,80 @@ function statTileValue(tiles: { id: string; value: string }[], id: string): stri
 function formatTimeForLegCard(raw: string | null | undefined): string {
   const s = raw?.trim();
   if (!s) return '—';
+  if (s.includes('T') || (s.length > 7 && /\d{4}-\d{2}-\d{2}/.test(s))) {
+    const t = Date.parse(s);
+    if (!Number.isNaN(t)) {
+      const d = new Date(t);
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      return `${hh}:${mm}`;
+    }
+    return '—';
+  }
   if (/^\d{4}$/.test(s)) return `${s.slice(0, 2)}:${s.slice(2)}`;
   return s;
 }
 
-function DetailHeroHeaderRow(props: { onBack: () => void }) {
-  const router = useRouter();
-  const unread = useNotificationsBadge();
-  const { count: dmUnread } = useDmUnreadBadge();
-  const { onBack } = props;
+function chipDateLabel(dateIso: string): string {
+  const iso = String(dateIso ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const d = new Date(`${iso}T12:00:00`);
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
 
-  return (
-    <View style={detailStyles.heroHeaderRow}>
-      <Pressable
-        onPress={onBack}
-        style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
-        accessibilityLabel="Back to schedule"
-        hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
-      >
-        <Text style={detailStyles.heroBackLabel}>‹ Schedule</Text>
-      </Pressable>
-      <View style={detailStyles.heroHeaderRight}>
-        <Pressable
-          onPress={() => router.push('/search')}
-          style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
-          accessibilityLabel="Search"
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="search-outline" size={24} color="#fff" />
-        </Pressable>
-        <Pressable
-          onPress={() => router.push('/notifications')}
-          style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
-          accessibilityLabel="Notifications"
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="notifications-outline" size={24} color="#fff" />
-          {unread > 0 ? (
-            <View style={detailStyles.heroBadge}>
-              <Text style={detailStyles.heroBadgeText}>{unread > 99 ? '99+' : unread}</Text>
-            </View>
-          ) : null}
-        </Pressable>
-        <Pressable
-          onPress={() => router.push('/messages-inbox')}
-          style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
-          accessibilityLabel="Messages"
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="chatbubble-ellipses-outline" size={24} color="#fff" />
-          {dmUnread > 0 ? (
-            <View style={detailStyles.heroBadge}>
-              <Text style={detailStyles.heroBadgeText}>{dmUnread > 99 ? '99+' : dmUnread}</Text>
-            </View>
-          ) : null}
-        </Pressable>
-        <Pressable
-          onPress={() => router.push('/menu')}
-          style={({ pressed }) => [detailStyles.heroIconBtn, pressed && detailStyles.heroIconBtnPressed]}
-          accessibilityLabel="Menu"
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="menu" size={24} color="#fff" />
-        </Pressable>
-      </View>
-    </View>
-  );
+/** Display "B6 523" / "AF 334" style; avoids rendering weird raw tokens as a title. */
+function formatFlightNumberForDisplay(raw: string | null | undefined): string {
+  const s = raw?.trim();
+  if (!s) return '—';
+  const alNum = s.match(/^([A-Za-z]{1,2})\s*0*(\d{1,5})\s*$/);
+  if (alNum) return `${alNum[1]!.toUpperCase()} ${alNum[2]}`;
+  const spaced = s.match(/^([A-Za-z]{1,2})(\d{2,5})$/);
+  if (spaced) return `${spaced[1]!.toUpperCase()} ${spaced[2]}`;
+  if (s.length <= 20 && /^[\w\s\-/]+$/i.test(s)) return s;
+  return '—';
+}
+
+function formatBlockDurationCenter(block: string | null | undefined): string | null {
+  const s = block?.trim();
+  if (!s) return null;
+  if (/^\d{1,2}:\d{2}$/.test(s)) {
+    const [a, b] = s.split(':');
+    return `${Number(a)}h ${b.padStart(2, '0')}m`;
+  }
+  if (/^\d{4}$/.test(s)) {
+    return `${Number(s.slice(0, 2))}h ${s.slice(2)}m`;
+  }
+  return s;
+}
+
+function looksLikeScheduleNoteHotel(text: string | null | undefined): boolean {
+  const s = String(text ?? '').trim();
+  if (!s) return false;
+  if (/\d{3,4}\s*[Ll]\b/.test(s)) return true;
+  if (/\(NR\b/i.test(s)) return true;
+  if (/^\d[\d:]*\s*[\[(]?[A-Z]{1,4}/.test(s)) return true;
+  return false;
+}
+
+/** Dot-separated remaining stations: unique cities in panel order, excluding the active city. */
+function heroContextCitiesLine(citiesByPanel: string[], selectedDayIndex: number): string {
+  if (!citiesByPanel.length) return '';
+  const active = (citiesByPanel[Math.min(Math.max(0, selectedDayIndex), citiesByPanel.length - 1)] ?? '')
+    .trim();
+  const ordered: string[] = [];
+  for (const c of citiesByPanel) {
+    const t = String(c ?? '')
+      .trim()
+      .toUpperCase();
+    if (!t || t === '—') continue;
+    if (!ordered.includes(t)) ordered.push(t);
+  }
+  if (!active || active === '—') {
+    return ordered.join(' • ');
+  }
+  const activeU = active.toUpperCase();
+  const ctx = ordered.filter((c) => c !== activeU);
+  return ctx.join(' • ');
 }
 
 function PremiumFlightLegCard({
@@ -272,79 +311,130 @@ function PremiumFlightLegCard({
 }) {
   const dep = String(leg.departureAirport ?? '').trim() || '—';
   const arr = String(leg.arrivalAirport ?? '').trim() || '—';
-  const fn = leg.flightNumber?.trim();
+  const fnDisplay = formatFlightNumberForDisplay(leg.flightNumber);
   const block = leg.blockTimeLocal?.trim();
+  const blockDuration = formatBlockDurationCenter(leg.blockTimeLocal);
+  const equip = leg.equipmentCode?.trim() ? leg.equipmentCode.trim() : '—';
+  const blockStat = block && block.length > 0 ? block : '—';
+  const gateStat = '—';
+  const tailStat = equip !== '—' ? equip : '—';
+  const loadStat = '—';
+  const legStatusGreen = /on\s*time|✓|delayed?\s*ok/i.test(String(legStatusLine ?? ''));
+  const blockValueColorStyle = leg.isDeadhead ? detailStyles.legMetaVGreen : detailStyles.legMetaVPurple;
 
   return (
     <View style={detailStyles.legCard}>
-      <View style={detailStyles.legCardTop}>
-        <View style={detailStyles.legCardTitleRow}>
-          <Text style={detailStyles.legFlightNum}>{fn ? fn : '—'}</Text>
-          {leg.isDeadhead ? (
-            <View style={detailStyles.dhPill}>
-              <Text style={detailStyles.dhPillText}>DH</Text>
-            </View>
-          ) : null}
-        </View>
-        {legStatusLine ? <Text style={detailStyles.legStatus}>{legStatusLine}</Text> : null}
-      </View>
-
-      <View style={detailStyles.legAirportRow}>
-        <View style={detailStyles.legAirportCol}>
-          <Text style={detailStyles.legAirportCode}>{dep}</Text>
-          <Text style={detailStyles.legTime}>{formatTimeForLegCard(leg.departLocal)}</Text>
-        </View>
-        <View style={detailStyles.legPlaneRail}>
-          <View style={detailStyles.legPlaneLine} />
-          <Ionicons name="airplane" size={18} color={FC_PREMIUM_RED} style={{ marginHorizontal: 6 }} />
-          <View style={detailStyles.legPlaneLine} />
-        </View>
-        <View style={[detailStyles.legAirportCol, { alignItems: 'flex-end' }]}>
-          <Text style={detailStyles.legAirportCode}>{arr}</Text>
-          <Text style={detailStyles.legTime}>{formatTimeForLegCard(leg.arriveLocal)}</Text>
-        </View>
-      </View>
-
-      {(block || leg.releaseLocal || leg.equipmentCode) && (
-        <View style={detailStyles.legMetaGrid}>
-          {block ? (
-            <View style={detailStyles.legMetaItem}>
-              <Text style={detailStyles.legMetaK}>Block</Text>
-              <Text style={detailStyles.legMetaV}>{block}</Text>
-            </View>
-          ) : null}
-          {leg.releaseLocal?.trim() ? (
-            <View style={detailStyles.legMetaItem}>
-              <Text style={detailStyles.legMetaK}>D-END</Text>
-              <Text style={detailStyles.legMetaV}>{formatTimeForLegCard(leg.releaseLocal)}</Text>
-            </View>
-          ) : null}
-          {leg.equipmentCode?.trim() ? (
-            <View style={detailStyles.legMetaItem}>
-              <Text style={detailStyles.legMetaK}>Equipment</Text>
-              <Text style={detailStyles.legMetaV}>{leg.equipmentCode.trim()}</Text>
-            </View>
-          ) : null}
-        </View>
-      )}
-
-      {fn ? (
-        <Pressable
-          style={detailStyles.trackLegRow}
-          onPress={() => onTrackLeg(leg)}
-          disabled={trackingLegId === leg.id}
-        >
-          {trackingLegId === leg.id ? (
-            <ActivityIndicator size="small" color={FC_PREMIUM_RED} />
+      <View style={detailStyles.legCardAccent} />
+      <View style={detailStyles.legCardBody}>
+        <View style={detailStyles.legTopStrip}>
+          <View style={detailStyles.legTopLeft}>
+            <Text style={detailStyles.legFlightNum}>{fnDisplay}</Text>
+            {leg.isDeadhead ? (
+              <View style={detailStyles.dhPill}>
+                <Text style={detailStyles.dhPillText}>DH</Text>
+              </View>
+            ) : (
+              <View style={detailStyles.workingPill}>
+                <Text style={detailStyles.workingPillText}>Working</Text>
+              </View>
+            )}
+          </View>
+          {legStatusLine ? (
+            <Text
+              style={[detailStyles.legStatusRight, legStatusGreen ? detailStyles.legStatusOnTime : detailStyles.legStatusPay]}
+              numberOfLines={2}
+            >
+              {legStatusLine}
+            </Text>
           ) : (
-            <Ionicons name="navigate-circle-outline" size={20} color={FC_PREMIUM_RED} />
+            <View style={detailStyles.legStatusRightSpacer} />
           )}
-          <Text style={detailStyles.trackLegText}>
-            {trackingLegId === leg.id ? 'Opening flight tracker…' : 'Track this leg live'}
-          </Text>
-          <Ionicons name="chevron-forward" size={18} color={FC_PREMIUM_RED} />
-        </Pressable>
-      ) : null}
+        </View>
+
+        <View style={detailStyles.legAirportRow}>
+          <View style={detailStyles.legAirportCol}>
+            <Text style={detailStyles.legAirportCode}>{dep}</Text>
+            <Text style={detailStyles.legTime}>{formatTimeForLegCard(leg.departLocal)}</Text>
+          </View>
+          <View style={[detailStyles.legPlaneColumn, !blockDuration && detailStyles.legPlaneColumnTight]}>
+            {blockDuration ? <Text style={detailStyles.legDurationCenter}>{blockDuration}</Text> : null}
+            <View style={detailStyles.legPlaneRail}>
+              <View style={detailStyles.legTimelineDot} />
+              <View style={detailStyles.legPlaneLine} />
+              <Ionicons name="airplane" size={14} color={FC_TIMELINE_BLUE} style={{ marginHorizontal: 4 }} />
+              <View style={detailStyles.legPlaneLine} />
+              <View style={detailStyles.legTimelineDot} />
+            </View>
+            <Text style={detailStyles.legNonStop}>Non-stop</Text>
+          </View>
+          <View style={[detailStyles.legAirportCol, { alignItems: 'flex-end' }]}>
+            <Text style={detailStyles.legAirportCode}>{arr}</Text>
+            <Text style={detailStyles.legTime}>{formatTimeForLegCard(leg.arriveLocal)}</Text>
+          </View>
+        </View>
+
+        <View style={detailStyles.legMetaRow}>
+          <View style={detailStyles.legMetaCell}>
+            <Text style={detailStyles.legMetaK}>BLOCK</Text>
+            <Text style={[detailStyles.legMetaV, blockValueColorStyle]}>{blockStat}</Text>
+          </View>
+          <View style={[detailStyles.legMetaCell, detailStyles.legMetaCellDivider]}>
+            <Text style={detailStyles.legMetaK}>GATE</Text>
+            <Text style={detailStyles.legMetaV}>{gateStat}</Text>
+          </View>
+          <View style={[detailStyles.legMetaCell, detailStyles.legMetaCellDivider]}>
+            <Text style={detailStyles.legMetaK}>TAIL</Text>
+            <Text style={detailStyles.legMetaV}>{tailStat}</Text>
+          </View>
+          <View style={[detailStyles.legMetaCell, detailStyles.legMetaCellDivider]}>
+            <Text style={detailStyles.legMetaK}>LOAD</Text>
+            <Text style={detailStyles.legMetaV}>{loadStat}</Text>
+          </View>
+        </View>
+
+        {leg.flightNumber?.trim() ? (
+          <Pressable
+            style={detailStyles.trackLegRow}
+            onPress={() => onTrackLeg(leg)}
+            disabled={trackingLegId === leg.id}
+          >
+            {trackingLegId === leg.id ? (
+              <ActivityIndicator size="small" color={FC_PREMIUM_RED} />
+            ) : (
+              <Ionicons name="location-outline" size={18} color={FC_PREMIUM_RED} />
+            )}
+            <Text style={detailStyles.trackLegText}>
+              {trackingLegId === leg.id ? 'Opening flight tracker…' : 'Track this leg live'}
+            </Text>
+            <Ionicons name="chevron-forward" size={18} color={FC_PREMIUM_RED} />
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function DayProgressWithThumb({
+  dayCount,
+  selectedIndex,
+}: {
+  dayCount: number;
+  selectedIndex: number;
+}) {
+  if (dayCount <= 0) return null;
+  const segWidthPct = 100 / dayCount;
+  const centerPct = (selectedIndex + 0.5) * segWidthPct;
+  return (
+    <View style={detailStyles.progressWrap}>
+      <View style={detailStyles.progressTrackBg}>
+        <View
+          style={[
+            detailStyles.progressTrackFill,
+            { width: `${Math.min(100, (selectedIndex + 1) * segWidthPct)}%` },
+          ]}
+        />
+        <View style={[detailStyles.progressThumb, { left: `${centerPct}%` }]} />
+      </View>
     </View>
   );
 }
@@ -363,7 +453,7 @@ function OperatingDayLegsPage({
   panelWidth: number;
 }) {
   return (
-    <View style={{ width: panelWidth, paddingHorizontal: 16 }}>
+    <View style={{ width: panelWidth, paddingHorizontal: 16, paddingTop: 12 }}>
       {day.legs.length === 0 ? (
         <Text style={detailStyles.emptyLegs}>No flight legs on file for this day.</Text>
       ) : (
@@ -383,6 +473,7 @@ function OperatingDayLegsPage({
 
 export default function TripDetailScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { tripId: tripIdParam, pairingUuid: pairingUuidParam } = useLocalSearchParams<{
     tripId?: string;
@@ -412,6 +503,30 @@ export default function TripDetailScreen() {
   const detailRenderScoreRef = useRef(0);
   /** Once a trip snapshot is shown, block async/network from replacing it (cache or first paint). */
   const detailPaintSealedRef = useRef(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      setStatusBarStyle('light');
+      const hideHeader = { headerShown: false as const, title: '' };
+      navigation.setOptions(hideHeader);
+      let p = navigation as {
+        setOptions?: (o: { headerShown: boolean; title: string }) => void;
+        getParent?: () => unknown;
+      };
+      let depth = 0;
+      while (p && depth < 5) {
+        p.setOptions?.(hideHeader);
+        p = p.getParent?.() as typeof p;
+        depth += 1;
+      }
+      return () => setStatusBarStyle('dark');
+    }, [navigation]),
+  );
+
+  useLayoutEffect(() => {
+    const hideHeader = { headerShown: false as const, title: '' };
+    navigation.setOptions(hideHeader);
+  }, [navigation]);
 
   useEffect(() => {
     return () => {
@@ -506,14 +621,10 @@ export default function TripDetailScreen() {
   }, [vm?.days, display]);
 
   const activeCity = citiesByPanel[selectedDayIndex] ?? '—';
-  const contextCitiesLine = useMemo(() => {
-    if (!citiesByPanel.length) return '';
-    return citiesByPanel
-      .filter((_, i) => i !== selectedDayIndex)
-      .map((c) => c.trim())
-      .filter(Boolean)
-      .join(' • ');
-  }, [citiesByPanel, selectedDayIndex]);
+  const contextCitiesLine = useMemo(
+    () => heroContextCitiesLine(citiesByPanel, selectedDayIndex),
+    [citiesByPanel, selectedDayIndex],
+  );
 
   const displaySpan = useMemo(
     () => (display ? getDisplaySpanAndDutyDayCount(display) : null),
@@ -708,10 +819,11 @@ export default function TripDetailScreen() {
 
   useEffect(() => {
     if (!__DEV__ || !vm) return;
-    console.log('[PAIRING_DETAIL_REDESIGN_RENDER]', {
+    console.log('[PAIRING_DETAIL_FINAL_POLISH_RENDER]', {
       pairingCode: vm.pairingCode,
       selectedDayIndex,
       activeCity,
+      contextCities: contextCitiesLine,
       legsForDay: legsForSelectedCount,
       hasHotel: !!(layoverHotelActive.hotel?.name?.trim() || layoverHotelActive.hotel?.city?.trim()),
       crewCount: vm.crewMembers.length,
@@ -723,6 +835,7 @@ export default function TripDetailScreen() {
     legsForSelectedCount,
     layoverHotelActive.hotel?.name,
     layoverHotelActive.hotel?.city,
+    contextCitiesLine,
     vm?.crewMembers.length,
   ]);
 
@@ -781,14 +894,6 @@ export default function TripDetailScreen() {
     [router],
   );
 
-  const goBackSchedule = useCallback(() => {
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace('/(tabs)');
-    }
-  }, [router]);
-
   if (!tripId) {
     return (
       <View style={detailStyles.shell}>
@@ -840,13 +945,13 @@ export default function TripDetailScreen() {
     <View style={detailStyles.shell}>
       <ScrollView
         style={detailStyles.scroll}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 22 }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        {...(Platform.OS === 'ios' ? { contentInsetAdjustmentBehavior: 'never' as const } : {})}
       >
-        <SafeAreaView edges={['top', 'left', 'right']} style={detailStyles.heroSafe}>
-          <View style={detailStyles.heroBlock}>
-            <DetailHeroHeaderRow onBack={goBackSchedule} />
+        <View style={[detailStyles.heroSafe, { paddingTop: insets.top + 6 }]}>
+          <View style={detailStyles.heroContent}>
             <Text style={detailStyles.heroMeta}>{metadataLine}</Text>
             <Text style={detailStyles.heroCity}>{activeCity}</Text>
             {contextCitiesLine.length > 0 ? (
@@ -858,6 +963,7 @@ export default function TripDetailScreen() {
             <View style={detailStyles.heroPills}>
               {t.status === 'flying' ? (
                 <View style={detailStyles.pill}>
+                  <Ionicons name="airplane" size={13} color="#fff" style={{ marginRight: 5 }} />
                   <Text style={detailStyles.pillText}>Flying</Text>
                 </View>
               ) : null}
@@ -868,28 +974,56 @@ export default function TripDetailScreen() {
               ) : null}
             </View>
           </View>
-        </SafeAreaView>
+        </View>
 
         <View style={detailStyles.statsCardWrap}>
           <View style={detailStyles.statsCard}>
             <View style={detailStyles.statsCol}>
               <Text style={detailStyles.statsLabel}>REPORT</Text>
-              <Text style={[detailStyles.statsValue, { color: FC_STAT_REPORT }]}>{reportForSelectedDay}</Text>
+              <Text
+                style={[detailStyles.statsValue, { color: FC_STAT_REPORT }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.82}
+              >
+                {reportForSelectedDay}
+              </Text>
             </View>
             <View style={detailStyles.statsDivider} />
             <View style={detailStyles.statsCol}>
               <Text style={detailStyles.statsLabel}>BLOCK</Text>
-              <Text style={[detailStyles.statsValue, { color: FC_STAT_MUTED }]}>{blockVal}</Text>
+              <Text
+                style={[detailStyles.statsValue, { color: FC_STAT_BLACK }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.82}
+              >
+                {blockVal}
+              </Text>
             </View>
             <View style={detailStyles.statsDivider} />
             <View style={detailStyles.statsCol}>
               <Text style={detailStyles.statsLabel}>CREDIT</Text>
-              <Text style={[detailStyles.statsValue, { color: FC_STAT_CREDIT }]}>{creditVal}</Text>
+              <Text
+                style={[detailStyles.statsValue, { color: FC_STAT_CREDIT }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.82}
+              >
+                {creditVal}
+              </Text>
             </View>
             <View style={detailStyles.statsDivider} />
             <View style={detailStyles.statsCol}>
               <Text style={detailStyles.statsLabel}>TAFB</Text>
-              <Text style={[detailStyles.statsValue, { color: FC_STAT_MUTED }]}>{tafbVal}</Text>
+              <Text
+                style={[detailStyles.statsValue, { color: FC_STAT_BLACK }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.82}
+              >
+                {tafbVal}
+              </Text>
             </View>
           </View>
         </View>
@@ -916,27 +1050,44 @@ export default function TripDetailScreen() {
                   DAY {d.dayIndex}
                 </Text>
                 <Text style={[detailStyles.dayChipDate, sel && detailStyles.dayChipDateSel]}>
-                  {d.dayLabel} {d.dateShort}
+                  {chipDateLabel(d.dateIso)}
                 </Text>
-                <Text style={[detailStyles.dayChipRoute, sel && detailStyles.dayChipRouteSel]} numberOfLines={1}>
-                  {routeSnippetForDay(d)}
+                <Text style={[detailStyles.dayChipLayover, sel && detailStyles.dayChipLayoverSel]} numberOfLines={2}>
+                  {layoverCityOnlyForDayChip(d, t)}
                 </Text>
               </Pressable>
             );
           })}
         </ScrollView>
 
-        <View style={detailStyles.progressSegments}>
-          {vm.days.map((d, i) => (
-            <View
-              key={`prog-${d.panelId}`}
-              style={[detailStyles.progressSegment, i === selectedDayIndex ? detailStyles.progressSegmentOn : undefined]}
-            />
-          ))}
-        </View>
+        <DayProgressWithThumb dayCount={vm.days.length} selectedIndex={selectedDayIndex} />
 
+        {vm.days[Math.min(selectedDayIndex, vm.days.length - 1)] ? (
+          <View style={detailStyles.selectedDayBar}>
+            <View style={detailStyles.selectedDayBarLeft}>
+              <View style={detailStyles.dayIndexPill}>
+                <Text style={detailStyles.dayIndexPillText}>
+                  Day {vm.days[Math.min(selectedDayIndex, vm.days.length - 1)]!.dayIndex}
+                </Text>
+              </View>
+              <Text style={detailStyles.selectedDayBarDate}>
+                {(() => {
+                  const d = vm.days[Math.min(selectedDayIndex, vm.days.length - 1)]!;
+                  const iso = d.dateIso.slice(0, 10);
+                  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return d.dateShort;
+                  const dt = new Date(`${iso}T12:00:00`);
+                  return dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+                })()}
+              </Text>
+            </View>
+            <Text style={detailStyles.selectedDayBarRpt}>
+              {reportForSelectedDay !== '—' ? `Rpt ${reportForSelectedDay}` : ''}
+            </Text>
+          </View>
+        ) : null}
         {vm.days.length > 0 ? (
           <FlatList
+            style={{ marginBottom: 6 }}
             ref={panelPagerRef}
             data={vm.days}
             keyExtractor={(item) => item.panelId}
@@ -970,24 +1121,84 @@ export default function TripDetailScreen() {
 
         <Text style={detailStyles.sectionLabel}>Layover & hotel</Text>
         <View style={detailStyles.hotelCard}>
+          <View style={detailStyles.hotelBubble} pointerEvents="none" />
+          <Text style={detailStyles.hotelKicker}>LAYOVER CITY</Text>
           <Text style={detailStyles.hotelCardTitle}>
-            {layoverHotelActive.layoverCityLine?.trim() ? layoverHotelActive.layoverCityLine.trim() : '—'}
+            {layoverHotelActive.layoverCityLine?.trim()
+              ? layoverHotelActive.layoverCityLine.trim()
+              : layoverHotelActive.hotel?.city?.trim() || 'Layover'}
           </Text>
-          <View style={detailStyles.hotelPanel}>
-            <Text style={detailStyles.hotelPanelK}>Rest / layover</Text>
-            <Text style={detailStyles.hotelPanelV}>{layoverHotelActive.layoverRestLine}</Text>
-          </View>
-          {layoverHotelActive.hotel?.name ? (
-            <View style={detailStyles.hotelPanel}>
-              <Text style={detailStyles.hotelPanelK}>Hotel</Text>
-              <Text style={detailStyles.hotelPanelV}>{layoverHotelActive.hotel.name}</Text>
-              {layoverHotelActive.hotel.phone?.trim() ? (
-                <Text style={detailStyles.hotelPhone}>{layoverHotelActive.hotel.phone.trim()}</Text>
-              ) : null}
-            </View>
-          ) : (
-            <Text style={detailStyles.hotelMuted}>No hotel on file for this layover.</Text>
-          )}
+          {layoverHotelActive.hotel?.city?.trim() &&
+          layoverHotelActive.layoverCityLine?.trim() &&
+          layoverHotelActive.hotel.city.trim().toUpperCase() !==
+            layoverHotelActive.layoverCityLine.trim().toUpperCase() ? (
+            <Text style={detailStyles.hotelSubtitle}>
+              {layoverHotelActive.layoverCityLine.trim()} · {layoverHotelActive.hotel.city.trim()}
+            </Text>
+          ) : null}
+          {(() => {
+            const restText =
+              layoverHotelActive.layoverRestLine === '—'
+                ? 'Not available'
+                : layoverHotelActive.layoverRestLine || '—';
+            const rawName = layoverHotelActive.hotel?.name?.trim();
+            const hotelVal = !rawName
+              ? 'Not listed'
+              : looksLikeScheduleNoteHotel(rawName)
+                ? formatLayoverColumnDisplay(rawName)
+                : rawName;
+            const infoVal =
+              rawName && !looksLikeScheduleNoteHotel(rawName) && layoverHotelActive.hotel?.phone?.trim()
+                ? layoverHotelActive.hotel.phone.trim()
+                : '—';
+            const previewLine =
+              hotelVal !== 'Not listed' ? hotelVal : '—';
+            const previewSub = !rawName
+              ? ''
+              : looksLikeScheduleNoteHotel(rawName)
+                ? 'Schedule note'
+                : 'Hotel on file';
+            return (
+              <>
+                <View style={detailStyles.hotelMidRow}>
+                  <View style={detailStyles.hotelRestCol}>
+                    <Text style={detailStyles.hotelRestBig} numberOfLines={2}>
+                      {restText}
+                    </Text>
+                    <Text style={detailStyles.hotelRestHoursLabel}>REST HOURS</Text>
+                  </View>
+                  <View style={detailStyles.hotelPreviewCard}>
+                    <Ionicons name="partly-sunny-outline" size={22} color="rgba(255,255,255,0.92)" />
+                    <Text style={detailStyles.hotelPreviewTitle} numberOfLines={2}>
+                      {previewLine}
+                    </Text>
+                    {previewSub ? <Text style={detailStyles.hotelPreviewSub}>{previewSub}</Text> : null}
+                  </View>
+                </View>
+                <View style={detailStyles.hotelHotelPanel}>
+                  <Ionicons name="bed-outline" size={26} color="rgba(255,255,255,0.92)" />
+                  <View style={detailStyles.hotelHotelPanelText}>
+                    <Text style={detailStyles.hotelHotelName} numberOfLines={2}>
+                      {hotelVal}
+                    </Text>
+                    <Text style={detailStyles.hotelHotelMeta} numberOfLines={2}>
+                      {layoverHotelActive.hotel?.city?.trim()
+                        ? `${layoverHotelActive.hotel.city.trim()} · Hotel on file`
+                        : layoverHotelActive.layoverCityLine?.trim()
+                          ? `${layoverHotelActive.layoverCityLine.trim()} · Hotel on file`
+                          : 'Hotel on file'}
+                    </Text>
+                    {infoVal !== '—' ? (
+                      <View style={detailStyles.hotelPhoneRow}>
+                        <Ionicons name="call-outline" size={16} color="#4ADE80" />
+                        <Text style={detailStyles.hotelPhoneText}>{infoVal}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              </>
+            );
+          })()}
         </View>
 
         <Text style={detailStyles.sectionLabel}>Crew</Text>
@@ -996,11 +1207,13 @@ export default function TripDetailScreen() {
             <Text style={detailStyles.crewBaseLine}>Base · {t.base.trim()}</Text>
           ) : null}
           {vm.crewMembers.length > 0 ? (
-            vm.crewMembers.map((c, i) => (
-              <DetailCrewCard key={crewKey(c, i)} member={c} />
-            ))
+            <View style={detailStyles.crewGrid}>
+              {vm.crewMembers.map((c, i) => (
+                <DetailCrewCard key={crewKey(c, i)} member={c} />
+              ))}
+            </View>
           ) : (
-            <Text style={detailStyles.muted}></Text>
+            <Text style={detailStyles.muted}>—</Text>
           )}
         </View>
 
@@ -1010,28 +1223,34 @@ export default function TripDetailScreen() {
             style={({ pressed }) => [detailStyles.ctaPrimary, pressed && detailStyles.ctaPrimaryPressed]}
             onPress={() => openPost(t)}
           >
-            <Text style={detailStyles.ctaPrimaryText}>Post to Tradeboard</Text>
-            <Ionicons name="arrow-forward" size={20} color="#fff" />
+            <View style={detailStyles.ctaPrimaryTextCol}>
+              <Text style={detailStyles.ctaPrimaryTitle}>Post to Tradeboard</Text>
+              <Text style={detailStyles.ctaPrimarySub}>Drop · Swap · Pickup</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={22} color="#FFFFFF" />
           </Pressable>
           <View style={detailStyles.secondaryRow}>
             <SecondaryAction
               icon="chatbubbles-outline"
               label="Trip Chat"
+              subtitle="Message crew"
               onPress={() => router.push({ pathname: '/crew-schedule/trip-chat', params: { tripId: t.id } })}
             />
             <SecondaryAction
-              icon="alarm-outline"
+              icon="notifications-outline"
               label="Set Alert"
+              subtitle="Delays · Gate"
               onPress={() => router.push({ pathname: '/crew-schedule/alerts', params: { tripId: t.id } })}
             />
+            <SecondaryAction
+              icon="compass-outline"
+              label="Commute"
+              subtitle="To base"
+              onPress={() =>
+                Alert.alert('Commute', 'Commute assist for this trip is not available yet.', [{ text: 'OK' }])
+              }
+            />
           </View>
-          <SecondaryAction
-            icon="car-outline"
-            label="Commute"
-            onPress={() =>
-              Alert.alert('Commute', 'Commute assist for this trip is not available yet.', [{ text: 'OK' }])
-            }
-          />
         </View>
       </ScrollView>
     </View>
@@ -1046,14 +1265,12 @@ function DetailCrewCard({ member }: { member: ScheduleCrewMember }) {
   return (
     <View style={detailStyles.crewCard}>
       <Text style={detailStyles.crewPos}>{member.position?.trim() || '—'}</Text>
-      <View style={detailStyles.crewMid}>
-        <Text style={detailStyles.crewName} numberOfLines={2}>
-          {member.name?.trim() || '—'}
-        </Text>
-        {member.employeeId?.trim() ? (
-          <Text style={detailStyles.crewEmp}>#{member.employeeId.trim()}</Text>
-        ) : null}
-      </View>
+      <Text style={detailStyles.crewName} numberOfLines={2}>
+        {member.name?.trim() || '—'}
+      </Text>
+      {member.employeeId?.trim() ? (
+        <Text style={detailStyles.crewEmp}>#{member.employeeId.trim()}</Text>
+      ) : null}
     </View>
   );
 }
@@ -1061,10 +1278,12 @@ function DetailCrewCard({ member }: { member: ScheduleCrewMember }) {
 function SecondaryAction({
   icon,
   label,
+  subtitle,
   onPress,
 }: {
   icon: React.ComponentProps<typeof Ionicons>['name'];
   label: string;
+  subtitle?: string;
   onPress: () => void;
 }) {
   return (
@@ -1074,6 +1293,7 @@ function SecondaryAction({
     >
       <Ionicons name={icon} size={20} color={FC_PREMIUM_RED} />
       <Text style={detailStyles.secondaryBtnText}>{label}</Text>
+      {subtitle ? <Text style={detailStyles.secondaryBtnSub}>{subtitle}</Text> : null}
     </Pressable>
   );
 }
@@ -1083,102 +1303,75 @@ const detailStyles = StyleSheet.create({
   scroll: { flex: 1 },
   heroSafe: {
     backgroundColor: FC_PREMIUM_RED,
+    overflow: 'hidden',
   },
-  heroBlock: {
-    backgroundColor: FC_PREMIUM_RED,
-    paddingHorizontal: spacing.lg,
-    paddingTop: 4,
-    paddingBottom: 36,
-    borderBottomLeftRadius: radius.md,
-    borderBottomRightRadius: radius.md,
-  },
-  heroHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-    minHeight: 44,
-  },
-  heroBackLabel: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '800',
-  },
-  heroHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  heroIconBtn: {
-    minWidth: 40,
-    minHeight: 40,
-    padding: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
+  heroContent: {
     position: 'relative',
-  },
-  heroIconBtnPressed: { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 22 },
-  heroBadge: {
-    position: 'absolute',
-    top: 2,
-    right: 2,
-    backgroundColor: colors.dangerRed,
-    minWidth: 14,
-    height: 14,
-    borderRadius: 7,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 2,
     zIndex: 2,
-  },
-  heroBadgeText: {
-    color: colors.cardBg,
-    fontSize: 9,
-    fontWeight: '800',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: 26,
   },
   heroMeta: {
-    color: 'rgba(255,255,255,0.92)',
+    ...TYPE_FACE,
+    color: 'rgba(255,255,255,0.9)',
     fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 0.2,
+    fontWeight: FONT.medium,
+    letterSpacing: 0.5,
   },
   heroCity: {
-    color: '#fff',
-    fontSize: 44,
-    fontWeight: '900',
-    marginTop: 10,
+    ...TYPE_FACE,
+    color: '#FFFFFF',
+    fontSize: 43,
+    fontWeight: FONT.bold,
+    marginTop: 8,
     letterSpacing: -0.5,
   },
   heroContext: {
-    color: 'rgba(255,255,255,0.88)',
+    ...TYPE_FACE,
+    color: 'rgba(255,255,255,0.95)',
     fontSize: 15,
-    fontWeight: '700',
-    marginTop: 8,
-    letterSpacing: 0.5,
+    fontWeight: FONT.medium,
+    marginTop: 6,
+    letterSpacing: 0.15,
   },
   heroDates: {
-    color: 'rgba(255,255,255,0.95)',
-    fontSize: 14,
-    fontWeight: '600',
-    marginTop: 14,
+    ...TYPE_FACE,
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 15,
+    fontWeight: FONT.regular,
+    marginTop: 10,
+    letterSpacing: -0.3,
+    ...MOCKUP_TABULAR,
   },
-  heroPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
+  heroPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   pill: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 18,
   },
-  pillDh: { backgroundColor: 'rgba(255,255,255,0.28)' },
-  pillText: { color: '#fff', fontSize: 12, fontWeight: '800', letterSpacing: 0.4 },
+  pillDh: { backgroundColor: 'rgba(0,0,0,0.22)' },
+  pillText: {
+    ...TYPE_FACE,
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: FONT.semibold,
+    letterSpacing: 0.15,
+  },
   statsCardWrap: {
-    marginTop: -22,
+    marginTop: -18,
     paddingHorizontal: 16,
     zIndex: 2,
-    marginBottom: 8,
+    marginBottom: 6,
   },
   statsCard: {
     flexDirection: 'row',
     backgroundColor: '#fff',
     borderRadius: 16,
-    paddingVertical: 16,
-    paddingHorizontal: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
     alignItems: 'stretch',
     justifyContent: 'space-between',
     borderWidth: StyleSheet.hairlineWidth,
@@ -1194,74 +1387,194 @@ const detailStyles = StyleSheet.create({
       default: {},
     }),
   },
-  statsCol: { flex: 1, alignItems: 'center', minWidth: 0, paddingHorizontal: 2 },
+  statsCol: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 0,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
   statsDivider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: T.line,
-    marginVertical: 4,
+    width: 1,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    alignSelf: 'stretch',
+    marginVertical: 0,
   },
   statsLabel: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: T.textSecondary,
-    letterSpacing: 0.6,
-    marginBottom: 6,
+    ...Platform.select<TextStyle>({
+      ios: { fontFamily: 'System' },
+      android: { fontFamily: 'sans-serif' },
+      default: {},
+    }),
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.05,
+    textTransform: 'uppercase',
+    color: '#8B93A3',
+    marginBottom: 5,
+    textAlign: 'center',
   },
-  statsValue: { fontSize: 14, fontWeight: '900' },
+  statsValue: {
+    ...STATS_VALUE_FONT,
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: -0.55,
+    lineHeight: 22,
+    textAlign: 'center',
+    maxWidth: '100%',
+  },
   sectionLabel: {
+    ...TYPE_FACE,
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: FONT.medium,
     color: T.textSecondary,
     textTransform: 'uppercase',
-    letterSpacing: 0.55,
+    letterSpacing: 0.5,
     paddingHorizontal: 16,
-    marginTop: 18,
-    marginBottom: 10,
+    marginTop: 12,
+    marginBottom: 8,
   },
-  dayChipScroll: { paddingHorizontal: 12, gap: 10, paddingBottom: 4 },
+  dayChipScroll: { paddingHorizontal: 12, gap: 10, paddingBottom: 2 },
   dayChip: {
-    width: 128,
-    borderRadius: 14,
+    width: 132,
+    borderRadius: 16,
     paddingVertical: 12,
     paddingHorizontal: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: T.line,
-    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'flex-start',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOpacity: 0.04,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 1 },
+      },
+      android: { elevation: 0 },
+      default: {},
+    }),
   },
   dayChipSelected: {
     backgroundColor: FC_PREMIUM_RED,
     borderColor: FC_PREMIUM_RED,
+    shadowOpacity: 0,
+    elevation: 0,
   },
-  dayChipTitle: { fontSize: 11, fontWeight: '800', color: T.textSecondary, letterSpacing: 0.6 },
-  dayChipTitleSel: { color: 'rgba(255,255,255,0.9)' },
-  dayChipDate: { fontSize: 13, fontWeight: '800', color: T.text, marginTop: 6 },
-  dayChipDateSel: { color: '#fff' },
-  dayChipRoute: { fontSize: 12, fontWeight: '700', color: T.textSecondary, marginTop: 4 },
-  dayChipRouteSel: { color: 'rgba(255,255,255,0.92)' },
-  progressSegments: {
-    flexDirection: 'row',
-    gap: 4,
+  dayChipTitle: {
+    ...TYPE_FACE,
+    fontSize: 11,
+    fontWeight: FONT.semibold,
+    color: '#64748B',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    textAlign: 'left',
+    alignSelf: 'stretch',
+  },
+  dayChipTitleSel: { color: 'rgba(255,255,255,0.95)' },
+  dayChipDate: {
+    ...TYPE_FACE,
+    fontSize: 14,
+    fontWeight: FONT.semibold,
+    color: '#0F172A',
+    marginTop: 6,
+    textAlign: 'left',
+    alignSelf: 'stretch',
+    letterSpacing: -0.3,
+    ...MOCKUP_TABULAR,
+  },
+  dayChipDateSel: { color: '#FFFFFF' },
+  dayChipLayover: {
+    ...TYPE_FACE,
+    fontSize: 13,
+    fontWeight: FONT.medium,
+    color: '#64748B',
+    marginTop: 5,
+    textAlign: 'left',
+    alignSelf: 'stretch',
+    letterSpacing: 0.15,
+  },
+  dayChipLayoverSel: { color: 'rgba(255,255,255,0.88)' },
+  progressWrap: {
     marginHorizontal: 16,
-    marginBottom: 12,
+    marginBottom: 10,
     marginTop: 4,
   },
-  progressSegment: {
-    flex: 1,
-    height: 4,
+  progressTrackBg: {
+    height: 3,
     borderRadius: 2,
-    backgroundColor: '#CBD5E1',
+    backgroundColor: '#E2E8F0',
+    overflow: 'visible',
+    position: 'relative',
   },
-  progressSegmentOn: {
+  progressTrackFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 2,
     backgroundColor: FC_PREMIUM_RED,
   },
-  emptyLegs: { fontSize: 14, color: T.textSecondary, paddingVertical: 12 },
-  legCard: {
+  progressThumb: {
+    position: 'absolute',
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: FC_PREMIUM_RED,
+    top: -3.5,
+    marginLeft: -5,
+  },
+  selectedDayBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginBottom: 22,
+    marginTop: 2,
+  },
+  selectedDayBarLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 },
+  dayIndexPill: {
+    backgroundColor: 'rgba(196,18,26,0.14)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  dayIndexPillText: {
+    ...TYPE_FACE,
+    fontSize: 12,
+    fontWeight: FONT.semibold,
+    color: FC_PREMIUM_RED,
+    ...MOCKUP_TABULAR,
+  },
+  selectedDayBarDate: {
+    ...TYPE_FACE,
+    fontSize: 15,
+    fontWeight: FONT.semibold,
+    color: '#0F172A',
+    flex: 1,
+    letterSpacing: -0.3,
+    ...MOCKUP_TABULAR,
+  },
+  selectedDayBarRpt: {
+    ...TYPE_FACE,
+    fontSize: 13,
+    fontWeight: FONT.medium,
+    color: '#64748B',
+    ...MOCKUP_TABULAR,
+  },
+  emptyLegs: { ...TYPE_FACE, fontSize: 14, fontWeight: FONT.regular, color: T.textSecondary, paddingVertical: 12 },
+  legCard: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
     borderRadius: 16,
-    padding: 16,
     marginBottom: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: T.line,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#fff',
+    overflow: 'hidden',
     ...Platform.select({
       ios: {
         shadowColor: '#0F172A',
@@ -1273,120 +1586,450 @@ const detailStyles = StyleSheet.create({
       default: {},
     }),
   },
-  legCardTop: { marginBottom: 8 },
-  legCardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  legFlightNum: { fontSize: 16, fontWeight: '900', color: T.text },
-  dhPill: { backgroundColor: '#EEF2FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  dhPillText: { fontSize: 11, fontWeight: '800', color: '#3730A3' },
-  legStatus: { fontSize: 12, fontWeight: '700', color: '#1D4ED8', marginTop: 4 },
+  legCardAccent: {
+    width: 3,
+    backgroundColor: FC_PREMIUM_RED,
+    alignSelf: 'stretch',
+  },
+  legCardBody: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    minWidth: 0,
+  },
+  legTopStrip: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
+  },
+  legTopLeft: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, flex: 1, minWidth: 0 },
+  legFlightNum: {
+    ...TYPE_FACE,
+    fontSize: 14,
+    fontWeight: FONT.semibold,
+    color: FC_PREMIUM_RED,
+    letterSpacing: -0.3,
+    ...MOCKUP_TABULAR,
+  },
+  workingPill: {
+    backgroundColor: '#FFE4E6',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(196,18,26,0.22)',
+  },
+  workingPillText: {
+    ...TYPE_FACE,
+    fontSize: 12,
+    fontWeight: FONT.semibold,
+    color: FC_PREMIUM_RED,
+    ...MOCKUP_TABULAR,
+  },
+  dhPill: { backgroundColor: '#EDE9FE', paddingHorizontal: 9, paddingVertical: 3, borderRadius: 8 },
+  dhPillText: {
+    ...TYPE_FACE,
+    fontSize: 12,
+    fontWeight: FONT.semibold,
+    color: '#5B21B6',
+    ...MOCKUP_TABULAR,
+  },
+  legStatusRight: {
+    ...TYPE_FACE,
+    fontSize: 12,
+    fontWeight: FONT.medium,
+    textAlign: 'right',
+    maxWidth: '46%',
+  },
+  legStatusOnTime: { color: '#15803D' },
+  legStatusPay: { color: '#6B21A8' },
+  legStatusRightSpacer: { width: 8 },
   legAirportRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    marginTop: 6,
+    marginTop: 2,
   },
   legAirportCol: { flex: 1, minWidth: 0 },
-  legAirportCode: { fontSize: 26, fontWeight: '900', color: T.text, letterSpacing: -0.5 },
-  legTime: { fontSize: 14, fontWeight: '700', color: T.textSecondary, marginTop: 4 },
-  legPlaneRail: { flexDirection: 'row', alignItems: 'center', flexShrink: 0, paddingHorizontal: 4 },
-  legPlaneLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: T.line, minWidth: 12 },
-  legMetaGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginTop: 14,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: T.line,
+  legAirportCode: {
+    ...TYPE_FACE,
+    fontSize: 27,
+    fontWeight: FONT.bold,
+    color: '#0F172A',
+    letterSpacing: -0.3,
+    ...MOCKUP_TABULAR,
   },
-  legMetaItem: { minWidth: '28%' },
-  legMetaK: { fontSize: 10, fontWeight: '800', color: T.textSecondary, textTransform: 'uppercase' },
-  legMetaV: { fontSize: 13, fontWeight: '800', color: T.text, marginTop: 2 },
-  trackLegRow: {
-    marginTop: 14,
+  legTime: {
+    ...STATS_VALUE_FONT,
+    fontSize: 16,
+    fontWeight: FONT.medium,
+    color: FC_STAT_BLACK,
+    marginTop: 4,
+    letterSpacing: -0.3,
+  },
+  legPlaneColumn: { alignItems: 'center', flexShrink: 0, paddingHorizontal: 2, maxWidth: 92, marginTop: 0 },
+  legPlaneColumnTight: { paddingTop: 0 },
+  legDurationCenter: {
+    ...STATS_VALUE_FONT,
+    fontSize: 13,
+    fontWeight: FONT.medium,
+    color: '#64748B',
+    opacity: 0.8,
+    marginBottom: 5,
+    lineHeight: 16,
+    letterSpacing: -0.3,
+  },
+  legPlaneRail: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: '#FFF5F5',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(200,16,46,0.25)',
+    width: '100%',
+    justifyContent: 'center',
   },
-  trackLegText: { flex: 1, fontSize: 14, fontWeight: '800', color: FC_PREMIUM_RED },
+  legTimelineDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: FC_PREMIUM_RED,
+  },
+  legPlaneLine: { flex: 1, height: 1, backgroundColor: '#CBD5E1', minWidth: 6 },
+  legNonStop: {
+    ...TYPE_FACE,
+    fontSize: 12,
+    fontWeight: FONT.regular,
+    color: '#64748B',
+    opacity: 0.6,
+    marginTop: 5,
+    lineHeight: 15,
+  },
+  legMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  legMetaCell: { flex: 1, minWidth: 0, paddingHorizontal: 4, justifyContent: 'flex-start', alignItems: 'center' },
+  legMetaCellDivider: {
+    borderLeftWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+  },
+  legMetaK: {
+    ...TYPE_FACE,
+    fontSize: 11,
+    fontWeight: FONT.medium,
+    color: '#94A3B8',
+    opacity: 0.6,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+  },
+  legMetaV: {
+    ...STATS_VALUE_FONT,
+    fontSize: 14,
+    fontWeight: FONT.semibold,
+    color: FC_STAT_BLACK,
+    marginTop: 5,
+    textAlign: 'center',
+    letterSpacing: -0.3,
+  },
+  legMetaVPurple: { color: FC_LEG_BLOCK_PURPLE },
+  legMetaVGreen: { color: FC_LEG_BLOCK_GREEN },
+  trackLegRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: '#FEF2F2',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(196,18,26,0.14)',
+  },
+  trackLegText: {
+    ...TYPE_FACE,
+    flex: 1,
+    fontSize: 16,
+    fontWeight: FONT.bold,
+    color: FC_PREMIUM_RED,
+    letterSpacing: -0.3,
+    ...MOCKUP_TABULAR,
+  },
   hotelCard: {
     marginHorizontal: 16,
     backgroundColor: FC_HOTEL_GREEN,
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    marginBottom: 2,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  hotelBubble: {
+    position: 'absolute',
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: FC_HOTEL_BUBBLE,
+    right: -58,
+    top: 8,
+  },
+  hotelKicker: {
+    ...TYPE_FACE,
+    fontSize: 11,
+    fontWeight: FONT.medium,
+    color: 'rgba(255,255,255,0.7)',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  hotelCardTitle: {
+    ...TYPE_FACE,
+    fontSize: 23,
+    fontWeight: FONT.bold,
+    color: '#fff',
     marginBottom: 4,
   },
-  hotelCardTitle: { fontSize: 22, fontWeight: '900', color: '#fff', marginBottom: 12 },
-  hotelPanel: {
-    backgroundColor: FC_HOTEL_GREEN_PANEL,
-    borderRadius: 12,
-    padding: 12,
+  hotelSubtitle: {
+    ...TYPE_FACE,
+    fontSize: 13,
+    fontWeight: FONT.regular,
+    color: 'rgba(255,255,255,0.85)',
+    marginBottom: 14,
+  },
+  hotelMidRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
     marginBottom: 10,
   },
-  hotelPanelK: { fontSize: 10, fontWeight: '800', color: 'rgba(255,255,255,0.7)', letterSpacing: 0.5 },
-  hotelPanelV: { fontSize: 15, fontWeight: '800', color: '#fff', marginTop: 6 },
-  hotelPhone: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.95)', marginTop: 8 },
-  hotelMuted: { fontSize: 14, color: 'rgba(255,255,255,0.75)', fontStyle: 'italic' },
-  crewWrap: { paddingHorizontal: 16, marginBottom: 8 },
-  crewBaseLine: { fontSize: 12, fontWeight: '700', color: T.textSecondary, marginBottom: 10 },
-  crewCard: {
+  hotelRestCol: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'flex-end',
+    paddingBottom: 2,
+  },
+  hotelRestBig: {
+    ...TYPE_FACE,
+    fontSize: 16,
+    fontWeight: FONT.semibold,
+    color: '#FFFFFF',
+    lineHeight: 20,
+    letterSpacing: -0.3,
+    ...MOCKUP_TABULAR,
+  },
+  hotelRestHoursLabel: {
+    ...TYPE_FACE,
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: FONT.medium,
+    color: 'rgba(255,255,255,0.7)',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  hotelPreviewCard: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: FC_HOTEL_INNER,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  hotelPreviewTitle: {
+    ...TYPE_FACE,
+    fontSize: 15,
+    fontWeight: FONT.semibold,
+    color: '#FFFFFF',
+    textAlign: 'center',
+    lineHeight: 19,
+    letterSpacing: -0.3,
+  },
+  hotelPreviewSub: {
+    ...TYPE_FACE,
+    fontSize: 13,
+    fontWeight: FONT.medium,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'center',
+  },
+  hotelHotelPanel: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: FC_HOTEL_INNER_DEEP,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+  },
+  hotelHotelPanelText: { flex: 1, minWidth: 0 },
+  hotelHotelName: {
+    ...TYPE_FACE,
+    fontSize: 16,
+    fontWeight: FONT.semibold,
+    color: '#FFFFFF',
+    lineHeight: 21,
+  },
+  hotelHotelMeta: {
+    ...TYPE_FACE,
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: FONT.regular,
+    color: 'rgba(255,255,255,0.6)',
+    lineHeight: 17,
+  },
+  hotelPhoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+  },
+  hotelPhoneText: {
+    ...TYPE_FACE,
+    fontSize: 15,
+    fontWeight: FONT.semibold,
+    color: FC_HOTEL_PHONE_NUM,
+    letterSpacing: -0.3,
+    ...MOCKUP_TABULAR,
+  },
+  crewWrap: { paddingHorizontal: 16, marginBottom: 6 },
+  crewGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'space-between',
+  },
+  crewBaseLine: {
+    ...TYPE_FACE,
+    fontSize: 11,
+    fontWeight: FONT.medium,
+    color: T.textSecondary,
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  crewCard: {
+    width: '48%',
+    maxWidth: '48%',
+    flexGrow: 1,
     backgroundColor: '#fff',
     borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    marginBottom: 2,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
-    gap: 12,
   },
   crewPos: {
-    fontSize: 12,
-    fontWeight: '900',
+    ...TYPE_FACE,
+    fontSize: 13,
+    fontWeight: FONT.bold,
     color: FC_PREMIUM_RED,
-    minWidth: 36,
+    marginBottom: 4,
+    letterSpacing: -0.3,
   },
-  crewMid: { flex: 1, minWidth: 0 },
-  crewName: { fontSize: 14, fontWeight: '800', color: T.text },
-  crewEmp: { fontSize: 12, fontWeight: '700', color: T.textSecondary, marginTop: 4 },
-  muted: { fontSize: 14, color: T.textSecondary },
-  actionsCol: { paddingHorizontal: 16, gap: 12, paddingBottom: 8 },
+  crewName: {
+    ...TYPE_FACE,
+    fontSize: 15,
+    fontWeight: FONT.semibold,
+    color: T.text,
+    letterSpacing: -0.2,
+  },
+  crewEmp: {
+    ...TYPE_FACE,
+    fontSize: 13,
+    fontWeight: FONT.regular,
+    color: T.textSecondary,
+    opacity: 0.6,
+    marginTop: 3,
+    ...MOCKUP_TABULAR,
+  },
+  muted: { ...TYPE_FACE, fontSize: 14, fontWeight: FONT.regular, color: T.textSecondary },
+  actionsCol: { paddingHorizontal: 16, gap: 10, paddingBottom: 6 },
   ctaPrimary: {
     backgroundColor: FC_PREMIUM_RED,
     borderRadius: 14,
-    paddingVertical: 16,
-    paddingHorizontal: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 12,
+    ...Platform.select({
+      android: { elevation: 2 },
+      default: {},
+    }),
   },
   ctaPrimaryPressed: { opacity: 0.92 },
-  ctaPrimaryText: { color: '#fff', fontSize: 16, fontWeight: '900' },
-  secondaryRow: { flexDirection: 'row', gap: 10 },
+  ctaPrimaryTextCol: { flex: 1, minWidth: 0 },
+  ctaPrimaryTitle: {
+    ...TYPE_FACE,
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: FONT.bold,
+    letterSpacing: -0.3,
+  },
+  ctaPrimarySub: {
+    ...TYPE_FACE,
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 13,
+    fontWeight: FONT.medium,
+    marginTop: 3,
+    letterSpacing: 0.15,
+  },
+  secondaryRow: { flexDirection: 'row', gap: 8, alignItems: 'stretch' },
   secondaryBtn: {
     flex: 1,
-    flexDirection: 'row',
+    minWidth: 0,
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    paddingHorizontal: 12,
+    gap: 3,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
     borderRadius: 12,
-    backgroundColor: '#fff',
+    backgroundColor: '#F1F5F9',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(200,16,46,0.35)',
+    borderColor: 'rgba(15,23,42,0.06)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOpacity: 0.03,
+        shadowRadius: 3,
+        shadowOffset: { width: 0, height: 1 },
+      },
+      default: {},
+    }),
   },
-  secondaryBtnPressed: { backgroundColor: '#FFF5F5' },
-  secondaryBtnText: { fontSize: 14, fontWeight: '800', color: T.text },
+  secondaryBtnPressed: { backgroundColor: '#E8EEF4' },
+  secondaryBtnText: {
+    ...TYPE_FACE,
+    fontSize: 13,
+    fontWeight: FONT.semibold,
+    color: T.text,
+    textAlign: 'center',
+    letterSpacing: -0.2,
+  },
+  secondaryBtnSub: {
+    ...TYPE_FACE,
+    fontSize: 12,
+    fontWeight: FONT.regular,
+    color: T.textSecondary,
+    opacity: 0.6,
+    textAlign: 'center',
+  },
   empty: { flex: 1, padding: 24, justifyContent: 'center' },
-  emptyTitle: { fontSize: 18, fontWeight: '800', color: T.text },
-  emptySub: { fontSize: 14, color: T.textSecondary, marginTop: 8, marginBottom: 20 },
+  emptyTitle: { ...TYPE_FACE, fontSize: 16, fontWeight: FONT.bold, color: T.text, letterSpacing: -0.3 },
+  emptySub: {
+    ...TYPE_FACE,
+    fontSize: 14,
+    fontWeight: FONT.regular,
+    color: T.textSecondary,
+    marginTop: 8,
+    marginBottom: 20,
+  },
   primaryBtn: {
     alignSelf: 'flex-start',
     backgroundColor: T.accent,
@@ -1394,5 +2037,5 @@ const detailStyles = StyleSheet.create({
     paddingHorizontal: 18,
     borderRadius: 10,
   },
-  primaryBtnText: { color: '#fff', fontWeight: '800' },
+  primaryBtnText: { ...TYPE_FACE, color: '#fff', fontWeight: FONT.bold, fontSize: 15 },
 });
