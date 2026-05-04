@@ -62,6 +62,8 @@ import CrewScheduleHeader from '../components/CrewScheduleHeader';
 const FC_PREMIUM_RED = '#C4121A';
 /** Brick / off-red for track CTA (lighter than hero #C4121A; must read red on device, not near-black). */
 const FC_TRACK_MUTED_RED = '#B04447';
+/** Mockup: light “off red” wash behind Track This Leg row (not plain white). */
+const FC_TRACK_TILE_BG = '#FEF2F2';
 /** Inline so tint always wins over any cached StyleSheet flattening. */
 const TRACK_LEG_TITLE_COLOR: TextStyle = { color: FC_TRACK_MUTED_RED };
 const FC_TIMELINE_BLUE = '#2563EB';
@@ -1948,8 +1950,8 @@ const detailStyles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(15,23,42,0.07)',
-    backgroundColor: '#FFFFFF',
+    borderTopColor: 'rgba(196,18,26,0.12)',
+    backgroundColor: FC_TRACK_TILE_BG,
   },
   trackLegInCardCompact: {
     gap: 8,
