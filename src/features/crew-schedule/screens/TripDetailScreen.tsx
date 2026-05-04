@@ -88,6 +88,13 @@ const TYPE_FACE: TextStyle = Platform.select<TextStyle>({
   default: {},
 });
 
+/** Red hero title + subtitles: SF Pro Text reads closer to mockup than Display at large sizes. */
+const HERO_SANS: TextStyle = Platform.select<TextStyle>({
+  ios: { fontFamily: 'SF Pro Text' },
+  android: { fontFamily: 'sans-serif' },
+  default: {},
+});
+
 /** Tabular lining figures for times (non-stats rows). */
 const MOCKUP_TABULAR: TextStyle = Platform.select<TextStyle>({
   ios: { fontVariant: ['tabular-nums'] },
@@ -298,16 +305,21 @@ function heroContextCitiesLine(citiesByPanel: string[], selectedDayIndex: number
   return ctx.join(' • ');
 }
 
+/** Narrow phones (e.g. mini / SE): slightly denser leg tile without changing hierarchy. */
+const DETAIL_COMPACT_WIDTH_BREAKPOINT = 390;
+
 function PremiumFlightLegCard({
   leg,
   legStatusLine,
   trackingLegId,
   onTrackLeg,
+  layoutCompact,
 }: {
   leg: CrewScheduleLeg;
   legStatusLine: string | null | undefined;
   trackingLegId: string | null;
   onTrackLeg: (leg: CrewScheduleLeg) => void;
+  layoutCompact: boolean;
 }) {
   const dep = String(leg.departureAirport ?? '').trim() || '—';
   const arr = String(leg.arrivalAirport ?? '').trim() || '—';
@@ -322,13 +334,20 @@ function PremiumFlightLegCard({
   const legStatusGreen = /on\s*time|✓|delayed?\s*ok/i.test(String(legStatusLine ?? ''));
   const blockValueColorStyle = leg.isDeadhead ? detailStyles.legMetaVGreen : detailStyles.legMetaVPurple;
 
+  const c = layoutCompact;
+
   return (
     <View style={detailStyles.legCard}>
       <View style={detailStyles.legCardAccent} />
-      <View style={detailStyles.legCardBody}>
-        <View style={detailStyles.legTopStrip}>
-          <View style={detailStyles.legTopLeft}>
-            <Text style={detailStyles.legFlightNum}>{fnDisplay}</Text>
+      <View
+        style={[
+          detailStyles.legCardBody,
+          c && { paddingHorizontal: 12, paddingVertical: 12 },
+        ]}
+      >
+        <View style={[detailStyles.legTopStrip, c && { marginBottom: 4, gap: 6 }]}>
+          <View style={[detailStyles.legTopLeft, c && { gap: 6 }]}>
+            <Text style={[detailStyles.legFlightNum, c && { fontSize: 13 }]}>{fnDisplay}</Text>
             {leg.isDeadhead ? (
               <View style={detailStyles.dhPill}>
                 <Text style={detailStyles.dhPillText}>DH</Text>
@@ -1286,36 +1305,36 @@ const detailStyles = StyleSheet.create({
     paddingBottom: 26,
   },
   heroMeta: {
-    ...TYPE_FACE,
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 13,
+    ...STATS_VALUE_FONT,
+    color: '#FFFFFF',
+    fontSize: 12,
     fontWeight: FONT.medium,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   heroCity: {
-    ...TYPE_FACE,
+    ...HERO_SANS,
     color: '#FFFFFF',
-    fontSize: 43,
+    fontSize: 32,
+    lineHeight: 38,
     fontWeight: FONT.bold,
     marginTop: 8,
-    letterSpacing: -0.5,
+    letterSpacing: -0.28,
   },
   heroContext: {
-    ...TYPE_FACE,
+    ...HERO_SANS,
     color: 'rgba(255,255,255,0.95)',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: FONT.medium,
     marginTop: 6,
-    letterSpacing: 0.15,
+    letterSpacing: 0,
   },
   heroDates: {
-    ...TYPE_FACE,
-    color: 'rgba(255,255,255,0.85)',
+    ...HERO_SANS,
+    color: 'rgba(255,255,255,0.92)',
     fontSize: 15,
-    fontWeight: FONT.regular,
-    marginTop: 10,
-    letterSpacing: -0.3,
-    ...MOCKUP_TABULAR,
+    fontWeight: FONT.medium,
+    marginTop: 8,
+    letterSpacing: -0.2,
   },
   heroPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   pill: {
@@ -1328,11 +1347,11 @@ const detailStyles = StyleSheet.create({
   },
   pillDh: { backgroundColor: 'rgba(0,0,0,0.22)' },
   pillText: {
-    ...TYPE_FACE,
+    ...HERO_SANS,
     color: '#FFFFFF',
     fontSize: 13,
-    fontWeight: FONT.semibold,
-    letterSpacing: 0.15,
+    fontWeight: FONT.medium,
+    letterSpacing: 0.1,
   },
   statsCardWrap: {
     marginTop: -18,
@@ -1391,10 +1410,10 @@ const detailStyles = StyleSheet.create({
   },
   statsValue: {
     ...STATS_VALUE_FONT,
-    fontSize: 18,
+    fontSize: 14,
     fontWeight: '700',
-    letterSpacing: -0.55,
-    lineHeight: 22,
+    letterSpacing: -0.45,
+    lineHeight: 18,
     textAlign: 'center',
     maxWidth: '100%',
   },
@@ -1472,7 +1491,7 @@ const detailStyles = StyleSheet.create({
   dayChipLayoverSel: { color: 'rgba(255,255,255,0.88)' },
   progressWrap: {
     marginHorizontal: 16,
-    marginBottom: 10,
+    marginBottom: 18,
     marginTop: 4,
   },
   progressTrackBg: {
@@ -1507,7 +1526,7 @@ const detailStyles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     marginBottom: 22,
-    marginTop: 2,
+    marginTop: 10,
   },
   selectedDayBarLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 },
   dayIndexPill: {
