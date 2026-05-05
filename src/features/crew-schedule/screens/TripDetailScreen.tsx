@@ -1255,7 +1255,6 @@ export default function TripDetailScreen() {
       >
         <View style={[detailStyles.heroSafe, { paddingTop: insets.top + 6 }]}>
           <View style={detailStyles.heroContent}>
-            <Text style={detailStyles.heroMeta}>{metadataLine}</Text>
             <Text style={detailStyles.heroCity}>{activeCity}</Text>
             {contextCitiesLine.length > 0 ? (
               <Text style={detailStyles.heroContext} numberOfLines={2}>
@@ -1263,11 +1262,12 @@ export default function TripDetailScreen() {
               </Text>
             ) : null}
             <Text style={detailStyles.heroDates}>{dateRangeHero}</Text>
+            <Text style={detailStyles.heroMeta}>{metadataLine}</Text>
             <View style={detailStyles.heroPills}>
               {t.status === 'flying' ? (
-                <View style={detailStyles.pill}>
-                  <Ionicons name="airplane" size={13} color="#fff" style={{ marginRight: 5 }} />
-                  <Text style={detailStyles.pillText}>Flying</Text>
+                <View style={[detailStyles.pill, detailStyles.pillFlying]}>
+                  <Ionicons name="airplane" size={10} color="#FFFFFF" />
+                  <Text style={detailStyles.pillFlyingText}>Flying</Text>
                 </View>
               ) : null}
               {selectedDayHasDh ? (
@@ -1768,14 +1768,16 @@ const detailStyles = StyleSheet.create({
     position: 'relative',
     zIndex: 2,
     paddingHorizontal: spacing.lg,
-    paddingBottom: 26,
+    paddingBottom: 32,
   },
   heroMeta: {
     ...HERO_MOCK,
-    color: 'rgba(255,255,255,0.96)',
+    color: 'rgba(255,255,255,0.62)',
     fontSize: 11,
-    fontWeight: FONT.medium,
+    fontWeight: FONT.regular,
     letterSpacing: 0.2,
+    marginTop: 6,
+    marginBottom: 6,
   },
   heroCity: {
     ...RED_HEADER_CITY_FACE,
@@ -1783,33 +1785,44 @@ const detailStyles = StyleSheet.create({
     fontSize: 42,
     lineHeight: 42,
     fontWeight: '400',
-    marginTop: 6,
+    marginTop: 0,
+    marginBottom: 4,
     letterSpacing: 1,
   },
   heroContext: {
     ...HERO_MOCK,
     color: 'rgba(255,255,255,0.95)',
-    fontSize: 15,
-    fontWeight: FONT.bold,
-    marginTop: 5,
+    fontSize: 14,
+    fontWeight: FONT.medium,
+    marginTop: 0,
+    marginBottom: 0,
     letterSpacing: 0,
   },
   heroDates: {
     ...HERO_MOCK,
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 14,
-    fontWeight: FONT.regular,
-    marginTop: 6,
-    letterSpacing: -0.08,
+    color: 'rgba(255,255,255,0.78)',
+    fontSize: 12,
+    fontWeight: '300',
+    letterSpacing: 0.2,
+    marginTop: 4,
+    marginBottom: 8,
   },
-  heroPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  heroPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.22)',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 18,
+  },
+  pillFlying: {
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.55)',
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 4,
   },
   pillDh: { backgroundColor: 'rgba(0,0,0,0.22)' },
   pillText: {
@@ -1819,8 +1832,15 @@ const detailStyles = StyleSheet.create({
     fontWeight: FONT.medium,
     letterSpacing: 0.1,
   },
+  pillFlyingText: {
+    ...HERO_MOCK,
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.03,
+  },
   statsCardWrap: {
-    marginTop: -18,
+    marginTop: -10,
     paddingHorizontal: 16,
     zIndex: 2,
     marginBottom: 6,
