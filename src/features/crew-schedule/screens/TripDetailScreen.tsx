@@ -47,6 +47,8 @@ import {
 } from '../pairingDetailMonthCache';
 import { pairingNavigationSessionKey, readCommittedMonthSnapshot } from '../scheduleStableSnapshots';
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
+import { useAuth } from '../../../hooks/useAuth';
+import { supabase } from '../../../lib/supabaseClient';
 import { enrichCrewScheduleSegment } from '../../../lib/supabase/flightTracker';
 import { scheduleTheme as T } from '../scheduleTheme';
 import {
@@ -725,6 +727,41 @@ export default function TripDetailScreen() {
   const detailRenderScoreRef = useRef(0);
   /** Once a trip snapshot is shown, block async/network from replacing it (cache or first paint). */
   const detailPaintSealedRef = useRef(false);
+
+  const { session } = useAuth();
+  const [profileDisplayName, setProfileDisplayName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const uid = session?.user?.id;
+    if (!uid) {
+      setProfileDisplayName(null);
+      return;
+    }
+    let cancelled = false;
+    void supabase
+      .from('profiles')
+      .select('display_name')
+      .eq('id', uid)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) setProfileDisplayName(String(data?.display_name ?? '').trim() || null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
+
+  const isCrewMemberSelf = useCallback(
+    (m: ScheduleCrewMember) => {
+      if (!profileDisplayName || !m.name?.trim()) return false;
+      return crewNameMatchesProfileDisplay(m.name, profileDisplayName);
+    },
+    [profileDisplayName],
+  );
+
+  const openNewMessage = useCallback(() => {
+    router.push('/new-message');
+  }, [router]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1497,7 +1534,7 @@ export default function TripDetailScreen() {
           })()}
         </View>
 
-        <Text style={detailStyles.sectionLabel}>Crew</Text>
+        <Text style={[detailStyles.moSectionLabel, detailStyles.moSectionLabelCrew]}>Crew</Text>
         <View style={detailStyles.crewWrap}>
           {t.base?.trim() ? (
             <Text style={detailStyles.crewBaseLine}>Base · {t.base.trim()}</Text>
@@ -1505,7 +1542,13 @@ export default function TripDetailScreen() {
           {vm.crewMembers.length > 0 ? (
             <View style={detailStyles.crewGrid}>
               {vm.crewMembers.map((c, i) => (
-                <DetailCrewCard key={crewKey(c, i)} member={c} />
+                <DetailCrewCard
+                  key={crewKey(c, i)}
+                  member={c}
+                  tripBase={t.base?.trim() ?? null}
+                  isYou={isCrewMemberSelf(c)}
+                  onMessage={openNewMessage}
+                />
               ))}
             </View>
           ) : (
@@ -1513,17 +1556,17 @@ export default function TripDetailScreen() {
           )}
         </View>
 
-        <Text style={detailStyles.sectionLabel}>Actions</Text>
+        <Text style={[detailStyles.moSectionLabel, detailStyles.moSectionLabelActions]}>Actions</Text>
         <View style={detailStyles.actionsCol}>
           <Pressable
             style={({ pressed }) => [detailStyles.ctaPrimary, pressed && detailStyles.ctaPrimaryPressed]}
             onPress={() => openPost(t)}
           >
+            <Ionicons name="swap-horizontal" size={21} color="#FFFFFF" />
             <View style={detailStyles.ctaPrimaryTextCol}>
               <Text style={detailStyles.ctaPrimaryTitle}>Post to Tradeboard</Text>
               <Text style={detailStyles.ctaPrimarySub}>Drop · Swap · Pickup</Text>
             </View>
-            <Ionicons name="chevron-forward" size={22} color="#FFFFFF" />
           </Pressable>
           <View style={detailStyles.secondaryRow}>
             <SecondaryAction
@@ -1557,15 +1600,68 @@ function crewKey(c: ScheduleCrewMember, i: number) {
   return `${c.name}-${c.employeeId ?? ''}-${c.position}-${i}`;
 }
 
-function DetailCrewCard({ member }: { member: ScheduleCrewMember }) {
+/** Uppercase line like the pairing-detail mockup (LAST, FIRST middle). */
+function formatCrewNameForCard(raw: string | undefined): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return '—';
+  return s.toUpperCase();
+}
+
+function crewTokensNorm(s: string): string[] {
+  return s
+    .toUpperCase()
+    .replace(/,/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter((t) => t.length > 1);
+}
+
+function crewNameMatchesProfileDisplay(crewName: string, displayName: string): boolean {
+  const c = crewTokensNorm(crewName);
+  const d = crewTokensNorm(displayName);
+  if (c.length === 0 || d.length === 0) return false;
+  if (c.join(' ') === d.join(' ')) return true;
+  const overlap = c.some((t) => d.some((u) => u === t || u.includes(t) || t.includes(u)));
+  return overlap;
+}
+
+function DetailCrewCard({
+  member,
+  tripBase,
+  isYou,
+  onMessage,
+}: {
+  member: ScheduleCrewMember;
+  tripBase: string | null;
+  isYou: boolean;
+  onMessage: () => void;
+}) {
+  const emp = member.employeeId?.trim();
+  const detailLine =
+    tripBase && emp ? `${tripBase} · #${emp}` : emp ? `#${emp}` : tripBase ? `${tripBase}` : '—';
+
   return (
-    <View style={detailStyles.crewCard}>
+    <View style={[detailStyles.crewCard, isYou ? detailStyles.crewCardYou : undefined]}>
       <Text style={detailStyles.crewPos}>{member.position?.trim() || '—'}</Text>
       <Text style={detailStyles.crewName} numberOfLines={2}>
-        {member.name?.trim() || '—'}
+        {formatCrewNameForCard(member.name)}
       </Text>
-      {member.employeeId?.trim() ? (
-        <Text style={detailStyles.crewEmp}>#{member.employeeId.trim()}</Text>
+      {isYou ? (
+        <View style={detailStyles.crewYouBadge}>
+          <Text style={detailStyles.crewYouBadgeText}>You</Text>
+        </View>
+      ) : null}
+      <Text style={detailStyles.crewEmp}>{detailLine}</Text>
+      {!isYou ? (
+        <Pressable
+          onPress={onMessage}
+          style={({ pressed }) => [detailStyles.crewMessageRow, pressed && { opacity: 0.85 }]}
+          hitSlop={6}
+        >
+          <Ionicons name="chatbubble-outline" size={13} color="#94A3B8" />
+          <Text style={detailStyles.crewMessageText}>Message</Text>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -1587,7 +1683,7 @@ function SecondaryAction({
       style={({ pressed }) => [detailStyles.secondaryBtn, pressed && detailStyles.secondaryBtnPressed]}
       onPress={onPress}
     >
-      <Ionicons name={icon} size={20} color={FC_PREMIUM_RED} />
+      <Ionicons name={icon} size={18} color={FC_PREMIUM_RED} />
       <Text style={detailStyles.secondaryBtnText}>{label}</Text>
       {subtitle ? <Text style={detailStyles.secondaryBtnSub}>{subtitle}</Text> : null}
     </Pressable>
@@ -2298,20 +2394,37 @@ const detailStyles = StyleSheet.create({
     letterSpacing: -0.25,
     ...MOCKUP_TABULAR,
   },
-  crewWrap: { paddingHorizontal: 16, marginBottom: 6 },
+  crewWrap: { paddingHorizontal: 16, marginBottom: 10 },
   crewGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 7,
     justifyContent: 'space-between',
+  },
+  moSectionLabel: {
+    ...TYPE_FACE,
+    fontSize: 10,
+    fontWeight: FONT.bold,
+    color: '#64748B',
+    textTransform: 'uppercase',
+    letterSpacing: 0.9,
+    paddingHorizontal: 16,
+  },
+  moSectionLabelCrew: {
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  moSectionLabelActions: {
+    marginTop: 18,
+    marginBottom: 8,
   },
   crewBaseLine: {
     ...TYPE_FACE,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: FONT.medium,
-    color: T.textSecondary,
-    letterSpacing: 0.5,
-    marginBottom: 8,
+    color: '#94A3B8',
+    letterSpacing: 0.35,
+    marginBottom: 10,
   },
   crewCard: {
     width: '48%',
@@ -2319,46 +2432,88 @@ const detailStyles = StyleSheet.create({
     flexGrow: 1,
     backgroundColor: '#fff',
     borderRadius: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    marginBottom: 2,
+    paddingVertical: 9,
+    paddingHorizontal: 9,
+    marginBottom: 0,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: T.line,
+    borderColor: '#E2E8F0',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOpacity: 0.04,
+        shadowRadius: 3,
+        shadowOffset: { width: 0, height: 1 },
+      },
+      android: { elevation: 0 },
+      default: {},
+    }),
+  },
+  crewCardYou: {
+    borderWidth: 1.5,
+    borderColor: '#93C5FD',
   },
   crewPos: {
     ...TYPE_FACE,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: FONT.bold,
     color: FC_PREMIUM_RED,
-    marginBottom: 4,
-    letterSpacing: -0.3,
+    marginBottom: 3,
+    letterSpacing: -0.2,
   },
   crewName: {
     ...TYPE_FACE,
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: FONT.semibold,
-    color: T.text,
-    letterSpacing: -0.2,
+    color: '#0F172A',
+    letterSpacing: -0.05,
+    lineHeight: 17,
+  },
+  crewYouBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginTop: 6,
+  },
+  crewYouBadgeText: {
+    ...TYPE_FACE,
+    fontSize: 9,
+    fontWeight: FONT.semibold,
+    color: '#2563EB',
+    letterSpacing: 0.2,
   },
   crewEmp: {
     ...TYPE_FACE,
-    fontSize: 13,
-    fontWeight: FONT.regular,
-    color: T.textSecondary,
-    opacity: 0.6,
-    marginTop: 3,
+    fontSize: 10,
+    fontWeight: FONT.medium,
+    color: '#64748B',
+    marginTop: 6,
     ...MOCKUP_TABULAR,
   },
+  crewMessageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 8,
+  },
+  crewMessageText: {
+    ...TYPE_FACE,
+    fontSize: 11,
+    fontWeight: FONT.semibold,
+    color: FC_PREMIUM_RED,
+    letterSpacing: -0.1,
+  },
   muted: { ...TYPE_FACE, fontSize: 14, fontWeight: FONT.regular, color: T.textSecondary },
-  actionsCol: { paddingHorizontal: 16, gap: 10, paddingBottom: 6 },
+  actionsCol: { paddingHorizontal: 16, gap: 11, paddingBottom: 24 },
   ctaPrimary: {
     backgroundColor: FC_PREMIUM_RED,
     borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     gap: 12,
     ...Platform.select({
       android: { elevation: 2 },
@@ -2370,57 +2525,57 @@ const detailStyles = StyleSheet.create({
   ctaPrimaryTitle: {
     ...TYPE_FACE,
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: FONT.bold,
-    letterSpacing: -0.3,
+    letterSpacing: -0.28,
   },
   ctaPrimarySub: {
     ...TYPE_FACE,
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 13,
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 11,
     fontWeight: FONT.medium,
-    marginTop: 3,
-    letterSpacing: 0.15,
+    marginTop: 2,
+    letterSpacing: 0.12,
   },
-  secondaryRow: { flexDirection: 'row', gap: 8, alignItems: 'stretch' },
+  secondaryRow: { flexDirection: 'row', gap: 7, alignItems: 'stretch' },
   secondaryBtn: {
     flex: 1,
     minWidth: 0,
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
-    paddingVertical: 10,
-    paddingHorizontal: 6,
+    gap: 2,
+    paddingVertical: 9,
+    paddingHorizontal: 4,
     borderRadius: 12,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#FFFFFF',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(15,23,42,0.06)',
+    borderColor: '#E2E8F0',
     ...Platform.select({
       ios: {
         shadowColor: '#0F172A',
-        shadowOpacity: 0.03,
+        shadowOpacity: 0.04,
         shadowRadius: 3,
         shadowOffset: { width: 0, height: 1 },
       },
       default: {},
     }),
   },
-  secondaryBtnPressed: { backgroundColor: '#E8EEF4' },
+  secondaryBtnPressed: { backgroundColor: '#F8FAFC' },
   secondaryBtnText: {
     ...TYPE_FACE,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: FONT.semibold,
     color: T.text,
     textAlign: 'center',
-    letterSpacing: -0.2,
+    letterSpacing: -0.15,
   },
   secondaryBtnSub: {
     ...TYPE_FACE,
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: FONT.regular,
     color: T.textSecondary,
-    opacity: 0.6,
+    opacity: 0.85,
     textAlign: 'center',
   },
   empty: { flex: 1, padding: 24, justifyContent: 'center' },
