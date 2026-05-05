@@ -306,11 +306,15 @@ function formatTimeForLegCard(raw: string | null | undefined): string {
   return s;
 }
 
+const NBSP = '\u00A0';
+
 function chipDateLabel(dateIso: string): string {
   const iso = String(dateIso ?? '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
   const d = new Date(`${iso}T12:00:00`);
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const raw = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  // Prefer keeping month + day on one line (clean 2-line wrap is "Wed, Apr" / "29" only if needed).
+  return raw.replace(/(\s)(\d{1,2})$/, `${NBSP}$2`);
 }
 
 /** Display "B6 523" / "AF 334" style; avoids rendering weird raw tokens as a title. */
@@ -419,9 +423,12 @@ function heroContextCitiesLine(citiesByPanel: string[], selectedDayIndex: number
 /** Phones at or below “standard” width (not Pro Max): slightly denser leg tile, same hierarchy. */
 const DETAIL_COMPACT_MAX_WIDTH = 393;
 
-/** Horizontal gap between operating-day chips; width computed so ~4 fit in the viewport. */
-const OPERATING_DAY_CHIP_GAP = 6;
-const OPERATING_DAY_SCROLL_PAD_X = 12;
+/** Fixed operating-day chips: horizontal scroll, peek of next tile; do not stretch to viewport. */
+const OPERATING_DAY_CHIP_WIDTH = 132;
+const OPERATING_DAY_CHIP_HEIGHT = 96;
+const OPERATING_DAY_CHIP_GAP = 11;
+const OPERATING_DAY_SCROLL_PAD_X = 24;
+const OPERATING_DAY_SNAP_INTERVAL = OPERATING_DAY_CHIP_WIDTH + OPERATING_DAY_CHIP_GAP;
 /** Must match `detailStyles.progressWrap` marginHorizontal (×2 subtracted from screen width for track). */
 const PROGRESS_TRACK_MARGIN_H = 16;
 
@@ -714,19 +721,10 @@ export default function TripDetailScreen() {
   const [pairingHotels, setPairingHotels] = useState<PairingDetailDbHotelRow[]>([]);
   const panelPagerRef = useRef<FlatList<TripDayViewModel>>(null);
   const operatingDayChipsRef = useRef<React.ComponentRef<typeof GHScrollView>>(null);
-  const selectionSourceRef = useRef<'pager' | 'chip' | 'tap' | 'programmatic'>('programmatic');
+  const selectionSourceRef = useRef<'pager' | 'tap' | 'programmatic'>('programmatic');
   const panelScrollAnimatedRef = useRef(false);
   const { width: panelWidth } = useWindowDimensions();
   const detailLayoutCompact = panelWidth > 0 && panelWidth <= DETAIL_COMPACT_MAX_WIDTH;
-  const operatingDayChipWidth = useMemo(() => {
-    const scrollPad = OPERATING_DAY_SCROLL_PAD_X * 2;
-    if (panelWidth <= scrollPad + 32) return 76;
-    return Math.max(
-      76,
-      Math.floor((panelWidth - scrollPad - 3 * OPERATING_DAY_CHIP_GAP) / 4),
-    );
-  }, [panelWidth]);
-  const operatingDaySnapInterval = operatingDayChipWidth + OPERATING_DAY_CHIP_GAP;
   /** Dismiss stale async detail merges when `tripId` changes before paint. */
   const activeDetailTripIdRef = useRef<string>('');
 
@@ -1017,17 +1015,13 @@ export default function TripDetailScreen() {
   }, [selectedDayIndex, vm?.days.length, panelWidth]);
 
   useEffect(() => {
-    if (!vm?.days.length || operatingDaySnapInterval <= 0) return;
-    if (selectionSourceRef.current === 'chip') {
-      selectionSourceRef.current = 'programmatic';
-      return;
-    }
+    if (!vm?.days.length || OPERATING_DAY_SNAP_INTERVAL <= 0) return;
     const x = Math.min(
-      Math.max(0, selectedDayIndex) * operatingDaySnapInterval,
-      Math.max(0, vm.days.length - 1) * operatingDaySnapInterval,
+      Math.max(0, selectedDayIndex) * OPERATING_DAY_SNAP_INTERVAL,
+      Math.max(0, vm.days.length - 1) * OPERATING_DAY_SNAP_INTERVAL,
     );
     operatingDayChipsRef.current?.scrollTo({ x, y: 0, animated: true });
-  }, [selectedDayIndex, operatingDaySnapInterval, vm?.days.length]);
+  }, [selectedDayIndex, OPERATING_DAY_SNAP_INTERVAL, vm?.days.length]);
 
   const syncSelectedDayFromPager = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -1039,18 +1033,6 @@ export default function TripDetailScreen() {
       setSelectedDayIndex((prev) => (clamped === prev ? prev : clamped));
     },
     [vm?.days.length, panelWidth],
-  );
-
-  const syncDayFromChipStrip = useCallback(
-    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (!vm?.days.length || operatingDaySnapInterval <= 0) return;
-      const idx = Math.round(e.nativeEvent.contentOffset.x / operatingDaySnapInterval);
-      const clamped = Math.max(0, Math.min(idx, vm.days.length - 1));
-      panelScrollAnimatedRef.current = false;
-      selectionSourceRef.current = 'chip';
-      setSelectedDayIndex((prev) => (clamped === prev ? prev : clamped));
-    },
-    [vm?.days.length, operatingDaySnapInterval],
   );
 
   const getOperatingPanelLayout = useCallback(
@@ -1336,15 +1318,11 @@ export default function TripDetailScreen() {
           ref={operatingDayChipsRef}
           horizontal
           nestedScrollEnabled
+          directionalLockEnabled
           showsHorizontalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          decelerationRate="fast"
-          snapToInterval={operatingDaySnapInterval}
-          snapToAlignment="start"
-          disableIntervalMomentum
-          bounces={false}
-          onMomentumScrollEnd={syncDayFromChipStrip}
-          onScrollEndDrag={syncDayFromChipStrip}
+          decelerationRate="normal"
+          bounces
           contentContainerStyle={[
             detailStyles.dayChipScroll,
             { gap: OPERATING_DAY_CHIP_GAP, paddingHorizontal: OPERATING_DAY_SCROLL_PAD_X },
@@ -1360,21 +1338,26 @@ export default function TripDetailScreen() {
                   selectionSourceRef.current = 'tap';
                   setSelectedDayIndex(i);
                 }}
-                style={[
-                  detailStyles.dayChip,
-                  { width: operatingDayChipWidth },
-                  sel ? detailStyles.dayChipSelected : undefined,
-                ]}
+                style={[detailStyles.dayChip, sel ? detailStyles.dayChipSelected : undefined]}
               >
-                <Text style={[detailStyles.dayChipTitle, sel && detailStyles.dayChipTitleSel]}>
-                  DAY {d.dayIndex}
+                <Text
+                  style={[detailStyles.dayChipTitle, sel && detailStyles.dayChipTitleSel]}
+                  numberOfLines={1}
+                >
+                  {`DAY ${d.dayIndex}`}
                 </Text>
-                <Text style={[detailStyles.dayChipDate, sel && detailStyles.dayChipDateSel]}>
+                <Text
+                  style={[detailStyles.dayChipDate, sel && detailStyles.dayChipDateSel]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.85}
+                >
                   {chipDateLabel(d.dateIso)}
                 </Text>
                 <Text
                   style={[detailStyles.dayChipLayover, sel && detailStyles.dayChipLayoverSel]}
                   numberOfLines={1}
+                  ellipsizeMode="tail"
                 >
                   {layoverCityOnlyForDayChip(d, t)}
                 </Text>
@@ -1914,21 +1897,25 @@ const detailStyles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 8,
   },
-  dayChipScroll: { paddingBottom: 3 },
+  dayChipScroll: { paddingBottom: 0 },
   dayChip: {
-    borderRadius: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
+    width: OPERATING_DAY_CHIP_WIDTH,
+    height: OPERATING_DAY_CHIP_HEIGHT,
+    borderRadius: 15,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: 'rgba(0,0,0,0.05)',
     backgroundColor: '#FFFFFF',
     alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    overflow: 'hidden',
     ...Platform.select({
       ios: {
-        shadowColor: '#0F172A',
-        shadowOpacity: 0.04,
-        shadowRadius: 4,
-        shadowOffset: { width: 0, height: 1 },
+        shadowColor: 'transparent',
+        shadowOpacity: 0,
+        shadowRadius: 0,
+        shadowOffset: { width: 0, height: 0 },
       },
       android: { elevation: 0 },
       default: {},
@@ -1937,47 +1924,55 @@ const detailStyles = StyleSheet.create({
   dayChipSelected: {
     backgroundColor: FC_PREMIUM_RED,
     borderColor: FC_PREMIUM_RED,
-    shadowOpacity: 0,
-    elevation: 0,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 2 },
+      },
+      android: { elevation: 3 },
+      default: {},
+    }),
   },
   dayChipTitle: {
     ...TYPE_FACE,
-    fontSize: 9,
-    fontWeight: FONT.semibold,
+    fontSize: 12,
+    lineHeight: 14,
+    fontWeight: '500',
     color: '#64748B',
-    letterSpacing: 0.35,
+    letterSpacing: 0.2,
     textTransform: 'uppercase',
     textAlign: 'left',
     alignSelf: 'stretch',
   },
-  dayChipTitleSel: { color: 'rgba(255,255,255,0.95)' },
+  dayChipTitleSel: { color: '#FFFFFF' },
   dayChipDate: {
     ...TYPE_FACE,
-    fontSize: 11,
-    fontWeight: FONT.semibold,
+    fontSize: 16,
+    lineHeight: 19,
+    fontWeight: '500',
     color: '#0F172A',
-    marginTop: 4,
     textAlign: 'left',
     alignSelf: 'stretch',
-    letterSpacing: -0.25,
-    ...MOCKUP_TABULAR,
+    letterSpacing: -0.15,
   },
   dayChipDateSel: { color: '#FFFFFF' },
   dayChipLayover: {
     ...TYPE_FACE,
-    fontSize: 10,
-    fontWeight: FONT.medium,
+    fontSize: 14,
+    lineHeight: 17,
+    fontWeight: '500',
     color: '#64748B',
-    marginTop: 3,
     textAlign: 'left',
     alignSelf: 'stretch',
-    letterSpacing: 0.1,
+    letterSpacing: 0.05,
   },
-  dayChipLayoverSel: { color: 'rgba(255,255,255,0.88)' },
+  dayChipLayoverSel: { color: '#FFFFFF' },
   progressWrap: {
     marginHorizontal: PROGRESS_TRACK_MARGIN_H,
     marginBottom: 12,
-    marginTop: 4,
+    marginTop: 9,
   },
   progressTrackBg: {
     height: 3,
