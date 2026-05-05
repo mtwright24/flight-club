@@ -1571,12 +1571,14 @@ export default function TripDetailScreen() {
           <View style={detailStyles.secondaryRow}>
             <SecondaryAction
               icon="chatbubbles-outline"
+              iconColor="#64748B"
               label="Trip Chat"
               subtitle="Message crew"
               onPress={() => router.push({ pathname: '/crew-schedule/trip-chat', params: { tripId: t.id } })}
             />
             <SecondaryAction
               icon="notifications-outline"
+              iconColor="#CA8A04"
               label="Set Alert"
               subtitle="Delays · Gate"
               onPress={() => router.push({ pathname: '/crew-schedule/alerts', params: { tripId: t.id } })}
@@ -1600,11 +1602,26 @@ function crewKey(c: ScheduleCrewMember, i: number) {
   return `${c.name}-${c.employeeId ?? ''}-${c.position}-${i}`;
 }
 
-/** Uppercase line like the pairing-detail mockup (LAST, FIRST middle). */
+/** Title case for mockup v3 (e.g. "wright, marcus" → "Wright, Marcus"). */
+function titleCaseWords(seg: string): string {
+  return seg
+    .split(/\s+/)
+    .map((w) => (w.length ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w))
+    .join(' ');
+}
+
 function formatCrewNameForCard(raw: string | undefined): string {
   const s = String(raw ?? '').trim();
   if (!s) return '—';
-  return s.toUpperCase();
+  if (s.includes(',')) {
+    return s
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map(titleCaseWords)
+      .join(', ');
+  }
+  return titleCaseWords(s);
 }
 
 function crewTokensNorm(s: string): string[] {
@@ -1643,10 +1660,12 @@ function DetailCrewCard({
 
   return (
     <View style={[detailStyles.crewCard, isYou ? detailStyles.crewCardYou : undefined]}>
-      <Text style={detailStyles.crewPos}>{member.position?.trim() || '—'}</Text>
-      <Text style={detailStyles.crewName} numberOfLines={2}>
-        {formatCrewNameForCard(member.name)}
-      </Text>
+      <View style={detailStyles.crewTopRow}>
+        <Text style={detailStyles.crewPos}>{member.position?.trim() || '—'}</Text>
+        <Text style={detailStyles.crewName} numberOfLines={2}>
+          {formatCrewNameForCard(member.name)}
+        </Text>
+      </View>
       {isYou ? (
         <View style={detailStyles.crewYouBadge}>
           <Text style={detailStyles.crewYouBadgeText}>You</Text>
@@ -1669,11 +1688,13 @@ function DetailCrewCard({
 
 function SecondaryAction({
   icon,
+  iconColor,
   label,
   subtitle,
   onPress,
 }: {
   icon: React.ComponentProps<typeof Ionicons>['name'];
+  iconColor?: string;
   label: string;
   subtitle?: string;
   onPress: () => void;
@@ -1683,7 +1704,7 @@ function SecondaryAction({
       style={({ pressed }) => [detailStyles.secondaryBtn, pressed && detailStyles.secondaryBtnPressed]}
       onPress={onPress}
     >
-      <Ionicons name={icon} size={18} color={FC_PREMIUM_RED} />
+      <Ionicons name={icon} size={17} color={iconColor ?? FC_PREMIUM_RED} />
       <Text style={detailStyles.secondaryBtnText}>{label}</Text>
       {subtitle ? <Text style={detailStyles.secondaryBtnSub}>{subtitle}</Text> : null}
     </Pressable>
@@ -1691,7 +1712,7 @@ function SecondaryAction({
 }
 
 const detailStyles = StyleSheet.create({
-  shell: { flex: 1, backgroundColor: T.bg },
+  shell: { flex: 1, backgroundColor: '#F2F2F7' },
   scroll: { flex: 1 },
   heroSafe: {
     backgroundColor: FC_PREMIUM_RED,
@@ -2405,9 +2426,9 @@ const detailStyles = StyleSheet.create({
     ...TYPE_FACE,
     fontSize: 10,
     fontWeight: FONT.bold,
-    color: '#64748B',
+    color: '#475569',
     textTransform: 'uppercase',
-    letterSpacing: 0.9,
+    letterSpacing: 0.85,
     paddingHorizontal: 16,
   },
   moSectionLabelCrew: {
@@ -2426,14 +2447,19 @@ const detailStyles = StyleSheet.create({
     letterSpacing: 0.35,
     marginBottom: 10,
   },
+  crewTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
   crewCard: {
     width: '48%',
     maxWidth: '48%',
     flexGrow: 1,
     backgroundColor: '#fff',
     borderRadius: 12,
-    paddingVertical: 9,
-    paddingHorizontal: 9,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
     marginBottom: 0,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E2E8F0',
@@ -2457,52 +2483,55 @@ const detailStyles = StyleSheet.create({
     fontSize: 12,
     fontWeight: FONT.bold,
     color: FC_PREMIUM_RED,
-    marginBottom: 3,
     letterSpacing: -0.2,
+    marginTop: 1,
+    minWidth: 26,
   },
   crewName: {
     ...TYPE_FACE,
-    fontSize: 13,
-    fontWeight: FONT.semibold,
+    flex: 1,
+    minWidth: 0,
+    fontSize: 12,
+    fontWeight: FONT.bold,
     color: '#0F172A',
-    letterSpacing: -0.05,
-    lineHeight: 17,
+    letterSpacing: -0.08,
+    lineHeight: 16,
   },
   crewYouBadge: {
     alignSelf: 'flex-start',
     backgroundColor: '#EFF6FF',
-    paddingHorizontal: 7,
+    paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 6,
-    marginTop: 6,
+    borderRadius: 8,
+    marginTop: 5,
   },
   crewYouBadgeText: {
     ...TYPE_FACE,
     fontSize: 9,
     fontWeight: FONT.semibold,
     color: '#2563EB',
-    letterSpacing: 0.2,
+    letterSpacing: 0.15,
   },
   crewEmp: {
     ...TYPE_FACE,
     fontSize: 10,
     fontWeight: FONT.medium,
-    color: '#64748B',
-    marginTop: 6,
+    color: '#94A3B8',
+    marginTop: 5,
     ...MOCKUP_TABULAR,
   },
   crewMessageRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    marginTop: 8,
+    marginTop: 7,
   },
   crewMessageText: {
     ...TYPE_FACE,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: FONT.semibold,
     color: FC_PREMIUM_RED,
-    letterSpacing: -0.1,
+    letterSpacing: -0.05,
   },
   muted: { ...TYPE_FACE, fontSize: 14, fontWeight: FONT.regular, color: T.textSecondary },
   actionsCol: { paddingHorizontal: 16, gap: 11, paddingBottom: 24 },
@@ -2544,8 +2573,8 @@ const detailStyles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
-    paddingVertical: 9,
+    gap: 3,
+    paddingVertical: 8,
     paddingHorizontal: 4,
     borderRadius: 12,
     backgroundColor: '#FFFFFF',
@@ -2564,18 +2593,17 @@ const detailStyles = StyleSheet.create({
   secondaryBtnPressed: { backgroundColor: '#F8FAFC' },
   secondaryBtnText: {
     ...TYPE_FACE,
-    fontSize: 12,
-    fontWeight: FONT.semibold,
-    color: T.text,
+    fontSize: 11,
+    fontWeight: FONT.bold,
+    color: '#0F172A',
     textAlign: 'center',
-    letterSpacing: -0.15,
+    letterSpacing: -0.12,
   },
   secondaryBtnSub: {
     ...TYPE_FACE,
-    fontSize: 10,
-    fontWeight: FONT.regular,
-    color: T.textSecondary,
-    opacity: 0.85,
+    fontSize: 9,
+    fontWeight: FONT.medium,
+    color: '#94A3B8',
     textAlign: 'center',
   },
   empty: { flex: 1, padding: 24, justifyContent: 'center' },
