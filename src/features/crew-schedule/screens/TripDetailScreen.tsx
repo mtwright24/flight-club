@@ -97,9 +97,20 @@ const TYPE_FACE: TextStyle = Platform.select<TextStyle>({
   default: {},
 });
 
-/** Red hero title + subtitles: SF Pro Text reads closer to mockup than Display at large sizes. */
-const HERO_SANS: TextStyle = Platform.select<TextStyle>({
-  ios: { fontFamily: 'SF Pro Text' },
+/** Red hero — large airport/city line only (mockup: SF Pro Display + 700; RN ≈ web stack without Inter). */
+const RED_HEADER_CITY_FACE: TextStyle = Platform.select<TextStyle>({
+  ios: { fontFamily: 'SF Pro Display' },
+  android: { fontFamily: 'sans-serif' },
+  default: {},
+});
+
+/**
+ * Red hero block: mockup is iOS SF Pro. Avoid hard-coded `SF Pro Text` / `Display` PostScript
+ * names — they often don’t resolve in RN and fall back to a different face. On iOS, omit
+ * `fontFamily` so Text uses the system San Francisco stack; Android uses sans-serif.
+ */
+const HERO_MOCK: TextStyle = Platform.select<TextStyle>({
+  ios: {},
   android: { fontFamily: 'sans-serif' },
   default: {},
 });
@@ -1760,36 +1771,36 @@ const detailStyles = StyleSheet.create({
     paddingBottom: 26,
   },
   heroMeta: {
-    ...STATS_VALUE_FONT,
-    color: '#FFFFFF',
-    fontSize: 12,
+    ...HERO_MOCK,
+    color: 'rgba(255,255,255,0.96)',
+    fontSize: 11,
     fontWeight: FONT.medium,
-    letterSpacing: 0,
+    letterSpacing: 0.2,
   },
   heroCity: {
-    ...HERO_SANS,
+    ...RED_HEADER_CITY_FACE,
     color: '#FFFFFF',
-    fontSize: 32,
-    lineHeight: 38,
-    fontWeight: FONT.bold,
-    marginTop: 8,
-    letterSpacing: -0.28,
+    fontSize: 42,
+    lineHeight: 42,
+    fontWeight: '400',
+    marginTop: 6,
+    letterSpacing: 1,
   },
   heroContext: {
-    ...HERO_SANS,
+    ...HERO_MOCK,
     color: 'rgba(255,255,255,0.95)',
-    fontSize: 16,
-    fontWeight: FONT.medium,
-    marginTop: 6,
+    fontSize: 15,
+    fontWeight: FONT.bold,
+    marginTop: 5,
     letterSpacing: 0,
   },
   heroDates: {
-    ...HERO_SANS,
+    ...HERO_MOCK,
     color: 'rgba(255,255,255,0.92)',
-    fontSize: 15,
-    fontWeight: FONT.medium,
-    marginTop: 8,
-    letterSpacing: -0.2,
+    fontSize: 14,
+    fontWeight: FONT.regular,
+    marginTop: 6,
+    letterSpacing: -0.08,
   },
   heroPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   pill: {
@@ -1802,7 +1813,7 @@ const detailStyles = StyleSheet.create({
   },
   pillDh: { backgroundColor: 'rgba(0,0,0,0.22)' },
   pillText: {
-    ...HERO_SANS,
+    ...HERO_MOCK,
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: FONT.medium,
