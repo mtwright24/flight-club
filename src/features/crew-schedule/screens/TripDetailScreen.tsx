@@ -1234,7 +1234,7 @@ export default function TripDetailScreen() {
     <View style={detailStyles.shell}>
       <ScrollView
         style={detailStyles.scroll}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 22 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 22, width: '100%' }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         nestedScrollEnabled
@@ -1731,14 +1731,18 @@ function SecondaryAction({
   onPress: () => void;
 }) {
   return (
-    <Pressable
-      style={({ pressed }) => [detailStyles.secondaryBtn, pressed && detailStyles.secondaryBtnPressed]}
-      onPress={onPress}
-    >
-      <Ionicons name={icon} size={iconSize} color={iconColor ?? FC_PREMIUM_RED} />
-      <Text style={detailStyles.secondaryBtnText}>{label}</Text>
-      {subtitle ? <Text style={detailStyles.secondaryBtnSub}>{subtitle}</Text> : null}
-    </Pressable>
+    <View style={detailStyles.secondaryTileCell}>
+      <Pressable
+        style={({ pressed }) => [detailStyles.secondaryBtn, pressed && detailStyles.secondaryBtnPressed]}
+        onPress={onPress}
+      >
+        <View style={detailStyles.secondaryBtnInner}>
+          <Ionicons name={icon} size={iconSize} color={iconColor ?? FC_PREMIUM_RED} />
+          <Text style={detailStyles.secondaryBtnText}>{label}</Text>
+          {subtitle ? <Text style={detailStyles.secondaryBtnSub}>{subtitle}</Text> : null}
+        </View>
+      </Pressable>
+    </View>
   );
 }
 
@@ -2656,20 +2660,21 @@ const detailStyles = StyleSheet.create({
     letterSpacing: 0.1,
     textAlign: 'center',
   },
-  secondaryRow: { flexDirection: 'row', gap: 7, alignItems: 'stretch' },
-  secondaryBtn: {
+  secondaryRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    alignSelf: 'stretch',
+    width: '100%',
+    gap: 8,
+  },
+  /** Outer shell matches crew cards: border on `View`, not `Pressable` (outline renders reliably). */
+  secondaryTileCell: {
     flex: 1,
     minWidth: 0,
-    minHeight: 96,
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 6,
+    alignSelf: 'stretch',
     borderRadius: 12,
     backgroundColor: '#FFFFFF',
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1,
     borderColor: '#E2E8F0',
     ...Platform.select({
       ios: {
@@ -2678,10 +2683,25 @@ const detailStyles = StyleSheet.create({
         shadowRadius: 3,
         shadowOffset: { width: 0, height: 1 },
       },
+      android: { elevation: 0 },
       default: {},
     }),
   },
+  secondaryBtn: {
+    width: '100%',
+    minHeight: 102,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+  },
   secondaryBtnPressed: { backgroundColor: '#F8FAFC' },
+  secondaryBtnInner: {
+    flex: 1,
+    paddingVertical: 14,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
   secondaryBtnText: {
     ...TYPE_FACE,
     fontSize: 11,
@@ -2689,6 +2709,8 @@ const detailStyles = StyleSheet.create({
     color: '#0F172A',
     textAlign: 'center',
     letterSpacing: -0.12,
+    alignSelf: 'center',
+    width: '100%',
   },
   secondaryBtnSub: {
     ...TYPE_FACE,
@@ -2696,6 +2718,8 @@ const detailStyles = StyleSheet.create({
     fontWeight: FONT.medium,
     color: '#94A3B8',
     textAlign: 'center',
+    alignSelf: 'center',
+    width: '100%',
   },
   empty: { flex: 1, padding: 24, justifyContent: 'center' },
   emptyTitle: { ...TYPE_FACE, fontSize: 16, fontWeight: FONT.bold, color: T.text, letterSpacing: -0.3 },
