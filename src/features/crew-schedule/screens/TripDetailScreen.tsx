@@ -1536,9 +1536,6 @@ export default function TripDetailScreen() {
 
         <Text style={[detailStyles.moSectionLabel, detailStyles.moSectionLabelCrew]}>Crew</Text>
         <View style={detailStyles.crewWrap}>
-          {t.base?.trim() ? (
-            <Text style={detailStyles.crewBaseLine}>Base · {t.base.trim()}</Text>
-          ) : null}
           {vm.crewMembers.length > 0 ? (
             <View style={detailStyles.crewGrid}>
               {vm.crewMembers.map((c, i) => (
@@ -1558,33 +1555,45 @@ export default function TripDetailScreen() {
 
         <Text style={[detailStyles.moSectionLabel, detailStyles.moSectionLabelActions]}>Actions</Text>
         <View style={detailStyles.actionsCol}>
-          <Pressable
-            style={({ pressed }) => [detailStyles.ctaPrimary, pressed && detailStyles.ctaPrimaryPressed]}
-            onPress={() => openPost(t)}
-          >
-            <Ionicons name="swap-horizontal" size={21} color="#FFFFFF" />
-            <View style={detailStyles.ctaPrimaryTextCol}>
-              <Text style={detailStyles.ctaPrimaryTitle}>Post to Tradeboard</Text>
-              <Text style={detailStyles.ctaPrimarySub}>Drop · Swap · Pickup</Text>
-            </View>
-          </Pressable>
+          <View style={detailStyles.ctaPrimaryWrap}>
+            <Pressable
+              android_ripple={{ color: 'rgba(255,255,255,0.22)' }}
+              style={({ pressed }) => [
+                detailStyles.ctaPrimary,
+                pressed && detailStyles.ctaPrimaryPressed,
+              ]}
+              onPress={() => openPost(t)}
+            >
+              <View style={detailStyles.ctaPrimaryCluster}>
+                <Ionicons name="swap-horizontal" size={22} color="#FFFFFF" style={detailStyles.ctaPrimaryIcon} />
+                <View style={detailStyles.ctaPrimaryTextStack}>
+                  <Text style={detailStyles.ctaPrimaryTitle}>Post to Tradeboard</Text>
+                  <Text style={detailStyles.ctaPrimarySub}>Drop · Swap · Pickup</Text>
+                </View>
+              </View>
+            </Pressable>
+          </View>
           <View style={detailStyles.secondaryRow}>
             <SecondaryAction
-              icon="chatbubbles-outline"
+              icon="chatbubble-ellipses"
               iconColor="#64748B"
+              iconSize={24}
               label="Trip Chat"
               subtitle="Message crew"
               onPress={() => router.push({ pathname: '/crew-schedule/trip-chat', params: { tripId: t.id } })}
             />
             <SecondaryAction
-              icon="notifications-outline"
+              icon="notifications"
               iconColor="#CA8A04"
+              iconSize={24}
               label="Set Alert"
               subtitle="Delays · Gate"
               onPress={() => router.push({ pathname: '/crew-schedule/alerts', params: { tripId: t.id } })}
             />
             <SecondaryAction
-              icon="compass-outline"
+              icon="compass"
+              iconColor="#57534E"
+              iconSize={24}
               label="Commute"
               subtitle="To base"
               onPress={() =>
@@ -1643,6 +1652,12 @@ function crewNameMatchesProfileDisplay(crewName: string, displayName: string): b
   return overlap;
 }
 
+/** Mockup v3: filled gray bubble beside red “Message” (not red bubble). */
+const CREW_MESSAGE_GLYPH = '#9CA3AF';
+
+/** Footer height reserved for Message row (non-self) or spacer (self) — keeps ID band symmetric. */
+const CREW_CARD_FOOTER_H = 18;
+
 function DetailCrewCard({
   member,
   tripBase,
@@ -1660,28 +1675,42 @@ function DetailCrewCard({
 
   return (
     <View style={[detailStyles.crewCard, isYou ? detailStyles.crewCardYou : undefined]}>
-      <View style={detailStyles.crewTopRow}>
-        <Text style={detailStyles.crewPos}>{member.position?.trim() || '—'}</Text>
-        <Text style={detailStyles.crewName} numberOfLines={2}>
-          {formatCrewNameForCard(member.name)}
-        </Text>
-      </View>
-      {isYou ? (
-        <View style={detailStyles.crewYouBadge}>
-          <Text style={detailStyles.crewYouBadgeText}>You</Text>
+      <View style={detailStyles.crewCardTop}>
+        <View style={detailStyles.crewTopRow}>
+          <Text style={detailStyles.crewPos}>{member.position?.trim() || '—'}</Text>
+          <Text style={detailStyles.crewName} numberOfLines={2}>
+            {formatCrewNameForCard(member.name)}
+          </Text>
         </View>
-      ) : null}
-      <Text style={detailStyles.crewEmp}>{detailLine}</Text>
-      {!isYou ? (
-        <Pressable
-          onPress={onMessage}
-          style={({ pressed }) => [detailStyles.crewMessageRow, pressed && { opacity: 0.85 }]}
-          hitSlop={6}
-        >
-          <Ionicons name="chatbubble-outline" size={13} color="#94A3B8" />
-          <Text style={detailStyles.crewMessageText}>Message</Text>
-        </Pressable>
-      ) : null}
+        {isYou ? (
+          <View style={detailStyles.crewMiddleSlot}>
+            <View style={detailStyles.crewYouBadge}>
+              <Text style={detailStyles.crewYouBadgeText}>You</Text>
+            </View>
+          </View>
+        ) : null}
+      </View>
+      <View style={detailStyles.crewEmpBand}>
+        <Text style={detailStyles.crewEmp}>{detailLine}</Text>
+      </View>
+      <View style={detailStyles.crewFooterSlot}>
+        {!isYou ? (
+          <Pressable
+            onPress={onMessage}
+            style={({ pressed }) => [detailStyles.crewMessageRow, pressed && { opacity: 0.85 }]}
+            hitSlop={6}
+          >
+            <View style={detailStyles.crewMessageInner}>
+              <Ionicons name="chatbubble-ellipses" size={14} color={CREW_MESSAGE_GLYPH} />
+              <Text style={detailStyles.crewMessageText} numberOfLines={1}>
+                Message
+              </Text>
+            </View>
+          </Pressable>
+        ) : (
+          <View style={detailStyles.crewFooterSpacer} />
+        )}
+      </View>
     </View>
   );
 }
@@ -1689,12 +1718,14 @@ function DetailCrewCard({
 function SecondaryAction({
   icon,
   iconColor,
+  iconSize = 22,
   label,
   subtitle,
   onPress,
 }: {
   icon: React.ComponentProps<typeof Ionicons>['name'];
   iconColor?: string;
+  iconSize?: number;
   label: string;
   subtitle?: string;
   onPress: () => void;
@@ -1704,7 +1735,7 @@ function SecondaryAction({
       style={({ pressed }) => [detailStyles.secondaryBtn, pressed && detailStyles.secondaryBtnPressed]}
       onPress={onPress}
     >
-      <Ionicons name={icon} size={17} color={iconColor ?? FC_PREMIUM_RED} />
+      <Ionicons name={icon} size={iconSize} color={iconColor ?? FC_PREMIUM_RED} />
       <Text style={detailStyles.secondaryBtnText}>{label}</Text>
       {subtitle ? <Text style={detailStyles.secondaryBtnSub}>{subtitle}</Text> : null}
     </Pressable>
@@ -2419,14 +2450,15 @@ const detailStyles = StyleSheet.create({
   crewGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 7,
+    gap: 8,
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
   moSectionLabel: {
     ...TYPE_FACE,
     fontSize: 10,
     fontWeight: FONT.bold,
-    color: '#475569',
+    color: '#94A3B8',
     textTransform: 'uppercase',
     letterSpacing: 0.85,
     paddingHorizontal: 16,
@@ -2439,28 +2471,21 @@ const detailStyles = StyleSheet.create({
     marginTop: 18,
     marginBottom: 8,
   },
-  crewBaseLine: {
-    ...TYPE_FACE,
-    fontSize: 10,
-    fontWeight: FONT.medium,
-    color: '#94A3B8',
-    letterSpacing: 0.35,
-    marginBottom: 10,
-  },
   crewTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 6,
+    gap: 5,
   },
   crewCard: {
     width: '48%',
     maxWidth: '48%',
     flexGrow: 1,
     backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingVertical: 8,
+    borderRadius: 10,
+    paddingVertical: 5,
     paddingHorizontal: 8,
     marginBottom: 0,
+    flexDirection: 'column',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E2E8F0',
     ...Platform.select({
@@ -2480,30 +2505,39 @@ const detailStyles = StyleSheet.create({
   },
   crewPos: {
     ...TYPE_FACE,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: FONT.bold,
     color: FC_PREMIUM_RED,
     letterSpacing: -0.2,
     marginTop: 1,
-    minWidth: 26,
+    minWidth: 24,
   },
   crewName: {
     ...TYPE_FACE,
     flex: 1,
     minWidth: 0,
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: FONT.bold,
     color: '#0F172A',
-    letterSpacing: -0.08,
-    lineHeight: 16,
+    letterSpacing: -0.06,
+    lineHeight: 13,
+    flexShrink: 1,
+  },
+  crewCardTop: {
+    alignSelf: 'stretch',
+    flexShrink: 0,
+  },
+  crewMiddleSlot: {
+    alignSelf: 'stretch',
+    marginTop: 3,
   },
   crewYouBadge: {
-    alignSelf: 'flex-start',
+    alignSelf: 'stretch',
+    alignItems: 'center',
     backgroundColor: '#EFF6FF',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
-    marginTop: 5,
   },
   crewYouBadgeText: {
     ...TYPE_FACE,
@@ -2512,19 +2546,38 @@ const detailStyles = StyleSheet.create({
     color: '#2563EB',
     letterSpacing: 0.15,
   },
+  /** Tight symmetric pad around # line — no flex grow (avoids huge gap when row stretches). */
+  crewEmpBand: {
+    alignSelf: 'stretch',
+    paddingVertical: 5,
+  },
+  crewFooterSlot: {
+    alignSelf: 'stretch',
+    flexShrink: 0,
+    height: CREW_CARD_FOOTER_H,
+    justifyContent: 'center',
+  },
+  crewFooterSpacer: {
+    height: CREW_CARD_FOOTER_H,
+  },
   crewEmp: {
     ...TYPE_FACE,
     fontSize: 10,
     fontWeight: FONT.medium,
     color: '#94A3B8',
-    marginTop: 5,
     ...MOCKUP_TABULAR,
+    textAlign: 'left',
   },
   crewMessageRow: {
+    alignSelf: 'flex-start',
+    height: CREW_CARD_FOOTER_H,
+    justifyContent: 'center',
+  },
+  crewMessageInner: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'nowrap',
     gap: 5,
-    marginTop: 7,
   },
   crewMessageText: {
     ...TYPE_FACE,
@@ -2534,48 +2587,86 @@ const detailStyles = StyleSheet.create({
     letterSpacing: -0.05,
   },
   muted: { ...TYPE_FACE, fontSize: 14, fontWeight: FONT.regular, color: T.textSecondary },
-  actionsCol: { paddingHorizontal: 16, gap: 11, paddingBottom: 24 },
-  ctaPrimary: {
-    backgroundColor: FC_PREMIUM_RED,
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: 12,
+  actionsCol: {
+    paddingHorizontal: 16,
+    gap: 11,
+    paddingBottom: 24,
+    alignSelf: 'stretch',
+    width: '100%',
+  },
+  ctaPrimaryWrap: {
+    alignSelf: 'stretch',
+    width: '100%',
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#C4121A',
     ...Platform.select({
-      android: { elevation: 2 },
+      android: { elevation: 3 },
       default: {},
     }),
   },
-  ctaPrimaryPressed: { opacity: 0.92 },
-  ctaPrimaryTextCol: { flex: 1, minWidth: 0 },
+  ctaPrimary: {
+    alignSelf: 'stretch',
+    width: '100%',
+    backgroundColor: '#C4121A',
+    borderRadius: 12,
+    paddingTop: 52,
+    paddingBottom: 52,
+    paddingLeft: 16,
+    paddingRight: 26,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ctaPrimaryPressed: { opacity: 0.9 },
+  ctaPrimaryCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    maxWidth: '100%',
+    gap: 11,
+    paddingVertical: 4,
+    transform: [{ translateX: -11 }],
+  },
+  ctaPrimaryTextStack: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  ctaPrimaryIcon: {
+    marginTop: 1,
+    marginLeft: -5,
+  },
   ctaPrimaryTitle: {
     ...TYPE_FACE,
     color: '#FFFFFF',
     fontSize: 15,
-    fontWeight: FONT.bold,
-    letterSpacing: -0.28,
+    fontWeight: FONT.medium,
+    letterSpacing: -0.2,
+    textAlign: 'center',
   },
   ctaPrimarySub: {
     ...TYPE_FACE,
-    color: 'rgba(255,255,255,0.88)',
+    color: 'rgba(255,255,255,0.92)',
     fontSize: 11,
-    fontWeight: FONT.medium,
-    marginTop: 2,
-    letterSpacing: 0.12,
+    fontWeight: FONT.regular,
+    letterSpacing: 0.1,
+    textAlign: 'center',
   },
   secondaryRow: { flexDirection: 'row', gap: 7, alignItems: 'stretch' },
   secondaryBtn: {
     flex: 1,
     minWidth: 0,
+    minHeight: 96,
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 6,
     borderRadius: 12,
     backgroundColor: '#FFFFFF',
     borderWidth: StyleSheet.hairlineWidth,
