@@ -73,6 +73,10 @@ const GRID_W_DETAIL = 54;
 const GRID_W_LAYOVER = 54;
 const GRID_W_WX = 22;
 
+/** Full-width horizontal rules between classic rows (mock: faint light grey). */
+const CLASSIC_ROW_DIVIDER = '#E2E8F0';
+const ROW_DIVIDER_WIDTH = StyleSheet.hairlineWidth;
+
 function parseLocalNoon(isoDate: string): Date {
   return new Date(`${isoDate}T12:00:00`);
 }
@@ -508,6 +512,12 @@ const ScheduleRow = memo(function ScheduleRow({
 
   const rowChrome = (
     <View style={rowStyle}>
+      {row.isToday ? (
+        <>
+          <View style={styles.todayInsetTopEdge} pointerEvents="none" />
+          <View style={styles.todayInsetBottomEdge} pointerEvents="none" />
+        </>
+      ) : null}
       <View style={styles.rowAccentHost}>
         {isTripDuty ? <View style={styles.rowAccentBar} /> : <View style={styles.rowAccentSpacerFill} />}
       </View>
@@ -970,6 +980,8 @@ const styles = StyleSheet.create({
     minHeight: 22,
     paddingVertical: 0,
     paddingHorizontal: 0,
+    borderBottomWidth: ROW_DIVIDER_WIDTH,
+    borderBottomColor: CLASSIC_ROW_DIVIDER,
     overflow: 'hidden',
   },
   cellsRow: {
@@ -1078,6 +1090,26 @@ const styles = StyleSheet.create({
   pressedRow: { opacity: 0.95 },
   todayRow: {
     backgroundColor: '#F9F0F2',
+  },
+  /** Recessed “pressed tile” look — darker band along top inner edge (mock inset shadow). */
+  todayInsetTopEdge: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    zIndex: 4,
+    height: Platform.OS === 'ios' ? 2 : Math.max(ROW_DIVIDER_WIDTH * 2, 1),
+    backgroundColor: 'rgba(15, 23, 42, 0.14)',
+  },
+  /** Subtle inner highlight along bottom (inset bevel). */
+  todayInsetBottomEdge: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 4,
+    height: ROW_DIVIDER_WIDTH,
+    backgroundColor: 'rgba(255, 255, 255, 0.58)',
   },
   tripChainRow: { },
   dateStack: {
