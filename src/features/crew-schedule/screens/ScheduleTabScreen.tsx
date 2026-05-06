@@ -1,7 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
 import {
     ActivityIndicator,
     Dimensions,
@@ -29,12 +35,6 @@ import {
     type CrewScheduleFlicaRow,
 } from "../scheduleApi";
 import {
-    clampYearMonthToScheduleWindow,
-    canGoToNextScheduleMonth,
-    canGoToPreviousScheduleMonth,
-    tryStepScheduleMonth,
-} from "../scheduleMonthWindow";
-import {
     canGoToNextImportedMonth,
     canGoToPreviousImportedMonth,
     clampYearMonthToImportedScheduleMonths,
@@ -43,6 +43,12 @@ import {
     type ScheduleYearMonth,
 } from "../scheduleAvailableMonths";
 import { monthCalendarKey } from "../scheduleMonthCache";
+import {
+    canGoToNextScheduleMonth,
+    canGoToPreviousScheduleMonth,
+    clampYearMonthToScheduleWindow,
+    tryStepScheduleMonth,
+} from "../scheduleMonthWindow";
 import { readCommittedMonthSnapshot } from "../scheduleStableSnapshots";
 import { scheduleTheme as T } from "../scheduleTheme";
 import {
@@ -52,7 +58,10 @@ import {
 } from "../scheduleViewStorage";
 import { tradePostPrefillParams } from "../tradePostPrefillParams";
 import { stashTripForDetailNavigation } from "../tripDetailNavCache";
-import type { CrewScheduleTrip, ScheduleMonthMetrics, ScheduleViewMode } from "../types";
+import type {
+    CrewScheduleTrip,
+    ScheduleViewMode
+} from "../types";
 
 const MONTH_NAMES = [
   "January",
@@ -92,7 +101,8 @@ export default function ScheduleTabScreen() {
         const cl = clampYearMonthToScheduleWindow(c.year, c.month, anchor);
         setYear(cl.year);
         setMonth(cl.month);
-        if (cl.year !== c.year || cl.month !== c.month) void saveLastMonthCursor(cl.year, cl.month);
+        if (cl.year !== c.year || cl.month !== c.month)
+          void saveLastMonthCursor(cl.year, cl.month);
       }
     });
   }, []);
@@ -111,7 +121,11 @@ export default function ScheduleTabScreen() {
     if (!importedMonths.length) return;
     const ok = importedMonths.some((x) => x.year === year && x.month === month);
     if (ok) return;
-    const c = clampYearMonthToImportedScheduleMonths(year, month, importedMonths);
+    const c = clampYearMonthToImportedScheduleMonths(
+      year,
+      month,
+      importedMonths,
+    );
     if (c && (c.year !== year || c.month !== month)) {
       setYear(c.year);
       setMonth(c.month);
@@ -123,7 +137,10 @@ export default function ScheduleTabScreen() {
     useScheduleTripsForMonth(year, month);
   const [, setFlicaDirectForMonth] = useState(false);
 
-  const requestedKey = useMemo(() => monthCalendarKey(year, month), [year, month]);
+  const requestedKey = useMemo(
+    () => monthCalendarKey(year, month),
+    [year, month],
+  );
 
   const stableMonthFallback = useMemo(
     () => readCommittedMonthSnapshot(requestedKey),
@@ -131,11 +148,7 @@ export default function ScheduleTabScreen() {
   );
 
   const { displayTrips, displayMetrics } = useMemo(() => {
-    if (
-      loading &&
-      stableMonthFallback?.trips?.length &&
-      trips.length === 0
-    ) {
+    if (loading && stableMonthFallback?.trips?.length && trips.length === 0) {
       return {
         displayTrips: stableMonthFallback.trips,
         displayMetrics: stableMonthFallback.monthMetrics,
@@ -145,7 +158,7 @@ export default function ScheduleTabScreen() {
   }, [loading, stableMonthFallback, trips, monthMetrics, requestedKey]);
 
   const monthBodyLoadingOverlay =
-    loading && displayTrips.length === 0 && !(stableMonthFallback?.trips?.length);
+    loading && displayTrips.length === 0 && !stableMonthFallback?.trips?.length;
 
   const loadFlicaDirectFlag = useCallback(() => {
     void hasFlicaDirectImportForMonth(year, month).then(setFlicaDirectForMonth);
@@ -215,8 +228,12 @@ export default function ScheduleTabScreen() {
   const persistMonth = useCallback(
     (y: number, m: number) => {
       if (importedMonths.length > 0) {
-        const inList = importedMonths.some((x) => x.year === y && x.month === m);
-        const target = inList ? { year: y, month: m } : clampYearMonthToImportedScheduleMonths(y, m, importedMonths);
+        const inList = importedMonths.some(
+          (x) => x.year === y && x.month === m,
+        );
+        const target = inList
+          ? { year: y, month: m }
+          : clampYearMonthToImportedScheduleMonths(y, m, importedMonths);
         if (target) {
           setYear(target.year);
           setMonth(target.month);
@@ -331,7 +348,9 @@ export default function ScheduleTabScreen() {
 
   const onPressCalendarDay = useCallback(
     (iso: string) => {
-      const onDay = displayTrips.filter((t) => iso >= t.startDate && iso <= t.endDate);
+      const onDay = displayTrips.filter(
+        (t) => iso >= t.startDate && iso <= t.endDate,
+      );
       if (onDay.length > 0) openTrip(onDay[0]!, iso);
     },
     [displayTrips, openTrip],

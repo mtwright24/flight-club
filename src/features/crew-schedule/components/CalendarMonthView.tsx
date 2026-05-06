@@ -1,11 +1,11 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { CrewScheduleTrip } from '../types';
-import { scheduleTheme as T } from '../scheduleTheme';
-import TripQuickPreviewSheet from './TripQuickPreviewSheet';
-import { stashTripForDetailNavigation } from '../tripDetailNavCache';
+import React, { useCallback, useMemo, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { scheduleTheme as T } from "../scheduleTheme";
+import { stashTripForDetailNavigation } from "../tripDetailNavCache";
+import type { CrewScheduleTrip } from "../types";
+import TripQuickPreviewSheet from "./TripQuickPreviewSheet";
 
-const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 
 type Props = {
   year: number;
@@ -16,12 +16,24 @@ type Props = {
   onOpenTrip?: (trip: CrewScheduleTrip, cellIso?: string) => void;
 };
 
-function tripsForDay(ymd: string, trips: CrewScheduleTrip[]): CrewScheduleTrip[] {
+function tripsForDay(
+  ymd: string,
+  trips: CrewScheduleTrip[],
+): CrewScheduleTrip[] {
   return trips.filter((t) => ymd >= t.startDate && ymd <= t.endDate);
 }
 
-export default function CalendarMonthView({ year, month, trips, onPressDay, onOpenTrip }: Props) {
-  const [preview, setPreview] = useState<{ trip: CrewScheduleTrip; dateIso: string } | null>(null);
+export default function CalendarMonthView({
+  year,
+  month,
+  trips,
+  onPressDay,
+  onOpenTrip,
+}: Props) {
+  const [preview, setPreview] = useState<{
+    trip: CrewScheduleTrip;
+    dateIso: string;
+  } | null>(null);
   const closePreview = useCallback(() => setPreview(null), []);
   const openFullFromPreview = useCallback(() => {
     const p = preview;
@@ -42,7 +54,7 @@ export default function CalendarMonthView({ year, month, trips, onPressDay, onOp
     return { cells, rowCount };
   }, [year, month]);
 
-  const pad = (n: number) => String(n).padStart(2, '0');
+  const pad = (n: number) => String(n).padStart(2, "0");
 
   return (
     <View style={styles.wrap}>
@@ -63,12 +75,12 @@ export default function CalendarMonthView({ year, month, trips, onPressDay, onOp
             const dayTrips = tripsForDay(iso, trips);
             const primary = dayTrips[0];
             const label = primary
-              ? primary.status === 'off'
-                ? 'OFF'
+              ? primary.status === "off"
+                ? "OFF"
                 : primary.pairingCode.length > 5
-                  ? primary.pairingCode.slice(0, 4) + '…'
+                  ? primary.pairingCode.slice(0, 4) + "…"
                   : primary.pairingCode
-              : '';
+              : "";
             return (
               <Pressable
                 key={iso}
@@ -86,7 +98,11 @@ export default function CalendarMonthView({ year, month, trips, onPressDay, onOp
                 }
                 delayLongPress={420}
                 style={styles.cell}
-                accessibilityHint={onOpenTrip && primary ? 'Long press for trip preview.' : undefined}
+                accessibilityHint={
+                  onOpenTrip && primary
+                    ? "Long press for trip preview."
+                    : undefined
+                }
               >
                 <Text style={styles.dayNum}>{cell.day}</Text>
                 {label ? (
@@ -120,18 +136,27 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
-  dowRow: { flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: T.line },
+  dowRow: {
+    flexDirection: "row",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: T.line,
+  },
   dowCell: {
     flex: 1,
-    textAlign: 'center',
+    textAlign: "center",
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: "800",
     color: T.textSecondary,
     paddingVertical: 6,
   },
-  weekRow: { flexDirection: 'row', minHeight: 56, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: T.line },
+  weekRow: {
+    flexDirection: "row",
+    minHeight: 56,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: T.line,
+  },
   cell: {
     flex: 1,
     padding: 4,
@@ -139,8 +164,13 @@ const styles = StyleSheet.create({
     borderRightColor: T.line,
     backgroundColor: T.surface,
   },
-  cellEmpty: { flex: 1, minHeight: 56, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: T.line },
-  dayNum: { fontSize: 12, fontWeight: '800', color: T.text },
-  mini: { fontSize: 9, fontWeight: '700', color: T.accent, marginTop: 2 },
+  cellEmpty: {
+    flex: 1,
+    minHeight: 56,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: T.line,
+  },
+  dayNum: { fontSize: 12, fontWeight: "800", color: T.text },
+  mini: { fontSize: 9, fontWeight: "700", color: T.accent, marginTop: 2 },
   miniMuted: { fontSize: 9, color: T.textSecondary },
 });
