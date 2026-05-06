@@ -1,32 +1,57 @@
-import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur";
+import React, {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { scheduleTheme as T } from '../scheduleTheme';
-import { buildTripDetailViewModel, type TripStatTile } from '../tripDetailViewModel';
-import type { CrewScheduleTrip } from '../types';
-import { validateVisibleTripHandoff } from '../pairingHandoff';
-import { isExemptFromStrictPairingPaint } from '../pairingRenderableGate';
-import { buildPairingFirstPaintDecision, resolveRenderablePairingSnapshot } from '../resolveRenderablePairingSnapshot';
-import { monthCalendarKey } from '../scheduleMonthCache';
-import { readPairingDetailFromMonthCache, storeDetailReadyPairingInMonthCaches } from '../pairingDetailMonthCache';
-import { readCommittedMonthSnapshot } from '../scheduleStableSnapshots';
-import { canSealPairingSurface } from '../pairingDetailReadiness';
-import { shouldRejectWeakerPairingRender } from '../tripDetailNavCache';
-import TripCrewList from './TripCrewList';
-import TripStatTilesRow from './TripStatTilesRow';
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  readPairingDetailFromMonthCache,
+  storeDetailReadyPairingInMonthCaches,
+} from "../pairingDetailMonthCache";
+import { canSealPairingSurface } from "../pairingDetailReadiness";
+import { validateVisibleTripHandoff } from "../pairingHandoff";
+import { isExemptFromStrictPairingPaint } from "../pairingRenderableGate";
+import {
+  buildPairingFirstPaintDecision,
+  resolveRenderablePairingSnapshot,
+} from "../resolveRenderablePairingSnapshot";
+import { monthCalendarKey } from "../scheduleMonthCache";
+import { readCommittedMonthSnapshot } from "../scheduleStableSnapshots";
+import { scheduleTheme as T } from "../scheduleTheme";
+import { shouldRejectWeakerPairingRender } from "../tripDetailNavCache";
+import {
+  buildTripDetailViewModel,
+  formatDisplayDateRangeLabelWithDow,
+  getDisplaySpanAndDutyDayCount,
+  type TripDayViewModel,
+  type TripDetailViewModel,
+  type TripStatTile,
+} from "../tripDetailViewModel";
+import type { CrewScheduleLeg, CrewScheduleTrip } from "../types";
+
+/** Dark layover card (compact pairing summary — not glass). */
+const LAYOVER_CARD_BG = "#14532D";
+const LAYOVER_CARD_TITLE = "#A7F3D0";
+const LAYOVER_CARD_MUTED = "#86EFAC";
+const LAYOVER_CARD_EMPH = "#ECFDF5";
 
 /**
- * Quick trip preview: scrollable bottom-sheet style modal (not full operational detail).
+ * Pairing summary: centered modal over the live schedule (blur + dim). Data path unchanged.
  */
 export default function TripQuickPreviewSheet({
   visible,
@@ -39,14 +64,15 @@ export default function TripQuickPreviewSheet({
   trip: CrewScheduleTrip | null;
   onClose: () => void;
   onOpenFullTrip: () => void;
-  /** Optional override (e.g. route param); otherwise `trip.schedulePairingId` + overlap resolver are used. */
   pairingUuid?: string | null;
 }) {
   const insets = useSafeAreaInsets();
-  const { height: winH } = useWindowDimensions();
-  const [resolvedTrip, setResolvedTrip] = useState<CrewScheduleTrip | null>(null);
+  const { width: winW, height: winH } = useWindowDimensions();
+  const [resolvedTrip, setResolvedTrip] = useState<CrewScheduleTrip | null>(
+    null,
+  );
   const [resolveSettled, setResolveSettled] = useState(false);
-  const previewTargetTripIdRef = useRef<string>('');
+  const previewTargetTripIdRef = useRef<string>("");
   const previewPaintSealedRef = useRef(false);
 
   const tripRef = useRef(trip);
@@ -56,7 +82,7 @@ export default function TripQuickPreviewSheet({
     const tripRow = tripRef.current;
     if (!visible) {
       previewPaintSealedRef.current = false;
-      previewTargetTripIdRef.current = '';
+      previewTargetTripIdRef.current = "";
       setResolvedTrip(null);
       setResolveSettled(false);
       return;
@@ -78,7 +104,11 @@ export default function TripQuickPreviewSheet({
       tripRow.startDate && /^\d{4}-\d{2}-\d{2}/.test(tripRow.startDate)
         ? tripRow.startDate.slice(0, 10)
         : null;
-    const cached = readPairingDetailFromMonthCache(tripRow.id, monthKey, rowDate);
+    const cached = readPairingDetailFromMonthCache(
+      tripRow.id,
+      monthKey,
+      rowDate,
+    );
     if (cached) {
       previewPaintSealedRef.current = true;
       setResolvedTrip(cached);
@@ -109,24 +139,36 @@ export default function TripQuickPreviewSheet({
       return;
     }
     const targetTripId = trip.id;
-    const targetPairing = String(trip.pairingCode ?? '').trim().toUpperCase();
+    const targetPairing = String(trip.pairingCode ?? "")
+      .trim()
+      .toUpperCase();
     let cancelled = false;
     void (async () => {
       if (previewPaintSealedRef.current) {
         return;
       }
       try {
-        const r = await resolveRenderablePairingSnapshot(targetTripId, pairingUuid ?? null, trip);
+        const r = await resolveRenderablePairingSnapshot(
+          targetTripId,
+          pairingUuid ?? null,
+          trip,
+        );
         if (cancelled) return;
         if (
           previewTargetTripIdRef.current !== targetTripId ||
-          String(trip.pairingCode ?? '').trim().toUpperCase() !== targetPairing
+          String(trip.pairingCode ?? "")
+            .trim()
+            .toUpperCase() !== targetPairing
         ) {
           return;
         }
         if (r) {
           setResolvedTrip((prev) => {
-            if (previewPaintSealedRef.current && prev && canSealPairingSurface(prev)) {
+            if (
+              previewPaintSealedRef.current &&
+              prev &&
+              canSealPairingSurface(prev)
+            ) {
               return prev;
             }
             if (prev && shouldRejectWeakerPairingRender(prev, r.trip)) {
@@ -139,7 +181,9 @@ export default function TripQuickPreviewSheet({
             previewPaintSealedRef.current = seal;
             if (seal) {
               const mk = monthCalendarKey(r.trip.year, r.trip.month);
-              const idk = readCommittedMonthSnapshot(mk)?.identityKey ?? 'preview-enriched';
+              const idk =
+                readCommittedMonthSnapshot(mk)?.identityKey ??
+                "preview-enriched";
               storeDetailReadyPairingInMonthCaches(r.trip, idk, mk);
             }
             return r.trip;
@@ -167,269 +211,836 @@ export default function TripQuickPreviewSheet({
   );
 
   const showErrorStub = Boolean(
-    visible && trip && !isExemptFromStrictPairingPaint(trip) && resolveSettled && !resolvedTrip,
+    visible &&
+      trip &&
+      !isExemptFromStrictPairingPaint(trip) &&
+      resolveSettled &&
+      !resolvedTrip,
   );
 
   const vm = useMemo(() => {
     if (!visible || !trip || showLoadingShell || showErrorStub) return null;
     if (!paintTrip) return null;
     if (!paintTrip.id?.trim()) return null;
-    if (!isExemptFromStrictPairingPaint(trip) && !validateVisibleTripHandoff(paintTrip).ok) return null;
+    if (
+      !isExemptFromStrictPairingPaint(trip) &&
+      !validateVisibleTripHandoff(paintTrip).ok
+    )
+      return null;
     return buildTripDetailViewModel(paintTrip);
   }, [visible, trip, paintTrip, showLoadingShell, showErrorStub]);
 
-  const statTiles: TripStatTile[] = useMemo(() => (vm ? vm.statTiles : []), [vm]);
+  const statTiles: TripStatTile[] = useMemo(
+    () => (vm ? vm.statTiles : []),
+    [vm],
+  );
+
+  const cardMaxW = Math.min(380, winW * 0.92);
+  const cardMaxH = Math.min(winH * 0.88, 640 + insets.bottom);
+  const scrollMaxH = cardMaxH - (12 + 8 + 44 + 12);
 
   if (!trip) return null;
 
-  const sheetMaxH = Math.min(winH * 0.82, 720);
-  /** Grabber + sheet padding above scroll (paddingTop + grabberWrap + grabber). */
-  const sheetTopChromePx = 4 + 6 + 4;
-  const sheetPadBottom = Math.max(insets.bottom, 12) + 6;
-  const scrollViewportMaxH = Math.max(260, sheetMaxH - sheetTopChromePx - sheetPadBottom);
-  const scrollContentPadBottom = Math.max(insets.bottom, 12) + 14;
-  const legCount = paintTrip?.legs.length ?? 0;
-  const dayCount = vm?.days.length ?? 0;
+  const dutyN =
+    paintTrip && vm
+      ? getDisplaySpanAndDutyDayCount(paintTrip).dutyDayCount ||
+        paintTrip.dutyDays ||
+        vm.days.length
+      : 0;
+  const legCountVm = paintTrip?.legs?.length ?? 0;
+  const dateRangeDow =
+    vm && paintTrip
+      ? formatDisplayDateRangeLabelWithDow(
+          getDisplaySpanAndDutyDayCount(paintTrip).displayStartDate,
+          getDisplaySpanAndDutyDayCount(paintTrip).displayEndDate,
+        )
+      : "";
 
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="slide"
+      animationType="fade"
       onRequestClose={onClose}
       presentationStyle="overFullScreen"
     >
-      <View style={styles.overlay}>
+      <View style={styles.wrap} pointerEvents="box-none">
+        <BlurView
+          intensity={Platform.OS === "ios" ? 28 : 20}
+          tint="light"
+          style={StyleSheet.absoluteFill}
+          experimentalBlurMethod={
+            Platform.OS === "android" ? "dimezisBlurView" : undefined
+          }
+        />
         <Pressable
-          style={[StyleSheet.absoluteFill, styles.backdropDim]}
+          style={[StyleSheet.absoluteFill, styles.dimVeil]}
           onPress={onClose}
           accessibilityRole="button"
           accessibilityLabel="Dismiss"
         />
-        <View style={[styles.sheet, { maxHeight: sheetMaxH, paddingBottom: sheetPadBottom }]}>
-          <View style={styles.grabberWrap}>
-            <View style={styles.grabber} />
-          </View>
-
-          <ScrollView
-            style={[styles.sheetScroll, { maxHeight: scrollViewportMaxH }]}
-            contentContainerStyle={[styles.sheetScrollContent, { paddingBottom: scrollContentPadBottom }]}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator
-            nestedScrollEnabled
-            bounces
+        <View
+          style={[styles.centerBox, { paddingBottom: insets.bottom + 8 }]}
+          pointerEvents="box-none"
+        >
+          <View
+            style={[
+              styles.card,
+              {
+                width: cardMaxW,
+                maxHeight: cardMaxH,
+                paddingTop: 10,
+                shadowOpacity: Platform.OS === "ios" ? 0.12 : 0.08,
+              },
+            ]}
           >
-            {showLoadingShell ? (
-              <View style={styles.hydrateShell}>
-                <View style={styles.headerRow}>
-                  <View style={styles.headerText}>
-                    <Text style={styles.pairing}>{trip.pairingCode}</Text>
-                    <Text style={styles.routeMuted}>Loading full pairing…</Text>
-                  </View>
-                  <Pressable onPress={onClose} style={styles.closeHit} hitSlop={12} accessibilityLabel="Close preview">
-                    <Ionicons name="close" size={20} color={T.textSecondary} />
-                  </Pressable>
-                </View>
-                <ActivityIndicator style={styles.hydrateSpinner} color={T.accent} />
-                <Pressable
-                  style={styles.primaryBtn}
-                  onPress={() => {
-                    onClose();
-                    onOpenFullTrip();
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Open full trip"
-                >
-                  <Text style={styles.primaryBtnText}>Open Full Trip</Text>
-                  <Ionicons name="chevron-forward" size={16} color="#fff" />
-                </Pressable>
-              </View>
-            ) : showErrorStub ? (
-              <View style={styles.hydrateShell}>
-                <View style={styles.headerRow}>
-                  <View style={styles.headerText}>
-                    <Text style={styles.pairing}>{trip.pairingCode}</Text>
-                    <Text style={styles.routeMuted}>Preview unavailable for this assignment.</Text>
-                  </View>
-                  <Pressable onPress={onClose} style={styles.closeHit} hitSlop={12} accessibilityLabel="Close preview">
-                    <Ionicons name="close" size={20} color={T.textSecondary} />
-                  </Pressable>
-                </View>
-                <Pressable
-                  style={styles.primaryBtn}
-                  onPress={() => {
-                    onClose();
-                    onOpenFullTrip();
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Open full trip"
-                >
-                  <Text style={styles.primaryBtnText}>Open Full Trip</Text>
-                  <Ionicons name="chevron-forward" size={16} color="#fff" />
-                </Pressable>
-              </View>
-            ) : vm && paintTrip ? (
-              <>
-                <View style={styles.headerRow}>
-                  <View style={styles.headerText}>
-                    <Text style={styles.pairing}>{vm.pairingCode}</Text>
-                    <Text style={styles.route} numberOfLines={2}>
-                      {vm.routeSummary}
-                    </Text>
-                    <View style={styles.badgeRow}>
-                      <View style={styles.badge}>
-                        <Text style={styles.badgeText}>{vm.statusLabel}</Text>
-                      </View>
-                    </View>
-                  </View>
-                  <Pressable onPress={onClose} style={styles.closeHit} hitSlop={12} accessibilityLabel="Close preview">
-                    <Ionicons name="close" size={20} color={T.textSecondary} />
-                  </Pressable>
-                </View>
+            <View style={styles.grabberWrap}>
+              <View style={styles.grabber} />
+            </View>
+            <Pressable
+              onPress={onClose}
+              style={styles.closeFab}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close preview"
+            >
+              <Ionicons name="close" size={18} color={T.textSecondary} />
+            </Pressable>
 
-                <Text style={styles.dateRange}>{vm.dateRangeLabel}</Text>
-                <Text style={styles.summary}>{vm.summaryLine}</Text>
-
-                <View style={styles.statsBlock}>
-                  <TripStatTilesRow tiles={statTiles} compact dense />
+            <ScrollView
+              style={{ maxHeight: scrollMaxH }}
+              contentContainerStyle={styles.cardScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled
+              bounces={false}
+            >
+              {showLoadingShell ? (
+                <View style={styles.hydrateShell}>
+                  <Text style={styles.pairingAccent}>{trip.pairingCode}</Text>
+                  <Text style={styles.muted13}>Loading full pairing…</Text>
+                  <ActivityIndicator
+                    style={styles.hydrateSpinner}
+                    color={T.accent}
+                  />
+                  <PrimaryCta onPress={() => { onClose(); onOpenFullTrip(); }} />
                 </View>
-
-                <View style={styles.section}>
-                  <Text style={styles.previewTitle}>Crew</Text>
-                  {vm.crewMembers.length > 0 ? (
-                    <TripCrewList members={vm.crewMembers} maxVisible={4} showTitle={false} />
-                  ) : (
-                    <Text style={styles.emdash}>—</Text>
-                  )}
-                </View>
-
-                <View style={styles.previewCard}>
-                  <Text style={styles.previewTitle}>Layover & hotel</Text>
-                  {vm.layoverHotelPreview && (vm.layoverHotelPreview.layoverLine || vm.layoverHotelPreview.hotelLine) ? (
-                    <>
-                      {vm.layoverHotelPreview.layoverLine ? (
-                        <Text style={styles.previewLine}>
-                          <Text style={styles.previewMuted}>City </Text>
-                          {vm.layoverHotelPreview.layoverLine}
-                        </Text>
-                      ) : null}
-                      {vm.layoverHotelPreview.hotelLine ? (
-                        <Text style={styles.previewLine} numberOfLines={3}>
-                          <Text style={styles.previewMuted}>Hotel </Text>
-                          {vm.layoverHotelPreview.hotelLine}
-                        </Text>
-                      ) : null}
-                    </>
-                  ) : (
-                    <Text style={styles.emdash}>—</Text>
-                  )}
-                </View>
-
-                <View style={styles.opsHint}>
-                  <Text style={styles.opsHintText}>
-                    {legCount > 0
-                      ? `${legCount} leg${legCount === 1 ? '' : 's'} · ${dayCount} operating day${dayCount === 1 ? '' : 's'}`
-                      : 'Open full trip for day-by-day legs and times'}
+              ) : showErrorStub ? (
+                <View style={styles.hydrateShell}>
+                  <Text style={styles.pairingAccent}>{trip.pairingCode}</Text>
+                  <Text style={styles.muted13}>
+                    Preview unavailable for this assignment.
                   </Text>
+                  <PrimaryCta onPress={() => { onClose(); onOpenFullTrip(); }} />
                 </View>
+              ) : vm && paintTrip ? (
+                <>
+                  <Text style={styles.pairingMetaLine}>
+                    <Text style={styles.pairingAccent}>{vm.pairingCode}</Text>
+                    <Text style={styles.pairingMetaRest}>
+                      {dutyN > 0 ? ` · ${dutyN}-Day Pairing` : ""}
+                    </Text>
+                  </Text>
 
-                <Pressable
-                  style={styles.primaryBtn}
-                  onPress={() => {
-                    onClose();
-                    onOpenFullTrip();
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Open full trip"
-                >
-                  <Text style={styles.primaryBtnText}>Open Full Trip</Text>
-                  <Ionicons name="chevron-forward" size={16} color="#fff" />
-                </Pressable>
-              </>
-            ) : null}
-          </ScrollView>
+                  <RouteHeadline routeSummary={vm.routeSummary} />
+
+                  <Text style={styles.dateRangeDow}>{dateRangeDow}</Text>
+                  <Text style={styles.summaryMicro}>
+                    {dutyN > 0 ? `${dutyN} duty day${dutyN === 1 ? "" : "s"}` : ""}
+                    {dutyN > 0 && legCountVm > 0 ? " · " : ""}
+                    {legCountVm > 0
+                      ? `${legCountVm} leg${legCountVm === 1 ? "" : "s"}`
+                      : ""}
+                  </Text>
+
+                  <MetricsStrip
+                    report={reportTimePreview(paintTrip, vm)}
+                    block={tileVal(statTiles, "block")}
+                    credit={tileVal(statTiles, "credit")}
+                    tafb={tileVal(statTiles, "tafb")}
+                  />
+
+                  <View style={styles.legList}>
+                    {vm.days.map((day, idx) => (
+                      <CompactLegPreviewRow
+                        key={day.panelId}
+                        day={day}
+                        isLast={idx === vm.days.length - 1}
+                      />
+                    ))}
+                  </View>
+
+                  <LayoverStaysCard trip={paintTrip} preview={vm.layoverHotelPreview} />
+
+                  <Text style={styles.crewLabel}>CREW</Text>
+                  <CrewChipsRow members={vm.crewMembers} />
+
+                  <PrimaryCta onPress={() => { onClose(); onOpenFullTrip(); }} />
+                </>
+              ) : null}
+            </ScrollView>
+          </View>
         </View>
       </View>
     </Modal>
   );
 }
 
+function PrimaryCta({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      style={styles.primaryBtn}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Open full trip detail"
+    >
+      <Text style={styles.primaryBtnText}>Open Full Trip Detail</Text>
+      <Ionicons name="chevron-forward" size={18} color="#fff" />
+    </Pressable>
+  );
+}
+
+function tileVal(tiles: TripStatTile[], id: string): string {
+  return tiles.find((t) => t.id === id)?.value ?? "—";
+}
+
+function RouteHeadline({ routeSummary }: { routeSummary: string }) {
+  const parts = splitRouteForDisplay(routeSummary);
+  if (parts.length < 2) {
+    return (
+      <Text style={styles.routeBig} numberOfLines={2}>
+        {routeSummary}
+      </Text>
+    );
+  }
+  return (
+    <Text style={styles.routeBig} numberOfLines={2}>
+      {parts.map((p, i) => (
+        <React.Fragment key={`${p}-${i}`}>
+          {i > 0 ? <Text style={styles.routeDot}> • </Text> : null}
+          <Text style={styles.routeCity}>{p}</Text>
+        </React.Fragment>
+      ))}
+    </Text>
+  );
+}
+
+function MetricsStrip({
+  report,
+  block,
+  credit,
+  tafb,
+}: {
+  report: string;
+  block: string;
+  credit: string;
+  tafb: string;
+}) {
+  const cells: { label: string; value: string; valueStyle?: object }[] = [
+    { label: "REPORT", value: report, valueStyle: styles.metricValReport },
+    { label: "BLOCK", value: block },
+    { label: "CREDIT", value: credit, valueStyle: styles.metricValCredit },
+    { label: "TAFB", value: tafb },
+  ];
+  return (
+    <View style={styles.metricsRow}>
+      {cells.map((c, i) => (
+        <React.Fragment key={c.label}>
+          {i > 0 ? <View style={styles.metricDivider} /> : null}
+          <View style={styles.metricCell}>
+            <Text style={styles.metricLabel}>{c.label}</Text>
+            <Text
+              style={[styles.metricVal, c.valueStyle]}
+              numberOfLines={1}
+            >
+              {c.value}
+            </Text>
+          </View>
+        </React.Fragment>
+      ))}
+    </View>
+  );
+}
+
+function CompactLegPreviewRow({
+  day,
+  isLast,
+}: {
+  day: TripDayViewModel;
+  isLast: boolean;
+}) {
+  const leg = day.legs[0];
+  const extras = day.legs.length - 1;
+  const dep = leg?.departureAirport?.trim().toUpperCase().slice(0, 4) ?? "—";
+  const arr = leg?.arrivalAirport?.trim().toUpperCase().slice(0, 4) ?? "—";
+  const depT = clockToUi(leg?.departLocal ?? leg?.reportLocal);
+  const arrT = clockToUi(leg?.arriveLocal);
+  const blockL = leg ? legBlockDurationLabel(leg) : "—";
+  const fn = leg ? flightNoLabel(leg) : "";
+  const rail = rightRailLabel(day);
+
+  return (
+    <View style={styles.legRowOuter}>
+      <View style={styles.timelineCol}>
+        <View style={styles.timelineDot} />
+        {!isLast ? <View style={styles.timelineStem} /> : null}
+      </View>
+      <View style={styles.legRowCard}>
+        <View style={styles.legRowTop}>
+          <View style={styles.dayBadge}>
+            <Text style={styles.dayBadgeTitle}>DAY {day.dayIndex}</Text>
+            <Text style={styles.dayBadgeSub}>
+              {day.dayLabel} {shortDom(day.dateIso)}
+            </Text>
+          </View>
+          <View style={styles.legRowMain}>
+            <View style={styles.legRouteRow}>
+              <Text style={styles.legRouteTxt}>
+                {dep} → {arr}
+                {fn ? (
+                  <Text style={styles.legFn}>{"  "}{fn}</Text>
+                ) : null}
+              </Text>
+            </View>
+            <Text style={styles.legTimeLine}>
+              {depT} — {arrT}
+              {blockL !== "—" ? ` · ${blockL}` : ""}
+            </Text>
+          </View>
+          <View style={styles.legRowRight}>
+            {rail ? (
+              <Text
+                style={extras > 0 ? styles.railPlus : styles.railMeta}
+                numberOfLines={1}
+              >
+                {rail}
+              </Text>
+            ) : (
+              <Text style={styles.railMeta} numberOfLines={1}>
+                {""}
+              </Text>
+            )}
+            <Ionicons
+              name="chevron-forward"
+              size={14}
+              color={T.textSecondary}
+              style={styles.legChev}
+            />
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function shortDom(iso: string): string {
+  const s = String(iso).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "";
+  const d = parseInt(s.slice(8, 10), 10);
+  return Number.isFinite(d) ? String(d) : "";
+}
+
+function LayoverStaysCard({
+  trip,
+  preview,
+}: {
+  trip: CrewScheduleTrip;
+  preview: TripDetailViewModel["layoverHotelPreview"];
+}) {
+  const model = layoverCardModel(trip, preview);
+  return (
+    <View style={styles.layoverCard}>
+      <Text style={styles.layoverTitle}>LAYOVERS & STAYS</Text>
+      {model ? (
+        <>
+          <Text style={styles.layoverNights}>{model.nightsLine}</Text>
+          <Text style={styles.layoverSub} numberOfLines={2}>
+            {model.detailLine}
+          </Text>
+        </>
+      ) : (
+        <Text style={styles.layoverSub}>—</Text>
+      )}
+    </View>
+  );
+}
+
+function CrewChipsRow({
+  members,
+}: {
+  members: TripDetailViewModel["crewMembers"];
+}) {
+  if (!members.length) {
+    return <Text style={styles.emdash}>—</Text>;
+  }
+  const cap = members.slice(0, 4);
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.crewScroll}
+    >
+      {cap.map((c, i) => (
+        <View key={`${c.position}-${c.name}-${i}`} style={styles.crewChip}>
+          <Text style={styles.crewChipPos} numberOfLines={1}>
+            F{i + 1}
+          </Text>
+          <Text style={styles.crewChipName} numberOfLines={1}>
+            {c.name?.trim() || "—"}
+          </Text>
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+/* --- Presentation-only helpers (existing trip / VM fields only) --- */
+
+function splitRouteForDisplay(routeSummary: string): string[] {
+  const raw = routeSummary.trim();
+  if (!raw) return [];
+  const delims = [" · ", " • ", "·", "•", " → ", " - "];
+  for (const d of delims) {
+    if (raw.includes(d)) {
+      return raw
+        .split(d)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+  }
+  return [raw];
+}
+
+function clockToUi(t: string | null | undefined): string {
+  if (t == null || !String(t).trim()) return "—";
+  const s = String(t).trim();
+  if (/^\d{4}$/.test(s)) return `${s.slice(0, 2)}:${s.slice(2)}`;
+  return s;
+}
+
+function legBlockDurationLabel(leg: CrewScheduleLeg): string {
+  const b = leg.blockTimeLocal?.trim();
+  if (!b) return "—";
+  if (/^\d{4}$/.test(b)) {
+    const h = parseInt(b.slice(0, 2), 10);
+    const m = parseInt(b.slice(2), 10);
+    if (Number.isFinite(h) && Number.isFinite(m)) {
+      return `${h}h ${String(m).padStart(2, "0")}m`;
+    }
+  }
+  const n = Number(b);
+  if (Number.isFinite(n)) return `${n.toFixed(1)}h`;
+  return b;
+}
+
+function reportTimePreview(
+  trip: CrewScheduleTrip,
+  vm: TripDetailViewModel,
+): string {
+  const rows = trip.summary?.legs;
+  if (rows?.length) {
+    const r = rows[0]?.report;
+    if (r != null && String(r).trim()) return String(r).trim();
+  }
+  const first = vm.days[0]?.legs?.[0];
+  if (first?.reportLocal) return clockToUi(first.reportLocal);
+  if (first?.departLocal) return clockToUi(first.departLocal);
+  return "—";
+}
+
+function flightNoLabel(leg: CrewScheduleLeg): string {
+  const fn = String(leg.flightNumber ?? "")
+    .trim()
+    .replace(/\s+/g, "");
+  if (!fn) return "";
+  const digits = fn.replace(/\D/g, "");
+  if (digits.length >= 2) return `B6 ${digits}`;
+  return fn;
+}
+
+function rightRailLabel(day: TripDayViewModel): string | null {
+  const n = day.legs.length;
+  if (n > 1) return `+${n - 1} leg${n - 1 === 1 ? "" : "s"}`;
+  const leg = day.legs[0];
+  if (!leg) return null;
+  const g =
+    leg.arrivalTerminalGate?.trim() || leg.departureTerminalGate?.trim();
+  if (g) return g;
+  return null;
+}
+
+function layoverCardModel(
+  trip: CrewScheduleTrip,
+  preview: TripDetailViewModel["layoverHotelPreview"],
+): { nightsLine: string; detailLine: string } | null {
+  const stations = trip.layoverStationByDate
+    ? Array.from(
+        new Set(
+          Object.values(trip.layoverStationByDate)
+            .map((s) => String(s).trim())
+            .filter(Boolean),
+        ),
+      )
+    : [];
+  const sh = trip.summary?.hotel;
+  const tripHotel = trip.hotel;
+  let hotelCount = 0;
+  if (tripHotel?.name?.trim()) hotelCount += 1;
+  if (sh?.name?.trim() && sh.name.trim() !== tripHotel?.name?.trim()) {
+    hotelCount += 1;
+  }
+
+  let nightsLine = "—";
+  if (sh?.nights != null && sh.nights > 0) {
+    nightsLine = `${sh.nights} Night${sh.nights === 1 ? "" : "s"}`;
+  } else if (stations.length > 1) {
+    nightsLine = `${stations.length - 1} Night${stations.length === 2 ? "" : "s"}`;
+  } else if (stations.length === 1) {
+    nightsLine = "1 Night";
+  }
+
+  const cities =
+    stations.join(", ") ||
+    trip.layoverCity?.trim() ||
+    preview?.layoverLine?.trim() ||
+    "";
+
+  const hotelBits: string[] = [];
+  if (hotelCount > 0) {
+    hotelBits.push(`${hotelCount} Hotel${hotelCount === 1 ? "" : "s"}`);
+  }
+  if (cities) hotelBits.push(cities);
+
+  let detailLine = hotelBits.join(" · ");
+  if (!detailLine && preview?.hotelLine?.trim()) {
+    detailLine = preview.hotelLine.trim();
+  }
+
+  if (!detailLine && !cities && nightsLine === "—") {
+    return preview?.layoverLine || preview?.hotelLine
+      ? {
+          nightsLine: "Layover",
+          detailLine:
+            [preview.layoverLine, preview.hotelLine].filter(Boolean).join(" · "),
+        }
+      : null;
+  }
+
+  return { nightsLine, detailLine: detailLine || "—" };
+}
+
 const styles = StyleSheet.create({
-  /** Sheet stacks above dim tap target; do not wrap sheet in Pressable (scroll would dismiss). */
-  overlay: {
+  wrap: {
     flex: 1,
-    justifyContent: 'flex-end',
   },
-  backdropDim: {
-    backgroundColor: 'rgba(43, 46, 60, 0.52)',
+  dimVeil: {
+    backgroundColor: "rgba(15, 23, 42, 0.22)",
   },
-  sheet: {
+  centerBox: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 12,
+  },
+  card: {
     backgroundColor: T.surface,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 4,
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
-    width: '100%',
-    flexDirection: 'column',
+    overflow: "hidden",
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 24,
+    elevation: 12,
   },
-  sheetScroll: {},
-  sheetScrollContent: {},
-  grabberWrap: { alignItems: 'center', paddingBottom: 6 },
-  grabber: { width: 36, height: 4, borderRadius: 2, backgroundColor: T.line },
-  hydrateShell: { paddingBottom: 8 },
-  hydrateSpinner: { marginVertical: 24 },
-  routeMuted: { fontSize: 13, fontWeight: '600', color: T.textSecondary, marginTop: 4, lineHeight: 17 },
-  headerRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
-  headerText: { flex: 1, paddingRight: 6 },
-  closeHit: { padding: 2, marginTop: -2 },
-  pairing: { fontSize: 18, fontWeight: '800', color: T.text, letterSpacing: -0.3 },
-  route: { fontSize: 13, fontWeight: '600', color: T.textSecondary, marginTop: 4, lineHeight: 17 },
-  badgeRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 6 },
-  badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+  grabberWrap: { alignItems: "center", paddingBottom: 4, marginTop: 2 },
+  grabber: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: T.line,
+  },
+  closeFab: {
+    position: "absolute",
+    right: 10,
+    top: 10,
+    width: 32,
+    height: 32,
     borderRadius: 16,
-    backgroundColor: '#FEF2F2',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#FECACA',
+    backgroundColor: T.surfaceMuted,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 4,
   },
-  badgeText: { fontSize: 11, fontWeight: '800', color: T.accent },
-  dateRange: { fontSize: 12, fontWeight: '700', color: T.text, marginTop: 8 },
-  summary: { fontSize: 12, color: T.textSecondary, marginTop: 4, lineHeight: 16 },
-  statsBlock: { marginTop: 8 },
-  section: { marginTop: 10 },
-  previewCard: {
+  cardScrollContent: {
+    paddingTop: 4,
+    paddingBottom: 6,
+  },
+  hydrateShell: {
+    paddingVertical: 8,
+  },
+  hydrateSpinner: { marginVertical: 20 },
+  pairingAccent: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: T.accent,
+    letterSpacing: -0.2,
+  },
+  pairingMetaLine: {
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  pairingMetaRest: {
+    color: T.textSecondary,
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  routeBig: {
+    marginTop: 6,
+    fontSize: 18,
+    fontWeight: "800",
+    color: T.text,
+    letterSpacing: -0.3,
+    lineHeight: 22,
+  },
+  routeCity: { fontWeight: "800", color: T.text },
+  routeDot: { fontWeight: "900", color: T.accent, fontSize: 14 },
+  dateRangeDow: {
+    marginTop: 6,
+    fontSize: 11,
+    fontWeight: "700",
+    color: T.textSecondary,
+    lineHeight: 15,
+  },
+  summaryMicro: {
+    marginTop: 3,
+    fontSize: 11,
+    fontWeight: "600",
+    color: T.textSecondary,
+  },
+  muted13: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: "600",
+    color: T.textSecondary,
+  },
+  metricsRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
     marginTop: 10,
-    padding: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    backgroundColor: T.surfaceMuted,
     borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: T.line,
+  },
+  metricDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: T.line,
+    marginVertical: 2,
+  },
+  metricCell: {
+    flex: 1,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  metricLabel: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: T.textSecondary,
+    letterSpacing: 0.35,
+    marginBottom: 2,
+  },
+  metricVal: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: T.text,
+  },
+  metricValReport: {
+    color: "#C2410C",
+  },
+  metricValCredit: {
+    color: T.importReview.good,
+  },
+  legList: {
+    marginTop: 10,
+    gap: 0,
+  },
+  legRowOuter: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
+  timelineCol: {
+    width: 14,
+    alignItems: "center",
+    paddingTop: 12,
+  },
+  timelineDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: T.accent,
+  },
+  timelineStem: {
+    width: 2,
+    marginTop: 2,
+    backgroundColor: T.line,
+    height: 32,
+    borderRadius: 1,
+  },
+  legRowCard: {
+    flex: 1,
+    marginLeft: 4,
+    marginBottom: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: T.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: T.line,
+  },
+  legRowTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+  dayBadge: {
+    backgroundColor: T.accent,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    marginRight: 8,
+    minWidth: 52,
+  },
+  dayBadgeTitle: {
+    color: "#fff",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.3,
+  },
+  dayBadgeSub: {
+    marginTop: 2,
+    color: "rgba(255,255,255,0.92)",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  legRowMain: { flex: 1, minWidth: 0 },
+  legRouteRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center" },
+  legRouteTxt: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: T.text,
+  },
+  legFn: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#2563EB",
+  },
+  legTimeLine: {
+    marginTop: 3,
+    fontSize: 10,
+    fontWeight: "600",
+    color: T.textSecondary,
+  },
+  legRowRight: {
+    alignItems: "flex-end",
+    justifyContent: "flex-start",
+    marginLeft: 4,
+    maxWidth: 72,
+  },
+  railPlus: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#2563EB",
+    textAlign: "right",
+  },
+  railMeta: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: T.textSecondary,
+    textAlign: "right",
+  },
+  legChev: { marginTop: 6 },
+  layoverCard: {
+    marginTop: 10,
+    backgroundColor: LAYOVER_CARD_BG,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  layoverTitle: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: LAYOVER_CARD_TITLE,
+    letterSpacing: 0.55,
+    marginBottom: 4,
+  },
+  layoverNights: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: LAYOVER_CARD_EMPH,
+  },
+  layoverSub: {
+    marginTop: 3,
+    fontSize: 11,
+    fontWeight: "600",
+    color: LAYOVER_CARD_MUTED,
+    lineHeight: 15,
+  },
+  crewLabel: {
+    marginTop: 12,
+    fontSize: 9,
+    fontWeight: "800",
+    color: T.textSecondary,
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  crewScroll: {
+    flexDirection: "row",
+    gap: 6,
+    paddingRight: 4,
+  },
+  crewChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 999,
     backgroundColor: T.surfaceMuted,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
+    maxWidth: 140,
   },
-  previewTitle: {
+  crewChipPos: {
     fontSize: 10,
-    fontWeight: '800',
-    color: T.textSecondary,
-    letterSpacing: 0.5,
-    marginBottom: 4,
-    textTransform: 'uppercase',
+    fontWeight: "900",
+    color: T.accent,
   },
-  previewLine: { fontSize: 12, fontWeight: '600', color: T.text, marginTop: 2, lineHeight: 16 },
-  previewMuted: { fontWeight: '700', color: T.textSecondary },
-  opsHint: { marginTop: 8, paddingVertical: 4 },
-  opsHintText: { fontSize: 11, color: T.textSecondary, fontWeight: '600' },
+  crewChipName: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: T.text,
+    flexShrink: 1,
+  },
   primaryBtn: {
-    marginTop: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    marginTop: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: T.accent,
-    paddingVertical: 11,
-    borderRadius: 10,
-    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 8,
   },
-  primaryBtnText: { color: '#fff', fontSize: 14, fontWeight: '800' },
-  emdash: { fontSize: 13, fontWeight: '700', color: T.textSecondary, marginTop: 2 },
+  primaryBtnText: { color: "#fff", fontSize: 14, fontWeight: "800" },
+  emdash: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: T.textSecondary,
+  },
 });
