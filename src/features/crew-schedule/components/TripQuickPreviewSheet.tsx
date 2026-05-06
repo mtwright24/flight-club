@@ -1,5 +1,6 @@
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
+import type { Session } from "@supabase/supabase-js";
 import React, {
   useEffect,
   useLayoutEffect,
@@ -19,6 +20,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useAuth } from "../../../hooks/useAuth";
 import {
   readPairingDetailFromMonthCache,
   storeDetailReadyPairingInMonthCaches,
@@ -36,7 +38,6 @@ import { scheduleTheme as T } from "../scheduleTheme";
 import { shouldRejectWeakerPairingRender } from "../tripDetailNavCache";
 import {
   buildTripDetailViewModel,
-  formatDisplayDateRangeLabelWithDow,
   getDisplaySpanAndDutyDayCount,
   type TripDayViewModel,
   type TripDetailViewModel,
@@ -44,14 +45,25 @@ import {
 } from "../tripDetailViewModel";
 import type { CrewScheduleLeg, CrewScheduleTrip } from "../types";
 
-/** Dark layover card (compact pairing summary — not glass). */
-const LAYOVER_CARD_BG = "#14532D";
-const LAYOVER_CARD_TITLE = "#A7F3D0";
-const LAYOVER_CARD_MUTED = "#86EFAC";
-const LAYOVER_CARD_EMPH = "#ECFDF5";
+/** Match TripDetailScreen `FC_HOTEL_GREEN` (layover / hotel card). */
+const LAYOVER_CARD_BG = "#0E3D2F";
+/** Section label "LAYOVERS & STAYS" — light mint, not white. */
+const LAYOVER_LABEL = "#A7F3D0";
+/** Secondary copy: hotels/cities line, weather, hotel names, chevrons. */
+const LAYOVER_MINT = "#86EFAC";
+const LAYOVER_WHITE = "#FFFFFF";
+/** Horizontal + vertical rules inside the tile. */
+const LAYOVER_RULE = "rgba(167, 243, 208, 0.45)";
+/** Hotel / building glyph accent (warm, mock “red-orange” highlights). */
+const LAYOVER_BUILDING = "#FEC89A";
+const WEATHER_SUN = "#FACC15";
+/** Partly-cloudy row: off-white cloud tone (v4 mock). */
+const WEATHER_PARTLY_ICON = "#F1F5F9";
+const ON_TIME_GREEN = "#15803D";
 
 /**
- * Pairing summary: centered modal over the live schedule (blur + dim). Data path unchanged.
+ * Pairing summary: centered modal (blur + dim). v4 layout: route → dates → pairing + Pairing • legs.
+ * Data resolution path unchanged.
  */
 export default function TripQuickPreviewSheet({
   visible,
@@ -67,6 +79,7 @@ export default function TripQuickPreviewSheet({
   pairingUuid?: string | null;
 }) {
   const insets = useSafeAreaInsets();
+  const { session } = useAuth();
   const { width: winW, height: winH } = useWindowDimensions();
   const [resolvedTrip, setResolvedTrip] = useState<CrewScheduleTrip | null>(
     null,
@@ -236,7 +249,7 @@ export default function TripQuickPreviewSheet({
   );
 
   const cardMaxW = Math.min(380, winW * 0.92);
-  const cardMaxH = Math.min(winH * 0.88, 640 + insets.bottom);
+  const cardMaxH = Math.min(winH * 0.92, 720 + insets.bottom);
   const scrollMaxH = cardMaxH - (12 + 8 + 44 + 12);
 
   if (!trip) return null;
@@ -248,13 +261,26 @@ export default function TripQuickPreviewSheet({
         vm.days.length
       : 0;
   const legCountVm = paintTrip?.legs?.length ?? 0;
-  const dateRangeDow =
+  const span =
     vm && paintTrip
-      ? formatDisplayDateRangeLabelWithDow(
-          getDisplaySpanAndDutyDayCount(paintTrip).displayStartDate,
-          getDisplaySpanAndDutyDayCount(paintTrip).displayEndDate,
+      ? getDisplaySpanAndDutyDayCount(paintTrip)
+      : { displayStartDate: "", displayEndDate: "" };
+  const dateRangeFormatted =
+    vm && paintTrip
+      ? formatPairingPopupDateRange(
+          span.displayStartDate,
+          span.displayEndDate,
         )
       : "";
+
+  const pairingTail =
+    dutyN > 0 && legCountVm > 0
+      ? ` · ${dutyN}-Day Pairing • ${legCountVm} leg${legCountVm === 1 ? "" : "s"}`
+      : dutyN > 0
+        ? ` · ${dutyN}-Day Pairing`
+        : legCountVm > 0
+          ? ` • ${legCountVm} leg${legCountVm === 1 ? "" : "s"}`
+          : "";
 
   return (
     <Modal
@@ -266,7 +292,7 @@ export default function TripQuickPreviewSheet({
     >
       <View style={styles.wrap} pointerEvents="box-none">
         <BlurView
-          intensity={Platform.OS === "ios" ? 28 : 20}
+          intensity={Platform.OS === "ios" ? 42 : 32}
           tint="light"
           style={StyleSheet.absoluteFill}
           experimentalBlurMethod={
@@ -290,7 +316,7 @@ export default function TripQuickPreviewSheet({
                 width: cardMaxW,
                 maxHeight: cardMaxH,
                 paddingTop: 10,
-                shadowOpacity: Platform.OS === "ios" ? 0.12 : 0.08,
+                shadowOpacity: Platform.OS === "ios" ? 0.14 : 0.1,
               },
             ]}
           >
@@ -335,26 +361,21 @@ export default function TripQuickPreviewSheet({
                 </View>
               ) : vm && paintTrip ? (
                 <>
-                  <Text style={styles.pairingMetaLine}>
-                    <Text style={styles.pairingAccent}>{vm.pairingCode}</Text>
-                    <Text style={styles.pairingMetaRest}>
-                      {dutyN > 0 ? ` · ${dutyN}-Day Pairing` : ""}
+                  <View style={styles.modalHeaderCenter}>
+                    <RouteHeadline routeSummary={vm.routeSummary} />
+
+                    <Text style={styles.dateRangeDow}>{dateRangeFormatted}</Text>
+
+                    <Text style={styles.pairingMetaLine}>
+                      <Text style={styles.pairingAccent}>{vm.pairingCode}</Text>
+                      <Text style={styles.pairingMetaRest}>{pairingTail}</Text>
                     </Text>
-                  </Text>
-
-                  <RouteHeadline routeSummary={vm.routeSummary} />
-
-                  <Text style={styles.dateRangeDow}>{dateRangeDow}</Text>
-                  <Text style={styles.summaryMicro}>
-                    {dutyN > 0 ? `${dutyN} duty day${dutyN === 1 ? "" : "s"}` : ""}
-                    {dutyN > 0 && legCountVm > 0 ? " · " : ""}
-                    {legCountVm > 0
-                      ? `${legCountVm} leg${legCountVm === 1 ? "" : "s"}`
-                      : ""}
-                  </Text>
+                  </View>
 
                   <MetricsStrip
-                    report={reportTimePreview(paintTrip, vm)}
+                    report={formatReportForPopup(
+                      reportTimePreview(paintTrip, vm),
+                    )}
                     block={tileVal(statTiles, "block")}
                     credit={tileVal(statTiles, "credit")}
                     tafb={tileVal(statTiles, "tafb")}
@@ -370,10 +391,13 @@ export default function TripQuickPreviewSheet({
                     ))}
                   </View>
 
-                  <LayoverStaysCard trip={paintTrip} preview={vm.layoverHotelPreview} />
+                  <LayoverStaysCard
+                    trip={paintTrip}
+                    preview={vm.layoverHotelPreview}
+                  />
 
                   <Text style={styles.crewLabel}>CREW</Text>
-                  <CrewChipsRow members={vm.crewMembers} />
+                  <CrewChipsRow members={vm.crewMembers} session={session} />
 
                   <PrimaryCta onPress={() => { onClose(); onOpenFullTrip(); }} />
                 </>
@@ -394,8 +418,13 @@ function PrimaryCta({ onPress }: { onPress: () => void }) {
       accessibilityRole="button"
       accessibilityLabel="Open full trip detail"
     >
-      <Text style={styles.primaryBtnText}>Open Full Trip Detail</Text>
-      <Ionicons name="chevron-forward" size={18} color="#fff" />
+      <View style={styles.primaryBtnInner}>
+        <View style={styles.primaryBtnSpacer} />
+        <Text style={styles.primaryBtnText}>Open Full Trip Detail</Text>
+        <View style={styles.primaryBtnSpacer}>
+          <Ionicons name="chevron-forward" size={18} color="#fff" />
+        </View>
+      </View>
     </Pressable>
   );
 }
@@ -404,18 +433,77 @@ function tileVal(tiles: TripStatTile[], id: string): string {
   return tiles.find((t) => t.id === id)?.value ?? "—";
 }
 
-function RouteHeadline({ routeSummary }: { routeSummary: string }) {
+/** Mock: "Mon, May 4, 2026 → Wed, May 6, 2026" */
+function formatPairingPopupDateRange(startIso: string, endIso: string): string {
+  const a = String(startIso ?? "").slice(0, 10);
+  const b = String(endIso ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b)) {
+    return "";
+  }
+  const o: Intl.DateTimeFormatOptions = {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  };
+  const da = new Date(`${a}T12:00:00`);
+  const db = new Date(`${b}T12:00:00`);
+  const left = da.toLocaleDateString("en-US", o);
+  const right = db.toLocaleDateString("en-US", o);
+  if (a === b) return left;
+  return `${left} → ${right}`;
+}
+
+/** v4 metrics: BLOCK/CREDIT/TAFB as HH:MM from decimal hour strings (e.g. 14.50 → 14:30). */
+function formatHoursMetricForPopup(raw: string): string {
+  const t = String(raw ?? "").trim();
+  if (!t || t === "—") return "—";
+  if (/^\d{1,2}:\d{2}$/.test(t)) return t;
+  const n = parseFloat(t.replace(/[^\d.+-]/g, ""));
+  if (!Number.isFinite(n) || n < 0) return t;
+  if (n > 72) return t;
+  const totalMin = Math.round(n * 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function formatReportForPopup(raw: string): string {
+  const t = String(raw ?? "").trim();
+  if (!t || t === "—") return "—";
+  if (/^\d{4}$/.test(t)) return `${t.slice(0, 2)}:${t.slice(2)}`;
+  return t;
+}
+
+/**
+ * Pairing-summary convention: omit report base at the start; show layovers + return/base only.
+ * E.g. JFK · DUB · JFK → DUB · JFK
+ */
+function pairingRouteDisplaySegments(routeSummary: string): string[] {
   const parts = splitRouteForDisplay(routeSummary);
-  if (parts.length < 2) {
+  if (parts.length >= 2) return parts.slice(1);
+  return parts;
+}
+
+function RouteHeadline({ routeSummary }: { routeSummary: string }) {
+  const displayParts = pairingRouteDisplaySegments(routeSummary);
+  if (displayParts.length === 0) {
     return (
-      <Text style={styles.routeBig} numberOfLines={2}>
-        {routeSummary}
+      <Text style={styles.routeBig} numberOfLines={3}>
+        {routeSummary.trim() || "—"}
+      </Text>
+    );
+  }
+  if (displayParts.length === 1) {
+    return (
+      <Text style={styles.routeBig} numberOfLines={3}>
+        <Text style={styles.routeCity}>{displayParts[0]}</Text>
       </Text>
     );
   }
   return (
-    <Text style={styles.routeBig} numberOfLines={2}>
-      {parts.map((p, i) => (
+    <Text style={styles.routeBig} numberOfLines={3}>
+      {displayParts.map((p, i) => (
         <React.Fragment key={`${p}-${i}`}>
           {i > 0 ? <Text style={styles.routeDot}> • </Text> : null}
           <Text style={styles.routeCity}>{p}</Text>
@@ -477,55 +565,53 @@ function CompactLegPreviewRow({
   const arrT = clockToUi(leg?.arriveLocal);
   const blockL = leg ? legBlockDurationLabel(leg) : "—";
   const fn = leg ? flightNoLabel(leg) : "";
-  const rail = rightRailLabel(day);
+  const gateLine = leg ? formatGateSubline(leg) : null;
 
   return (
-    <View style={styles.legRowOuter}>
-      <View style={styles.timelineCol}>
-        <View style={styles.timelineDot} />
-        {!isLast ? <View style={styles.timelineStem} /> : null}
-      </View>
-      <View style={styles.legRowCard}>
-        <View style={styles.legRowTop}>
-          <View style={styles.dayBadge}>
-            <Text style={styles.dayBadgeTitle}>DAY {day.dayIndex}</Text>
-            <Text style={styles.dayBadgeSub}>
-              {day.dayLabel} {shortDom(day.dateIso)}
-            </Text>
-          </View>
-          <View style={styles.legRowMain}>
-            <View style={styles.legRouteRow}>
-              <Text style={styles.legRouteTxt}>
-                {dep} → {arr}
-                {fn ? (
-                  <Text style={styles.legFn}>{"  "}{fn}</Text>
-                ) : null}
+    <View style={[styles.legRowWrap, isLast ? styles.legRowWrapLast : null]}>
+      <View style={styles.legRowInner}>
+        <View style={styles.redRail} />
+        <View style={styles.legRowBody}>
+          <View style={styles.legRowTop}>
+            <View style={styles.dayBadge}>
+              <Text style={styles.dayBadgeTitle}>DAY {day.dayIndex}</Text>
+              <Text style={styles.dayBadgeSub}>
+                {dayBadgeCalendarSubline(day.dateIso)}
               </Text>
             </View>
-            <Text style={styles.legTimeLine}>
-              {depT} — {arrT}
-              {blockL !== "—" ? ` · ${blockL}` : ""}
-            </Text>
-          </View>
-          <View style={styles.legRowRight}>
-            {rail ? (
-              <Text
-                style={extras > 0 ? styles.railPlus : styles.railMeta}
-                numberOfLines={1}
-              >
-                {rail}
+            <View style={styles.legRowMain}>
+              <Text style={styles.legRouteTxt}>
+                {dep} → {arr}
+                {fn ? <Text style={styles.legFn}>  {fn}</Text> : null}
               </Text>
-            ) : (
-              <Text style={styles.railMeta} numberOfLines={1}>
-                {""}
+              <Text style={styles.legTimeLine}>
+                {depT} — {arrT}
+                {blockL !== "—" ? ` · ${blockL}` : ""}
               </Text>
-            )}
-            <Ionicons
-              name="chevron-forward"
-              size={14}
-              color={T.textSecondary}
-              style={styles.legChev}
-            />
+            </View>
+            <View style={styles.legRowRight}>
+              <View style={styles.railStack}>
+                {extras > 0 ? (
+                  <Text style={styles.railPlus} numberOfLines={1}>
+                    +{extras} leg{extras === 1 ? "" : "s"}
+                  </Text>
+                ) : (
+                  <Text style={styles.railOnTime} numberOfLines={1}>
+                    ON TIME
+                  </Text>
+                )}
+                {extras === 0 && gateLine ? (
+                  <Text style={styles.railGate} numberOfLines={2}>
+                    {gateLine}
+                  </Text>
+                ) : null}
+              </View>
+              <Ionicons
+                name="chevron-forward"
+                size={14}
+                color={T.textSecondary}
+              />
+            </View>
           </View>
         </View>
       </View>
@@ -533,11 +619,18 @@ function CompactLegPreviewRow({
   );
 }
 
-function shortDom(iso: string): string {
+/** Red badge second line: "MAY 4" (month uppercase + day). */
+function dayBadgeCalendarSubline(iso: string): string {
   const s = String(iso).slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "";
-  const d = parseInt(s.slice(8, 10), 10);
-  return Number.isFinite(d) ? String(d) : "";
+  const d = new Date(`${s}T12:00:00`);
+  const mon = d
+    .toLocaleDateString("en-US", { month: "short" })
+    .toUpperCase()
+    .replace(".", "");
+  const dayNum = d.getDate();
+  if (!Number.isFinite(dayNum)) return "";
+  return `${mon} ${dayNum}`;
 }
 
 function LayoverStaysCard({
@@ -547,58 +640,236 @@ function LayoverStaysCard({
   trip: CrewScheduleTrip;
   preview: TripDetailViewModel["layoverHotelPreview"];
 }) {
-  const model = layoverCardModel(trip, preview);
+  const model = layoverCardModelExpanded(trip, preview);
   return (
     <View style={styles.layoverCard}>
-      <Text style={styles.layoverTitle}>LAYOVERS & STAYS</Text>
+      <Text style={styles.layoverSectionTitle}>LAYOVERS & STAYS</Text>
+
       {model ? (
         <>
-          <Text style={styles.layoverNights}>{model.nightsLine}</Text>
-          <Text style={styles.layoverSub} numberOfLines={2}>
-            {model.detailLine}
-          </Text>
+          <View style={styles.layoverSummaryRow}>
+            <MaterialCommunityIcons
+              name="office-building-outline"
+              size={20}
+              color={LAYOVER_BUILDING}
+              style={styles.layoverBuildingIcon}
+            />
+            <View style={styles.layoverSummaryTextCol}>
+              <Text style={styles.layoverNightsHero}>{model.nightsLine}</Text>
+              <Text style={styles.layoverHotelsSub} numberOfLines={1}>
+                {model.detailLine}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.layoverHRule} />
+
+          <View style={styles.layoverCityGrid}>
+            {model.columns.length >= 2 ? (
+              <>
+                <LayoverCityBlock col={model.columns[0]!} />
+                <View style={styles.layoverVRule} />
+                <LayoverCityBlock col={model.columns[1]!} />
+              </>
+            ) : (
+              <LayoverCityBlock col={model.columns[0]!} wide />
+            )}
+          </View>
         </>
       ) : (
-        <Text style={styles.layoverSub}>—</Text>
+        <Text style={styles.layoverHotelsSub}>—</Text>
       )}
+    </View>
+  );
+}
+
+function LayoverCityBlock({
+  col,
+  wide,
+}: {
+  col: LayoverCol;
+  wide?: boolean;
+}) {
+  return (
+    <View
+      style={[styles.layoverCityBlock, wide ? styles.layoverCityBlockWide : null]}
+    >
+      <Text style={styles.layoverCityCode}>{col.code}</Text>
+      <View style={styles.layoverWeatherRow}>
+        {col.weatherKind === "sunny" ? (
+          <MaterialCommunityIcons
+            name="weather-sunny"
+            size={13}
+            color={WEATHER_SUN}
+          />
+        ) : (
+          <MaterialCommunityIcons
+            name="weather-partly-cloudy"
+            size={13}
+            color={WEATHER_PARTLY_ICON}
+          />
+        )}
+        <Text style={styles.layoverWeatherText} numberOfLines={1}>
+          {col.weatherText}
+        </Text>
+      </View>
+      <View style={styles.layoverHotelTap}>
+        <Text style={styles.layoverHotelText} numberOfLines={1}>
+          {col.hotelLine}
+          {col.hotelLine.trim().length > 0 ? (
+            <Text style={styles.layoverHotelChev}> &gt;</Text>
+          ) : null}
+        </Text>
+      </View>
     </View>
   );
 }
 
 function CrewChipsRow({
   members,
+  session,
 }: {
   members: TripDetailViewModel["crewMembers"];
+  session: Session | null;
 }) {
   if (!members.length) {
     return <Text style={styles.emdash}>—</Text>;
   }
   const cap = members.slice(0, 4);
-  return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.crewScroll}
-    >
-      {cap.map((c, i) => (
-        <View key={`${c.position}-${c.name}-${i}`} style={styles.crewChip}>
+
+  if (cap.length === 1) {
+    const c = cap[0]!;
+    return (
+      <View style={styles.crewGridSingle}>
+        <View style={[styles.crewChip, styles.crewChipSolo]}>
           <Text style={styles.crewChipPos} numberOfLines={1}>
-            F{i + 1}
+            F1
           </Text>
-          <Text style={styles.crewChipName} numberOfLines={1}>
-            {c.name?.trim() || "—"}
+          <Text
+            style={styles.crewChipName}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
+            {crewShortNameForChip(c.name, session)}
           </Text>
         </View>
+      </View>
+    );
+  }
+
+  const pairs: (typeof cap)[] = [];
+  for (let i = 0; i < cap.length; i += 2) {
+    pairs.push(cap.slice(i, i + 2));
+  }
+
+  return (
+    <View style={styles.crewGrid}>
+      {pairs.map((pair, rowIndex) => (
+        <View key={`crew-row-${rowIndex}`} style={styles.crewGridRow}>
+          {pair.map((c, colIndex) => {
+            const i = rowIndex * 2 + colIndex;
+            return (
+              <View
+                key={`${c.position}-${c.name}-${i}`}
+                style={styles.crewChip}
+              >
+                <Text style={styles.crewChipPos} numberOfLines={1}>
+                  F{i + 1}
+                </Text>
+                <Text
+                  style={styles.crewChipName}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {crewShortNameForChip(c.name, session)}
+                </Text>
+              </View>
+            );
+          })}
+          {pair.length === 1 ? <View style={styles.crewGridCellSpacer} /> : null}
+        </View>
       ))}
-    </ScrollView>
+    </View>
   );
 }
 
-/* --- Presentation-only helpers (existing trip / VM fields only) --- */
+/** "First L." for chips; "You" when matched to session. */
+function crewShortNameForChip(name: string, session: Session | null): string {
+  const n = name?.trim() || "—";
+  if (isLikelySelf(n, session)) return "You";
+  return formatCrewNameFirstLastInitial(n);
+}
+
+function titleCaseToken(t: string): string {
+  const s = t.trim();
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+function formatCrewNameFirstLastInitial(raw: string): string {
+  let n = raw.trim();
+  if (!n) return "—";
+  if (/^.+\s*,\s*.+$/.test(n)) {
+    const [last, firstRest] = n.split(",").map((x) => x.trim());
+    if (last && firstRest) n = `${firstRest} ${last}`;
+  }
+  const parts = n.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "—";
+  if (parts.length === 1) return titleCaseToken(parts[0]!);
+  const first = titleCaseToken(parts[0]!);
+  const last = parts[parts.length - 1]!;
+  const letter = last.replace(/[^A-Za-z]/g, "").slice(0, 1).toUpperCase();
+  return letter ? `${first} ${letter}.` : first;
+}
+
+function isLikelySelf(crewName: string, session: Session | null): boolean {
+  if (!session?.user || !crewName.trim()) return false;
+  const meta = session.user.user_metadata as
+    | { full_name?: string; name?: string }
+    | undefined;
+  const full = (meta?.full_name ?? meta?.name ?? "").trim();
+  if (!full) return false;
+  const a = crewName.trim().toUpperCase();
+  const b = full.toUpperCase();
+  if (a === b) return true;
+  const aTok = a.split(/\s+/).filter(Boolean);
+  const bTok = b.split(/\s+/).filter(Boolean);
+  const aLast = aTok[aTok.length - 1];
+  const bLast = bTok[bTok.length - 1];
+  if (aLast && bLast && aLast === bLast) return true;
+  if (aTok[0] && bTok[0] && aTok[0] === bTok[0]) return true;
+  return false;
+}
+
+/* --- Presentation-only helpers --- */
+
+function orderedUniqueLayoverStations(trip: CrewScheduleTrip): string[] {
+  const e = trip.layoverStationByDate;
+  if (!e) return [];
+  const keys = Object.keys(e).sort((a, b) => a.localeCompare(b));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const k of keys) {
+    const v = String(e[k] ?? "").trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
 
 function splitRouteForDisplay(routeSummary: string): string[] {
   const raw = routeSummary.trim();
   if (!raw) return [];
+  if (/[–-]/.test(raw)) {
+    const noSpace = raw.replace(/\s+/g, "");
+    if (/^[A-Za-z0-9–\-]+$/i.test(noSpace) && /[–-]/.test(raw)) {
+      return raw
+        .split(/[\u2013\-]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+  }
   const delims = [" · ", " • ", "·", "•", " → ", " - "];
   for (const d of delims) {
     if (raw.includes(d)) {
@@ -658,30 +929,35 @@ function flightNoLabel(leg: CrewScheduleLeg): string {
   return fn;
 }
 
-function rightRailLabel(day: TripDayViewModel): string | null {
-  const n = day.legs.length;
-  if (n > 1) return `+${n - 1} leg${n - 1 === 1 ? "" : "s"}`;
-  const leg = day.legs[0];
-  if (!leg) return null;
-  const g =
-    leg.arrivalTerminalGate?.trim() || leg.departureTerminalGate?.trim();
-  if (g) return g;
-  return null;
+function formatGateSubline(leg: CrewScheduleLeg): string | null {
+  const dep = leg.departureTerminalGate?.trim();
+  const arr = leg.arrivalTerminalGate?.trim();
+  const pick = arr || dep;
+  if (!pick) return null;
+  if (pick.includes("·")) return pick;
+  if (/^T\d+/i.test(pick) && /G\d+|Gate/i.test(pick)) {
+    return pick.replace(/\s+/g, " ");
+  }
+  return pick;
 }
 
-function layoverCardModel(
+type LayoverCol = {
+  code: string;
+  weatherKind: "sunny" | "partly";
+  /** v4 mock shape e.g. "62°F · Sunny"; placeholder without weather API. */
+  weatherText: string;
+  hotelLine: string;
+};
+
+function layoverCardModelExpanded(
   trip: CrewScheduleTrip,
   preview: TripDetailViewModel["layoverHotelPreview"],
-): { nightsLine: string; detailLine: string } | null {
-  const stations = trip.layoverStationByDate
-    ? Array.from(
-        new Set(
-          Object.values(trip.layoverStationByDate)
-            .map((s) => String(s).trim())
-            .filter(Boolean),
-        ),
-      )
-    : [];
+): {
+  nightsLine: string;
+  detailLine: string;
+  columns: LayoverCol[];
+} | null {
+  const stationsOrdered = orderedUniqueLayoverStations(trip);
   const sh = trip.summary?.hotel;
   const tripHotel = trip.hotel;
   let hotelCount = 0;
@@ -693,14 +969,14 @@ function layoverCardModel(
   let nightsLine = "—";
   if (sh?.nights != null && sh.nights > 0) {
     nightsLine = `${sh.nights} Night${sh.nights === 1 ? "" : "s"}`;
-  } else if (stations.length > 1) {
-    nightsLine = `${stations.length - 1} Night${stations.length === 2 ? "" : "s"}`;
-  } else if (stations.length === 1) {
+  } else if (stationsOrdered.length > 1) {
+    nightsLine = `${stationsOrdered.length - 1} Night${stationsOrdered.length === 2 ? "" : "s"}`;
+  } else if (stationsOrdered.length === 1) {
     nightsLine = "1 Night";
   }
 
   const cities =
-    stations.join(", ") ||
+    stationsOrdered.join(", ") ||
     trip.layoverCity?.trim() ||
     preview?.layoverLine?.trim() ||
     "";
@@ -710,23 +986,93 @@ function layoverCardModel(
     hotelBits.push(`${hotelCount} Hotel${hotelCount === 1 ? "" : "s"}`);
   }
   if (cities) hotelBits.push(cities);
-
   let detailLine = hotelBits.join(" · ");
   if (!detailLine && preview?.hotelLine?.trim()) {
     detailLine = preview.hotelLine.trim();
   }
 
-  if (!detailLine && !cities && nightsLine === "—") {
+  const hotelName =
+    tripHotel?.name?.trim() ||
+    sh?.name?.trim() ||
+    (preview?.hotelLine ? preview.hotelLine.split("·")[0]!.trim() : "");
+  const hotelCity =
+    tripHotel?.city?.trim() || sh?.city?.trim() || "";
+
+  const hotelLineParts =
+    preview?.hotelLine
+      ?.split(/\s*·\s*/)
+      .map((s) => s.trim())
+      .filter(Boolean) ?? [];
+
+  const columns: LayoverCol[] = [];
+  const codes = stationsOrdered.slice(0, 2);
+  if (codes.length === 0 && cities) {
+    const firstCity = cities.split(",")[0]!.trim().slice(0, 3).toUpperCase();
+    if (firstCity) {
+      columns.push({
+        code: firstCity,
+        weatherKind: "sunny",
+        weatherText: "— · —",
+        hotelLine:
+          hotelLineParts[0] ??
+          hotelName ??
+          preview?.hotelLine?.trim() ??
+          "",
+      });
+    }
+  } else {
+    codes.forEach((code, idx) => {
+      const short = code.slice(0, 3).toUpperCase();
+      const line =
+        hotelLineParts[idx] ??
+        (idx === 0
+          ? hotelName
+          : hotelLineParts[0]
+            ? hotelLineParts[hotelLineParts.length - 1] ?? ""
+            : hotelName || hotelCity || "");
+      columns.push({
+        code: short,
+        weatherKind: idx === 0 ? "sunny" : "partly",
+        weatherText: "— · —",
+        hotelLine: line,
+      });
+    });
+  }
+
+  if (!detailLine && !cities && nightsLine === "—" && columns.length === 0) {
     return preview?.layoverLine || preview?.hotelLine
       ? {
           nightsLine: "Layover",
           detailLine:
             [preview.layoverLine, preview.hotelLine].filter(Boolean).join(" · "),
+          columns: preview.hotelLine
+            ? [
+                {
+                  code: "LAY",
+                  weatherKind: "sunny",
+                  weatherText: "— · —",
+                  hotelLine: preview.hotelLine.trim(),
+                },
+              ]
+            : [],
         }
       : null;
   }
 
-  return { nightsLine, detailLine: detailLine || "—" };
+  return {
+    nightsLine,
+    detailLine: detailLine || "—",
+    columns: columns.length
+      ? columns
+      : [
+          {
+            code: "—",
+            weatherKind: "sunny",
+            weatherText: "— · —",
+            hotelLine: "",
+          },
+        ],
+  };
 }
 
 const styles = StyleSheet.create({
@@ -734,7 +1080,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   dimVeil: {
-    backgroundColor: "rgba(15, 23, 42, 0.22)",
+    backgroundColor: "rgba(15, 23, 42, 0.36)",
   },
   centerBox: {
     ...StyleSheet.absoluteFillObject,
@@ -745,7 +1091,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: T.surface,
     borderRadius: 22,
-    paddingHorizontal: 14,
+    paddingHorizontal: 18,
     paddingBottom: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
@@ -776,7 +1122,11 @@ const styles = StyleSheet.create({
   },
   cardScrollContent: {
     paddingTop: 4,
-    paddingBottom: 6,
+    paddingBottom: 4,
+  },
+  modalHeaderCenter: {
+    alignSelf: "stretch",
+    alignItems: "center",
   },
   hydrateShell: {
     paddingVertical: 8,
@@ -789,7 +1139,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
   pairingMetaLine: {
-    marginTop: 2,
+    marginTop: 6,
     fontSize: 13,
     fontWeight: "700",
   },
@@ -799,27 +1149,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   routeBig: {
-    marginTop: 6,
-    fontSize: 18,
+    marginTop: 2,
+    fontSize: 19,
     fontWeight: "800",
     color: T.text,
-    letterSpacing: -0.3,
-    lineHeight: 22,
+    letterSpacing: -0.35,
+    lineHeight: 24,
   },
   routeCity: { fontWeight: "800", color: T.text },
   routeDot: { fontWeight: "900", color: T.accent, fontSize: 14 },
   dateRangeDow: {
-    marginTop: 6,
-    fontSize: 11,
-    fontWeight: "700",
-    color: T.textSecondary,
-    lineHeight: 15,
-  },
-  summaryMicro: {
-    marginTop: 3,
+    marginTop: 7,
     fontSize: 11,
     fontWeight: "600",
     color: T.textSecondary,
+    opacity: 0.88,
+    lineHeight: 15,
+    textAlign: "center",
+    alignSelf: "stretch",
   },
   muted13: {
     marginTop: 6,
@@ -832,20 +1179,20 @@ const styles = StyleSheet.create({
     alignItems: "stretch",
     marginTop: 10,
     paddingVertical: 8,
-    paddingHorizontal: 4,
-    backgroundColor: T.surfaceMuted,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 2,
+    backgroundColor: T.surface,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
   },
   metricDivider: {
     width: StyleSheet.hairlineWidth,
     backgroundColor: T.line,
-    marginVertical: 2,
+    marginVertical: 0,
   },
   metricCell: {
     flex: 1,
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -857,7 +1204,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   metricVal: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "800",
     color: T.text,
   },
@@ -868,45 +1215,35 @@ const styles = StyleSheet.create({
     color: T.importReview.good,
   },
   legList: {
-    marginTop: 10,
-    gap: 0,
+    marginTop: 6,
   },
-  legRowOuter: {
-    flexDirection: "row",
-    alignItems: "stretch",
-  },
-  timelineCol: {
-    width: 14,
-    alignItems: "center",
-    paddingTop: 12,
-  },
-  timelineDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: T.accent,
-  },
-  timelineStem: {
-    width: 2,
-    marginTop: 2,
-    backgroundColor: T.line,
-    height: 32,
-    borderRadius: 1,
-  },
-  legRowCard: {
-    flex: 1,
-    marginLeft: 4,
+  legRowWrap: {
     marginBottom: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+  },
+  legRowWrapLast: {
+    marginBottom: 0,
+  },
+  legRowInner: {
+    flexDirection: "row",
     borderRadius: 10,
-    backgroundColor: T.surface,
+    overflow: "hidden",
+    backgroundColor: T.surfaceMuted,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
   },
+  redRail: {
+    width: 3,
+    backgroundColor: T.accent,
+    alignSelf: "stretch",
+  },
+  legRowBody: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+  },
   legRowTop: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
   },
   dayBadge: {
     backgroundColor: T.accent,
@@ -914,22 +1251,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 5,
     marginRight: 8,
-    minWidth: 52,
+    minWidth: 48,
+    alignItems: "flex-start",
   },
   dayBadgeTitle: {
+    color: "rgba(255,255,255,0.72)",
+    fontSize: 9,
+    fontWeight: "500",
+    letterSpacing: 0.2,
+  },
+  dayBadgeSub: {
+    marginTop: 2,
     color: "#fff",
     fontSize: 9,
     fontWeight: "900",
     letterSpacing: 0.3,
   },
-  dayBadgeSub: {
-    marginTop: 2,
-    color: "rgba(255,255,255,0.92)",
-    fontSize: 9,
-    fontWeight: "700",
-  },
   legRowMain: { flex: 1, minWidth: 0 },
-  legRouteRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center" },
   legRouteTxt: {
     fontSize: 12,
     fontWeight: "800",
@@ -947,10 +1285,15 @@ const styles = StyleSheet.create({
     color: T.textSecondary,
   },
   legRowRight: {
-    alignItems: "flex-end",
-    justifyContent: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
     marginLeft: 4,
-    maxWidth: 72,
+    maxWidth: 88,
+    gap: 4,
+  },
+  railStack: {
+    alignItems: "flex-end",
+    flexShrink: 1,
   },
   railPlus: {
     fontSize: 10,
@@ -958,86 +1301,204 @@ const styles = StyleSheet.create({
     color: "#2563EB",
     textAlign: "right",
   },
-  railMeta: {
+  railOnTime: {
     fontSize: 9,
-    fontWeight: "700",
+    fontWeight: "800",
+    color: ON_TIME_GREEN,
+    textAlign: "right",
+  },
+  railGate: {
+    marginTop: 2,
+    fontSize: 9,
+    fontWeight: "600",
     color: T.textSecondary,
     textAlign: "right",
   },
-  legChev: { marginTop: 6 },
   layoverCard: {
-    marginTop: 10,
+    marginTop: 8,
+    marginHorizontal: 0,
     backgroundColor: LAYOVER_CARD_BG,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
   },
-  layoverTitle: {
-    fontSize: 9,
-    fontWeight: "800",
-    color: LAYOVER_CARD_TITLE,
-    letterSpacing: 0.55,
-    marginBottom: 4,
+  layoverSectionTitle: {
+    fontSize: 7,
+    fontWeight: "600",
+    color: LAYOVER_LABEL,
+    letterSpacing: 0.65,
+    textTransform: "uppercase",
+    marginBottom: 5,
   },
-  layoverNights: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: LAYOVER_CARD_EMPH,
+  layoverSummaryRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
   },
-  layoverSub: {
-    marginTop: 3,
+  layoverBuildingIcon: {
+    marginTop: 0,
+    marginRight: 8,
+  },
+  layoverSummaryTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  layoverNightsHero: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: LAYOVER_WHITE,
+    letterSpacing: -0.35,
+    lineHeight: 19,
+  },
+  layoverHotelsSub: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: "400",
+    color: LAYOVER_MINT,
+    lineHeight: 13,
+  },
+  layoverHRule: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: LAYOVER_RULE,
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  layoverCityGrid: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
+  layoverVRule: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: LAYOVER_RULE,
+    marginHorizontal: 6,
+    alignSelf: "stretch",
+  },
+  layoverCityBlock: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 4,
+  },
+  layoverCityBlockWide: {
+    flex: 1,
+    paddingRight: 0,
+  },
+  layoverCityCode: {
     fontSize: 11,
     fontWeight: "600",
-    color: LAYOVER_CARD_MUTED,
-    lineHeight: 15,
+    color: LAYOVER_WHITE,
+    letterSpacing: 0.25,
+  },
+  layoverWeatherRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 3,
+    gap: 4,
+  },
+  layoverWeatherText: {
+    flex: 1,
+    fontSize: 9,
+    fontWeight: "400",
+    color: LAYOVER_MINT,
+    minWidth: 0,
+  },
+  layoverHotelTap: {
+    marginTop: 3,
+  },
+  layoverHotelText: {
+    fontSize: 10,
+    fontWeight: "500",
+    color: LAYOVER_MINT,
+    lineHeight: 13,
+  },
+  layoverHotelChev: {
+    fontSize: 10,
+    fontWeight: "300",
+    color: LAYOVER_MINT,
   },
   crewLabel: {
-    marginTop: 12,
+    marginTop: 10,
     fontSize: 9,
     fontWeight: "800",
     color: T.textSecondary,
     letterSpacing: 0.5,
     marginBottom: 6,
   },
-  crewScroll: {
+  crewGrid: {
+    width: "100%",
+    alignSelf: "stretch",
+    gap: 8,
+  },
+  crewGridRow: {
     flexDirection: "row",
-    gap: 6,
-    paddingRight: 4,
+    alignItems: "stretch",
+    width: "100%",
+    gap: 8,
+  },
+  crewGridCellSpacer: {
+    flex: 1,
+    minWidth: 0,
+  },
+  crewGridSingle: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignSelf: "stretch",
+    width: "100%",
+  },
+  crewChipSolo: {
+    flexGrow: 0,
+    flexShrink: 1,
+    flexBasis: "auto",
+    alignSelf: "center",
+    maxWidth: "96%",
   },
   crewChip: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 999,
     backgroundColor: T.surfaceMuted,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.line,
-    maxWidth: 140,
   },
   crewChipPos: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: "900",
     color: T.accent,
+    lineHeight: 14,
   },
   crewChipName: {
     fontSize: 10,
-    fontWeight: "700",
+    fontWeight: "600",
     color: T.text,
-    flexShrink: 1,
+    lineHeight: 14,
+    flex: 1,
+    minWidth: 0,
   },
   primaryBtn: {
-    marginTop: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
+    marginTop: 10,
     backgroundColor: T.accent,
     paddingVertical: 12,
     borderRadius: 12,
-    gap: 8,
   },
-  primaryBtnText: { color: "#fff", fontSize: 14, fontWeight: "800" },
+  primaryBtnInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+  },
+  primaryBtnSpacer: {
+    width: 22,
+    alignItems: "flex-end",
+  },
+  primaryBtnText: {
+    flex: 1,
+    textAlign: "center",
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "800",
+  },
   emdash: {
     fontSize: 12,
     fontWeight: "700",
