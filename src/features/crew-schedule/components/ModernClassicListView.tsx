@@ -2,6 +2,7 @@ import React, { useMemo } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -18,6 +19,27 @@ import {
 } from "../modernClassic/modernClassicDayDisplay";
 import { useClassicMonthDayRows } from "../modernClassic/useClassicMonthDayRows";
 import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
+import {
+  PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+  PAIRING_DETAIL_STAT_DIGIT_TYPE,
+} from "../scheduleTileNumerals";
+
+/** Pairing row: avoid "800" — on Android default sans-serif often ignores light weights. */
+const PAIRING_CODE_TYPE = Platform.select({
+  android: { fontFamily: "sans-serif-light", fontWeight: "normal" as const },
+  ios: { fontWeight: "500" as const },
+  default: { fontWeight: "500" as const },
+});
+const PAIRING_DAY_TYPE = Platform.select({
+  android: { fontFamily: "sans-serif-thin", fontWeight: "normal" as const },
+  ios: { fontWeight: "400" as const },
+  default: { fontWeight: "400" as const },
+});
+const ROUTE_TYPE = Platform.select({
+  android: { fontFamily: "sans-serif-light", fontWeight: "normal" as const },
+  ios: { fontWeight: "500" as const },
+  default: { fontWeight: "500" as const },
+});
 
 /** Compact duty time for mock (e.g. 1930L). */
 function fmtDutyClock(raw: string): string {
@@ -119,7 +141,9 @@ export default function ModernClassicListView({
         removeClippedSubviews
         renderItem={({ item }) => {
           if (item.kind === "week") {
-            return <Text style={styles.weekLabel}>WEEK {item.week}</Text>;
+            return (
+              <Text style={styles.weekLabel}>{`WEEK ${item.week}`}</Text>
+            );
           }
           const row = item.row;
           const isOff = row.kind === "empty" && !row.trip;
@@ -127,17 +151,34 @@ export default function ModernClassicListView({
 
           if (isOff) {
             return (
-              <View style={styles.offCardOuter}>
-                <View style={styles.offCardInner}>
+              <View style={styles.dayTileRowWrap}>
+                <View style={styles.offCardOuter}>
+                  <View style={styles.offCardInner}>
+                  <View
+                    style={
+                      row.isToday ? styles.redRail : styles.offLeftSpacerRail
+                    }
+                  />
                   <View style={styles.offDateRail}>
-                    <Text style={styles.offDow}>{row.dayCode.slice(0, 2)}</Text>
-                    <Text style={styles.offDom}>{row.dayNum}</Text>
+                    <Text style={styles.tripDow}>
+                      {row.dayCode.slice(0, 2)}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.tripDom,
+                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                      ]}
+                    >
+                      {row.dayNum}
+                    </Text>
                   </View>
                   <View style={styles.offDivider} />
                   <View style={styles.offCenter}>
                     <View style={styles.offPill}>
                       <Text style={styles.offPillText}>DAY OFF</Text>
                     </View>
+                  </View>
                   </View>
                 </View>
               </View>
@@ -164,38 +205,70 @@ export default function ModernClassicListView({
             const dend = fmtDutyClock(row.dEndText);
 
             return (
-              <Pressable
-                onPress={() => onOpenFullTrip(trip, row.dateIso)}
-                style={({ pressed }) => [
-                  styles.cardStack,
-                  pressed && styles.cardStackPressed,
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel={`Open pairing ${pairing}`}
-              >
+              <View style={styles.dayTileRowWrap}>
+                <Pressable
+                  onPress={() => onOpenFullTrip(trip, row.dateIso)}
+                  style={({ pressed }) => [pressed && styles.cardStackPressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open pairing ${pairing}`}
+                >
                 <View
                   style={[
                     styles.tripCardMain,
                     extra ? styles.tripCardMainNoBottomRadius : null,
                   ]}
                 >
-                  <View style={styles.redRail} />
+                  <View
+                    style={
+                      row.isToday ? styles.redRail : styles.offLeftSpacerRail
+                    }
+                  />
                   <View style={styles.tripDateRail}>
-                    <Text style={styles.tripDow}>{row.dayCode.slice(0, 2)}</Text>
-                    <Text style={styles.tripDom}>{row.dayNum}</Text>
+                    <Text style={styles.tripDow}>
+                      {row.dayCode.slice(0, 2)}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.tripDom,
+                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                      ]}
+                    >
+                      {row.dayNum}
+                    </Text>
                   </View>
                   <View style={styles.tripDivider} />
                   <View style={styles.tripMid}>
-                    <Text style={styles.pairingLine} numberOfLines={1}>
-                      {pairing}
-                      {dayLine ? ` · ${dayLine}` : ""}
+                    <Text style={styles.pairingRow} numberOfLines={1}>
+                      <Text style={[styles.pairingCode, PAIRING_CODE_TYPE]}>
+                        {pairing}
+                      </Text>
+                      {dayLine ? (
+                        <Text style={[styles.pairingDayPart, PAIRING_DAY_TYPE]}>
+                          {` · ${dayLine}`}
+                        </Text>
+                      ) : null}
                     </Text>
-                    <Text style={styles.routeLine} numberOfLines={1}>
+                    <Text style={[styles.routeLine, ROUTE_TYPE]} numberOfLines={1}>
                       {route}
                     </Text>
                     <Text style={styles.reportLine} numberOfLines={2}>
-                      <Text style={styles.rptStrong}>Rpt {rpt}</Text>
-                      <Text style={styles.rptRest}>
+                      <Text
+                        style={[
+                          styles.rptStrong,
+                          PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                          PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                        ]}
+                      >
+                        Rpt {rpt}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.rptRest,
+                          PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                          PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                        ]}
+                      >
                         {" "}
                         · D-End {dend}
                         {lay ? ` · ${lay}` : ""}
@@ -203,10 +276,24 @@ export default function ModernClassicListView({
                     </Text>
                   </View>
                   <View style={styles.tripRight}>
-                    <Text style={styles.creditTop} numberOfLines={1}>
+                    <Text
+                      style={[
+                        styles.creditTop,
+                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                      ]}
+                      numberOfLines={1}
+                    >
                       {credit.main}
                     </Text>
-                    <Text style={styles.creditPlus} numberOfLines={1}>
+                    <Text
+                      style={[
+                        styles.creditPlus,
+                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                      ]}
+                      numberOfLines={1}
+                    >
                       {credit.plus ?? " "}
                     </Text>
                     <Text style={styles.wxEmoji} numberOfLines={1}>
@@ -222,27 +309,35 @@ export default function ModernClassicListView({
                     </Text>
                   </View>
                 ) : null}
-              </Pressable>
+                </Pressable>
+              </View>
             );
           }
 
           if (row.trip) {
             return (
-              <Pressable
-                onPress={() => onOpenFullTrip(row.trip!, row.dateIso)}
-                style={styles.miscCard}
-              >
+              <View style={styles.dayTileRowWrap}>
+                <Pressable
+                  onPress={() => onOpenFullTrip(row.trip!, row.dateIso)}
+                  style={({ pressed }) => [
+                    styles.miscCard,
+                    pressed && styles.cardStackPressed,
+                  ]}
+                >
                 <Text style={styles.miscText} numberOfLines={2}>
                   {row.pairingText || row.cityText || "—"}
                 </Text>
-              </Pressable>
+                </Pressable>
+              </View>
             );
           }
           return (
-            <View style={styles.miscCard}>
+            <View style={styles.dayTileRowWrap}>
+              <View style={styles.miscCard}>
               <Text style={styles.miscText} numberOfLines={2}>
                 {row.pairingText || row.cityText || "—"}
               </Text>
+              </View>
             </View>
           );
         }}
@@ -253,6 +348,11 @@ export default function ModernClassicListView({
 
 const CARD_RADIUS = 10;
 const CARD_BORDER = "#E2E8F0";
+/**
+ * Vertical gap between calendar day tiles — split as margin above and below each card
+ * so spacing matches the mock (breathing room top + bottom).
+ */
+const TILE_STACK_GAP = 4;
 
 const styles = StyleSheet.create({
   root: {
@@ -269,8 +369,9 @@ const styles = StyleSheet.create({
     color: T.textSecondary,
     letterSpacing: 0.4,
   },
-  cardStack: {
-    marginBottom: 5,
+  /** Same vertical inset for every day row (pairing, OFF, misc) — margins on `Pressable` are unreliable. */
+  dayTileRowWrap: {
+    marginVertical: TILE_STACK_GAP / 2,
   },
   cardStackPressed: { opacity: 0.92 },
   /* —— Day off —— */
@@ -279,7 +380,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
     backgroundColor: "#fff",
-    marginBottom: 5,
     shadowColor: "#000",
     shadowOpacity: 0.04,
     shadowRadius: 3,
@@ -288,25 +388,35 @@ const styles = StyleSheet.create({
   },
   offCardInner: {
     flexDirection: "row",
-    alignItems: "center",
-    minHeight: 46,
+    alignItems: "stretch",
+    minHeight: 54,
     overflow: "hidden",
     borderRadius: CARD_RADIUS,
+  },
+  offLeftSpacerRail: {
+    width: 3,
+    alignSelf: "stretch",
+    backgroundColor: "transparent",
   },
   offDateRail: {
     width: 36,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 6,
+    paddingVertical: 4,
   },
   offDivider: {
     width: StyleSheet.hairlineWidth,
     alignSelf: "stretch",
     backgroundColor: "#ECEEF1",
   },
-  offDow: { fontSize: 9, fontWeight: "600", color: T.textSecondary },
-  offDom: { fontSize: 13, fontWeight: "800", color: T.text, marginTop: 1 },
-  offCenter: { flex: 1, alignItems: "center", justifyContent: "center" },
+  offCenter: {
+    flex: 1,
+    alignItems: "flex-start",
+    justifyContent: "center",
+    paddingLeft: 8,
+    paddingRight: 8,
+    paddingVertical: 5,
+  },
   offPill: {
     paddingHorizontal: 10,
     paddingVertical: 3,
@@ -354,28 +464,35 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     backgroundColor: "#ECEEF1",
   },
-  tripDow: { fontSize: 9, fontWeight: "600", color: T.textSecondary },
-  tripDom: { fontSize: 13, fontWeight: "800", color: T.text, marginTop: 1 },
+  tripDow: { fontSize: 7, fontWeight: "600", color: T.textSecondary },
+  tripDom: { fontSize: 11, fontWeight: "500", color: T.text, marginTop: 1 },
   tripMid: {
     flex: 1,
     paddingHorizontal: 8,
     paddingVertical: 5,
     minWidth: 0,
   },
-  pairingLine: {
+  pairingRow: {
     fontSize: 10,
-    fontWeight: "800",
     color: SCHEDULE_MOCK_HEADER_RED,
+  },
+  pairingCode: {
+    color: SCHEDULE_MOCK_HEADER_RED,
+  },
+  pairingDayPart: {
+    fontSize: 8,
+    lineHeight: 11,
+    color: T.textSecondary,
   },
   routeLine: {
     marginTop: 2,
-    fontSize: 13,
-    fontWeight: "800",
+    fontSize: 9,
+    lineHeight: 12,
     color: T.text,
-    letterSpacing: -0.2,
+    letterSpacing: -0.15,
   },
   reportLine: { marginTop: 3, fontSize: 9, lineHeight: 12 },
-  rptStrong: { fontWeight: "800", color: "#C4621A" },
+  rptStrong: { fontWeight: "800", color: T.textSecondary },
   rptRest: { fontWeight: "500", color: T.textSecondary },
 
   continuationAttached: {
@@ -426,7 +543,6 @@ const styles = StyleSheet.create({
     padding: 8,
     backgroundColor: "#fff",
     borderRadius: CARD_RADIUS,
-    marginBottom: 5,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
   },

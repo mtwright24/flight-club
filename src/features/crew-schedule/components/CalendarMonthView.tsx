@@ -1,11 +1,47 @@
 import React, { useCallback, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { scheduleTheme as T } from "../scheduleTheme";
 import { stashTripForDetailNavigation } from "../tripDetailNavCache";
 import type { CrewScheduleTrip } from "../types";
+import {
+  PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+  PAIRING_DETAIL_STAT_DIGIT_TYPE,
+} from "../scheduleTileNumerals";
 import TripQuickPreviewSheet from "./TripQuickPreviewSheet";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
+
+/**
+ * Apply at render as `[baseStyle, TILE_*]` — do not spread into `StyleSheet.create`
+ * (RN/Expo can omit platform keys when they're folded into registered styles).
+ */
+const TILE_DOW = Platform.select({
+  android: { fontFamily: "sans-serif-light", fontWeight: "normal" as const },
+  ios: { fontWeight: "300" as const },
+  web: { fontWeight: "300" as const },
+  default: { fontWeight: "300" as const },
+});
+const TILE_DAY = Platform.select({
+  android: { fontFamily: "sans-serif-thin", fontWeight: "normal" as const },
+  ios: { fontWeight: "200" as const },
+  web: { fontWeight: "300" as const },
+  default: { fontWeight: "200" as const },
+});
+const TILE_MINI = Platform.select({
+  android: { fontFamily: "sans-serif-light", fontWeight: "normal" as const },
+  ios: { fontWeight: "300" as const },
+  web: { fontWeight: "400" as const },
+  default: { fontWeight: "300" as const },
+});
+const TILE_MINI_MUTED = Platform.select({
+  android: { fontFamily: "sans-serif-thin", fontWeight: "normal" as const },
+  ios: { fontWeight: "200" as const },
+  web: { fontWeight: "300" as const },
+  default: { fontWeight: "200" as const },
+});
+
+const androidNoFontPad =
+  Platform.OS === "android" ? ({ includeFontPadding: false } as const) : {};
 
 type Props = {
   year: number;
@@ -60,7 +96,11 @@ export default function CalendarMonthView({
     <View style={styles.wrap}>
       <View style={styles.dowRow}>
         {WEEKDAYS.map((w, i) => (
-          <Text key={i} style={styles.dowCell}>
+          <Text
+            key={i}
+            style={[styles.dowCell, TILE_DOW]}
+            {...androidNoFontPad}
+          >
             {w}
           </Text>
         ))}
@@ -104,13 +144,32 @@ export default function CalendarMonthView({
                     : undefined
                 }
               >
-                <Text style={styles.dayNum}>{cell.day}</Text>
+                <Text
+                  style={[
+                    styles.dayNum,
+                    TILE_DAY,
+                    PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                    PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                  ]}
+                  {...androidNoFontPad}
+                >
+                  {cell.day}
+                </Text>
                 {label ? (
-                  <Text style={styles.mini} numberOfLines={2}>
+                  <Text
+                    style={[styles.mini, TILE_MINI]}
+                    numberOfLines={2}
+                    {...androidNoFontPad}
+                  >
                     {label}
                   </Text>
                 ) : (
-                  <Text style={styles.miniMuted}> </Text>
+                  <Text
+                    style={[styles.miniMuted, TILE_MINI_MUTED]}
+                    {...androidNoFontPad}
+                  >
+                    {" "}
+                  </Text>
                 )}
               </Pressable>
             );
@@ -147,7 +206,6 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: "center",
     fontSize: 11,
-    fontWeight: "800",
     color: T.textSecondary,
     paddingVertical: 6,
   },
@@ -170,7 +228,17 @@ const styles = StyleSheet.create({
     borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: T.line,
   },
-  dayNum: { fontSize: 12, fontWeight: "800", color: T.text },
-  mini: { fontSize: 9, fontWeight: "700", color: T.accent, marginTop: 2 },
-  miniMuted: { fontSize: 9, color: T.textSecondary },
+  dayNum: {
+    fontSize: 12,
+    color: T.text,
+  },
+  mini: {
+    fontSize: 9,
+    color: T.accent,
+    marginTop: 2,
+  },
+  miniMuted: {
+    fontSize: 9,
+    color: T.textSecondary,
+  },
 });
