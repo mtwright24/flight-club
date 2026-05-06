@@ -154,31 +154,32 @@ export default function ModernClassicListView({
               <View style={styles.dayTileRowWrap}>
                 <View style={styles.offCardOuter}>
                   <View style={styles.offCardInner}>
-                  <View
-                    style={
-                      row.isToday ? styles.redRail : styles.offLeftSpacerRail
-                    }
-                  />
-                  <View style={styles.offDateRail}>
-                    <Text style={styles.tripDow}>
-                      {row.dayCode.slice(0, 2)}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.tripDom,
-                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
-                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-                      ]}
-                    >
-                      {row.dayNum}
-                    </Text>
-                  </View>
-                  <View style={styles.offDivider} />
-                  <View style={styles.offCenter}>
-                    <View style={styles.offPill}>
-                      <Text style={styles.offPillText}>DAY OFF</Text>
+                    <View
+                      style={
+                        row.isToday ? styles.redRail : styles.offLeftSpacerRail
+                      }
+                    />
+                    <View style={styles.offDateRail}>
+                      <Text style={styles.tripDow}>
+                        {row.dayCode.slice(0, 2)}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.tripDom,
+                          row.isToday && styles.tripDomToday,
+                          PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                          PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                        ]}
+                      >
+                        {row.dayNum}
+                      </Text>
                     </View>
-                  </View>
+                    <View style={styles.offDivider} />
+                    <View style={styles.offCenter}>
+                      <View style={styles.offPill}>
+                        <Text style={styles.offPillText}>DAY OFF</Text>
+                      </View>
+                    </View>
                   </View>
                 </View>
               </View>
@@ -212,33 +213,34 @@ export default function ModernClassicListView({
                   accessibilityRole="button"
                   accessibilityLabel={`Open pairing ${pairing}`}
                 >
-                <View
-                  style={[
-                    styles.tripCardMain,
-                    extra ? styles.tripCardMainNoBottomRadius : null,
-                  ]}
-                >
                   <View
-                    style={
-                      row.isToday ? styles.redRail : styles.offLeftSpacerRail
-                    }
-                  />
-                  <View style={styles.tripDateRail}>
-                    <Text style={styles.tripDow}>
-                      {row.dayCode.slice(0, 2)}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.tripDom,
-                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
-                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-                      ]}
-                    >
-                      {row.dayNum}
-                    </Text>
-                  </View>
-                  <View style={styles.tripDivider} />
-                  <View style={styles.tripMid}>
+                    style={[
+                      styles.tripCardMain,
+                      extra ? styles.tripCardMainNoBottomRadius : null,
+                    ]}
+                  >
+                    <View
+                      style={
+                        row.isToday ? styles.redRail : styles.offLeftSpacerRail
+                      }
+                    />
+                    <View style={styles.tripDateRail}>
+                      <Text style={styles.tripDow}>
+                        {row.dayCode.slice(0, 2)}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.tripDom,
+                          row.isToday && styles.tripDomToday,
+                          PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                          PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                        ]}
+                      >
+                        {row.dayNum}
+                      </Text>
+                    </View>
+                    <View style={styles.tripDivider} />
+                    <View style={styles.tripMid}>
                     <Text style={styles.pairingRow} numberOfLines={1}>
                       <Text style={[styles.pairingCode, PAIRING_CODE_TYPE]}>
                         {pairing}
@@ -465,7 +467,15 @@ const styles = StyleSheet.create({
     backgroundColor: "#ECEEF1",
   },
   tripDow: { fontSize: 7, fontWeight: "600", color: T.textSecondary },
-  tripDom: { fontSize: 11, fontWeight: "500", color: T.text, marginTop: 1 },
+  tripDom: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: T.text,
+    marginTop: 1,
+  },
+  tripDomToday: {
+    color: SCHEDULE_MOCK_HEADER_RED,
+  },
   tripMid: {
     flex: 1,
     paddingHorizontal: 8,
@@ -482,7 +492,7 @@ const styles = StyleSheet.create({
   pairingDayPart: {
     fontSize: 8,
     lineHeight: 11,
-    color: T.textSecondary,
+    color: SCHEDULE_MOCK_HEADER_RED,
   },
   routeLine: {
     marginTop: 2,
