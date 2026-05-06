@@ -256,6 +256,37 @@ function visibleRowFallbackForDetail(tripId: string) {
   return fromOverlay ?? peekStashedTripForDetail(tripId) ?? null;
 }
 
+/**
+ * When local today falls inside the trip, open the first operating panel for that calendar date (e.g. day 2 of 3).
+ * Otherwise use the schedule row date from the navigation stash when it matches a panel.
+ */
+function resolveInitialOperatingDayIndex(
+  days: TripDayViewModel[],
+  trip: CrewScheduleTrip,
+  stashDateIso: string | null,
+): number {
+  if (!days.length) return 0;
+  const start = String(trip.startDate ?? '').slice(0, 10);
+  const end = String(trip.endDate ?? '').slice(0, 10);
+  const today = localCalendarDate();
+  const datesOk =
+    /^\d{4}-\d{2}-\d{2}$/.test(today) && /^\d{4}-\d{2}-\d{2}$/.test(start) && /^\d{4}-\d{2}-\d{2}$/.test(end);
+  const todayInTrip = datesOk && today >= start && today <= end;
+
+  if (todayInTrip) {
+    const idx = days.findIndex((d) => String(d.dateIso).slice(0, 10) === today);
+    if (idx >= 0) return idx;
+  }
+
+  if (stashDateIso && /^\d{4}-\d{2}-\d{2}/.test(stashDateIso)) {
+    const iso = stashDateIso.slice(0, 10);
+    const idx = days.findIndex((d) => String(d.dateIso).slice(0, 10) === iso);
+    if (idx >= 0) return idx;
+  }
+
+  return 0;
+}
+
 function layoverCityOnlyForDayChip(day: TripDayViewModel, trip: CrewScheduleTrip): string {
   const code = resolveLayoverAirportCode(day, trip);
   if (code) return code;
@@ -723,6 +754,7 @@ export default function TripDetailScreen() {
   const operatingDayChipsRef = useRef<React.ComponentRef<typeof GHScrollView>>(null);
   const selectionSourceRef = useRef<'pager' | 'tap' | 'programmatic'>('programmatic');
   const panelScrollAnimatedRef = useRef(false);
+  const initialOperatingDayAppliedTripIdRef = useRef<string | null>(null);
   const { width: panelWidth } = useWindowDimensions();
   const detailLayoutCompact = panelWidth > 0 && panelWidth <= DETAIL_COMPACT_MAX_WIDTH;
   /** Dismiss stale async detail merges when `tripId` changes before paint. */
@@ -882,6 +914,11 @@ export default function TripDetailScreen() {
 
   const vm = useMemo(() => (display ? buildTripDetailViewModel(display) : null), [display]);
 
+  const operatingPanelsKey = useMemo(
+    () => (vm?.days?.length ? vm.days.map((d) => d.panelId).join('|') : ''),
+    [vm?.days],
+  );
+
   const citiesByPanel = useMemo(() => {
     if (!vm?.days.length || !display) return [];
     const n = vm.days.length;
@@ -996,10 +1033,20 @@ export default function TripDetailScreen() {
   }, [vm, display, selectedDayIndex, pairingHotels]);
 
   useLayoutEffect(() => {
-    setSelectedDayIndex(0);
+    initialOperatingDayAppliedTripIdRef.current = null;
     panelScrollAnimatedRef.current = false;
     selectionSourceRef.current = 'programmatic';
   }, [tripId]);
+
+  useLayoutEffect(() => {
+    if (!tripId || !vm?.days.length || !display) return;
+    if (initialOperatingDayAppliedTripIdRef.current === tripId) return;
+    initialOperatingDayAppliedTripIdRef.current = tripId;
+    const pointer = peekStashedDetailPointer(tripId);
+    const stashDate = pointer?.selectedDateIso ?? null;
+    const idx = resolveInitialOperatingDayIndex(vm.days, display, stashDate);
+    setSelectedDayIndex(idx);
+  }, [tripId, operatingPanelsKey, display]);
 
   useEffect(() => {
     if (!vm?.days.length) return;
