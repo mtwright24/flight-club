@@ -10,7 +10,13 @@ const KEY_MONTH = '@flightclub/crew_schedule_last_month';
 export async function loadScheduleViewMode(): Promise<ScheduleViewMode> {
   try {
     const v = await AsyncStorage.getItem(KEY_VIEW);
-    if (v === 'classic' || v === 'calendar' || v === 'smart') return v;
+    if (
+      v === 'modernClassic' ||
+      v === 'classic' ||
+      v === 'calendar' ||
+      v === 'smart'
+    )
+      return v;
   } catch {
     /* ignore */
   }

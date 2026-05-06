@@ -3,9 +3,13 @@ import { useRouter } from 'expo-router';
 import React from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, radius, spacing } from '../../../styles/theme';
 import { useNotificationsBadge } from '../../../hooks/useNotificationsBadge';
 import { useDmUnreadBadge } from '../../../hooks/useDmUnreadBadge';
+import { colors, radius, spacing } from '../../../styles/theme';
+import { useCrewScheduleHeaderBridge } from '../crewScheduleHeaderBridge';
+import { SCHEDULE_MOCK_HEADER_RED } from '../scheduleMockPalette';
+
+const TABS_HEADER_ICON = 21;
 
 type Props = {
   title?: string;
@@ -14,15 +18,28 @@ type Props = {
    * Use only where the default bar feels tight below the chromed row — e.g. FLICA Sync.
    */
   relaxedBottomInset?: boolean;
+  /**
+   * Crew schedule **bottom tabs** only: mock reference red, title + subtitle row, search · notifications · menu
+   * (no back). Stack screens (import, trip detail, etc.) keep the default Flight Club chrome + back.
+   */
+  scheduleTabsVariant?: boolean;
 };
 
 /**
- * Red branded header for the Crew Schedule module (matches Flight Club header affordances).
+ * Red branded header for the Crew Schedule module.
+ * Sub-screens use Flight Club `#headerRed` + back. Tab shell uses schedule mock reference red when
+ * `scheduleTabsVariant` is set.
  */
-export default function CrewScheduleHeader({ title = 'Crew Schedule', relaxedBottomInset = false }: Props) {
+export default function CrewScheduleHeader({
+  title = 'Crew Schedule',
+  relaxedBottomInset = false,
+  scheduleTabsVariant = false,
+}: Props) {
   const router = useRouter();
   const unread = useNotificationsBadge();
   const { count: dmUnread } = useDmUnreadBadge();
+  const { subtitle } = useCrewScheduleHeaderBridge();
+  const barRed = scheduleTabsVariant ? SCHEDULE_MOCK_HEADER_RED : colors.headerRed;
 
   const goBack = () => {
     if (router.canGoBack()) {
@@ -31,6 +48,67 @@ export default function CrewScheduleHeader({ title = 'Crew Schedule', relaxedBot
       router.replace('/(tabs)');
     }
   };
+
+  if (scheduleTabsVariant) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: barRed }]} edges={['left', 'right', 'top']}>
+        <View style={[styles.tabsHeaderWrap, { backgroundColor: barRed }]}>
+          <View style={styles.tabsTitleCol}>
+            <Text
+              style={styles.tabsTitle}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+              {...(Platform.OS === 'ios'
+                ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.85 }
+                : { includeFontPadding: false })}
+            >
+              {title}
+            </Text>
+            {subtitle ? (
+              <Text
+                style={styles.tabsSubtitle}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+              >
+                {subtitle}
+              </Text>
+            ) : null}
+          </View>
+          <View style={styles.tabsRightRow}>
+            <Pressable
+              onPress={() => router.push('/search')}
+              style={({ pressed }) => [styles.tabsIconButton, pressed && styles.tabsIconButtonPressed]}
+              accessibilityLabel="Search"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="search-outline" size={TABS_HEADER_ICON} color={colors.cardBg} />
+            </Pressable>
+            <Pressable
+              onPress={() => router.push('/notifications')}
+              style={({ pressed }) => [styles.tabsIconButton, pressed && styles.tabsIconButtonPressed]}
+              accessibilityLabel="Notifications"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="notifications-outline" size={TABS_HEADER_ICON} color={colors.cardBg} />
+              {unread > 0 ? (
+                <View style={styles.tabsBadge}>
+                  <Text style={styles.tabsBadgeText}>{unread > 99 ? '99+' : unread}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+            <Pressable
+              onPress={() => router.push('/menu')}
+              style={({ pressed }) => [styles.tabsIconButton, pressed && styles.tabsIconButtonPressed]}
+              accessibilityLabel="Menu"
+            >
+              <Ionicons name="menu" size={TABS_HEADER_ICON} color={colors.cardBg} />
+            </Pressable>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['left', 'right', 'top']}>
@@ -184,5 +262,78 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
     lineHeight: 16,
+  },
+  tabsHeaderWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 66,
+    paddingTop: 4,
+    paddingBottom: 10,
+    paddingHorizontal: spacing.lg,
+  },
+  tabsTitleCol: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    paddingRight: 12,
+  },
+  tabsTitle: {
+    color: colors.cardBg,
+    fontSize: 16,
+    fontWeight: '500',
+    letterSpacing: -0.15,
+    lineHeight: 19,
+    textAlign: 'left',
+    marginBottom: 1,
+  },
+  tabsSubtitle: {
+    marginTop: 0,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 9,
+    fontWeight: '300',
+    lineHeight: 11,
+    textAlign: 'left',
+  },
+  tabsRightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    justifyContent: 'flex-end',
+    gap: 8,
+    alignSelf: 'center',
+  },
+  tabsIconButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    borderRadius: 20,
+    backgroundColor: 'transparent',
+  },
+  tabsIconButtonPressed: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 20,
+  },
+  tabsBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: colors.dangerRed,
+    minWidth: 15,
+    height: 15,
+    borderRadius: 7,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 2,
+    zIndex: 2,
+  },
+  tabsBadgeText: {
+    color: colors.cardBg,
+    fontSize: 9,
+    fontWeight: '800',
+    textAlign: 'center',
+    lineHeight: 12,
   },
 });

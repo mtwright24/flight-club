@@ -38,9 +38,15 @@ const VIEW_OPTIONS: {
   description: string;
   icon: keyof typeof Ionicons.glyphMap;
 }[] = [
-  { id: 'classic', label: 'Classic List', description: 'Ledger', icon: 'list-outline' },
-  { id: 'calendar', label: 'Calendar', description: 'Month grid', icon: 'calendar-outline' },
-  { id: 'smart', label: 'Smart List', description: 'Quick actions', icon: 'layers-outline' },
+  {
+    id: 'modernClassic',
+    label: 'Modern Classic View',
+    description: 'Compact crew list',
+    icon: 'list-outline',
+  },
+  { id: 'classic', label: 'Classic/List View', description: 'Ledger', icon: 'list-outline' },
+  { id: 'smart', label: 'Tile View', description: 'Card-style list', icon: 'layers-outline' },
+  { id: 'calendar', label: 'Calendar View', description: 'Month grid', icon: 'calendar-outline' },
 ];
 
 export default function ManageTabScreen() {
@@ -50,7 +56,7 @@ export default function ManageTabScreen() {
   const tripContext =
     typeof tripId === 'string' ? tripId : Array.isArray(tripId) ? tripId[0] : undefined;
 
-  const [viewMode, setViewMode] = useState<ScheduleViewMode>('classic');
+  const [viewMode, setViewMode] = useState<ScheduleViewMode>('modernClassic');
   const [removingAllSchedules, setRemovingAllSchedules] = useState(false);
 
   React.useEffect(() => {

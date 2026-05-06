@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import React, {
     useCallback,
@@ -26,6 +26,9 @@ import type {
 } from "../../../services/flicaScheduleHtmlParser";
 import CalendarMonthView from "../components/CalendarMonthView";
 import ClassicListView from "../components/ClassicListView";
+import ModernClassicListView from "../components/ModernClassicListView";
+import ModernScheduleChrome from "../components/ModernScheduleChrome";
+import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
 import FlicaCrewScheduleSection from "../components/FlicaCrewScheduleSection";
 import SmartListView from "../components/SmartListView";
 import { useScheduleTripsForMonth } from "../hooks/useScheduleTripsForMonth";
@@ -58,10 +61,13 @@ import {
 } from "../scheduleViewStorage";
 import { tradePostPrefillParams } from "../tradePostPrefillParams";
 import { stashTripForDetailNavigation } from "../tripDetailNavCache";
-import type {
-    CrewScheduleTrip,
-    ScheduleViewMode
-} from "../types";
+import type { CrewScheduleTrip, ScheduleViewMode } from "../types";
+import { DEFAULT_SCHEDULE_VIEW } from "../types";
+import { useAuth } from "../../../hooks/useAuth";
+import { supabase } from "../../../lib/supabaseClient";
+import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
+import { buildMonthlyStatsStripValues } from "../modernClassic/modernClassicHeaderMetrics";
+import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
 
 const MONTH_NAMES = [
   "January",
@@ -78,8 +84,72 @@ const MONTH_NAMES = [
   "December",
 ];
 
+/** Crew schedule header subtitle — abbreviate FA; other roles stay uppercase. */
+function formatRoleForScheduleHeader(role: string): string {
+  const raw = String(role).trim();
+  if (!raw) return "";
+  const compact = raw.replace(/[\s/_-]+/g, "").toLowerCase();
+  const spaced = raw.replace(/[\s/_-]+/g, " ").trim().toLowerCase();
+  if (
+    compact === "fa" ||
+    compact === "flightattendant" ||
+    spaced === "flight attendant" ||
+    compact === "f/a"
+  ) {
+    return "FA";
+  }
+  return raw.toUpperCase();
+}
+
+function crewScheduleHeaderSubtitleTail(
+  base: string | null | undefined,
+  role: string | null | undefined,
+): string | null {
+  const b = String(base ?? "").trim().toUpperCase();
+  const r = formatRoleForScheduleHeader(String(role ?? ""));
+  if (!b && !r) return null;
+  if (b && r) return `${b} Base · ${r}`;
+  if (b) return `${b} Base`;
+  return r;
+}
+
 export default function ScheduleTabScreen() {
   const router = useRouter();
+  const { session } = useAuth();
+  const { setCrewScheduleHeaderSubtitle } = useCrewScheduleHeaderBridge();
+  const [profileBase, setProfileBase] = useState<string | null>(null);
+  const [profileRole, setProfileRole] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    const uid = session?.user?.id;
+    if (!uid) {
+      setProfileBase(null);
+      setProfileRole(null);
+      return;
+    }
+    let cancelled = false;
+    void supabase
+      .from("profiles")
+      .select("base, role")
+      .eq("id", uid)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        setProfileBase(
+          data?.base != null && String(data.base).trim()
+            ? String(data.base).trim()
+            : null,
+        );
+        setProfileRole(
+          data?.role != null && String(data.role).trim()
+            ? String(data.role).trim()
+            : null,
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
   const seedYm = useMemo(() => {
     const d = new Date();
     return clampYearMonthToScheduleWindow(d.getFullYear(), d.getMonth() + 1, d);
@@ -90,7 +160,7 @@ export default function ScheduleTabScreen() {
 
   const ymRef = React.useRef(seedYm);
   ymRef.current = { year, month };
-  const [viewMode, setViewMode] = useState<ScheduleViewMode>("classic");
+  const [viewMode, setViewMode] = useState<ScheduleViewMode>(DEFAULT_SCHEDULE_VIEW);
   const [flicaRow, setFlicaRow] = useState<CrewScheduleFlicaRow | null>(null);
   const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
 
@@ -220,10 +290,26 @@ export default function ScheduleTabScreen() {
           void saveLastMonthCursor(c.year, c.month);
         }
       }
-    }, []),
+      return () => setCrewScheduleHeaderSubtitle(null);
+    }, [setCrewScheduleHeaderSubtitle]),
   );
 
   const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
+
+  const scheduleHeaderSubtitle = useMemo(() => {
+    const tail = crewScheduleHeaderSubtitleTail(profileBase, profileRole);
+    return tail ? `${monthLabel} · ${tail}` : monthLabel;
+  }, [monthLabel, profileBase, profileRole]);
+
+  const isFocused = useIsFocused();
+  useEffect(() => {
+    if (!isFocused) return;
+    setCrewScheduleHeaderSubtitle(scheduleHeaderSubtitle);
+  }, [
+    isFocused,
+    scheduleHeaderSubtitle,
+    setCrewScheduleHeaderSubtitle,
+  ]);
 
   const persistMonth = useCallback(
     (y: number, m: number) => {
@@ -379,6 +465,11 @@ export default function ScheduleTabScreen() {
     };
   }, [flicaRow]);
 
+  const statsStripValues = useMemo(
+    () => buildMonthlyStatsStripValues(displayMetrics, flicaStats),
+    [displayMetrics, flicaStats],
+  );
+
   /**
    * If content is shorter than the screen (e.g. “blank” month), the outer ScrollView may not
    * deliver pull-to-refresh. Force a min height so the bounce/gesture can still fire.
@@ -397,44 +488,55 @@ export default function ScheduleTabScreen() {
   }, [router]);
 
   return (
-    <View style={styles.screenRoot} {...monthSwipePan.panHandlers}>
-      <View
-        style={styles.monthRow}
-        accessibilityLabel="Month header — swipe left or right to change month"
-      >
-        <Pressable
-          onPress={goPrevMonth}
-          style={styles.iconHit}
-          disabled={!canPrevMonth}
-          accessibilityLabel="Previous month"
-          accessibilityState={{ disabled: !canPrevMonth }}
+    <View
+      style={[
+        styles.screenRoot,
+        viewMode === "modernClassic" && styles.screenRootModern,
+      ]}
+      {...monthSwipePan.panHandlers}
+    >
+      {viewMode === "modernClassic" ? (
+        <MonthlyStatsStrip values={statsStripValues} />
+      ) : null}
+      {viewMode !== "modernClassic" ? (
+        <View
+          style={styles.monthRow}
+          accessibilityLabel="Month header — swipe left or right to change month"
         >
-          <Ionicons
-            name="chevron-back"
-            size={22}
-            color={canPrevMonth ? T.text : T.line}
-          />
-        </Pressable>
-        <View style={styles.monthTitleRow}>
-          <Text style={styles.monthText}>{monthLabel}</Text>
+          <Pressable
+            onPress={goPrevMonth}
+            style={styles.iconHit}
+            disabled={!canPrevMonth}
+            accessibilityLabel="Previous month"
+            accessibilityState={{ disabled: !canPrevMonth }}
+          >
+            <Ionicons
+              name="chevron-back"
+              size={22}
+              color={canPrevMonth ? T.text : T.line}
+            />
+          </Pressable>
+          <View style={styles.monthTitleRow}>
+            <Text style={styles.monthText}>{monthLabel}</Text>
+          </View>
+          <Pressable
+            onPress={goNextMonth}
+            style={styles.iconHit}
+            disabled={!canNextMonth}
+            accessibilityLabel="Next month"
+            accessibilityState={{ disabled: !canNextMonth }}
+          >
+            <Ionicons
+              name="chevron-forward"
+              size={22}
+              color={canNextMonth ? T.text : T.line}
+            />
+          </Pressable>
         </View>
-        <Pressable
-          onPress={goNextMonth}
-          style={styles.iconHit}
-          disabled={!canNextMonth}
-          accessibilityLabel="Next month"
-          accessibilityState={{ disabled: !canNextMonth }}
-        >
-          <Ionicons
-            name="chevron-forward"
-            size={22}
-            color={canNextMonth ? T.text : T.line}
-          />
-        </Pressable>
-      </View>
+      ) : null}
 
       <ScrollView
-        style={styles.scroll}
+        style={[styles.scroll, viewMode === "modernClassic" && styles.scrollModern]}
         contentContainerStyle={[
           styles.scrollContent,
           { minHeight: scrollContentMinHeight },
@@ -446,63 +548,95 @@ export default function ScheduleTabScreen() {
             progressViewOffset={Platform.OS === "android" ? 0 : undefined}
             refreshing={false}
             onRefresh={onSchedulePullToRefresh}
-            tintColor={T.accent}
+            tintColor={
+              viewMode === "modernClassic" ? SCHEDULE_MOCK_HEADER_RED : T.accent
+            }
           />
         }
       >
-        <View style={styles.readingArea}>
+        <View
+          style={[
+            styles.readingArea,
+            viewMode === "modernClassic" && styles.readingAreaModern,
+          ]}
+        >
           {monthBodyLoadingOverlay ? (
             <View style={styles.monthTransitionOverlay} pointerEvents="none">
               <ActivityIndicator size="small" color={T.accent} />
             </View>
           ) : null}
-          {flicaPairings.length > 0 ? (
-            <FlicaCrewScheduleSection
-              stats={flicaStats}
-              pairings={flicaPairings}
-              importedAt={flicaRow?.imported_at}
-            />
-          ) : null}
-          {viewMode === "classic" && (
-            <ClassicListView
-              year={year}
-              month={month}
-              refreshKey={scheduleRefreshKey}
-              trips={displayTrips}
-              monthMetrics={displayMetrics}
-              tripLayerReady={!loading || displayTrips.length > 0}
-              onPressTrip={openTrip}
-              onOpenManage={openManage}
-            />
-          )}
-          {viewMode === "calendar" && (
-            <CalendarMonthView
-              year={year}
-              month={month}
-              trips={displayTrips}
-              onPressDay={onPressCalendarDay}
-              onOpenTrip={openTrip}
-            />
-          )}
-          {viewMode === "smart" && (
-            <SmartListView
-              trips={displayTrips}
-              onPressTrip={openTrip}
-              onPost={(trip) => openTradePost(trip)}
-              onChat={(trip) =>
-                router.push({
-                  pathname: "/crew-schedule/trip-chat",
-                  params: { tripId: trip.id },
-                })
-              }
-              onManageSchedule={() => router.push("/crew-schedule/manage")}
-              onAlert={(trip) =>
-                router.push({
-                  pathname: "/crew-schedule/alerts",
-                  params: { tripId: trip.id },
-                })
-              }
-            />
+          {viewMode === "modernClassic" ? (
+            <>
+              <ModernScheduleChrome
+                monthMetrics={displayMetrics ?? null}
+                monthNavLabel={monthLabel}
+                canPrevMonth={canPrevMonth}
+                canNextMonth={canNextMonth}
+                onPrevMonth={goPrevMonth}
+                onNextMonth={goNextMonth}
+              />
+              <ModernClassicListView
+                year={year}
+                month={month}
+                refreshKey={scheduleRefreshKey}
+                trips={displayTrips}
+                monthMetrics={displayMetrics ?? null}
+                tripLayerReady={!loading || displayTrips.length > 0}
+                onOpenFullTrip={openTrip}
+                onOpenManage={openManage}
+              />
+            </>
+          ) : (
+            <>
+              {flicaPairings.length > 0 ? (
+                <FlicaCrewScheduleSection
+                  stats={flicaStats}
+                  pairings={flicaPairings}
+                  importedAt={flicaRow?.imported_at}
+                />
+              ) : null}
+              {viewMode === "classic" && (
+                <ClassicListView
+                  year={year}
+                  month={month}
+                  refreshKey={scheduleRefreshKey}
+                  trips={displayTrips}
+                  monthMetrics={displayMetrics}
+                  tripLayerReady={!loading || displayTrips.length > 0}
+                  onPressTrip={openTrip}
+                  onOpenManage={openManage}
+                />
+              )}
+              {viewMode === "calendar" && (
+                <CalendarMonthView
+                  year={year}
+                  month={month}
+                  trips={displayTrips}
+                  onPressDay={onPressCalendarDay}
+                  onOpenTrip={openTrip}
+                />
+              )}
+              {viewMode === "smart" && (
+                <SmartListView
+                  trips={displayTrips}
+                  onPressTrip={openTrip}
+                  onPost={(trip) => openTradePost(trip)}
+                  onChat={(trip) =>
+                    router.push({
+                      pathname: "/crew-schedule/trip-chat",
+                      params: { tripId: trip.id },
+                    })
+                  }
+                  onManageSchedule={() => router.push("/crew-schedule/manage")}
+                  onAlert={(trip) =>
+                    router.push({
+                      pathname: "/crew-schedule/alerts",
+                      params: { tripId: trip.id },
+                    })
+                  }
+                />
+              )}
+            </>
           )}
         </View>
       </ScrollView>
@@ -512,7 +646,9 @@ export default function ScheduleTabScreen() {
 
 const styles = StyleSheet.create({
   screenRoot: { flex: 1, backgroundColor: T.bg },
+  screenRootModern: { backgroundColor: T.bg },
   scroll: { flex: 1, backgroundColor: T.bg },
+  scrollModern: { backgroundColor: T.bg },
   scrollContent: { flexGrow: 1, paddingBottom: 8 },
   monthRow: {
     flexDirection: "row",
@@ -542,6 +678,7 @@ const styles = StyleSheet.create({
   },
   iconHit: { paddingHorizontal: 6, paddingVertical: 4 },
   readingArea: { paddingHorizontal: 0, paddingTop: 0, position: "relative" },
+  readingAreaModern: { backgroundColor: T.bg },
   monthTransitionOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
