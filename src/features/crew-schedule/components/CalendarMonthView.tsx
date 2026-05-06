@@ -189,18 +189,23 @@ export default function CalendarMonthView({
   );
 }
 
+/**
+ * Month grid rules — between `T.line` and heavier slate so boundaries stay readable.
+ */
+const CALENDAR_GRID_LINE = "#D2DAE6";
+
 const styles = StyleSheet.create({
   wrap: {
     backgroundColor: T.surface,
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: T.line,
+    borderColor: CALENDAR_GRID_LINE,
     overflow: "hidden",
   },
   dowRow: {
     flexDirection: "row",
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: T.line,
+    borderBottomColor: CALENDAR_GRID_LINE,
   },
   dowCell: {
     flex: 1,
@@ -213,20 +218,20 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     minHeight: 56,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: T.line,
+    borderBottomColor: CALENDAR_GRID_LINE,
   },
   cell: {
     flex: 1,
     padding: 4,
     borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: T.line,
+    borderRightColor: CALENDAR_GRID_LINE,
     backgroundColor: T.surface,
   },
   cellEmpty: {
     flex: 1,
     minHeight: 56,
     borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: T.line,
+    borderRightColor: CALENDAR_GRID_LINE,
   },
   dayNum: {
     fontSize: 12,

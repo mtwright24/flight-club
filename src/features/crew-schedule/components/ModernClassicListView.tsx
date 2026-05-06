@@ -350,6 +350,8 @@ export default function ModernClassicListView({
 
 const CARD_RADIUS = 10;
 const CARD_BORDER = "#E2E8F0";
+/** Vertical rule between date rail and trip body — matches calendar grid weight. */
+const DAY_RAIL_DIVIDER = "#D2DAE6";
 /**
  * Vertical gap between calendar day tiles — split as margin above and below each card
  * so spacing matches the mock (breathing room top + bottom).
@@ -409,7 +411,7 @@ const styles = StyleSheet.create({
   offDivider: {
     width: StyleSheet.hairlineWidth,
     alignSelf: "stretch",
-    backgroundColor: "#ECEEF1",
+    backgroundColor: DAY_RAIL_DIVIDER,
   },
   offCenter: {
     flex: 1,
@@ -420,12 +422,17 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   offPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
     borderRadius: 999,
     backgroundColor: "#F1F5F9",
   },
-  offPillText: { fontSize: 9, fontWeight: "800", color: T.textSecondary },
+  offPillText: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: T.textSecondary,
+    lineHeight: 10,
+  },
   /* —— Trip —— */
   tripCardMain: {
     flexDirection: "row",
@@ -464,7 +471,7 @@ const styles = StyleSheet.create({
   tripDivider: {
     width: StyleSheet.hairlineWidth,
     alignSelf: "stretch",
-    backgroundColor: "#ECEEF1",
+    backgroundColor: DAY_RAIL_DIVIDER,
   },
   tripDow: { fontSize: 7, fontWeight: "600", color: T.textSecondary },
   tripDom: {
@@ -543,7 +550,7 @@ const styles = StyleSheet.create({
     paddingRight: 7,
     paddingVertical: 4,
     borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: "#F1F5F9",
+    borderLeftColor: "#D2DAE6",
   },
   creditTop: { fontSize: 10, fontWeight: "800", color: T.text },
   creditPlus: { fontSize: 8, fontWeight: "800", color: SCHEDULE_MOCK_HEADER_RED, marginTop: 2 },
