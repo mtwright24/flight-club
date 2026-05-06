@@ -8,6 +8,7 @@ import {
 } from '../buildClassicRows';
 import { mergeLayoverOntoLegDates } from '../scheduleTime';
 import { scheduleTheme as T } from '../scheduleTheme';
+import { SCHEDULE_MOCK_HEADER_RED } from '../scheduleMockPalette';
 import { isFlicaNonFlyingActivityId } from '../../../services/flicaScheduleHtmlParser';
 import { monthCalendarKey } from '../scheduleMonthCache';
 import {
@@ -18,6 +19,10 @@ import {
 } from '../scheduleSnapshotCache';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
 import { stashTripForDetailNavigation } from '../tripDetailNavCache';
+import {
+  PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+  PAIRING_DETAIL_STAT_DIGIT_TYPE,
+} from '../scheduleTileNumerals';
 
 const DOW = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 /**
@@ -59,15 +64,13 @@ type DayRow = {
   groupedWithNext: boolean;
 };
 
-const DIV = StyleSheet.hairlineWidth;
-
 /** Classic grid proportional weights — sum used to split row width; WX kept small so weather glyph never owns a wide strip. */
 const GRID_W_DATE = 44;
-const GRID_W_PAIRING = 68;
-const GRID_W_REPORT = 52;
-const GRID_W_ROUTE = 44;
-const GRID_W_DETAIL = 52;
-const GRID_W_LAYOVER = 52;
+const GRID_W_PAIRING = 48;
+const GRID_W_REPORT = 54;
+const GRID_W_ROUTE = 48;
+const GRID_W_DETAIL = 54;
+const GRID_W_LAYOVER = 54;
 const GRID_W_WX = 22;
 
 function parseLocalNoon(isoDate: string): Date {
@@ -345,33 +348,6 @@ function attachDayRowGrouping(rows: DayRow[]): DayRow[] {
   return rows;
 }
 
-function formatDec(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return '—';
-  return n.toFixed(2);
-}
-
-export type SummaryMetricItem = { id: string; label: string; value: string };
-
-/** Header strip: only `schedule_month_metrics` (import/screenshot). No sums from trip rows. */
-function buildSummaryStrip(server: ScheduleMonthMetrics | null | undefined): SummaryMetricItem[] {
-  if (server) {
-    return [
-      { id: 'block', label: 'BLOCK', value: formatDec(server.blockHours) },
-      { id: 'tafb', label: 'TAFB', value: formatDec(server.monthlyTafbHours) },
-      { id: 'credit', label: 'CREDIT', value: formatDec(server.creditHours) },
-      { id: 'ytd', label: 'YTD', value: formatDec(server.ytdCreditHours) },
-      { id: 'off', label: 'DAYS OFF', value: server.daysOff != null ? String(server.daysOff) : '—' },
-    ];
-  }
-  return [
-    { id: 'block', label: 'BLOCK', value: '—' },
-    { id: 'tafb', label: 'TAFB', value: '—' },
-    { id: 'credit', label: 'CREDIT', value: '—' },
-    { id: 'ytd', label: 'YTD', value: '—' },
-    { id: 'off', label: 'DAYS OFF', value: '—' },
-  ];
-}
-
 const ScheduleRow = memo(function ScheduleRow({
   row,
   onPressTrip,
@@ -385,10 +361,11 @@ const ScheduleRow = memo(function ScheduleRow({
 }) {
   const isEmpty = row.kind === 'empty';
   const isPtv = row.kind === 'ptv';
-  const dayInitial = row.dayCode.slice(0, 1);
-  const dayNumber = String(row.dayNum).padStart(2, '0');
+  const isTripDuty =
+    row.kind === 'trip' || row.kind === 'continuation' || row.kind === 'deadhead' || row.kind === 'ptv';
 
   const pairingValue = row.pairingText || '';
+  const pairingDisplay = row.groupedWithPrev ? '' : pairingValue;
   const reportValue = row.reportText || '';
   const cityValue = row.cityText || '';
   const dEndValue = row.dEndText || '';
@@ -399,25 +376,49 @@ const ScheduleRow = memo(function ScheduleRow({
   const rowStyle = [
     styles.row,
     styles.bodyRow,
-    row.isWeekend && styles.weekendRow,
+    isEmpty && styles.emptyDayRow,
+    row.isWeekend && !isEmpty && styles.weekendRow,
     row.isToday && styles.todayRow,
     row.groupedWithPrev && styles.tripChainRow,
   ];
 
+  const dateWorkRed = row.isToday || (isTripDuty && !isEmpty);
   const dataPlaceholder = isEmpty || isPtv;
   const wxMuted = isEmpty || isPtv;
 
   const interactive = !!row.trip && !!onPressTrip;
 
-  const content = (
-    <>
+  const dEndDisplay =
+    dEndValue.trim() || (isEmpty ? '' : isTripDuty ? '—' : '');
+  const layDisplay =
+    layoverValue.trim() || (isEmpty ? '' : isTripDuty ? '—' : '');
+  const hasLayText = Boolean(layoverValue.trim());
+
+  const cityIsPlaceholder = !cityValue.trim() || cityValue.trim() === '—' || cityValue.trim() === '–';
+
+  const rowBody = (
+    <View style={styles.cellsRow}>
       <View style={[styles.rowCell, styles.cellDate]}>
-        <View style={styles.dateInlineWrap}>
-          <Text style={[styles.cellText, styles.dateDayInline, row.isToday && styles.todayDateInline]} numberOfLines={1}>
-            {dayInitial}
+        <View style={styles.dateStack}>
+          <Text
+            style={[
+              styles.dateDowSmall,
+              dateWorkRed ? styles.dateWorkAccent : null,
+            ]}
+            numberOfLines={1}
+          >
+            {row.dayCode.slice(0, 2)}
           </Text>
-          <Text style={[styles.cellText, styles.dateNumInline, row.isToday && styles.todayDateInline]} numberOfLines={1}>
-            {dayNumber}
+          <Text
+            style={[
+              styles.dateDomLarge,
+              dateWorkRed ? styles.dateWorkAccent : null,
+              PAIRING_DETAIL_STAT_DIGIT_TYPE,
+              PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+            ]}
+            numberOfLines={1}
+          >
+            {row.dayNum}
           </Text>
         </View>
       </View>
@@ -427,48 +428,91 @@ const ScheduleRow = memo(function ScheduleRow({
             styles.cellText,
             styles.assignmentCode,
             isPtv && styles.ptoCode,
-            !isPtv && dataPlaceholder && styles.routePlaceholder,
+            !pairingDisplay.trim() && styles.routePlaceholder,
           ]}
           numberOfLines={1}
           ellipsizeMode="tail"
         >
-          {pairingValue}
+          {pairingDisplay}
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellReport]}>
-        <Text style={[styles.cellText, dataPlaceholder && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
+        <Text
+          style={[
+            styles.cellText,
+            dataPlaceholder && styles.routePlaceholder,
+            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+          ]}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
           {reportValue}
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellRoute]}>
-        <Text style={[styles.cellText, styles.routeMain]} numberOfLines={1} ellipsizeMode="tail">
+        <Text
+          style={[
+            styles.cellText,
+            cityIsPlaceholder ? styles.routePlaceholder : styles.routeMain,
+          ]}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
           {cityValue}
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellDetail]}>
         <Text
-          style={[styles.cellText, styles.detailCellText, dataPlaceholder && styles.routePlaceholder]}
+          style={[
+            styles.cellText,
+            styles.detailCellText,
+            !dEndDisplay && styles.routePlaceholder,
+            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+          ]}
           numberOfLines={1}
           ellipsizeMode="tail"
         >
-          {dEndValue}
+          {dEndDisplay}
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellLayover]}>
         <Text
-          style={[styles.cellText, styles.detailCellText, styles.layoverCellText, dataPlaceholder && styles.routePlaceholder]}
+          style={[
+            styles.cellText,
+            styles.detailCellText,
+            styles.layoverCellText,
+            hasLayText && styles.layoverValueGreen,
+            !layDisplay && styles.routePlaceholder,
+            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+          ]}
           numberOfLines={1}
           ellipsizeMode="tail"
         >
-          {layoverValue}
+          {layDisplay}
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellWx]}>
-        <Text style={[styles.cellText, styles.wxCellText, wxMuted && styles.routePlaceholder]} numberOfLines={1} ellipsizeMode="tail">
+        <Text
+          style={[styles.cellText, styles.wxCellText, wxMuted && styles.routePlaceholder]}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
           {wxValue}
         </Text>
       </View>
-    </>
+    </View>
+  );
+
+  const rowChrome = (
+    <View style={rowStyle}>
+      <View style={styles.rowAccentHost}>
+        {isTripDuty ? <View style={styles.rowAccentBar} /> : <View style={styles.rowAccentSpacerFill} />}
+      </View>
+      {rowBody}
+    </View>
   );
 
   if (interactive) {
@@ -481,25 +525,20 @@ const ScheduleRow = memo(function ScheduleRow({
         accessibilityRole="button"
         accessibilityHint="Opens trip detail. Long press for a quick preview."
       >
-        {/* Inner row View: Pressable with multiple RN children can lose horizontal flex; one flex row child fixes layout. */}
-        <View style={rowStyle}>{content}</View>
+        {rowChrome}
       </Pressable>
     );
   }
 
-  return <View style={rowStyle}>{content}</View>;
+  return rowChrome;
 });
 
-function BandBHeaderLabel({ children, align }: { children: string; align: 'left' | 'center' }) {
+function BandBHeaderLabel({ children }: { children: string }) {
   return (
     <Text
       numberOfLines={1}
       ellipsizeMode="clip"
-      style={[
-        styles.headerText,
-        align === 'center' ? styles.headerTextWx : styles.headerTextLeft,
-        Platform.OS === 'android' ? styles.headerTextAndroid : null,
-      ]}
+      style={[styles.headerText, styles.headerTextCenter, Platform.OS === 'android' ? styles.headerTextAndroid : null]}
     >
       {children}
     </Text>
@@ -507,46 +546,37 @@ function BandBHeaderLabel({ children, align }: { children: string; align: 'left'
 }
 
 /** Non-interactive shell while Layer-7 classic data is fetching — avoids trip grid + stale classic mismatches. */
-function ClassicScheduleSkeleton({ summary }: { summary: ReturnType<typeof buildSummaryStrip> }) {
+function ClassicScheduleSkeleton() {
   return (
-    <View style={styles.tableWrap}>
-      <View style={styles.summaryStripRow}>
-        {summary.map((item) => (
-          <View key={item.id} style={styles.summaryMetricCell}>
-            <Text style={styles.summaryKey} numberOfLines={2}>
-              {item.label}
-            </Text>
-            <Text style={styles.summaryValue}>{item.value}</Text>
+    <View style={styles.tableOuter}>
+      <View style={styles.tableSurface}>
+        <View style={styles.headerRow}>
+          <View style={[styles.headerBandCell, styles.headerColDate]}>
+            <BandBHeaderLabel>DATE</BandBHeaderLabel>
           </View>
-        ))}
-      </View>
+          <View style={[styles.headerBandCell, styles.headerColPairing]}>
+            <BandBHeaderLabel>PAIRING</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerColReport]}>
+            <BandBHeaderLabel>RPT</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerColRoute]}>
+            <BandBHeaderLabel>CITY</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerColDetail]}>
+            <BandBHeaderLabel>D-END</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerColLayover]}>
+            <BandBHeaderLabel>LAYOVR</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerBandWx]}>
+            <BandBHeaderLabel>WX</BandBHeaderLabel>
+          </View>
+        </View>
 
-      <View style={styles.headerRow}>
-        <View style={[styles.headerBandCell, styles.headerColDate]}>
-          <BandBHeaderLabel align="left">DATE</BandBHeaderLabel>
+        <View style={styles.skeletonBody}>
+          <ActivityIndicator size="large" color={T.accent} accessibilityLabel="Loading schedule grid" />
         </View>
-        <View style={[styles.headerBandCell, styles.headerColPairing]}>
-          <BandBHeaderLabel align="left">PAIRING</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerColReport]}>
-          <BandBHeaderLabel align="left">REPORT</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerColRoute]}>
-          <BandBHeaderLabel align="left">CITY</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerColDetail]}>
-          <BandBHeaderLabel align="left">D-END</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerColLayover]}>
-          <BandBHeaderLabel align="center">LAYOVER</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerBandWx]}>
-          <BandBHeaderLabel align="center">WX</BandBHeaderLabel>
-        </View>
-      </View>
-
-      <View style={styles.skeletonBody}>
-        <ActivityIndicator size="large" color={T.accent} accessibilityLabel="Loading schedule grid" />
       </View>
     </View>
   );
@@ -761,71 +791,60 @@ export default function ClassicListView({
     );
   }, [viewModelRows, mergedTrips]);
 
-  const summary = useMemo(() => buildSummaryStrip(monthMetrics ?? null), [monthMetrics]);
-
   if (isReady && !trips.length && (classicCommit?.classicRows.length ?? 0) === 0) {
     return <EmptyMonth onOpenManage={onOpenManage} />;
   }
 
   if (!isReady || !rows) {
-    return <ClassicScheduleSkeleton summary={summary} />;
+    return <ClassicScheduleSkeleton />;
   }
 
   return (
-    <View style={styles.tableWrap}>
-      <View style={styles.summaryStripRow}>
-        {summary.map((item) => (
-          <View key={item.id} style={styles.summaryMetricCell}>
-            <Text style={styles.summaryKey} numberOfLines={2}>
-              {item.label}
-            </Text>
-            <Text style={styles.summaryValue}>{item.value}</Text>
+    <View style={styles.tableOuter}>
+      <View style={styles.tableSurface}>
+        <View style={styles.headerRow}>
+          <View style={[styles.headerBandCell, styles.headerColDate]}>
+            <BandBHeaderLabel>DATE</BandBHeaderLabel>
           </View>
-        ))}
-      </View>
+          <View style={[styles.headerBandCell, styles.headerColPairing]}>
+            <BandBHeaderLabel>PAIRING</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerColReport]}>
+            <BandBHeaderLabel>RPT</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerColRoute]}>
+            <BandBHeaderLabel>CITY</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerColDetail]}>
+            <BandBHeaderLabel>D-END</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerColLayover]}>
+            <BandBHeaderLabel>LAYOVR</BandBHeaderLabel>
+          </View>
+          <View style={[styles.headerBandCell, styles.headerBandWx]}>
+            <BandBHeaderLabel>WX</BandBHeaderLabel>
+          </View>
+        </View>
 
-      <View style={styles.headerRow}>
-        <View style={[styles.headerBandCell, styles.headerColDate]}>
-          <BandBHeaderLabel align="left">DATE</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerColPairing]}>
-          <BandBHeaderLabel align="left">PAIRING</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerColReport]}>
-          <BandBHeaderLabel align="left">REPORT</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerColRoute]}>
-          <BandBHeaderLabel align="left">CITY</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerColDetail]}>
-          <BandBHeaderLabel align="left">D-END</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerColLayover]}>
-          <BandBHeaderLabel align="center">LAYOVER</BandBHeaderLabel>
-        </View>
-        <View style={[styles.headerBandCell, styles.headerBandWx]}>
-          <BandBHeaderLabel align="center">WX</BandBHeaderLabel>
-        </View>
+        <FlatList
+          data={rows}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <ScheduleRow
+              row={item}
+              rowDateIso={item.dateIso}
+              onPressTrip={item.trip ? onPressTrip : undefined}
+              onLongPressTrip={item.trip ? onLongPressTrip : undefined}
+            />
+          )}
+          contentContainerStyle={styles.wrap}
+          initialNumToRender={22}
+          maxToRenderPerBatch={24}
+          windowSize={9}
+          removeClippedSubviews
+          scrollEnabled={false}
+        />
       </View>
-
-      <FlatList
-        data={rows}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <ScheduleRow
-            row={item}
-            rowDateIso={item.dateIso}
-            onPressTrip={item.trip ? onPressTrip : undefined}
-            onLongPressTrip={item.trip ? onLongPressTrip : undefined}
-          />
-        )}
-        contentContainerStyle={styles.wrap}
-        initialNumToRender={22}
-        maxToRenderPerBatch={24}
-        windowSize={9}
-        removeClippedSubviews
-        scrollEnabled={false}
-      />
 
       <TripQuickPreviewSheet
         visible={previewTrip != null}
@@ -839,45 +858,18 @@ export default function ClassicListView({
 }
 
 const styles = StyleSheet.create({
-  tableWrap: {
-    backgroundColor: '#FFFFFF',
+  tableOuter: {
     width: '100%',
-    paddingLeft: 2,
-    paddingRight: 2,
+    backgroundColor: T.bg,
+    paddingHorizontal: 10,
+    paddingBottom: 6,
+  },
+  tableSurface: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
   },
   wrap: { paddingBottom: 0 },
-  summaryStripRow: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    width: '100%',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#B8BEC6',
-    backgroundColor: '#D4D7DD',
-    paddingHorizontal: 6,
-    paddingVertical: 10,
-  },
-  summaryMetricCell: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 2,
-  },
-  summaryKey: {
-    fontSize: 8,
-    fontWeight: '700',
-    color: '#64748B',
-    letterSpacing: 0.15,
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  summaryValue: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0F172A',
-    textAlign: 'center',
-  },
   skeletonBody: {
     minHeight: 260,
     width: '100%',
@@ -886,57 +878,53 @@ const styles = StyleSheet.create({
     paddingVertical: 40,
     backgroundColor: '#FFFFFF',
   },
-  /** Band B: lighter frosted neutral than Band A; not body white. */
   headerRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
     width: '100%',
-    backgroundColor: '#F5F6F8',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#D8DCE2',
+    backgroundColor: '#F3F4F6',
   },
   headerBandCell: {
     justifyContent: 'center',
-    minHeight: 40,
-    paddingVertical: 10,
-    paddingHorizontal: 0,
+    minHeight: 28,
+    paddingVertical: 5,
+    paddingHorizontal: 2,
     overflow: 'visible',
   },
-  /** Header cells use the same flex weights as body columns so labels line up with data. */
   headerColDate: {
     flexGrow: GRID_W_DATE,
     flexShrink: 1,
     flexBasis: 0,
     minWidth: GRID_W_DATE,
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   headerColPairing: {
     flexGrow: GRID_W_PAIRING,
     flexShrink: 1,
     flexBasis: 0,
     minWidth: GRID_W_PAIRING,
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   headerColReport: {
     flexGrow: GRID_W_REPORT,
     flexShrink: 1,
     flexBasis: 0,
     minWidth: GRID_W_REPORT,
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   headerColRoute: {
     flexGrow: GRID_W_ROUTE,
     flexShrink: 1,
     flexBasis: 0,
     minWidth: GRID_W_ROUTE,
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   headerColDetail: {
     flexGrow: GRID_W_DETAIL,
     flexShrink: 1,
     flexBasis: 0,
     minWidth: GRID_W_DETAIL,
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   headerColLayover: {
     flexGrow: GRID_W_LAYOVER,
@@ -945,7 +933,6 @@ const styles = StyleSheet.create({
     minWidth: GRID_W_LAYOVER,
     alignItems: 'center',
   },
-  /** WX: narrow flex share so the column never grows wider than a small glyph. */
   headerBandWx: {
     flexGrow: GRID_W_WX,
     flexShrink: 1,
@@ -956,27 +943,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
   },
   headerText: {
-    fontSize: 7.2,
-    fontWeight: '700',
-    color: '#334155',
-    letterSpacing: 0,
-    lineHeight: 10,
+    fontSize: 7,
+    fontWeight: '500',
+    color: '#94A3B8',
+    letterSpacing: 0.04,
+    lineHeight: 9,
     width: '100%',
     textTransform: 'uppercase',
   },
-  headerTextLeft: {
-    textAlign: 'left',
-  },
-  headerTextWx: {
-    textAlign: 'center',
-    letterSpacing: 0.02,
-  },
-  headerTextAndroid: {
-    includeFontPadding: false,
-  },
+  headerTextCenter: { textAlign: 'center', letterSpacing: 0.03 },
+  headerTextAndroid: { includeFontPadding: false },
   rowCell: {
-    minHeight: 22,
-    paddingHorizontal: 0,
+    minHeight: 20,
+    paddingHorizontal: 2,
     marginHorizontal: 0,
     justifyContent: 'center',
     alignItems: 'center',
@@ -986,40 +965,60 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     flexWrap: 'nowrap',
-    alignItems: 'center',
+    alignItems: 'stretch',
     width: '100%',
     minHeight: 22,
     paddingVertical: 0,
     paddingHorizontal: 0,
-    borderBottomWidth: DIV,
-    borderBottomColor: '#E8EAED',
     overflow: 'hidden',
   },
-  /** Wraps the flex row so Pressable stays full-width without breaking column layout. */
+  cellsRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    minHeight: 22,
+  },
+  rowAccentHost: {
+    width: 3,
+    alignSelf: 'stretch',
+    paddingVertical: 5,
+    justifyContent: 'center',
+  },
+  rowAccentBar: {
+    flex: 1,
+    width: 3,
+    minHeight: 10,
+    alignSelf: 'center',
+    borderRadius: 1,
+    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
+  },
+  rowAccentSpacerFill: {
+    flex: 1,
+    width: 3,
+    minHeight: 10,
+    alignSelf: 'center',
+    opacity: 0,
+  },
   rowPressHost: {
     width: '100%',
     alignSelf: 'stretch',
   },
-  /** Default body fill: no status-based row tints (PTO/RSV/DH/OFF/etc. use text color only). */
   bodyRow: {
     backgroundColor: '#FFFFFF',
+  },
+  emptyDayRow: {
+    backgroundColor: '#F8FAFC',
   },
   rowPressed: {
     backgroundColor: '#F1F5F9',
   },
-  /**
-   * Layer 8: proportional flex columns so the row spans full width evenly (no left-heavy cluster);
-   * WX uses the smallest weight so a tiny icon never sits in an oversized strip.
-   */
   cellDate: {
     flexGrow: GRID_W_DATE,
     flexShrink: 1,
     flexBasis: 0,
     minWidth: GRID_W_DATE,
     overflow: 'hidden',
-    borderRightWidth: DIV,
-    borderRightColor: '#ECEEF1',
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   cellPairing: {
     flexGrow: GRID_W_PAIRING,
@@ -1027,9 +1026,7 @@ const styles = StyleSheet.create({
     flexBasis: 0,
     minWidth: GRID_W_PAIRING,
     overflow: 'hidden',
-    borderRightWidth: DIV,
-    borderRightColor: '#ECEEF1',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'center',
   },
   cellReport: {
@@ -1038,9 +1035,7 @@ const styles = StyleSheet.create({
     flexBasis: 0,
     minWidth: GRID_W_REPORT,
     overflow: 'hidden',
-    borderRightWidth: DIV,
-    borderRightColor: '#ECEEF1',
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   cellRoute: {
     flexGrow: GRID_W_ROUTE,
@@ -1048,9 +1043,7 @@ const styles = StyleSheet.create({
     flexBasis: 0,
     minWidth: GRID_W_ROUTE,
     overflow: 'hidden',
-    borderRightWidth: DIV,
-    borderRightColor: '#ECEEF1',
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   cellDetail: {
     flexGrow: GRID_W_DETAIL,
@@ -1058,9 +1051,7 @@ const styles = StyleSheet.create({
     flexBasis: 0,
     minWidth: GRID_W_DETAIL,
     overflow: 'hidden',
-    borderRightWidth: DIV,
-    borderRightColor: '#ECEEF1',
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   cellLayover: {
     flexGrow: GRID_W_LAYOVER,
@@ -1068,8 +1059,6 @@ const styles = StyleSheet.create({
     flexBasis: 0,
     minWidth: GRID_W_LAYOVER,
     overflow: 'hidden',
-    borderRightWidth: DIV,
-    borderRightColor: '#ECEEF1',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1082,66 +1071,72 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  /** Only weekend + today override bodyRow; cool neutral, not beige/pink. */
   weekendRow: {
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#F9FAFB',
   },
-  noPressRow: {
-    opacity: 0.96,
-  },
-  pressedRow: {
-    opacity: 0.95,
-  },
+  noPressRow: { opacity: 0.96 },
+  pressedRow: { opacity: 0.95 },
   todayRow: {
     backgroundColor: '#F9F0F2',
   },
-  tripChainRow: { opacity: 0.992 },
-  cellText: { width: '100%', fontSize: 7.8, color: '#243447', lineHeight: 10, fontWeight: '600' },
-  dateInlineWrap: {
+  tripChainRow: { },
+  dateStack: {
     width: '100%',
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingLeft: 0,
+    paddingVertical: 2,
   },
-  dateDayInline: {
-    width: 10,
-    fontSize: 8.1,
-    fontWeight: '700',
-    color: '#334155',
+  dateDowSmall: {
+    fontSize: 6.5,
+    fontWeight: '600',
+    color: '#64748B',
+    lineHeight: 8,
+  },
+  dateDomLarge: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#0F172A',
+    lineHeight: 11,
+  },
+  dateWorkAccent: {
+    color: SCHEDULE_MOCK_HEADER_RED,
+  },
+  cellText: {
+    width: '100%',
+    fontSize: 7.6,
+    color: '#1E293B',
     lineHeight: 10,
-    letterSpacing: 0,
-    textAlign: 'left',
+    fontWeight: '600',
+    textAlign: 'center',
   },
-  dateNumInline: {
-    width: 18,
-    marginLeft: 2,
-    fontSize: 8.1,
-    fontWeight: '700',
-    color: '#334155',
-    lineHeight: 10,
-    letterSpacing: 0,
-    textAlign: 'left',
-    fontVariant: ['tabular-nums'],
-  },
-  todayDateInline: { color: '#8A2E3C', fontWeight: '800' },
-  assignmentCode: { fontSize: 8.2, fontWeight: '700', color: T.text, lineHeight: 10 },
-  routeMain: { fontSize: 7.8, fontWeight: '600', color: '#B5161E', lineHeight: 10 },
-  detailCellText: { fontSize: 7.8, color: '#607086', lineHeight: 10, fontWeight: '600' },
-  layoverCellText: { textAlign: 'center' },
-  wxCellText: {
+  assignmentCode: {
     fontSize: 8,
-    color: '#EAB308',
+    fontWeight: '800',
+    color: SCHEDULE_MOCK_HEADER_RED,
+    lineHeight: 10,
+    textAlign: 'center',
+  },
+  routeMain: { fontSize: 7.6, fontWeight: '700', color: SCHEDULE_MOCK_HEADER_RED, lineHeight: 10, textAlign: 'center' },
+  detailCellText: { fontSize: 7.6, color: '#475569', lineHeight: 10, fontWeight: '600', textAlign: 'center' },
+  layoverCellText: { textAlign: 'center' },
+  layoverValueGreen: { color: '#15803D', fontWeight: '700' },
+  wxCellText: {
+    fontSize: 7.5,
+    color: '#CA8A04',
     lineHeight: 10,
     fontWeight: '700',
     textAlign: 'center',
     width: '100%',
   },
   continuationCode: { color: '#425972', fontWeight: '600' },
-  routePlaceholder: { fontSize: 7.8, color: '#C6D1DE', lineHeight: 10 },
+  routePlaceholder: { fontSize: 7.6, color: '#C6D1DE', lineHeight: 10, textAlign: 'center' },
   offCode: { color: '#475569' },
   ptoCode: { color: '#047857' },
   reserveCode: { color: '#92400E' },
   unavailableCode: { color: '#475569' },
-  emptyCode: { color: '#AAB8CB', fontWeight: '700' },
+  emptyCode: { color: '#94A3B8', fontWeight: '700' },
   stateDetail: { color: '#667085' },
   emptyMonth: {
     borderWidth: 1,

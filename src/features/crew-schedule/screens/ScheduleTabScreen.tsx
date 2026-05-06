@@ -495,10 +495,12 @@ export default function ScheduleTabScreen() {
       ]}
       {...monthSwipePan.panHandlers}
     >
-      {viewMode === "modernClassic" ? (
+      {(viewMode === "modernClassic" ||
+        viewMode === "classic" ||
+        viewMode === "calendar") ? (
         <MonthlyStatsStrip values={statsStripValues} />
       ) : null}
-      {viewMode !== "modernClassic" ? (
+      {viewMode !== "modernClassic" && viewMode !== "calendar" ? (
         <View
           style={styles.monthRow}
           accessibilityLabel="Month header — swipe left or right to change month"
@@ -588,7 +590,7 @@ export default function ScheduleTabScreen() {
             </>
           ) : (
             <>
-              {flicaPairings.length > 0 ? (
+              {flicaPairings.length > 0 && viewMode !== "classic" ? (
                 <FlicaCrewScheduleSection
                   stats={flicaStats}
                   pairings={flicaPairings}
@@ -611,6 +613,12 @@ export default function ScheduleTabScreen() {
                 <CalendarMonthView
                   year={year}
                   month={month}
+                  monthLabel={monthLabel}
+                  canPrevMonth={canPrevMonth}
+                  canNextMonth={canNextMonth}
+                  onPrevMonth={goPrevMonth}
+                  onNextMonth={goNextMonth}
+                  monthMetrics={displayMetrics ?? null}
                   trips={displayTrips}
                   onPressDay={onPressCalendarDay}
                   onOpenTrip={openTrip}
