@@ -1,6 +1,8 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
+import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
+import { routeSummaryFromCanonicalLedgerCities } from '../pairingDayApply';
+import { formatLegChain } from '../modernClassic/modernClassicDayDisplay';
 import {
   buildClassicRowsFromDuties,
   fetchScheduleDutiesAndPairingsForMonth,
@@ -18,6 +20,9 @@ import {
   writeScheduleMonthUISnapshot,
 } from '../scheduleSnapshotCache';
 import TripQuickPreviewSheet from './TripQuickPreviewSheet';
+import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
+import type { FlicaCalendarListModel } from '../flicaCalendarDisplaySource';
+import { buildHybridFlicaCalendarRows } from '../flicaHybridCalendarRows';
 import { stashTripForDetailNavigation } from '../tripDetailNavCache';
 import {
   PAIRING_DETAIL_STAT_DIGIT_TRACKING,
@@ -62,6 +67,8 @@ type DayRow = {
   isToday: boolean;
   groupedWithPrev: boolean;
   groupedWithNext: boolean;
+  /** When set, CITY follows FLICA mini-table only (no cross-month route substitution). */
+  useFlicaLedgerLabels?: boolean;
 };
 
 /** Classic grid proportional weights — sum used to split row width; WX kept small so weather glyph never owns a wide strip. */
@@ -107,6 +114,46 @@ function getAllDatesInMonth(year: number, month: number): string[] {
     out.push(`${year}-${mm}-${String(d).padStart(2, '0')}`);
   }
   return out;
+}
+
+/** Trip overlaps a prior or next calendar month relative to the month currently on screen (carry-in / carry-out). */
+function classicTripCrossesViewMonthBoundary(
+  trip: CrewScheduleTrip,
+  year: number,
+  month: number,
+): boolean {
+  const code = String(trip.pairingCode ?? '').trim();
+  if (!code || code === '—' || code === 'CONT' || isFlicaNonFlyingActivityId(code)) return false;
+  const viewMonthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+  const lastIso = viewMonthLastIso(year, month);
+  const ts = trip.startDate.slice(0, 10);
+  const te = trip.endDate.slice(0, 10);
+  return ts < viewMonthStart || te > lastIso;
+}
+
+function dutyIsoForClassicLegSort(leg: CrewScheduleLeg): string | null {
+  const d = String(leg.dutyDate ?? '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+}
+
+/** Full pairing route for classic CITY column on cross-month trips (ledger cities → routeSummary → leg chain). */
+function classicListLedgerRouteLine(trip: CrewScheduleTrip): string {
+  const canon = routeSummaryFromCanonicalLedgerCities(trip);
+  if (canon) return canon;
+  const rs = String(trip.routeSummary ?? '').trim();
+  if (rs && rs !== '—' && rs !== '-') return rs;
+  const legs = [...(trip.legs ?? [])]
+    .filter((l) => dutyIsoForClassicLegSort(l))
+    .sort((a, b) => {
+      const da = dutyIsoForClassicLegSort(a)!;
+      const db = dutyIsoForClassicLegSort(b)!;
+      if (da !== db) return da.localeCompare(db);
+      const ka = `${String(a.reportLocal ?? '').trim()}_${String(a.departLocal ?? '').trim()}_${String(a.departureAirport ?? '').trim()}`;
+      const kb = `${String(b.reportLocal ?? '').trim()}_${String(b.departLocal ?? '').trim()}_${String(b.departureAirport ?? '').trim()}`;
+      return ka.localeCompare(kb);
+    });
+  if (!legs.length) return '';
+  return formatLegChain(legs).replace(/ · /g, ' – ');
 }
 
 function rowPriorityForClassicRow(r: ClassicScheduleRow): number {
@@ -357,11 +404,15 @@ const ScheduleRow = memo(function ScheduleRow({
   onPressTrip,
   onLongPressTrip,
   rowDateIso,
+  viewYear,
+  viewMonth,
 }: {
   row: DayRow;
   onPressTrip?: (trip: CrewScheduleTrip, rowDateIso?: string) => void;
   onLongPressTrip?: (trip: CrewScheduleTrip, rowDateIso?: string) => void;
   rowDateIso: string;
+  viewYear: number;
+  viewMonth: number;
 }) {
   const isEmpty = row.kind === 'empty';
   const isPtv = row.kind === 'ptv';
@@ -369,9 +420,17 @@ const ScheduleRow = memo(function ScheduleRow({
     row.kind === 'trip' || row.kind === 'continuation' || row.kind === 'deadhead' || row.kind === 'ptv';
 
   const pairingValue = row.pairingText || '';
-  const pairingDisplay = row.groupedWithPrev ? '' : pairingValue;
+  const pairingDisplay =
+    row.groupedWithPrev && !row.useFlicaLedgerLabels ? '' : pairingValue;
   const reportValue = row.reportText || '';
   const cityValue = row.cityText || '';
+  const useCarryLedgerRoute =
+    !!row.trip &&
+    isTripLikeKind(row.kind) &&
+    !row.useFlicaLedgerLabels &&
+    classicTripCrossesViewMonthBoundary(row.trip, viewYear, viewMonth);
+  const carryLine = useCarryLedgerRoute && row.trip ? classicListLedgerRouteLine(row.trip) : '';
+  const cityDisplay = carryLine.trim() ? carryLine : cityValue;
   const dEndValue = row.dEndText || '';
   const layoverValue = row.layoverText || '';
   /** WX always from trip / entries pipeline (Layer 10), not schedule_duties. */
@@ -388,17 +447,22 @@ const ScheduleRow = memo(function ScheduleRow({
 
   const dateWorkRed = row.isToday || (isTripDuty && !isEmpty);
   const dataPlaceholder = isEmpty || isPtv;
+  /** Do not dim RPT when duty text exists (continuation / hybrid merge). */
+  const reportUsePlaceholder =
+    !reportValue.trim() && (isEmpty || isPtv);
   const wxMuted = isEmpty || isPtv;
 
   const interactive = !!row.trip && !!onPressTrip;
 
   const dEndDisplay =
     dEndValue.trim() || (isEmpty ? '' : isTripDuty ? '—' : '');
-  const layDisplay =
-    layoverValue.trim() || (isEmpty ? '' : isTripDuty ? '—' : '');
+  const layDisplay = row.useFlicaLedgerLabels
+    ? layoverValue.trim()
+    : layoverValue.trim() || (isEmpty ? '' : isTripDuty ? '—' : '');
   const hasLayText = Boolean(layoverValue.trim());
 
-  const cityIsPlaceholder = !cityValue.trim() || cityValue.trim() === '—' || cityValue.trim() === '–';
+  const cityIsPlaceholder =
+    !cityDisplay.trim() || cityDisplay.trim() === '—' || cityDisplay.trim() === '–';
 
   const rowBody = (
     <View style={styles.cellsRow}>
@@ -444,7 +508,7 @@ const ScheduleRow = memo(function ScheduleRow({
         <Text
           style={[
             styles.cellText,
-            dataPlaceholder && styles.routePlaceholder,
+            reportUsePlaceholder && styles.routePlaceholder,
             PAIRING_DETAIL_STAT_DIGIT_TYPE,
             PAIRING_DETAIL_STAT_DIGIT_TRACKING,
           ]}
@@ -463,7 +527,7 @@ const ScheduleRow = memo(function ScheduleRow({
           numberOfLines={1}
           ellipsizeMode="tail"
         >
-          {cityValue}
+          {cityDisplay}
         </Text>
       </View>
       <View style={[styles.rowCell, styles.cellDetail]}>
@@ -488,7 +552,10 @@ const ScheduleRow = memo(function ScheduleRow({
             styles.detailCellText,
             styles.layoverCellText,
             hasLayText && styles.layoverValueGreen,
-            !layDisplay && styles.routePlaceholder,
+            !row.useFlicaLedgerLabels &&
+              !layDisplay &&
+              (!isEmpty && isTripDuty) &&
+              styles.routePlaceholder,
             PAIRING_DETAIL_STAT_DIGIT_TYPE,
             PAIRING_DETAIL_STAT_DIGIT_TRACKING,
           ]}
@@ -608,6 +675,34 @@ function EmptyMonth({ onOpenManage }: { onOpenManage?: () => void }) {
   );
 }
 
+function FlicaLedgerBlockedClassic({
+  model,
+  onOpenManage,
+}: {
+  model: Extract<FlicaCalendarListModel, { mode: "flica_blocked" }>;
+  onOpenManage?: () => void;
+}) {
+  return (
+    <View style={styles.emptyMonth}>
+      <Text style={styles.emptyMonthTitle}>Mini-calendar table unavailable</Text>
+      <Text style={styles.emptyMonthBody}>
+        This month has no saved FLICA schedule HTML. Re-import from Manage — Classic view uses the FLICA
+        mini calendar only.
+      </Text>
+      {typeof __DEV__ !== "undefined" && __DEV__ ? (
+        <Text style={styles.devLedgerBlockedHint}>
+          [FC_CAL_LEDGER_BLOCKED] {model.reason} {model.visibleMonth}
+        </Text>
+      ) : null}
+      {onOpenManage ? (
+        <Pressable style={styles.importBtn} onPress={onOpenManage}>
+          <Text style={styles.importBtnText}>Open Manage</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 type Props = {
   trips: CrewScheduleTrip[];
   year: number;
@@ -624,6 +719,8 @@ type Props = {
   onPressTrip: (trip: CrewScheduleTrip, rowDateIso?: string) => void;
   /** Opens Crew Schedule → Manage (import + view mode). */
   onOpenManage?: () => void;
+  /** FLICA `crew_schedule` list source — mini calendar HTML when imported; no duty fallback when blocked. */
+  flicaCalendarListModel: FlicaCalendarListModel;
 };
 
 export default function ClassicListView({
@@ -635,6 +732,7 @@ export default function ClassicListView({
   tripLayerReady,
   onPressTrip,
   onOpenManage,
+  flicaCalendarListModel,
 }: Props) {
   const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
   /** Committed Layer-7 grid for `ymKey` only — avoids painting prior month classics against new-month trips. */
@@ -661,22 +759,31 @@ export default function ClassicListView({
   }, [previewTrip, onPressTrip]);
 
   const ymKey = monthCalendarKey(year, month);
+  const flicaMode = flicaCalendarListModel.mode;
 
   useLayoutEffect(() => {
     loadEpochRef.current += 1;
     const epoch = loadEpochRef.current;
     setLoadEpoch(epoch);
-    const snap = readScheduleMonthUISnapshot(ymKey);
-    if (snap && isScheduleMonthUISnapshotCoherent(snap, year, month)) {
-      setClassicCommit({ ymKey, classicRows: snap.classicRows });
-      setClassicSettledEpoch(epoch);
+    if (flicaMode === "trip_derived" || flicaMode === "flica_mini_table") {
+      const snap = readScheduleMonthUISnapshot(ymKey);
+      if (snap && isScheduleMonthUISnapshotCoherent(snap, year, month)) {
+        setClassicCommit({ ymKey, classicRows: snap.classicRows });
+        setClassicSettledEpoch(epoch);
+      } else {
+        setClassicCommit(null);
+        setClassicSettledEpoch(0);
+      }
     } else {
-      setClassicCommit(null);
-      setClassicSettledEpoch(0);
+      setClassicCommit({ ymKey, classicRows: [] });
+      setClassicSettledEpoch(epoch);
     }
-  }, [year, month, ymKey]);
+  }, [year, month, ymKey, flicaMode]);
 
   useEffect(() => {
+    if (flicaMode !== "trip_derived" && flicaMode !== "flica_mini_table") {
+      return;
+    }
     const epoch = loadEpochRef.current;
     const y = year;
     const m = month;
@@ -703,7 +810,7 @@ export default function ClassicListView({
     return () => {
       cancelled = true;
     };
-  }, [loadEpoch, year, month, ymKey, refreshKey]);
+  }, [loadEpoch, year, month, ymKey, refreshKey, flicaMode]);
 
   const mergedTrips = useMemo(
     () =>
@@ -714,14 +821,20 @@ export default function ClassicListView({
     [trips],
   );
 
+  const useFlicaMiniTable = flicaMode === "flica_mini_table";
+  const useFlicaBlocked = flicaMode === "flica_blocked";
   const classicHydratedForRequest = classicSettledEpoch === loadEpoch;
   const dutiesLoaded = classicCommit?.ymKey === ymKey && classicHydratedForRequest;
   const pairingsLoaded = dutiesLoaded;
   const legsLoaded = dutiesLoaded;
   const statsLoaded = tripLayerReady;
-  const isReady = dutiesLoaded && pairingsLoaded && legsLoaded && statsLoaded;
+  const isReady =
+    useFlicaBlocked
+      ? true
+      : dutiesLoaded && pairingsLoaded && legsLoaded && statsLoaded;
 
   useEffect(() => {
+    if (flicaMode !== "trip_derived") return;
     if (!isReady || !classicCommit || classicCommit.ymKey !== ymKey) return;
     const prevSnap = readScheduleMonthUISnapshot(ymKey);
     const metrics = monthMetrics ?? prevSnap?.monthMetrics ?? null;
@@ -742,9 +855,10 @@ export default function ClassicListView({
       classicRows: classicCommit.classicRows,
       monthMetrics: metrics,
     });
-  }, [isReady, ymKey, trips, classicCommit, monthMetrics]);
+  }, [isReady, ymKey, trips, classicCommit, monthMetrics, flicaMode]);
 
   const viewModelRows = useMemo((): ClassicDisplayItem[] | null => {
+    if (useFlicaBlocked) return null;
     if (!isReady || !classicCommit || classicCommit.ymKey !== ymKey) return null;
     const classicRows = classicCommit.classicRows;
     const monthLastIso = viewMonthLastIso(year, month);
@@ -791,21 +905,71 @@ export default function ClassicListView({
     }
 
     return result;
-  }, [isReady, classicCommit, ymKey, mergedTrips, year, month]);
+  }, [isReady, classicCommit, ymKey, mergedTrips, year, month, useFlicaBlocked]);
 
   const rows = useMemo(() => {
+    if (useFlicaBlocked) {
+      return [];
+    }
     if (!viewModelRows) return null;
     const todayIso = dateToIsoDateLocal(new Date());
-    return attachDayRowGrouping(
+    const tripRows = attachDayRowGrouping(
       viewModelRows.map((item, rowIdx) => displayItemToDayRow(item, mergedTrips, todayIso, rowIdx)),
     );
-  }, [viewModelRows, mergedTrips]);
+    if (useFlicaMiniTable) {
+      const visibleMonth = `${year}-${String(month).padStart(2, "0")}`;
+      return buildHybridFlicaCalendarRows({
+        ledgerCells: flicaCalendarListModel.cells,
+        tripDerivedRows: tripRows,
+        visibleMonth,
+        mergedTrips,
+        todayIso,
+        rawPairingDetailIndex: flicaCalendarListModel.rawPairingDetailIndex,
+      });
+    }
+    return tripRows;
+  }, [useFlicaMiniTable, useFlicaBlocked, flicaCalendarListModel, viewModelRows, mergedTrips, year, month]);
 
-  if (isReady && !trips.length && (classicCommit?.classicRows.length ?? 0) === 0) {
+  useEffect(() => {
+    if (typeof __DEV__ === "undefined" || !__DEV__) return;
+    const mode = flicaCalendarListModel.mode;
+    const payload = {
+      listMode: mode,
+      ledgerRowCount:
+        mode === "flica_mini_table" ? flicaCalendarListModel.cells.length : 0,
+      isReady,
+      useFlicaMiniTable,
+      displayMode:
+        mode === "flica_mini_table"
+          ? "ledger_plus_duty_hybrid"
+          : mode === "flica_blocked"
+            ? "flica_blocked_no_fallback"
+            : "duty_classic_rows",
+      rowCount: rows?.length ?? 0,
+    };
+    console.log("[FC_CLASSIC_LIST_SOURCE]", payload);
+    fcDevMirrorScheduleLogToFile("FC_CLASSIC_LIST_SOURCE", payload);
+  }, [flicaCalendarListModel, rows, isReady, useFlicaMiniTable]);
+
+  if (
+    isReady &&
+    flicaMode === "trip_derived" &&
+    !trips.length &&
+    (classicCommit?.classicRows.length ?? 0) === 0
+  ) {
     return <EmptyMonth onOpenManage={onOpenManage} />;
   }
 
-  if (!isReady || !rows) {
+  if (flicaCalendarListModel.mode === "flica_blocked") {
+    return (
+      <FlicaLedgerBlockedClassic
+        model={flicaCalendarListModel}
+        onOpenManage={onOpenManage}
+      />
+    );
+  }
+
+  if (!isReady || rows == null) {
     return <ClassicScheduleSkeleton />;
   }
 
@@ -843,6 +1007,8 @@ export default function ClassicListView({
             <ScheduleRow
               row={item}
               rowDateIso={item.dateIso}
+              viewYear={year}
+              viewMonth={month}
               onPressTrip={item.trip ? onPressTrip : undefined}
               onLongPressTrip={item.trip ? onLongPressTrip : undefined}
             />
@@ -1180,6 +1346,13 @@ const styles = StyleSheet.create({
   },
   emptyMonthTitle: { color: T.text, fontSize: 15, fontWeight: '800' },
   emptyMonthBody: { color: T.textSecondary, fontSize: 12, fontWeight: '600', marginTop: 4, textAlign: 'center' },
+  devLedgerBlockedHint: {
+    marginTop: 8,
+    fontSize: 11,
+    color: '#B45309',
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   importBtn: {
     marginTop: 10,
     borderRadius: 8,

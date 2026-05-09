@@ -1,28 +1,29 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { dateToIsoDateLocal } from "../modernClassic/classicMonthGridCore";
 import {
-  dailyCreditDisplay,
-  dutyDayIndexLabel,
-  legsForDutyDate,
-  primaryDayRoute,
+    dailyCreditDisplay,
+    dutyDayIndexLabel,
+    legsForDutyDate,
+    primaryDayRoute,
 } from "../modernClassic/modernClassicDayDisplay";
 import { scheduleProgressFromMetrics } from "../modernClassic/modernClassicHeaderMetrics";
 import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
 import { scheduleTheme as T } from "../scheduleTheme";
-import type { CrewScheduleTrip, ScheduleMonthMetrics } from "../types";
-import { stashTripForDetailNavigation } from "../tripDetailNavCache";
 import {
-  PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-  PAIRING_DETAIL_STAT_DIGIT_TYPE,
+    PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+    PAIRING_DETAIL_STAT_DIGIT_TYPE,
 } from "../scheduleTileNumerals";
+import { stashTripForDetailNavigation } from "../tripDetailNavCache";
+import type { CrewScheduleTrip, ScheduleMonthMetrics } from "../types";
+import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
+import type { FlicaCalendarListModel } from "../flicaCalendarDisplaySource";
+import {
+  type FlicaCalendarCell,
+  sanitizeFlicaLedgerCityText,
+} from "../flicaMiniCalendarTableLedger";
+import { tripForFlicaCalendarCell } from "../flicaCalendarLedgerDayRows";
 import TripQuickPreviewSheet from "./TripQuickPreviewSheet";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
@@ -64,8 +65,7 @@ function dayCreditHoursShort(
   trip: CrewScheduleTrip | undefined,
 ): string | null {
   if (!trip || trip.status === "off") return null;
-  const total =
-    trip.pairingCreditHours ?? trip.creditHours ?? null;
+  const total = trip.pairingCreditHours ?? trip.creditHours ?? null;
   if (total == null || Number.isNaN(total)) return null;
   const n = Math.max(1, trip.dutyDays ?? 1);
   const daily = total / n;
@@ -73,7 +73,10 @@ function dayCreditHoursShort(
   return `${daily.toFixed(1)}h`;
 }
 
-function dayBlockShort(trip: CrewScheduleTrip | undefined, iso: string): string {
+function dayBlockShort(
+  trip: CrewScheduleTrip | undefined,
+  iso: string,
+): string {
   if (!trip) return "—";
   const legs = legsForDutyDate(trip, iso);
   const raw = legs[0]?.blockTimeLocal?.trim();
@@ -119,6 +122,25 @@ const TILE_DAY = Platform.select({
 const androidNoFontPad =
   Platform.OS === "android" ? ({ includeFontPadding: false } as const) : {};
 
+function cellKindFromFlicaLedger(
+  ledgerCell: FlicaCalendarCell | undefined,
+  fallbackTrip: CrewScheduleTrip | undefined,
+): CellKind {
+  if (ledgerCell) {
+    const c = (ledgerCell.displayCode ?? "").trim().toUpperCase();
+    if (c === "PTV") return "pto";
+    if (c === "RSV") return "rsv";
+    if (c === "PTO") return "pto";
+      if (!c) {
+        const city = sanitizeFlicaLedgerCityText(ledgerCell.displayCity);
+        if (!city || city === "-" || city === "—") return "empty";
+      return fallbackTrip ? cellKind(fallbackTrip) : "empty";
+    }
+    return "work";
+  }
+  return cellKind(fallbackTrip);
+}
+
 type Props = {
   year: number;
   month: number;
@@ -133,6 +155,10 @@ type Props = {
   /** Opens trip detail when user taps the selected-day card (existing calendar behavior). */
   onPressDay: (isoDate: string) => void;
   onOpenTrip?: (trip: CrewScheduleTrip, cellIso?: string) => void;
+  /** FLICA mini-calendar cells by ISO date — grid labels follow HTML table. */
+  flicaCellByIso?: Map<string, FlicaCalendarCell>;
+  /** Schedule tab FLICA display mode (blocked vs mini-table vs trip-derived). */
+  flicaCalendarListModel: FlicaCalendarListModel;
 };
 
 export default function CalendarMonthView({
@@ -147,6 +173,8 @@ export default function CalendarMonthView({
   trips,
   onPressDay,
   onOpenTrip,
+  flicaCellByIso,
+  flicaCalendarListModel,
 }: Props) {
   const [selectedIso, setSelectedIso] = useState(() =>
     initialSelectedIso(year, month),
@@ -160,6 +188,7 @@ export default function CalendarMonthView({
     setSelectedIso(initialSelectedIso(year, month));
   }, [year, month]);
 
+  const ledgerMode = (flicaCellByIso?.size ?? 0) > 0;
   const closePreview = useCallback(() => setPreview(null), []);
   const openFullFromPreview = useCallback(() => {
     const p = preview;
@@ -179,6 +208,44 @@ export default function CalendarMonthView({
     return { cells: c, rowCount: Math.ceil(c.length / 7) };
   }, [year, month]);
 
+  useEffect(() => {
+    if (typeof __DEV__ === "undefined" || !__DEV__) return;
+    const visibleMonth = `${year}-${pad2(month)}`;
+    const mapSize = flicaCellByIso?.size ?? 0;
+    const first10TileLabelsFromFlicaLedger: {
+      iso: string;
+      pairingText: string | null;
+      cityText: string | null;
+    }[] = [];
+    for (let i = 0; i < cells.length && first10TileLabelsFromFlicaLedger.length < 10; i++) {
+      const cell = cells[i];
+      if (!cell?.inMonth) continue;
+      const iso = `${year}-${pad2(month)}-${pad2(cell.day)}`;
+      const lc = mapSize > 0 ? flicaCellByIso?.get(iso) : undefined;
+      first10TileLabelsFromFlicaLedger.push({
+        iso,
+        pairingText: lc?.displayCode ?? null,
+        cityText: lc?.displayCity ?? null,
+      });
+    }
+    console.log("[FC_MONTH_GRID_SOURCE]", {
+      flicaCellByIsoPresent: mapSize > 0,
+      flicaCellByIsoSize: mapSize,
+      selectedVisibleMonth: visibleMonth,
+      selectedDayIso: selectedIso,
+      listMode: flicaCalendarListModel.mode,
+      first10TileLabelsFromFlicaLedger,
+    });
+    fcDevMirrorScheduleLogToFile("FC_MONTH_GRID_SOURCE", {
+      flicaCellByIsoPresent: mapSize > 0,
+      flicaCellByIsoSize: mapSize,
+      selectedVisibleMonth: visibleMonth,
+      selectedDayIso: selectedIso,
+      listMode: flicaCalendarListModel.mode,
+      first10TileLabelsFromFlicaLedger,
+    });
+  }, [year, month, flicaCellByIso, cells, selectedIso, flicaCalendarListModel.mode]);
+
   const prog = useMemo(
     () => scheduleProgressFromMetrics(monthMetrics ?? null),
     [monthMetrics],
@@ -187,13 +254,31 @@ export default function CalendarMonthView({
   const pctLabel = Math.round(prog.pct * 100);
   const progressRight = `${pctLabel}% · ${Math.round(prog.workedH)}/${Math.round(prog.targetH)}h`;
 
+  const ledgerForSelected = ledgerMode
+    ? flicaCellByIso?.get(selectedIso)
+    : undefined;
   const primarySelected =
-    tripsForDay(selectedIso, trips)[0] ?? undefined;
+    ledgerForSelected
+      ? (tripForFlicaCalendarCell(trips, ledgerForSelected) ??
+        tripsForDay(selectedIso, trips)[0]) ??
+        undefined
+      : tripsForDay(selectedIso, trips)[0] ?? undefined;
   const todayIso = dateToIsoDateLocal(new Date());
   const isTodaySelected = selectedIso === todayIso;
 
   return (
     <View style={styles.page}>
+      {flicaCalendarListModel.mode === "flica_blocked" &&
+      typeof __DEV__ !== "undefined" &&
+      __DEV__ ? (
+        <View style={styles.devLedgerBanner} accessibilityLabel="FLICA calendar ledger blocked">
+          <Text style={styles.devLedgerBannerText}>
+            [FC_CAL_LEDGER_BLOCKED] Grid uses trips only — no raw_html for{" "}
+            {flicaCalendarListModel.visibleMonth} ({flicaCalendarListModel.reason}
+            ).
+          </Text>
+        </View>
+      ) : null}
       <View style={styles.monthNav}>
         <Pressable
           onPress={onPrevMonth}
@@ -268,10 +353,20 @@ export default function CalendarMonthView({
                 return <View key={ci} style={styles.cellSlot} />;
               }
               const iso = `${year}-${pad2(month)}-${pad2(cell.day)}`;
+              const ledgerCell = ledgerMode
+                ? flicaCellByIso?.get(iso)
+                : undefined;
               const dayTrips = tripsForDay(iso, trips);
-              const primary = dayTrips[0];
-              const kind = cellKind(primary);
-              const hoursShort = dayCreditHoursShort(primary);
+              const primaryFromLedger = ledgerCell
+                ? tripForFlicaCalendarCell(trips, ledgerCell)
+                : undefined;
+              const primary = primaryFromLedger ?? dayTrips[0];
+              const kind = ledgerMode
+                ? cellKindFromFlicaLedger(ledgerCell, primary)
+                : cellKind(primary);
+              const hoursShort = ledgerMode
+                ? null
+                : dayCreditHoursShort(primary);
               const selected = iso === selectedIso;
               return (
                 <Pressable
@@ -319,7 +414,25 @@ export default function CalendarMonthView({
                     >
                       {cell.day}
                     </Text>
-                    {hoursShort ? (
+                    {ledgerMode && ledgerCell ? (
+                      <>
+                        <Text
+                          style={styles.hoursMini}
+                          numberOfLines={1}
+                          {...androidNoFontPad}
+                        >
+                          {(ledgerCell.displayCode ?? "").trim() || " "}
+                        </Text>
+                        <Text
+                          style={styles.hoursMiniMuted}
+                          numberOfLines={1}
+                          {...androidNoFontPad}
+                        >
+                          {sanitizeFlicaLedgerCityText(ledgerCell.displayCity) ||
+                            " "}
+                        </Text>
+                      </>
+                    ) : hoursShort ? (
                       <Text
                         style={styles.hoursMini}
                         numberOfLines={1}
@@ -347,6 +460,7 @@ export default function CalendarMonthView({
         selectedIso={selectedIso}
         isToday={isTodaySelected}
         primary={primarySelected}
+        flicaLedgerCell={ledgerForSelected}
         onOpenTripForDay={onPressDay}
       />
 
@@ -367,36 +481,40 @@ function SelectedDayDetailCard({
   selectedIso,
   isToday,
   primary,
+  flicaLedgerCell,
   onOpenTripForDay,
 }: {
   selectedIso: string;
   isToday: boolean;
   primary: CrewScheduleTrip | undefined;
+  /** FLICA mini-calendar row for this ISO — calendar list labels only. */
+  flicaLedgerCell?: FlicaCalendarCell;
   onOpenTripForDay: (iso: string) => void;
 }) {
   const openable = !!primary;
 
-  const route = primary
-    ? primaryDayRoute(primary, selectedIso, primary.routeSummary ?? "")
-    : "—";
-  const dutyLbl = primary
-    ? dutyDayIndexLabel(primary, selectedIso)
-    : null;
-  const pairing = primary
-    ? String(primary.pairingCode ?? "")
-        .trim()
-        .toUpperCase()
-        .replace(/^PAIRING\s+/i, "") || "—"
-    : "—";
+  const route = flicaLedgerCell
+    ? sanitizeFlicaLedgerCityText(flicaLedgerCell.displayCity) || "—"
+    : primary
+      ? primaryDayRoute(primary, selectedIso, primary.routeSummary ?? "")
+      : "—";
+  const dutyLbl = primary ? dutyDayIndexLabel(primary, selectedIso) : null;
+  const pairing = flicaLedgerCell
+    ? (flicaLedgerCell.displayCode ?? "").trim().toUpperCase() ||
+      "—"
+    : primary
+      ? String(primary.pairingCode ?? "")
+          .trim()
+          .toUpperCase()
+          .replace(/^PAIRING\s+/i, "") || "—"
+      : "—";
   const dayLine =
-    dutyLbl != null
-      ? `Day ${dutyLbl.current} of ${dutyLbl.total}`
-      : "";
+    dutyLbl != null ? `Day ${dutyLbl.current} of ${dutyLbl.total}` : "";
 
   const legs = primary ? legsForDutyDate(primary, selectedIso) : [];
   const report = legs[0]?.reportLocal?.trim() ?? "—";
   const dEnd = legs.length
-    ? legs[legs.length - 1]?.releaseLocal?.trim() ?? "—"
+    ? (legs[legs.length - 1]?.releaseLocal?.trim() ?? "—")
     : "—";
   const credit =
     dayCreditHoursShort(primary) ??
@@ -589,6 +707,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 4,
     paddingBottom: 16,
+  },
+  devLedgerBanner: {
+    backgroundColor: "#FEF3C7",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#F59E0B",
+  },
+  devLedgerBannerText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#92400E",
   },
   monthNav: {
     flexDirection: "row",

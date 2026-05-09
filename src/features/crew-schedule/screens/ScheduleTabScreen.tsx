@@ -20,23 +20,33 @@ import {
     Text,
     View,
 } from "react-native";
+import { useAuth } from "../../../hooks/useAuth";
+import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
+import { supabase } from "../../../lib/supabaseClient";
 import type {
     FlicaMonthStats,
     FlicaPairing,
 } from "../../../services/flicaScheduleHtmlParser";
 import CalendarMonthView from "../components/CalendarMonthView";
 import ClassicListView from "../components/ClassicListView";
+import FlicaCrewScheduleSection from "../components/FlicaCrewScheduleSection";
 import ModernClassicListView from "../components/ModernClassicListView";
 import ModernScheduleChrome from "../components/ModernScheduleChrome";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
-import FlicaCrewScheduleSection from "../components/FlicaCrewScheduleSection";
 import SmartListView from "../components/SmartListView";
+import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
 import { useScheduleTripsForMonth } from "../hooks/useScheduleTripsForMonth";
+import { buildMonthlyStatsStripValues } from "../modernClassic/modernClassicHeaderMetrics";
 import {
     fetchCrewScheduleFlicaForMonth,
     hasFlicaDirectImportForMonth,
     type CrewScheduleFlicaRow,
 } from "../scheduleApi";
+import {
+  buildFlicaCalendarListModel,
+  type FlicaCalendarListModel,
+} from "../flicaCalendarDisplaySource";
+import type { FlicaCalendarCell } from "../flicaMiniCalendarTableLedger";
 import {
     canGoToNextImportedMonth,
     canGoToPreviousImportedMonth,
@@ -45,6 +55,7 @@ import {
     tryStepImportedScheduleMonth,
     type ScheduleYearMonth,
 } from "../scheduleAvailableMonths";
+import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
 import { monthCalendarKey } from "../scheduleMonthCache";
 import {
     canGoToNextScheduleMonth,
@@ -63,11 +74,6 @@ import { tradePostPrefillParams } from "../tradePostPrefillParams";
 import { stashTripForDetailNavigation } from "../tripDetailNavCache";
 import type { CrewScheduleTrip, ScheduleViewMode } from "../types";
 import { DEFAULT_SCHEDULE_VIEW } from "../types";
-import { useAuth } from "../../../hooks/useAuth";
-import { supabase } from "../../../lib/supabaseClient";
-import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
-import { buildMonthlyStatsStripValues } from "../modernClassic/modernClassicHeaderMetrics";
-import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
 
 const MONTH_NAMES = [
   "January",
@@ -89,7 +95,10 @@ function formatRoleForScheduleHeader(role: string): string {
   const raw = String(role).trim();
   if (!raw) return "";
   const compact = raw.replace(/[\s/_-]+/g, "").toLowerCase();
-  const spaced = raw.replace(/[\s/_-]+/g, " ").trim().toLowerCase();
+  const spaced = raw
+    .replace(/[\s/_-]+/g, " ")
+    .trim()
+    .toLowerCase();
   if (
     compact === "fa" ||
     compact === "flightattendant" ||
@@ -105,7 +114,9 @@ function crewScheduleHeaderSubtitleTail(
   base: string | null | undefined,
   role: string | null | undefined,
 ): string | null {
-  const b = String(base ?? "").trim().toUpperCase();
+  const b = String(base ?? "")
+    .trim()
+    .toUpperCase();
   const r = formatRoleForScheduleHeader(String(role ?? ""));
   if (!b && !r) return null;
   if (b && r) return `${b} Base · ${r}`;
@@ -160,7 +171,9 @@ export default function ScheduleTabScreen() {
 
   const ymRef = React.useRef(seedYm);
   ymRef.current = { year, month };
-  const [viewMode, setViewMode] = useState<ScheduleViewMode>(DEFAULT_SCHEDULE_VIEW);
+  const [viewMode, setViewMode] = useState<ScheduleViewMode>(
+    DEFAULT_SCHEDULE_VIEW,
+  );
   const [flicaRow, setFlicaRow] = useState<CrewScheduleFlicaRow | null>(null);
   const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
 
@@ -235,13 +248,45 @@ export default function ScheduleTabScreen() {
   }, [year, month]);
 
   const loadFlicaRow = useCallback(async () => {
+    const mk = `${year}-${String(month).padStart(2, "0")}`;
+    const userId = session?.user?.id ?? null;
+    const queryUsed =
+      "crew_schedule: select id,month_key,pairings,stats,raw_html,imported_at — eq user_id + airline + month_key maybeSingle";
     try {
       const row = await fetchCrewScheduleFlicaForMonth(year, month);
       setFlicaRow(row);
-    } catch {
+      const readPayload = {
+        visibleMonth: mk,
+        found: Boolean(row),
+        crewScheduleMonthKey: row?.month_key ?? null,
+        rawHtmlLength: row?.raw_html?.length ?? 0,
+        userId,
+        profileId: userId,
+        queryUsed,
+        error: null,
+      };
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log("[FC_RAW_HTML_READ_CHECK]", readPayload);
+      }
+      fcDevMirrorScheduleLogToFile("FC_RAW_HTML_READ_CHECK", readPayload);
+    } catch (e) {
       setFlicaRow(null);
+      const readPayload = {
+        visibleMonth: mk,
+        found: false,
+        crewScheduleMonthKey: null,
+        rawHtmlLength: 0,
+        userId,
+        profileId: userId,
+        queryUsed,
+        error: e instanceof Error ? e.message : String(e),
+      };
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log("[FC_RAW_HTML_READ_CHECK]", readPayload);
+      }
+      fcDevMirrorScheduleLogToFile("FC_RAW_HTML_READ_CHECK", readPayload);
     }
-  }, [year, month]);
+  }, [year, month, session?.user?.id]);
 
   /** Refs: useFocusEffect must use a stable callback ([] deps). Otherwise any identity churn re-fires focus → setScheduleRefreshKey loops (maximum update depth). */
   const refreshSilentRef = useRef(refreshSilent);
@@ -305,11 +350,7 @@ export default function ScheduleTabScreen() {
   useEffect(() => {
     if (!isFocused) return;
     setCrewScheduleHeaderSubtitle(scheduleHeaderSubtitle);
-  }, [
-    isFocused,
-    scheduleHeaderSubtitle,
-    setCrewScheduleHeaderSubtitle,
-  ]);
+  }, [isFocused, scheduleHeaderSubtitle, setCrewScheduleHeaderSubtitle]);
 
   const persistMonth = useCallback(
     (y: number, m: number) => {
@@ -454,6 +495,60 @@ export default function ScheduleTabScreen() {
     [flicaRow],
   );
 
+  /**
+   * FLICA-imported months (`crew_schedule`): mini-calendar HTML only for list/grid.
+   * No duty/UI-snapshot override when a row exists but raw_html is missing (blocked + message).
+   */
+  const flicaCalendarListModel = useMemo((): FlicaCalendarListModel => {
+    const mk = `${year}-${String(month).padStart(2, "0")}`;
+    const model = buildFlicaCalendarListModel(year, month, flicaRow);
+    const rawLen = flicaRow?.raw_html?.length ?? 0;
+
+    if (typeof __DEV__ !== "undefined" && __DEV__) {
+      const cells =
+        model.mode === "flica_mini_table" ? model.cells : null;
+      const wiringPayload = {
+        visibleMonth: mk,
+        crewScheduleMonthKey: flicaRow?.month_key ?? null,
+        hasRawHtml: rawLen > 0,
+        rawHtmlLength: rawLen,
+        monthMatch: flicaRow?.month_key === mk,
+        ledgerRowCount: cells?.length ?? 0,
+        listMode: model.mode,
+        first5LedgerRows: (cells ?? []).slice(0, 5).map((c) => ({
+          isoDate: c.isoDate,
+          pairingText: c.displayCode ?? c.rawPairingText,
+          cityText: c.displayCity,
+          isAdjacentMonth: c.isAdjacentMonth,
+        })),
+      };
+      console.log("[FC_CAL_LEDGER_WIRING]", wiringPayload);
+      fcDevMirrorScheduleLogToFile("FC_CAL_LEDGER_WIRING", wiringPayload);
+    }
+
+    if (model.mode === "flica_blocked") {
+      const blockedPayload = {
+        source: "flica",
+        visibleMonth: model.visibleMonth,
+        reason: model.reason,
+        crewScheduleMonthKey: model.crewScheduleMonthKey ?? null,
+      };
+      console.warn("[FC_CAL_LEDGER_BLOCKED]", blockedPayload);
+      fcDevMirrorScheduleLogToFile("FC_CAL_LEDGER_BLOCKED", blockedPayload);
+    }
+
+    return model;
+  }, [flicaRow, year, month]);
+
+  const flicaCellByIso = useMemo(() => {
+    const m = new Map<string, FlicaCalendarCell>();
+    if (flicaCalendarListModel.mode !== "flica_mini_table") return m;
+    for (const c of flicaCalendarListModel.cells) {
+      m.set(c.isoDate, c);
+    }
+    return m;
+  }, [flicaCalendarListModel]);
+
   const flicaStats: FlicaMonthStats = useMemo(() => {
     const raw = (flicaRow?.stats ?? {}) as Partial<FlicaMonthStats>;
     return {
@@ -495,9 +590,9 @@ export default function ScheduleTabScreen() {
       ]}
       {...monthSwipePan.panHandlers}
     >
-      {(viewMode === "modernClassic" ||
-        viewMode === "classic" ||
-        viewMode === "calendar") ? (
+      {viewMode === "modernClassic" ||
+      viewMode === "classic" ||
+      viewMode === "calendar" ? (
         <MonthlyStatsStrip values={statsStripValues} />
       ) : null}
       {viewMode !== "modernClassic" && viewMode !== "calendar" ? (
@@ -538,7 +633,10 @@ export default function ScheduleTabScreen() {
       ) : null}
 
       <ScrollView
-        style={[styles.scroll, viewMode === "modernClassic" && styles.scrollModern]}
+        style={[
+          styles.scroll,
+          viewMode === "modernClassic" && styles.scrollModern,
+        ]}
         contentContainerStyle={[
           styles.scrollContent,
           { minHeight: scrollContentMinHeight },
@@ -586,6 +684,7 @@ export default function ScheduleTabScreen() {
                 tripLayerReady={!loading || displayTrips.length > 0}
                 onOpenFullTrip={openTrip}
                 onOpenManage={openManage}
+                flicaCalendarListModel={flicaCalendarListModel}
               />
             </>
           ) : (
@@ -607,6 +706,7 @@ export default function ScheduleTabScreen() {
                   tripLayerReady={!loading || displayTrips.length > 0}
                   onPressTrip={openTrip}
                   onOpenManage={openManage}
+                  flicaCalendarListModel={flicaCalendarListModel}
                 />
               )}
               {viewMode === "calendar" && (
@@ -622,11 +722,14 @@ export default function ScheduleTabScreen() {
                   trips={displayTrips}
                   onPressDay={onPressCalendarDay}
                   onOpenTrip={openTrip}
+                  flicaCellByIso={flicaCellByIso}
+                  flicaCalendarListModel={flicaCalendarListModel}
                 />
               )}
               {viewMode === "smart" && (
                 <SmartListView
                   trips={displayTrips}
+                  flicaCalendarListModel={flicaCalendarListModel}
                   onPressTrip={openTrip}
                   onPost={(trip) => openTradePost(trip)}
                   onChat={(trip) =>

@@ -1,28 +1,37 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useEffect } from "react";
 import {
-  ActivityIndicator,
-  FlatList,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    FlatList,
+    Platform,
+    Pressable,
+    StyleSheet,
+    Text,
+    View,
 } from "react-native";
-import type { CrewScheduleTrip, ScheduleMonthMetrics } from "../types";
-import { scheduleTheme as T } from "../scheduleTheme";
-import { isTripLikeKind, type DayRow } from "../modernClassic/classicMonthGridCore";
+import { type DayRow } from "../modernClassic/classicMonthGridCore";
 import {
-  additionalLegsSummary,
-  dailyCreditDisplay,
-  dutyDayIndexLabel,
-  primaryDayRoute,
+    additionalLegsSummary,
+    dailyCreditDisplay,
+    dutyDayIndexLabel,
+    primaryDayRoute,
 } from "../modernClassic/modernClassicDayDisplay";
+import {
+    buildModernListSequenceMeta,
+    isModernTrueDayOffRow,
+    modernRowUsesMiscCard,
+    modernRowUsesPairingCard,
+    type ModernRowSeqMeta,
+} from "../modernClassic/modernListPairingSequence";
 import { useClassicMonthDayRows } from "../modernClassic/useClassicMonthDayRows";
 import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
+import { scheduleTheme as T } from "../scheduleTheme";
 import {
-  PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-  PAIRING_DETAIL_STAT_DIGIT_TYPE,
+    PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+    PAIRING_DETAIL_STAT_DIGIT_TYPE,
 } from "../scheduleTileNumerals";
+import type { CrewScheduleTrip, ScheduleMonthMetrics } from "../types";
+import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
+import type { FlicaCalendarListModel } from "../flicaCalendarDisplaySource";
 
 /** Pairing row: avoid "800" — on Android default sans-serif often ignores light weights. */
 const PAIRING_CODE_TYPE = Platform.select({
@@ -71,6 +80,8 @@ type Props = {
   tripLayerReady: boolean;
   onOpenFullTrip: (trip: CrewScheduleTrip, rowDateIso?: string) => void;
   onOpenManage?: () => void;
+  /** FLICA `crew_schedule` display source (mini-table vs trip-derived vs blocked). */
+  flicaCalendarListModel: FlicaCalendarListModel;
 };
 
 export default function ModernClassicListView({
@@ -82,6 +93,7 @@ export default function ModernClassicListView({
   tripLayerReady,
   onOpenFullTrip,
   onOpenManage,
+  flicaCalendarListModel,
 }: Props) {
   const { rows, isReady, emptyMonth } = useClassicMonthDayRows({
     trips,
@@ -90,7 +102,58 @@ export default function ModernClassicListView({
     refreshKey,
     monthMetrics,
     tripLayerReady,
+    flicaCalendarListModel,
   });
+
+  useEffect(() => {
+    if (typeof __DEV__ === "undefined" || !__DEV__) return;
+    const mode = flicaCalendarListModel.mode;
+    const payload = {
+      listMode: mode,
+      ledgerRowCount:
+        mode === "flica_mini_table" ? flicaCalendarListModel.cells.length : 0,
+      isReady,
+      displayMode:
+        mode === "flica_mini_table"
+          ? "ledger_plus_duty_hybrid"
+          : mode === "flica_blocked"
+            ? "flica_blocked_no_fallback"
+            : "duty_classic_rows",
+      rowCount: rows?.length ?? 0,
+    };
+    console.log("[FC_MODERN_LIST_SOURCE]", payload);
+    fcDevMirrorScheduleLogToFile("FC_MODERN_LIST_SOURCE", payload);
+  }, [flicaCalendarListModel, rows, isReady]);
+
+  const visibleMonth = `${year}-${String(month).padStart(2, "0")}`;
+
+  const { modernMetaByRowId, modernSequenceAudit } = useMemo(() => {
+    if (!rows?.length) {
+      return {
+        modernMetaByRowId: new Map<string, ModernRowSeqMeta>(),
+        modernSequenceAudit: null,
+      };
+    }
+    const { metaByRowIndex, audit } = buildModernListSequenceMeta(
+      rows,
+      visibleMonth,
+    );
+    const modernMetaByRowId = new Map<string, ModernRowSeqMeta>();
+    rows.forEach((r, i) => {
+      modernMetaByRowId.set(r.id, metaByRowIndex[i]!);
+    });
+    return { modernMetaByRowId, modernSequenceAudit: audit };
+  }, [rows, visibleMonth]);
+
+  useEffect(() => {
+    if (typeof __DEV__ === "undefined" || !__DEV__) return;
+    if (!modernSequenceAudit) return;
+    console.log("[FC_MODERN_SEQUENCE_AUDIT]", modernSequenceAudit);
+    fcDevMirrorScheduleLogToFile(
+      "FC_MODERN_SEQUENCE_AUDIT",
+      modernSequenceAudit as unknown as Record<string, unknown>,
+    );
+  }, [modernSequenceAudit]);
 
   const listData = useMemo((): ListSeg[] => {
     if (!rows?.length) return [];
@@ -124,6 +187,30 @@ export default function ModernClassicListView({
     );
   }
 
+  if (flicaCalendarListModel.mode === "flica_blocked") {
+    return (
+      <View style={styles.emptyBox}>
+        <Text style={styles.emptyTitle}>Mini-calendar table unavailable</Text>
+        <Text style={styles.emptyBody}>
+          This month has no saved FLICA schedule HTML in Flight Club. Re-import from
+          Manage — list and calendar views use the FLICA mini calendar only (not
+          pairing legs).
+        </Text>
+        {typeof __DEV__ !== "undefined" && __DEV__ ? (
+          <Text style={styles.devBlockedHint}>
+            [FC_CAL_LEDGER_BLOCKED] {flicaCalendarListModel.reason}{" "}
+            {flicaCalendarListModel.visibleMonth}
+          </Text>
+        ) : null}
+        {onOpenManage ? (
+          <Pressable style={styles.importBtn} onPress={onOpenManage}>
+            <Text style={styles.importBtnText}>Open Manage</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  }
+
   if (!isReady || !rows) {
     return (
       <View style={styles.loadingBox}>
@@ -141,9 +228,7 @@ export default function ModernClassicListView({
         removeClippedSubviews
         renderItem={({ item }) => {
           if (item.kind === "week") {
-            return (
-              <Text style={styles.weekLabel}>{`WEEK ${item.week}`}</Text>
-            );
+            return <Text style={styles.weekLabel}>{`WEEK ${item.week}`}</Text>;
           }
           const row = item.row;
           const isOff = row.kind === "empty" && !row.trip;
@@ -152,7 +237,12 @@ export default function ModernClassicListView({
           if (isOff) {
             return (
               <View style={styles.dayTileRowWrap}>
-                <View style={styles.offCardOuter}>
+                <View
+                  style={[
+                    styles.offCardOuter,
+                    row.isToday && styles.tileOutlineToday,
+                  ]}
+                >
                   <View style={styles.offCardInner}>
                     <View
                       style={
@@ -174,7 +264,12 @@ export default function ModernClassicListView({
                         {row.dayNum}
                       </Text>
                     </View>
-                    <View style={styles.offDivider} />
+                    <View
+                      style={[
+                        styles.offDivider,
+                        row.isToday && styles.railDividerToday,
+                      ]}
+                    />
                     <View style={styles.offCenter}>
                       <View style={styles.offPill}>
                         <Text style={styles.offPillText}>DAY OFF</Text>
@@ -188,15 +283,26 @@ export default function ModernClassicListView({
 
           if (isWork && row.trip) {
             const trip = row.trip;
-            const route = primaryDayRoute(trip, row.dateIso, row.cityText);
-            const extra = additionalLegsSummary(trip, row.dateIso);
+            const route = row.useFlicaLedgerLabels
+              ? (String(row.cityText ?? "").trim() || "—")
+              : primaryDayRoute(trip, row.dateIso, row.cityText);
+            const extra = row.useFlicaLedgerLabels
+              ? null
+              : additionalLegsSummary(trip, row.dateIso);
             const dutyLbl = dutyDayIndexLabel(trip, row.dateIso);
             const credit = dailyCreditDisplay(trip, row.dateIso);
-            const pairing =
-              String(trip.pairingCode ?? row.pairingText ?? "")
-                .trim()
-                .toUpperCase()
-                .replace(/^PAIRING\s+/i, "") || "—";
+            const pairingNorm = row.useFlicaLedgerLabels
+              ? String(row.pairingText ?? "")
+                  .trim()
+                  .toUpperCase()
+                  .replace(/^PAIRING\s+/i, "")
+              : String(trip.pairingCode ?? row.pairingText ?? "")
+                  .trim()
+                  .toUpperCase()
+                  .replace(/^PAIRING\s+/i, "");
+            const pairing = row.useFlicaLedgerLabels
+              ? pairingNorm
+              : pairingNorm || "—";
             const dayLine =
               dutyLbl != null
                 ? `Day ${dutyLbl.current} of ${dutyLbl.total}`
@@ -217,6 +323,7 @@ export default function ModernClassicListView({
                     style={[
                       styles.tripCardMain,
                       extra ? styles.tripCardMainNoBottomRadius : null,
+                      row.isToday && styles.tileOutlineToday,
                     ]}
                   >
                     <View
@@ -239,78 +346,88 @@ export default function ModernClassicListView({
                         {row.dayNum}
                       </Text>
                     </View>
-                    <View style={styles.tripDivider} />
+                    <View
+                      style={[
+                        styles.tripDivider,
+                        row.isToday && styles.railDividerToday,
+                      ]}
+                    />
                     <View style={styles.tripMid}>
-                    <Text style={styles.pairingRow} numberOfLines={1}>
-                      <Text style={[styles.pairingCode, PAIRING_CODE_TYPE]}>
-                        {pairing}
-                      </Text>
-                      {dayLine ? (
-                        <Text style={[styles.pairingDayPart, PAIRING_DAY_TYPE]}>
-                          {` · ${dayLine}`}
+                      <Text style={styles.pairingRow} numberOfLines={1}>
+                        <Text style={[styles.pairingCode, PAIRING_CODE_TYPE]}>
+                          {pairing}
                         </Text>
-                      ) : null}
-                    </Text>
-                    <Text style={[styles.routeLine, ROUTE_TYPE]} numberOfLines={1}>
-                      {route}
-                    </Text>
-                    <Text style={styles.reportLine} numberOfLines={2}>
+                        {dayLine ? (
+                          <Text
+                            style={[styles.pairingDayPart, PAIRING_DAY_TYPE]}
+                          >
+                            {` · ${dayLine}`}
+                          </Text>
+                        ) : null}
+                      </Text>
+                      <Text
+                        style={[styles.routeLine, ROUTE_TYPE]}
+                        numberOfLines={1}
+                      >
+                        {route}
+                      </Text>
+                      <Text style={styles.reportLine} numberOfLines={2}>
+                        <Text
+                          style={[
+                            styles.rptStrong,
+                            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                          ]}
+                        >
+                          Rpt {rpt}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.rptRest,
+                            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                          ]}
+                        >
+                          {" "}
+                          · D-End {dend}
+                          {lay ? ` · ${lay}` : ""}
+                        </Text>
+                      </Text>
+                    </View>
+                    <View style={styles.tripRight}>
                       <Text
                         style={[
-                          styles.rptStrong,
+                          styles.creditTop,
                           PAIRING_DETAIL_STAT_DIGIT_TYPE,
                           PAIRING_DETAIL_STAT_DIGIT_TRACKING,
                         ]}
+                        numberOfLines={1}
                       >
-                        Rpt {rpt}
+                        {credit.main}
                       </Text>
                       <Text
                         style={[
-                          styles.rptRest,
+                          styles.creditPlus,
                           PAIRING_DETAIL_STAT_DIGIT_TYPE,
                           PAIRING_DETAIL_STAT_DIGIT_TRACKING,
                         ]}
+                        numberOfLines={1}
                       >
-                        {" "}
-                        · D-End {dend}
-                        {lay ? ` · ${lay}` : ""}
+                        {credit.plus ?? " "}
                       </Text>
-                    </Text>
+                      <Text style={styles.wxEmoji} numberOfLines={1}>
+                        {row.wxText || "—"}
+                      </Text>
+                    </View>
                   </View>
-                  <View style={styles.tripRight}>
-                    <Text
-                      style={[
-                        styles.creditTop,
-                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
-                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {credit.main}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.creditPlus,
-                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
-                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {credit.plus ?? " "}
-                    </Text>
-                    <Text style={styles.wxEmoji} numberOfLines={1}>
-                      {row.wxText || "—"}
-                    </Text>
-                  </View>
-                </View>
-                {extra ? (
-                  <View style={styles.continuationAttached}>
-                    <View style={styles.continuationDot} />
-                    <Text style={styles.continuationText} numberOfLines={2}>
-                      {extra}
-                    </Text>
-                  </View>
-                ) : null}
+                  {extra ? (
+                    <View style={styles.continuationAttached}>
+                      <View style={styles.continuationDot} />
+                      <Text style={styles.continuationText} numberOfLines={2}>
+                        {extra}
+                      </Text>
+                    </View>
+                  ) : null}
                 </Pressable>
               </View>
             );
@@ -326,9 +443,9 @@ export default function ModernClassicListView({
                     pressed && styles.cardStackPressed,
                   ]}
                 >
-                <Text style={styles.miscText} numberOfLines={2}>
-                  {row.pairingText || row.cityText || "—"}
-                </Text>
+                  <Text style={styles.miscText} numberOfLines={2}>
+                    {row.pairingText || row.cityText || "—"}
+                  </Text>
                 </Pressable>
               </View>
             );
@@ -336,9 +453,9 @@ export default function ModernClassicListView({
           return (
             <View style={styles.dayTileRowWrap}>
               <View style={styles.miscCard}>
-              <Text style={styles.miscText} numberOfLines={2}>
-                {row.pairingText || row.cityText || "—"}
-              </Text>
+                <Text style={styles.miscText} numberOfLines={2}>
+                  {row.pairingText || row.cityText || "—"}
+                </Text>
               </View>
             </View>
           );
@@ -379,6 +496,16 @@ const styles = StyleSheet.create({
   },
   cardStackPressed: { opacity: 0.92 },
   /* —— Day off —— */
+  /** Today-only: full card outline in schedule red. */
+  tileOutlineToday: {
+    borderColor: SCHEDULE_MOCK_HEADER_RED,
+    borderWidth: 1.5,
+  },
+  /** Today-only: vertical rule between date rail and body/route column. */
+  railDividerToday: {
+    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
+    width: 1,
+  },
   offCardOuter: {
     borderRadius: CARD_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
@@ -553,7 +680,12 @@ const styles = StyleSheet.create({
     borderLeftColor: "#D2DAE6",
   },
   creditTop: { fontSize: 10, fontWeight: "800", color: T.text },
-  creditPlus: { fontSize: 8, fontWeight: "800", color: SCHEDULE_MOCK_HEADER_RED, marginTop: 2 },
+  creditPlus: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: SCHEDULE_MOCK_HEADER_RED,
+    marginTop: 2,
+  },
   wxEmoji: { fontSize: 10, marginTop: 3 },
 
   miscCard: {
@@ -564,7 +696,11 @@ const styles = StyleSheet.create({
     borderColor: CARD_BORDER,
   },
   miscText: { fontSize: 10, color: T.textSecondary },
-  loadingBox: { paddingVertical: 24, alignItems: "center", backgroundColor: T.bg },
+  loadingBox: {
+    paddingVertical: 24,
+    alignItems: "center",
+    backgroundColor: T.bg,
+  },
   emptyBox: {
     marginHorizontal: 12,
     marginTop: 12,
@@ -576,6 +712,12 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: 15, fontWeight: "800", color: T.text },
   emptyBody: { marginTop: 6, fontSize: 12, color: T.textSecondary },
+  devBlockedHint: {
+    marginTop: 10,
+    fontSize: 11,
+    color: "#B45309",
+    fontWeight: "600",
+  },
   importBtn: {
     marginTop: 12,
     alignSelf: "flex-start",
