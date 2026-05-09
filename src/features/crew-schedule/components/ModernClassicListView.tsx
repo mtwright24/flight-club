@@ -12,17 +12,20 @@ import { type DayRow } from "../modernClassic/classicMonthGridCore";
 import {
     additionalLegsSummary,
     dailyCreditDisplay,
-    dutyDayIndexLabel,
     primaryDayRoute,
 } from "../modernClassic/modernClassicDayDisplay";
 import {
-    buildModernListSequenceMeta,
-    isModernTrueDayOffRow,
-    modernRowUsesMiscCard,
-    modernRowUsesPairingCard,
-    type ModernRowSeqMeta,
+    buildModernDayCountAudit,
+    type ModernRowDayMeta,
+    type ModernCanonicalSequenceAudit,
 } from "../modernClassic/modernListPairingSequence";
+import {
+    ModernPairingRailBridge,
+    ModernPairingRailColumn,
+} from "../modernClassic/ModernPairingRailColumn";
+import { computeModernPairingRailLayout } from "../modernClassic/modernPairingRailLayout";
 import { useClassicMonthDayRows } from "../modernClassic/useClassicMonthDayRows";
+import { mergeLayoverOntoLegDates } from "../scheduleTime";
 import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
 import { scheduleTheme as T } from "../scheduleTheme";
 import {
@@ -127,33 +130,53 @@ export default function ModernClassicListView({
 
   const visibleMonth = `${year}-${String(month).padStart(2, "0")}`;
 
-  const { modernMetaByRowId, modernSequenceAudit } = useMemo(() => {
+  const mergedTripsForModern = useMemo(
+    () =>
+      trips.map((t) => {
+        const merged = mergeLayoverOntoLegDates(t);
+        return merged ? { ...t, layoverByDate: merged } : t;
+      }),
+    [trips],
+  );
+
+  const rawPairingDetailIndex =
+    flicaCalendarListModel.mode === "flica_mini_table"
+      ? flicaCalendarListModel.rawPairingDetailIndex
+      : null;
+
+  const { modernMetaByRowId, modernCanonicalSequenceAudit } = useMemo(() => {
     if (!rows?.length) {
       return {
-        modernMetaByRowId: new Map<string, ModernRowSeqMeta>(),
-        modernSequenceAudit: null,
+        modernMetaByRowId: new Map<string, ModernRowDayMeta>(),
+        modernCanonicalSequenceAudit: null as ModernCanonicalSequenceAudit | null,
       };
     }
-    const { metaByRowIndex, audit } = buildModernListSequenceMeta(
+    const { metaByRowId, canonicalAudit } = buildModernDayCountAudit(
       rows,
+      mergedTripsForModern,
       visibleMonth,
+      rawPairingDetailIndex,
     );
-    const modernMetaByRowId = new Map<string, ModernRowSeqMeta>();
-    rows.forEach((r, i) => {
-      modernMetaByRowId.set(r.id, metaByRowIndex[i]!);
-    });
-    return { modernMetaByRowId, modernSequenceAudit: audit };
-  }, [rows, visibleMonth]);
+    return {
+      modernMetaByRowId: metaByRowId,
+      modernCanonicalSequenceAudit: canonicalAudit,
+    };
+  }, [rows, visibleMonth, mergedTripsForModern, rawPairingDetailIndex]);
 
   useEffect(() => {
     if (typeof __DEV__ === "undefined" || !__DEV__) return;
-    if (!modernSequenceAudit) return;
-    console.log("[FC_MODERN_SEQUENCE_AUDIT]", modernSequenceAudit);
+    if (!modernCanonicalSequenceAudit) return;
+    const payload = {
+      visibleMonth,
+      pairings: modernCanonicalSequenceAudit.pairings,
+      rows: modernCanonicalSequenceAudit.rows,
+    };
+    console.log("[FC_MODERN_CANONICAL_SEQUENCE_AUDIT]", payload);
     fcDevMirrorScheduleLogToFile(
-      "FC_MODERN_SEQUENCE_AUDIT",
-      modernSequenceAudit as unknown as Record<string, unknown>,
+      "FC_MODERN_CANONICAL_SEQUENCE_AUDIT",
+      payload as unknown as Record<string, unknown>,
     );
-  }, [modernSequenceAudit]);
+  }, [modernCanonicalSequenceAudit, visibleMonth]);
 
   const listData = useMemo((): ListSeg[] => {
     if (!rows?.length) return [];
@@ -170,6 +193,38 @@ export default function ModernClassicListView({
     }
     return out;
   }, [rows]);
+
+  const modernPairingRailByRowId = useMemo(
+    () => computeModernPairingRailLayout(listData, modernMetaByRowId),
+    [listData, modernMetaByRowId],
+  );
+
+  useEffect(() => {
+    if (typeof __DEV__ === "undefined" || !__DEV__) return;
+    if (!listData.length) return;
+    const auditRows = listData.flatMap((item, listIndex) => {
+      if (item.kind !== "row") return [];
+      const meta = modernMetaByRowId.get(item.row.id);
+      const rail = modernPairingRailByRowId.get(item.row.id);
+      return [
+        {
+          listIndex,
+          dateIso: item.row.dateIso.slice(0, 10),
+          pairingCode: meta?.pairingCodeUsed ?? meta?.pairingDisplay ?? "",
+          linkedTripId: rail?.linkedTripId ?? null,
+          railPosition: rail?.railPosition ?? ("none" as const),
+          previousRowLinkedTripId: rail?.prevRowLinkedTripId ?? null,
+          nextRowLinkedTripId: rail?.nextRowLinkedTripId ?? null,
+        },
+      ];
+    });
+    const payload = { rowCount: auditRows.length, rows: auditRows };
+    console.log("[FC_MODERN_PAIRING_RAIL_AUDIT]", payload);
+    fcDevMirrorScheduleLogToFile(
+      "FC_MODERN_PAIRING_RAIL_AUDIT",
+      payload as unknown as Record<string, unknown>,
+    );
+  }, [listData, modernMetaByRowId, modernPairingRailByRowId]);
 
   if (emptyMonth) {
     return (
@@ -225,14 +280,14 @@ export default function ModernClassicListView({
         data={listData}
         keyExtractor={(i) => i.key}
         scrollEnabled={false}
-        removeClippedSubviews
+        removeClippedSubviews={false}
         renderItem={({ item }) => {
           if (item.kind === "week") {
             return <Text style={styles.weekLabel}>{`WEEK ${item.week}`}</Text>;
           }
           const row = item.row;
-          const isOff = row.kind === "empty" && !row.trip;
-          const isWork = row.trip && isTripLikeKind(row.kind);
+          const meta = modernMetaByRowId.get(row.id)!;
+          const isOff = meta.isDayOff;
 
           if (isOff) {
             return (
@@ -244,11 +299,7 @@ export default function ModernClassicListView({
                   ]}
                 >
                   <View style={styles.offCardInner}>
-                    <View
-                      style={
-                        row.isToday ? styles.redRail : styles.offLeftSpacerRail
-                      }
-                    />
+                    <View style={styles.offLeftSpacerRail} />
                     <View style={styles.offDateRail}>
                       <Text style={styles.tripDow}>
                         {row.dayCode.slice(0, 2)}
@@ -281,170 +332,222 @@ export default function ModernClassicListView({
             );
           }
 
-          if (isWork && row.trip) {
-            const trip = row.trip;
+          if (meta.renderAsPairingCard) {
+            const trip = meta.linkedTrip;
             const route = row.useFlicaLedgerLabels
               ? (String(row.cityText ?? "").trim() || "—")
-              : primaryDayRoute(trip, row.dateIso, row.cityText);
-            const extra = row.useFlicaLedgerLabels
-              ? null
-              : additionalLegsSummary(trip, row.dateIso);
-            const dutyLbl = dutyDayIndexLabel(trip, row.dateIso);
-            const credit = dailyCreditDisplay(trip, row.dateIso);
-            const pairingNorm = row.useFlicaLedgerLabels
-              ? String(row.pairingText ?? "")
-                  .trim()
-                  .toUpperCase()
-                  .replace(/^PAIRING\s+/i, "")
-              : String(trip.pairingCode ?? row.pairingText ?? "")
-                  .trim()
-                  .toUpperCase()
-                  .replace(/^PAIRING\s+/i, "");
-            const pairing = row.useFlicaLedgerLabels
-              ? pairingNorm
-              : pairingNorm || "—";
-            const dayLine =
-              dutyLbl != null
-                ? `Day ${dutyLbl.current} of ${dutyLbl.total}`
-                : "";
+              : trip
+                ? primaryDayRoute(trip, row.dateIso, row.cityText)
+                : (String(row.cityText ?? "").trim() || "—");
+            const extra =
+              trip && !row.useFlicaLedgerLabels
+                ? additionalLegsSummary(trip, row.dateIso)
+                : null;
+            const dayLine = meta.dayLine;
+            const credit = trip
+              ? dailyCreditDisplay(trip, row.dateIso)
+              : { main: "—", plus: null as string | null };
+
+            const pairing = meta.pairingDisplay || "—";
+
             const lay = String(row.layoverText ?? "").trim();
             const rpt = fmtDutyClock(row.reportText);
             const dend = fmtDutyClock(row.dEndText);
+            const canOpenTrip = Boolean(trip);
+
+            const pairingRail = modernPairingRailByRowId.get(row.id);
+            const showPairingRail = Boolean(
+              meta.canonicalSequenceId && pairingRail?.railPosition,
+            );
 
             return (
               <View style={styles.dayTileRowWrap}>
-                <Pressable
-                  onPress={() => onOpenFullTrip(trip, row.dateIso)}
-                  style={({ pressed }) => [pressed && styles.cardStackPressed]}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open pairing ${pairing}`}
-                >
-                  <View
-                    style={[
-                      styles.tripCardMain,
-                      extra ? styles.tripCardMainNoBottomRadius : null,
-                      row.isToday && styles.tileOutlineToday,
-                    ]}
-                  >
-                    <View
-                      style={
-                        row.isToday ? styles.redRail : styles.offLeftSpacerRail
-                      }
-                    />
-                    <View style={styles.tripDateRail}>
-                      <Text style={styles.tripDow}>
-                        {row.dayCode.slice(0, 2)}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.tripDom,
-                          row.isToday && styles.tripDomToday,
-                          PAIRING_DETAIL_STAT_DIGIT_TYPE,
-                          PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-                        ]}
-                      >
-                        {row.dayNum}
-                      </Text>
-                    </View>
+                <View style={styles.pairingRailRowAnchor}>
+                  {showPairingRail && pairingRail!.bridgeAbove > 0 ? (
                     <View
                       style={[
-                        styles.tripDivider,
-                        row.isToday && styles.railDividerToday,
+                        styles.pairingRailBridgeAbove,
+                        {
+                          left: MODERN_PAIRING_RAIL_SLOT_LEFT,
+                          height: pairingRail!.bridgeAbove,
+                        },
                       ]}
-                    />
-                    <View style={styles.tripMid}>
-                      <Text style={styles.pairingRow} numberOfLines={1}>
-                        <Text style={[styles.pairingCode, PAIRING_CODE_TYPE]}>
-                          {pairing}
-                        </Text>
-                        {dayLine ? (
-                          <Text
-                            style={[styles.pairingDayPart, PAIRING_DAY_TYPE]}
-                          >
-                            {` · ${dayLine}`}
-                          </Text>
-                        ) : null}
-                      </Text>
-                      <Text
-                        style={[styles.routeLine, ROUTE_TYPE]}
-                        numberOfLines={1}
-                      >
-                        {route}
-                      </Text>
-                      <Text style={styles.reportLine} numberOfLines={2}>
-                        <Text
-                          style={[
-                            styles.rptStrong,
-                            PAIRING_DETAIL_STAT_DIGIT_TYPE,
-                            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-                          ]}
-                        >
-                          Rpt {rpt}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.rptRest,
-                            PAIRING_DETAIL_STAT_DIGIT_TYPE,
-                            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-                          ]}
-                        >
-                          {" "}
-                          · D-End {dend}
-                          {lay ? ` · ${lay}` : ""}
-                        </Text>
-                      </Text>
-                    </View>
-                    <View style={styles.tripRight}>
-                      <Text
-                        style={[
-                          styles.creditTop,
-                          PAIRING_DETAIL_STAT_DIGIT_TYPE,
-                          PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {credit.main}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.creditPlus,
-                          PAIRING_DETAIL_STAT_DIGIT_TYPE,
-                          PAIRING_DETAIL_STAT_DIGIT_TRACKING,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {credit.plus ?? " "}
-                      </Text>
-                      <Text style={styles.wxEmoji} numberOfLines={1}>
-                        {row.wxText || "—"}
-                      </Text>
-                    </View>
-                  </View>
-                  {extra ? (
-                    <View style={styles.continuationAttached}>
-                      <View style={styles.continuationDot} />
-                      <Text style={styles.continuationText} numberOfLines={2}>
-                        {extra}
-                      </Text>
+                    >
+                      <ModernPairingRailBridge
+                        color={SCHEDULE_MOCK_HEADER_RED}
+                        height={pairingRail!.bridgeAbove}
+                      />
                     </View>
                   ) : null}
-                </Pressable>
+                  <Pressable
+                    onPress={
+                      canOpenTrip
+                        ? () => onOpenFullTrip(trip!, row.dateIso)
+                        : undefined
+                    }
+                    disabled={!canOpenTrip}
+                    style={({ pressed }) => [
+                      pressed && canOpenTrip && styles.cardStackPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      canOpenTrip
+                        ? `Open pairing ${pairing}`
+                        : `Schedule ${pairing} ${row.dateIso}`
+                    }
+                  >
+                    <View
+                      style={[
+                        styles.tripCardMain,
+                        extra ? styles.tripCardMainNoBottomRadius : null,
+                        row.isToday && styles.tileOutlineToday,
+                        showPairingRail && styles.tripCardMainRailVisible,
+                      ]}
+                    >
+                      <View style={styles.offLeftSpacerRail} />
+                      <View style={styles.tripDateRail}>
+                        <Text style={styles.tripDow}>
+                          {row.dayCode.slice(0, 2)}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.tripDom,
+                            row.isToday && styles.tripDomToday,
+                            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                          ]}
+                        >
+                          {row.dayNum}
+                        </Text>
+                      </View>
+                      {showPairingRail ? (
+                        <ModernPairingRailColumn
+                          color={SCHEDULE_MOCK_HEADER_RED}
+                          railPosition={pairingRail!.railPosition!}
+                        />
+                      ) : null}
+                      <View
+                        style={[
+                          styles.tripDivider,
+                          row.isToday && styles.railDividerToday,
+                        ]}
+                      />
+                      <View style={styles.tripMid}>
+                        <Text style={styles.pairingRow} numberOfLines={1}>
+                          <Text style={[styles.pairingCode, PAIRING_CODE_TYPE]}>
+                            {pairing}
+                          </Text>
+                          {dayLine ? (
+                            <Text
+                              style={[styles.pairingDayPart, PAIRING_DAY_TYPE]}
+                            >
+                              {` · ${dayLine}`}
+                            </Text>
+                          ) : null}
+                        </Text>
+                        <Text
+                          style={[styles.routeLine, ROUTE_TYPE]}
+                          numberOfLines={1}
+                        >
+                          {route}
+                        </Text>
+                        <Text style={styles.reportLine} numberOfLines={2}>
+                          <Text
+                            style={[
+                              styles.rptStrong,
+                              PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                              PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                            ]}
+                          >
+                            Rpt {rpt}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.rptRest,
+                              PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                              PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                            ]}
+                          >
+                            {" "}
+                            · D-End {dend}
+                            {lay ? ` · ${lay}` : ""}
+                          </Text>
+                        </Text>
+                      </View>
+                      <View style={styles.tripRight}>
+                        <Text
+                          style={[
+                            styles.creditTop,
+                            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {credit.main}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.creditPlus,
+                            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {credit.plus ?? " "}
+                        </Text>
+                        <Text style={styles.wxEmoji} numberOfLines={1}>
+                          {row.wxText || "—"}
+                        </Text>
+                      </View>
+                    </View>
+                    {extra ? (
+                      <View style={styles.continuationAttached}>
+                        <View style={styles.continuationDot} />
+                        <Text style={styles.continuationText} numberOfLines={2}>
+                          {extra}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                  {showPairingRail && pairingRail!.bridgeBelow > 0 ? (
+                    <View
+                      style={[
+                        styles.pairingRailBridgeBelow,
+                        {
+                          left: MODERN_PAIRING_RAIL_SLOT_LEFT,
+                          height: pairingRail!.bridgeBelow,
+                        },
+                      ]}
+                    >
+                      <ModernPairingRailBridge
+                        color={SCHEDULE_MOCK_HEADER_RED}
+                        height={pairingRail!.bridgeBelow}
+                      />
+                    </View>
+                  ) : null}
+                </View>
               </View>
             );
           }
 
-          if (row.trip) {
+          if (meta.renderAsMiscCard) {
+            const label = row.pairingText || row.cityText || "—";
             return (
               <View style={styles.dayTileRowWrap}>
                 <Pressable
-                  onPress={() => onOpenFullTrip(row.trip!, row.dateIso)}
+                  onPress={
+                    row.trip
+                      ? () => onOpenFullTrip(row.trip!, row.dateIso)
+                      : undefined
+                  }
+                  disabled={!row.trip}
                   style={({ pressed }) => [
                     styles.miscCard,
-                    pressed && styles.cardStackPressed,
+                    pressed && row.trip && styles.cardStackPressed,
                   ]}
                 >
                   <Text style={styles.miscText} numberOfLines={2}>
-                    {row.pairingText || row.cityText || "—"}
+                    {label}
                   </Text>
                 </Pressable>
               </View>
@@ -475,6 +578,9 @@ const DAY_RAIL_DIVIDER = "#D2DAE6";
  */
 const TILE_STACK_GAP = 4;
 
+/** Left edge of pairing rail slot: `offLeftSpacerRail` + `tripDateRail`. */
+const MODERN_PAIRING_RAIL_SLOT_LEFT = 3 + 36;
+
 const styles = StyleSheet.create({
   root: {
     paddingHorizontal: 12,
@@ -493,18 +599,39 @@ const styles = StyleSheet.create({
   /** Same vertical inset for every day row (pairing, OFF, misc) — margins on `Pressable` are unreliable. */
   dayTileRowWrap: {
     marginVertical: TILE_STACK_GAP / 2,
+    overflow: "visible",
+  },
+  pairingRailRowAnchor: {
+    position: "relative",
+    overflow: "visible",
+  },
+  pairingRailBridgeAbove: {
+    position: "absolute",
+    bottom: "100%",
+    width: 10,
+    alignItems: "center",
+    zIndex: 3,
+    overflow: "visible",
+  },
+  pairingRailBridgeBelow: {
+    position: "absolute",
+    top: "100%",
+    width: 10,
+    alignItems: "center",
+    zIndex: 3,
+    overflow: "visible",
   },
   cardStackPressed: { opacity: 0.92 },
   /* —— Day off —— */
   /** Today-only: full card outline in schedule red. */
   tileOutlineToday: {
     borderColor: SCHEDULE_MOCK_HEADER_RED,
-    borderWidth: 1.5,
+    borderWidth: 2,
   },
   /** Today-only: vertical rule between date rail and body/route column. */
   railDividerToday: {
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
-    width: 1,
+    width: 2,
   },
   offCardOuter: {
     borderRadius: CARD_RADIUS,
@@ -579,15 +706,13 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
+  tripCardMainRailVisible: {
+    overflow: "visible",
+  },
   tripCardMainNoBottomRadius: {
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
     borderBottomWidth: 0,
-  },
-  redRail: {
-    width: 3,
-    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
-    alignSelf: "stretch",
   },
   tripDateRail: {
     width: 36,
