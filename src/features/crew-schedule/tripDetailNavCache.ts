@@ -1,27 +1,38 @@
-import type { CrewScheduleTrip } from './types';
-import { monthCalendarKey } from './scheduleMonthCache';
 import {
-  buildMonthTripsByKeyCache,
-  dbEnrichmentAddsAuthoritativeFields,
-  isDbEnrichedPairing,
-  isPartialVisiblePairing,
-  resolveFullPairingForDetail,
-  sameTripGroupAndPairingCode,
-  scorePairingCompleteness,
-  statFieldsPresent,
-  routeAirportCount,
-} from './pairingDetailResolve';
-import { devLogCarryoverOrInternationalCheck, type ScheduleVisibleMonth, validateVisibleTripHandoff } from './pairingHandoff';
+    logTripsForJ4195FakeMay29,
+    tripHasJ4195StaleMay292026,
+} from "./j4195FakeMay29Audit";
 import {
-  validatePairingSummaryPaintReady,
-  isInstantPaintablePairing,
-  isScheduleInstantPaintablePairing,
-} from './pairingRenderableGate';
+    canSealPairingSurface,
+    isThinScheduleOnlyPairing,
+} from "./pairingDetailReadiness";
 import {
-  canSealPairingSurface,
-  isThinScheduleOnlyPairing,
-} from './pairingDetailReadiness';
-import { pairingNavigationSessionKey, warmPairingDetailSnapshot } from './scheduleStableSnapshots';
+    buildMonthTripsByKeyCache,
+    dbEnrichmentAddsAuthoritativeFields,
+    isDbEnrichedPairing,
+    isPartialVisiblePairing,
+    resolveFullPairingForDetail,
+    routeAirportCount,
+    sameTripGroupAndPairingCode,
+    scorePairingCompleteness,
+    statFieldsPresent,
+} from "./pairingDetailResolve";
+import {
+    devLogCarryoverOrInternationalCheck,
+    type ScheduleVisibleMonth,
+    validateVisibleTripHandoff,
+} from "./pairingHandoff";
+import {
+    isInstantPaintablePairing,
+    isScheduleInstantPaintablePairing,
+    validatePairingSummaryPaintReady,
+} from "./pairingRenderableGate";
+import { monthCalendarKey } from "./scheduleMonthCache";
+import {
+    pairingNavigationSessionKey,
+    warmPairingDetailSnapshot,
+} from "./scheduleStableSnapshots";
+import type { CrewScheduleTrip } from "./types";
 
 const UUID_RE_STASH =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -47,7 +58,7 @@ function deepCloneTrip(t: CrewScheduleTrip): CrewScheduleTrip {
 }
 
 function normCodeRaw(s: string | undefined | null): string {
-  return String(s ?? '')
+  return String(s ?? "")
     .trim()
     .toUpperCase();
 }
@@ -83,30 +94,44 @@ export function stashTripForDetailNavigation(
   opts: StashTripHandoffOpts,
 ): void {
   const { visibleMonth, rowDateIso } = opts;
-  const selectedMonthKey = monthCalendarKey(visibleMonth.year, visibleMonth.month);
-  const sidRaw = String(selected.schedulePairingId ?? '').trim();
+  const selectedMonthKey = monthCalendarKey(
+    visibleMonth.year,
+    visibleMonth.month,
+  );
+  const sidRaw = String(selected.schedulePairingId ?? "").trim();
   const pointer: DetailHandoffPointer = {
     pairingCode: normCodeRaw(selected.pairingCode),
-    selectedDateIso: rowDateIso && /^\d{4}-\d{2}-\d{2}/.test(rowDateIso) ? rowDateIso.slice(0, 10) : null,
+    selectedDateIso:
+      rowDateIso && /^\d{4}-\d{2}-\d{2}/.test(rowDateIso)
+        ? rowDateIso.slice(0, 10)
+        : null,
     selectedMonthKey,
     schedulePairingId: UUID_RE_STASH.test(sidRaw) ? sidRaw : undefined,
   };
   const overlay = monthTrips.map((t) => deepCloneTrip(t));
   const canonical = canonicalTripForStash(selected, overlay, pointer);
-  const validity = validateVisibleTripHandoff(canonical, pointer.selectedDateIso ?? undefined);
+  const validity = validateVisibleTripHandoff(
+    canonical,
+    pointer.selectedDateIso ?? undefined,
+  );
   if (validity.ok) {
-    devLogCarryoverOrInternationalCheck(canonical, 'nav_stash');
+    devLogCarryoverOrInternationalCheck(canonical, "nav_stash");
   }
 
   stashByTripId.set(selected.id, { pointer, overlayTrips: overlay });
 
-  if (isInstantPaintablePairing(canonical) || validatePairingSummaryPaintReady(canonical, pointer.selectedDateIso).ok) {
+  if (
+    isInstantPaintablePairing(canonical) ||
+    validatePairingSummaryPaintReady(canonical, pointer.selectedDateIso).ok
+  ) {
     warmPairingDetailSnapshot(deepCloneTrip(canonical));
   }
 }
 
 /** Pointer + overlay for DB/detail resolution (pairing row is not render-ready). */
-export function getDetailNavigationStashForResolve(tripId: string): StashEntry | undefined {
+export function getDetailNavigationStashForResolve(
+  tripId: string,
+): StashEntry | undefined {
   const e = stashByTripId.get(tripId);
   if (!e) return undefined;
   return {
@@ -130,7 +155,9 @@ function readCanonicalFromStash(tripId: string): CrewScheduleTrip | undefined {
 }
 
 /** Read canonical resolved trip (re-runs resolver against latest committed months + overlay). */
-export function peekStashedTripForDetail(tripId: string): CrewScheduleTrip | undefined {
+export function peekStashedTripForDetail(
+  tripId: string,
+): CrewScheduleTrip | undefined {
   const t = readCanonicalFromStash(tripId);
   return t ? deepCloneTrip(t) : undefined;
 }
@@ -140,20 +167,40 @@ export function peekStashedHandoffValid(tripId: string): boolean {
   return t ? validateVisibleTripHandoff(t).ok : false;
 }
 
-export function peekStashedPairingSnapshotKey(tripId: string): string | undefined {
+export function peekStashedPairingSnapshotKey(
+  tripId: string,
+): string | undefined {
   const t = readCanonicalFromStash(tripId);
   return t ? pairingNavigationSessionKey(t) : undefined;
 }
 
-export function peekStashedDetailPointer(tripId: string): DetailHandoffPointer | undefined {
+export function peekStashedDetailPointer(
+  tripId: string,
+): DetailHandoffPointer | undefined {
   return stashByTripId.get(tripId)?.pointer;
 }
 
 /** Returns and removes the stashed trip for this id, if any. */
-export function consumeStashedTripForDetail(tripId: string): CrewScheduleTrip | undefined {
+export function consumeStashedTripForDetail(
+  tripId: string,
+): CrewScheduleTrip | undefined {
   const t = peekStashedTripForDetail(tripId);
   stashByTripId.delete(tripId);
   return t;
+}
+
+export function purgeDetailNavStashJ4195FakeMay292026(): void {
+  for (const [tripId, entry] of [...stashByTripId.entries()]) {
+    const bad = entry.overlayTrips.some((t) => tripHasJ4195StaleMay292026(t));
+    if (bad) {
+      logTripsForJ4195FakeMay29(
+        entry.overlayTrips,
+        "tripDetailNavCache.stash.purge",
+        "local_cache_only",
+      );
+      stashByTripId.delete(tripId);
+    }
+  }
 }
 
 /** Reject hydrated/network trip only when it would downgrade a stronger same-session render (never block DB authority over partial visible snapshots). */
@@ -163,11 +210,17 @@ export function shouldRejectWeakerPairingRender(
 ): boolean {
   if (!currentTrip) return false;
 
-  if (isThinScheduleOnlyPairing(currentTrip) && canSealPairingSurface(candidate)) {
+  if (
+    isThinScheduleOnlyPairing(currentTrip) &&
+    canSealPairingSurface(candidate)
+  ) {
     return false;
   }
 
-  if (canSealPairingSurface(currentTrip) && isThinScheduleOnlyPairing(candidate)) {
+  if (
+    canSealPairingSurface(currentTrip) &&
+    isThinScheduleOnlyPairing(candidate)
+  ) {
     return true;
   }
 
@@ -189,7 +242,8 @@ export function shouldRejectWeakerPairingRender(
   if (
     canSealPairingSurface(currentTrip) &&
     (currentTrip.crewMembers?.length ?? 0) > 0 &&
-    (candidate.crewMembers?.length ?? 0) < (currentTrip.crewMembers?.length ?? 0)
+    (candidate.crewMembers?.length ?? 0) <
+      (currentTrip.crewMembers?.length ?? 0)
   ) {
     return true;
   }
@@ -212,11 +266,17 @@ export function shouldRejectWeakerPairingRender(
   const wouldRejectOnScore = nextS < curS - 1;
 
   if (curPaint && nextPaint && wouldRejectOnScore) {
-    if (sameTripGroupAndPairingCode(currentTrip, candidate) && isDbEnrichedPairing(candidate)) {
+    if (
+      sameTripGroupAndPairingCode(currentTrip, candidate) &&
+      isDbEnrichedPairing(candidate)
+    ) {
       return false;
     }
 
-    if (isPartialVisiblePairing(currentTrip) && isDbEnrichedPairing(candidate)) {
+    if (
+      isPartialVisiblePairing(currentTrip) &&
+      isDbEnrichedPairing(candidate)
+    ) {
       return false;
     }
 
@@ -227,7 +287,10 @@ export function shouldRejectWeakerPairingRender(
     return true;
   }
 
-  if (sameTripGroupAndPairingCode(currentTrip, candidate) && isDbEnrichedPairing(candidate)) {
+  if (
+    sameTripGroupAndPairingCode(currentTrip, candidate) &&
+    isDbEnrichedPairing(candidate)
+  ) {
     return false;
   }
 

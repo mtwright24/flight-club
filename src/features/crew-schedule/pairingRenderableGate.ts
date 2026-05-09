@@ -1,53 +1,62 @@
-import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
-import type { CrewScheduleTrip } from './types';
+import { isFlicaNonFlyingActivityId } from "../../services/flicaScheduleHtmlParser";
 import {
-  crewBaseFromPairingDbFields,
-  isDbEnrichedPairing,
-  isPartialVisiblePairing,
-  normBaseForScoring,
-  routeAirportCount,
-  routeHasJfkBookend,
-  routeOrderedIatasFromRouteString,
-  statFieldsPresent,
-} from './pairingDetailResolve';
+    crewBaseFromPairingDbFields,
+    isDbEnrichedPairing,
+    isPartialVisiblePairing,
+    normBaseForScoring,
+    routeAirportCount,
+    routeHasJfkBookend,
+    routeOrderedIatasFromRouteString,
+    statFieldsPresent,
+} from "./pairingDetailResolve";
+import type { CrewScheduleTrip } from "./types";
 
 const UUID_SCHEDULE_PAIRING =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function normCode(s: string | undefined | null): string {
-  return String(s ?? '')
+  return String(s ?? "")
     .trim()
     .toUpperCase();
 }
 
 function isoOk(s: string | null | undefined): boolean {
-  return /^\d{4}-\d{2}-\d{2}/.test(String(s ?? '').slice(0, 10));
+  return /^\d{4}-\d{2}-\d{2}/.test(String(s ?? "").slice(0, 10));
 }
 
 /** Non-operational / non-flying rows: strict paint rules do not apply. */
-export function isExemptFromStrictPairingPaint(t: CrewScheduleTrip | null | undefined): boolean {
+export function isExemptFromStrictPairingPaint(
+  t: CrewScheduleTrip | null | undefined,
+): boolean {
   if (t == null) return true;
   const code = normCode(t.pairingCode);
-  if (!code || code === '—' || code === '-' || code === '–') return true;
+  if (!code || code === "—" || code === "-" || code === "–") return true;
   if (isFlicaNonFlyingActivityId(code)) return true;
-  if (t.status === 'off' || t.status === 'pto' || t.status === 'ptv' || t.status === 'rsv') return true;
-  if (t.status === 'training' || t.status === 'other') return true;
-  if (code === 'CONT' || code === 'RDO') return true;
+  if (
+    t.status === "off" ||
+    t.status === "pto" ||
+    t.status === "ptv" ||
+    t.status === "rsv"
+  )
+    return true;
+  if (t.status === "training" || t.status === "other") return true;
+  if (code === "CONT" || code === "RDO") return true;
   return false;
 }
 
 function inferredBaseFromRoute(t: CrewScheduleTrip): string | null {
-  const inf = crewBaseFromPairingDbFields(String(t.routeSummary ?? ''), t.base);
+  const inf = crewBaseFromPairingDbFields(String(t.routeSummary ?? ""), t.base);
   return inf ? inf.trim().toUpperCase() : null;
 }
 
 function hasTrustedSchedulePairingId(t: CrewScheduleTrip): boolean {
-  return UUID_SCHEDULE_PAIRING.test(String(t.schedulePairingId ?? '').trim());
+  return UUID_SCHEDULE_PAIRING.test(String(t.schedulePairingId ?? "").trim());
 }
 
 function legOrDutyStructure(t: CrewScheduleTrip): boolean {
   if ((t.legs?.length ?? 0) >= 1) return true;
-  if (t.canonicalPairingDays && Object.keys(t.canonicalPairingDays).length >= 1) return true;
+  if (t.canonicalPairingDays && Object.keys(t.canonicalPairingDays).length >= 1)
+    return true;
   return false;
 }
 
@@ -58,7 +67,7 @@ function legOrDutyStructure(t: CrewScheduleTrip): boolean {
 export function isUnsafeFirstPaintPairing(t: CrewScheduleTrip): boolean {
   if (isExemptFromStrictPairingPaint(t)) return false;
   const code = normCode(t.pairingCode);
-  if (!code || code === '—' || code === '-' || code === '–') return true;
+  if (!code || code === "—" || code === "-" || code === "–") return true;
   if (!t.id?.trim()) return true;
   if (!isoOk(t.startDate) || !isoOk(t.endDate)) return true;
   const hasStructure = legOrDutyStructure(t) || routeAirportCount(t) >= 2;
@@ -67,7 +76,9 @@ export function isUnsafeFirstPaintPairing(t: CrewScheduleTrip): boolean {
 }
 
 /** Calendar/cache/overlay trip is allowed to paint immediately before DB hydration. */
-export function isScheduleInstantPaintablePairing(t: CrewScheduleTrip): boolean {
+export function isScheduleInstantPaintablePairing(
+  t: CrewScheduleTrip,
+): boolean {
   if (isUnsafeFirstPaintPairing(t)) return false;
   if (isExemptFromStrictPairingPaint(t)) return Boolean(t.id?.trim());
   return true;
@@ -79,14 +90,16 @@ export function isScheduleInstantPaintablePairing(t: CrewScheduleTrip): boolean 
 export function isDangerousPartialPairing(t: CrewScheduleTrip): boolean {
   if (isExemptFromStrictPairingPaint(t)) return false;
   const code = normCode(t.pairingCode);
-  if (!code || code === '—' || code === '-' || code === '–') return true;
+  if (!code || code === "—" || code === "-" || code === "–") return true;
   if (!t.id?.trim()) return true;
   if (!isoOk(t.startDate) || !isoOk(t.endDate)) return true;
   if (isPartialVisiblePairing(t)) return true;
-  const baseOk = normBaseForScoring(t.base) != null || inferredBaseFromRoute(t) != null;
+  const baseOk =
+    normBaseForScoring(t.base) != null || inferredBaseFromRoute(t) != null;
   const dbHint = isDbEnrichedPairing(t);
   if (!baseOk && !dbHint) return true;
-  if (statFieldsPresent(t) < 1 && !hasTrustedSchedulePairingId(t) && !baseOk) return true;
+  if (statFieldsPresent(t) < 1 && !hasTrustedSchedulePairingId(t) && !baseOk)
+    return true;
   return false;
 }
 
@@ -101,7 +114,8 @@ export function isInstantPaintablePairing(t: CrewScheduleTrip): boolean {
   if (!isoOk(t.startDate) || !isoOk(t.endDate)) return false;
   if (!legOrDutyStructure(t)) return false;
   if (routeAirportCount(t) < 2 && !hasTrustedSchedulePairingId(t)) return false;
-  const baseOk = normBaseForScoring(t.base) != null || inferredBaseFromRoute(t) != null;
+  const baseOk =
+    normBaseForScoring(t.base) != null || inferredBaseFromRoute(t) != null;
   const statsOk = statFieldsPresent(t) >= 1;
   const uuidOk = hasTrustedSchedulePairingId(t);
   if (!baseOk && !statsOk && !uuidOk) return false;
@@ -116,44 +130,57 @@ export function validateRenderableOperationalFlyingPairing(
   anchorIso?: string | null,
 ): { ok: true } | { ok: false; reason: string } {
   const code = normCode(trip.pairingCode);
-  if (!code || code === '—' || code === '-' || code === '–') return { ok: false, reason: 'no_pairing_code' };
-  if (!trip.id?.trim()) return { ok: false, reason: 'no_trip_id' };
-  if (!normBaseForScoring(trip.base)) return { ok: false, reason: 'no_base' };
+  if (!code || code === "—" || code === "-" || code === "–")
+    return { ok: false, reason: "no_pairing_code" };
+  if (!trip.id?.trim()) return { ok: false, reason: "no_trip_id" };
+  if (!normBaseForScoring(trip.base)) return { ok: false, reason: "no_base" };
 
-  if (statFieldsPresent(trip) < 3) return { ok: false, reason: 'insufficient_stats' };
+  if (statFieldsPresent(trip) < 3)
+    return { ok: false, reason: "insufficient_stats" };
 
   const ap = routeOrderedIatasFromRouteString(trip.routeSummary);
   const hasBookend = routeHasJfkBookend(trip.routeSummary);
-  if (ap.length === 2 && ap[0] !== 'JFK' && ap[0] !== 'BOS' && !hasBookend) {
-    return { ok: false, reason: 'layover_first_two_segment' };
+  if (ap.length === 2 && ap[0] !== "JFK" && ap[0] !== "BOS" && !hasBookend) {
+    return { ok: false, reason: "layover_first_two_segment" };
   }
 
   const legAp = new Set<string>();
   for (const l of trip.legs ?? []) {
-    const d = String(l.departureAirport ?? '')
+    const d = String(l.departureAirport ?? "")
       .trim()
       .toUpperCase();
-    const a = String(l.arrivalAirport ?? '')
+    const a = String(l.arrivalAirport ?? "")
       .trim()
       .toUpperCase();
     if (/^[A-Z]{3}$/.test(d)) legAp.add(d);
     if (/^[A-Z]{3}$/.test(a)) legAp.add(a);
   }
   const routeToks = ap.length;
-  if (routeToks < 2 && legAp.size < 2) return { ok: false, reason: 'route_too_thin' };
+  if (routeToks < 2 && legAp.size < 2)
+    return { ok: false, reason: "route_too_thin" };
 
   const fullRouteOk =
-    legAp.size >= 3 || routeToks >= 3 || hasBookend || (routeToks >= 2 && ap[0] === 'JFK') || (legAp.size >= 2 && hasBookend);
-  if (!fullRouteOk) return { ok: false, reason: 'route_not_full_enough' };
+    legAp.size >= 3 ||
+    routeToks >= 3 ||
+    hasBookend ||
+    (routeToks >= 2 && ap[0] === "JFK") ||
+    (legAp.size >= 2 && hasBookend);
+  if (!fullRouteOk) return { ok: false, reason: "route_not_full_enough" };
 
-  if (anchorIso && isoOk(anchorIso) && isoOk(trip.startDate) && isoOk(trip.endDate)) {
+  if (
+    anchorIso &&
+    isoOk(anchorIso) &&
+    isoOk(trip.startDate) &&
+    isoOk(trip.endDate)
+  ) {
     const d = anchorIso.slice(0, 10);
     if (d < trip.startDate.slice(0, 10) || d > trip.endDate.slice(0, 10)) {
-      return { ok: false, reason: 'anchor_outside_span' };
+      return { ok: false, reason: "anchor_outside_span" };
     }
   }
 
-  if (!legOrDutyStructure(trip)) return { ok: false, reason: 'no_duty_leg_structure' };
+  if (!legOrDutyStructure(trip))
+    return { ok: false, reason: "no_duty_leg_structure" };
 
   return { ok: true };
 }
@@ -163,7 +190,7 @@ export function validatePairingSummaryPaintReady(
   anchorIso?: string | null,
 ): { ok: true } | { ok: false; reason: string } {
   if (isExemptFromStrictPairingPaint(trip)) {
-    if (!trip.id?.trim()) return { ok: false, reason: 'no_trip_id' };
+    if (!trip.id?.trim()) return { ok: false, reason: "no_trip_id" };
     return { ok: true };
   }
   return validateRenderableOperationalFlyingPairing(trip, anchorIso);

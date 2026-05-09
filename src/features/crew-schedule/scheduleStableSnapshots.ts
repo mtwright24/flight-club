@@ -2,8 +2,13 @@
  * In-memory committed snapshots for crew schedule month + pairing surfaces.
  * Atomic replace only — no in-place mutation of cached objects.
  */
-import type { CrewScheduleTrip, ScheduleMonthMetrics } from './types';
-import { monthCalendarKey } from './scheduleMonthCache';
+import {
+    logTripsForJ4195FakeMay29,
+    tripHasJ4195StaleMay292026,
+    tripListHasJ4195StaleMay292026,
+} from "./j4195FakeMay29Audit";
+import { monthCalendarKey } from "./scheduleMonthCache";
+import type { CrewScheduleTrip, ScheduleMonthMetrics } from "./types";
 
 export function simpleDataSignature(input: string): string {
   let h = 0;
@@ -15,28 +20,33 @@ export function simpleDataSignature(input: string): string {
 
 /** Stable row/list identity: pairing uuid (or placeholder), trip group id, span, code. */
 export function pairingSnapshotKey(trip: CrewScheduleTrip): string {
-  const uuid = String(trip.schedulePairingId ?? '')
+  const uuid = String(trip.schedulePairingId ?? "")
     .trim()
     .toUpperCase();
-  const gid = String(trip.id ?? '').trim();
-  const code = String(trip.pairingCode ?? '')
+  const gid = String(trip.id ?? "").trim();
+  const code = String(trip.pairingCode ?? "")
     .trim()
     .toUpperCase();
-  const a = String(trip.startDate ?? '').slice(0, 10);
-  const b = String(trip.endDate ?? '').slice(0, 10);
-  return `${uuid || 'no-uuid'}|${gid}|${a}|${b}|${code}`;
+  const a = String(trip.startDate ?? "").slice(0, 10);
+  const b = String(trip.endDate ?? "").slice(0, 10);
+  return `${uuid || "no-uuid"}|${gid}|${a}|${b}|${code}`;
 }
 
-export function pairingSnapshotKeysMatch(a: CrewScheduleTrip, b: CrewScheduleTrip): boolean {
+export function pairingSnapshotKeysMatch(
+  a: CrewScheduleTrip,
+  b: CrewScheduleTrip,
+): boolean {
   return pairingSnapshotKey(a) === pairingSnapshotKey(b);
 }
 
 /** Row/trip identity for detail refresh guards: trip_group id + span + pairing code (stable before/after DB UUID resolution). */
 export function pairingNavigationSessionKey(trip: CrewScheduleTrip): string {
-  const gid = String(trip.id ?? '').trim();
-  const a = String(trip.startDate ?? '').slice(0, 10);
-  const b = String(trip.endDate ?? '').slice(0, 10);
-  const code = String(trip.pairingCode ?? '').trim().toUpperCase();
+  const gid = String(trip.id ?? "").trim();
+  const a = String(trip.startDate ?? "").slice(0, 10);
+  const b = String(trip.endDate ?? "").slice(0, 10);
+  const code = String(trip.pairingCode ?? "")
+    .trim()
+    .toUpperCase();
   return `${gid}|${a}|${b}|${code}`;
 }
 
@@ -48,7 +58,9 @@ function cloneTrips(trips: CrewScheduleTrip[]): CrewScheduleTrip[] {
   return JSON.parse(JSON.stringify(trips)) as CrewScheduleTrip[];
 }
 
-function cloneMetrics(m: ScheduleMonthMetrics | null): ScheduleMonthMetrics | null {
+function cloneMetrics(
+  m: ScheduleMonthMetrics | null,
+): ScheduleMonthMetrics | null {
   if (!m) return null;
   return JSON.parse(JSON.stringify(m)) as ScheduleMonthMetrics;
 }
@@ -65,13 +77,17 @@ export function computeStableMonthIdentityKey(params: {
   monthMetrics: ScheduleMonthMetrics | null;
 }): string {
   const mk = monthCalendarKey(params.year, params.month);
-  const base = params.trips[0]?.base?.trim().toUpperCase() ?? '—';
-  const role = 'crew';
-  const rev = params.monthMetrics?.updatedAt ?? params.monthMetrics?.monthKey ?? 'nom';
+  const base = params.trips[0]?.base?.trim().toUpperCase() ?? "—";
+  const role = "crew";
+  const rev =
+    params.monthMetrics?.updatedAt ?? params.monthMetrics?.monthKey ?? "nom";
   const tripSig = params.trips
-    .map((t) => `${t.id}|${String(t.schedulePairingId ?? '')}|${t.startDate}|${t.endDate}|${String(t.pairingCode).toUpperCase()}`)
+    .map(
+      (t) =>
+        `${t.id}|${String(t.schedulePairingId ?? "")}|${t.startDate}|${t.endDate}|${String(t.pairingCode).toUpperCase()}`,
+    )
     .sort()
-    .join(';');
+    .join(";");
   const sig = simpleDataSignature(tripSig);
   return `${params.userId}|${base}|${role}|${mk}|${rev}|${params.trips.length}:${sig}`;
 }
@@ -87,12 +103,29 @@ export type ScheduleCommittedMonthSnapshot = {
 
 const committedMonths = new Map<string, ScheduleCommittedMonthSnapshot>();
 
-export function readCommittedMonthSnapshot(monthCalendarKey: string): ScheduleCommittedMonthSnapshot | undefined {
-  return committedMonths.get(monthCalendarKey);
+export function readCommittedMonthSnapshot(
+  monthCalendarKey: string,
+): ScheduleCommittedMonthSnapshot | undefined {
+  const v = committedMonths.get(monthCalendarKey);
+  if (!v) return undefined;
+  if (tripListHasJ4195StaleMay292026(v.trips)) {
+    logTripsForJ4195FakeMay29(
+      v.trips,
+      "scheduleStableSnapshots.committedMonths.evict_on_read",
+      "local_cache_only",
+    );
+    committedMonths.delete(monthCalendarKey);
+    return undefined;
+  }
+  return v;
 }
 
 /** Replace atomically with deep-cloned payloads. */
-export function commitMonthSnapshotAtomic(snap: Omit<ScheduleCommittedMonthSnapshot, 'committedAt'> & { committedAt?: number }): void {
+export function commitMonthSnapshotAtomic(
+  snap: Omit<ScheduleCommittedMonthSnapshot, "committedAt"> & {
+    committedAt?: number;
+  },
+): void {
   const row: ScheduleCommittedMonthSnapshot = {
     monthCalendarKey: snap.monthCalendarKey,
     userId: snap.userId,
@@ -113,13 +146,51 @@ export function invalidateCommittedMonthSnapshotsForKeys(keys: string[]): void {
   for (const k of keys) committedMonths.delete(k);
 }
 
+export function purgeJ4195FakeMay292026CommittedAndWarm(): void {
+  for (const [k, v] of [...committedMonths.entries()]) {
+    if (tripListHasJ4195StaleMay292026(v.trips)) {
+      logTripsForJ4195FakeMay29(
+        v.trips,
+        "scheduleStableSnapshots.committedMonths.purge",
+        "local_cache_only",
+      );
+      committedMonths.delete(k);
+    }
+  }
+  for (const [k, t] of [...pairingDetailWarm.entries()]) {
+    if (tripHasJ4195StaleMay292026(t)) {
+      logTripsForJ4195FakeMay29(
+        [t],
+        "scheduleStableSnapshots.pairingDetailWarm.purge",
+        "local_cache_only",
+      );
+      pairingDetailWarm.delete(k);
+    }
+  }
+}
+
 const pairingDetailWarm = new Map<string, CrewScheduleTrip>();
 
 export function warmPairingDetailSnapshot(trip: CrewScheduleTrip): void {
+  if (tripHasJ4195StaleMay292026(trip)) {
+    return;
+  }
   pairingDetailWarm.set(pairingSnapshotKey(trip), cloneTrip(trip));
 }
 
-export function readPairingDetailSnapshot(key: string): CrewScheduleTrip | undefined {
+export function readPairingDetailSnapshot(
+  key: string,
+): CrewScheduleTrip | undefined {
   const v = pairingDetailWarm.get(key);
-  return v ? cloneTrip(v) : undefined;
+  if (!v) return undefined;
+  if (tripHasJ4195StaleMay292026(v)) {
+    pairingDetailWarm.delete(key);
+    logTripsForJ4195FakeMay29(
+      [v],
+      "scheduleStableSnapshots.pairingDetailWarm.evict_on_read",
+      "local_cache_only",
+    );
+    return undefined;
+  }
+  return cloneTrip(v);
 }

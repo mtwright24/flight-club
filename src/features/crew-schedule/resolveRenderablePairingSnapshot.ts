@@ -1,48 +1,62 @@
-import type { CrewScheduleTrip } from './types';
+import { dutiesToCrewScheduleLegs } from "./jetblueFlicaImport";
 import {
-  fetchCrewScheduleTripByPairingUuid,
-  fetchPairingDutiesForScheduleEntries,
-  fetchTripGroupEntries,
-  fetchTripMetadataForGroup,
-  mergeTripWithMetadataRow,
-  resolveSchedulePairingDbIdByOverlap,
-  type ScheduleTripMetadataRow,
-} from './scheduleApi';
-import { entriesToSingleTrip } from './tripMapper';
-import { dutiesToCrewScheduleLegs } from './jetblueFlicaImport';
+    adjacentMonthKeys,
+    buildMonthTripsByKeyCache,
+    isDbEnrichedPairing,
+    resolveFullPairingForDetail,
+    scorePairingCompleteness,
+    statFieldsPresent,
+} from "./pairingDetailResolve";
 import {
-  adjacentMonthKeys,
-  buildMonthTripsByKeyCache,
-  isDbEnrichedPairing,
-  resolveFullPairingForDetail,
-  scorePairingCompleteness,
-  statFieldsPresent,
-} from './pairingDetailResolve';
-import { monthCalendarKey } from './scheduleMonthCache';
-import { pairingSnapshotKey, readCommittedMonthSnapshot, readPairingDetailSnapshot } from './scheduleStableSnapshots';
-import { getDetailNavigationStashForResolve } from './tripDetailNavCache';
+    isDangerousPartialPairing,
+    isExemptFromStrictPairingPaint,
+    isScheduleInstantPaintablePairing,
+    isUnsafeFirstPaintPairing,
+    validatePairingSummaryPaintReady,
+} from "./pairingRenderableGate";
 import {
-  isDangerousPartialPairing,
-  isExemptFromStrictPairingPaint,
-  isScheduleInstantPaintablePairing,
-  isUnsafeFirstPaintPairing,
-  validatePairingSummaryPaintReady,
-} from './pairingRenderableGate';
+    fetchCrewScheduleTripByPairingUuid,
+    fetchPairingDutiesForScheduleEntries,
+    fetchTripGroupEntries,
+    fetchTripMetadataForGroup,
+    mergeTripWithMetadataRow,
+    resolveSchedulePairingDbIdByOverlap,
+    type ScheduleTripMetadataRow,
+} from "./scheduleApi";
+import { monthCalendarKey } from "./scheduleMonthCache";
+import {
+    pairingSnapshotKey,
+    readCommittedMonthSnapshot,
+    readPairingDetailSnapshot,
+} from "./scheduleStableSnapshots";
+import { getDetailNavigationStashForResolve } from "./tripDetailNavCache";
+import { entriesToSingleTrip } from "./tripMapper";
+import type { CrewScheduleTrip } from "./types";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function normCode(s: string | undefined | null): string {
-  return String(s ?? '')
+  return String(s ?? "")
     .trim()
     .toUpperCase();
 }
 
 function isoOk(s: string | null | undefined): boolean {
-  return /^\d{4}-\d{2}-\d{2}/.test(String(s ?? '').slice(0, 10));
+  return /^\d{4}-\d{2}-\d{2}/.test(String(s ?? "").slice(0, 10));
 }
 
-function anchorInSpan(trip: CrewScheduleTrip, anchorIso: string | null | undefined): boolean {
-  if (!anchorIso || !isoOk(anchorIso) || !isoOk(trip.startDate) || !isoOk(trip.endDate)) return true;
+function anchorInSpan(
+  trip: CrewScheduleTrip,
+  anchorIso: string | null | undefined,
+): boolean {
+  if (
+    !anchorIso ||
+    !isoOk(anchorIso) ||
+    !isoOk(trip.startDate) ||
+    !isoOk(trip.endDate)
+  )
+    return true;
   if (isExemptFromStrictPairingPaint(trip)) return true;
   const d = anchorIso.slice(0, 10);
   return d >= trip.startDate.slice(0, 10) && d <= trip.endDate.slice(0, 10);
@@ -55,7 +69,7 @@ function pickBestCommittedTrip(
 ): CrewScheduleTrip | null {
   let best: CrewScheduleTrip | null = null;
   let bestScore = -1;
-  const code = pairingCode ? normCode(pairingCode) : '';
+  const code = pairingCode ? normCode(pairingCode) : "";
   for (const mk of adjacentMonthKeys(monthCenterKey)) {
     const snap = readCommittedMonthSnapshot(mk);
     for (const t of snap?.trips ?? []) {
@@ -77,16 +91,23 @@ function finalizeAsyncCandidate(
   meta: ScheduleTripMetadataRow | null,
   anchorIso: string | null,
   source: string,
-): { trip: CrewScheduleTrip; meta: ScheduleTripMetadataRow | null; source: string } | null {
+): {
+  trip: CrewScheduleTrip;
+  meta: ScheduleTripMetadataRow | null;
+  source: string;
+} | null {
   const merged = mergeTripWithMetadataRow(raw, meta);
   const withId: CrewScheduleTrip = { ...merged, id: tripId };
   if (isDangerousPartialPairing(withId)) return null;
-  if (validatePairingSummaryPaintReady(withId, anchorIso).ok) return { trip: withId, meta, source };
+  if (validatePairingSummaryPaintReady(withId, anchorIso).ok)
+    return { trip: withId, meta, source };
   if (isDbEnrichedPairing(withId)) return { trip: withId, meta, source };
   return null;
 }
 
-async function loadLegacyTripWithDuties(tripId: string): Promise<CrewScheduleTrip | null> {
+async function loadLegacyTripWithDuties(
+  tripId: string,
+): Promise<CrewScheduleTrip | null> {
   const rows = await fetchTripGroupEntries(tripId);
   let base = entriesToSingleTrip(rows);
   if (!base) return null;
@@ -94,7 +115,11 @@ async function loadLegacyTripWithDuties(tripId: string): Promise<CrewScheduleTri
   if (duties?.length) {
     base = {
       ...base,
-      legs: dutiesToCrewScheduleLegs(duties, base.id, base.base?.trim().toUpperCase() || 'JFK'),
+      legs: dutiesToCrewScheduleLegs(
+        duties,
+        base.id,
+        base.base?.trim().toUpperCase() || "JFK",
+      ),
     };
   }
   return base;
@@ -125,40 +150,62 @@ function scoreCandidate(
   pointerAnchor: string | null | undefined,
   fallbackVisibleTrip: CrewScheduleTrip | null | undefined,
   useAnchor: boolean,
-): { candidates: { t: CrewScheduleTrip; source: string }[]; pick: InstantPaintPick | null } {
+): {
+  candidates: { t: CrewScheduleTrip; source: string }[];
+  pick: InstantPaintPick | null;
+} {
   const entry = getDetailNavigationStashForResolve(tripId);
   const candidates: { t: CrewScheduleTrip; source: string }[] = [];
 
   const canon = canonicalFromStashEntry(tripId);
   if (canon) {
-    candidates.push({ t: withTripId(tripId, canon), source: 'stash_canonical' });
+    candidates.push({
+      t: withTripId(tripId, canon),
+      source: "stash_canonical",
+    });
     const warm = readPairingDetailSnapshot(pairingSnapshotKey(canon));
     if (warm) {
-      candidates.push({ t: withTripId(tripId, warm), source: 'warm_cache' });
+      candidates.push({ t: withTripId(tripId, warm), source: "warm_cache" });
     }
   }
 
-  const codeForCommitted = entry?.pointer.pairingCode ?? fallbackVisibleTrip?.pairingCode;
+  const codeForCommitted =
+    entry?.pointer.pairingCode ?? fallbackVisibleTrip?.pairingCode;
   const monthCenterResolved =
     entry?.pointer.selectedMonthKey ??
-    (fallbackVisibleTrip ? monthCalendarKey(fallbackVisibleTrip.year, fallbackVisibleTrip.month) : null);
+    (fallbackVisibleTrip
+      ? monthCalendarKey(fallbackVisibleTrip.year, fallbackVisibleTrip.month)
+      : null);
 
   if (monthCenterResolved) {
-    const committed = pickBestCommittedTrip(tripId, codeForCommitted, monthCenterResolved);
+    const committed = pickBestCommittedTrip(
+      tripId,
+      codeForCommitted,
+      monthCenterResolved,
+    );
     if (committed) {
-      candidates.push({ t: withTripId(tripId, committed), source: 'committed_month' });
+      candidates.push({
+        t: withTripId(tripId, committed),
+        source: "committed_month",
+      });
     }
   }
 
   if (entry) {
     for (const ot of entry.overlayTrips) {
       if (String(ot.id) !== String(tripId)) continue;
-      candidates.push({ t: withTripId(tripId, ot), source: 'overlay_visible' });
+      candidates.push({ t: withTripId(tripId, ot), source: "overlay_visible" });
     }
   }
 
-  if (fallbackVisibleTrip && String(fallbackVisibleTrip.id) === String(tripId)) {
-    candidates.push({ t: withTripId(tripId, fallbackVisibleTrip), source: 'fallback_visible' });
+  if (
+    fallbackVisibleTrip &&
+    String(fallbackVisibleTrip.id) === String(tripId)
+  ) {
+    candidates.push({
+      t: withTripId(tripId, fallbackVisibleTrip),
+      source: "fallback_visible",
+    });
   }
 
   let best: InstantPaintPick | null = null;
@@ -213,11 +260,15 @@ export function buildPairingFirstPaintDecision(
   const pointerAnchor = pointer?.selectedDateIso ?? anchorIso ?? null;
 
   const canon = canonicalFromStashEntry(tripId);
-  const warmExists = Boolean(canon && readPairingDetailSnapshot(pairingSnapshotKey(canon)));
+  const warmExists = Boolean(
+    canon && readPairingDetailSnapshot(pairingSnapshotKey(canon)),
+  );
 
   const monthCenterResolved =
     pointer?.selectedMonthKey ??
-    (fallbackVisibleTrip ? monthCalendarKey(fallbackVisibleTrip.year, fallbackVisibleTrip.month) : null);
+    (fallbackVisibleTrip
+      ? monthCalendarKey(fallbackVisibleTrip.year, fallbackVisibleTrip.month)
+      : null);
   const codeProbe = pointer?.pairingCode ?? fallbackVisibleTrip?.pairingCode;
   const committedKeys: string[] = [];
   if (monthCenterResolved) {
@@ -226,7 +277,9 @@ export function buildPairingFirstPaintDecision(
       if (!snap?.trips?.length) continue;
       if (
         snap.trips.some(
-          (x) => String(x.id) === String(tripId) && (!codeProbe || normCode(x.pairingCode) === normCode(codeProbe)),
+          (x) =>
+            String(x.id) === String(tripId) &&
+            (!codeProbe || normCode(x.pairingCode) === normCode(codeProbe)),
         )
       ) {
         committedKeys.push(mk);
@@ -245,7 +298,12 @@ export function buildPairingFirstPaintDecision(
   let candidatesListed = candidatesAnchored;
   let unanchoredCandidatesLen = 0;
   if (!pick && pointerAnchor) {
-    const second = scoreCandidate(tripId, pointerAnchor, fallbackVisibleTrip, false);
+    const second = scoreCandidate(
+      tripId,
+      pointerAnchor,
+      fallbackVisibleTrip,
+      false,
+    );
     pick = second.pick;
     anchorRelaxed = Boolean(pick);
     unanchoredCandidatesLen = second.candidates.length;
@@ -253,13 +311,17 @@ export function buildPairingFirstPaintDecision(
   }
 
   const chosen = pick?.trip;
-  const strictReady = chosen ? validatePairingSummaryPaintReady(chosen, pointerAnchor).ok : false;
+  const strictReady = chosen
+    ? validatePairingSummaryPaintReady(chosen, pointerAnchor).ok
+    : false;
 
   const anyCandidatesCollected =
-    candidatesAnchored.length > 0 || (pointerAnchor != null && unanchoredCandidatesLen > 0);
+    candidatesAnchored.length > 0 ||
+    (pointerAnchor != null && unanchoredCandidatesLen > 0);
 
   const decision: FirstPaintDecisionPayload = {
-    pairingCode: pointer?.pairingCode ?? fallbackVisibleTrip?.pairingCode ?? null,
+    pairingCode:
+      pointer?.pairingCode ?? fallbackVisibleTrip?.pairingCode ?? null,
     selectedDateIso: pointerAnchor,
     selectedMonthKey: monthCenterResolved ?? null,
     routeTripId: tripId,
@@ -274,7 +336,11 @@ export function buildPairingFirstPaintDecision(
     selectedSource: pick?.source ?? null,
     instantPaintable: Boolean(pick),
     strictReady,
-    rejectionReason: pick ? null : anyCandidatesCollected ? 'no_candidate_passed_filters' : 'no_candidates_collected',
+    rejectionReason: pick
+      ? null
+      : anyCandidatesCollected
+        ? "no_candidate_passed_filters"
+        : "no_candidates_collected",
     anchorRelaxed,
   };
 
@@ -289,11 +355,14 @@ export function pickBestInstantPaintTrip(
   anchorIso: string | null | undefined,
   fallbackVisibleTrip: CrewScheduleTrip | null | undefined,
 ): InstantPaintPick | null {
-  return buildPairingFirstPaintDecision(tripId, anchorIso, fallbackVisibleTrip).pick;
+  return buildPairingFirstPaintDecision(tripId, anchorIso, fallbackVisibleTrip)
+    .pick;
 }
 
 /** @deprecated Prefer {@link pickBestInstantPaintTrip} */
-export function trySyncRenderablePairingSnapshot(tripId: string): CrewScheduleTrip | null {
+export function trySyncRenderablePairingSnapshot(
+  tripId: string,
+): CrewScheduleTrip | null {
   return pickBestInstantPaintTrip(tripId, null, null)?.trip ?? null;
 }
 
@@ -317,14 +386,17 @@ export async function resolveRenderablePairingSnapshot(
   const pointer = entry?.pointer;
   const anchorIso =
     pointer?.selectedDateIso ??
-    (fallbackVisibleTrip?.startDate && /^\d{4}-\d{2}-\d{2}/.test(fallbackVisibleTrip.startDate)
+    (fallbackVisibleTrip?.startDate &&
+    /^\d{4}-\d{2}-\d{2}/.test(fallbackVisibleTrip.startDate)
       ? fallbackVisibleTrip.startDate.slice(0, 10)
       : null);
 
   const canon = canonicalFromStashEntry(tripId);
   const monthCenter =
     pointer?.selectedMonthKey ??
-    (fallbackVisibleTrip ? monthCalendarKey(fallbackVisibleTrip.year, fallbackVisibleTrip.month) : null);
+    (fallbackVisibleTrip
+      ? monthCalendarKey(fallbackVisibleTrip.year, fallbackVisibleTrip.month)
+      : null);
 
   const tryCand = (
     raw: CrewScheduleTrip | null | undefined,
@@ -335,29 +407,36 @@ export async function resolveRenderablePairingSnapshot(
   };
 
   if (canon && isExemptFromStrictPairingPaint(canon)) {
-    const hit = tryCand(canon, 'stash_exempt');
-    if (hit) return { ...hit, source: 'stash_exempt' };
+    const hit = tryCand(canon, "stash_exempt");
+    if (hit) return { ...hit, source: "stash_exempt" };
   }
 
-  if (fallbackVisibleTrip && isExemptFromStrictPairingPaint(fallbackVisibleTrip)) {
-    const hit = tryCand(fallbackVisibleTrip, 'fallback_exempt');
-    if (hit) return { ...hit, source: 'fallback_exempt' };
+  if (
+    fallbackVisibleTrip &&
+    isExemptFromStrictPairingPaint(fallbackVisibleTrip)
+  ) {
+    const hit = tryCand(fallbackVisibleTrip, "fallback_exempt");
+    if (hit) return { ...hit, source: "fallback_exempt" };
   }
 
   if (canon) {
-    const hit = tryCand(canon, 'stash_canonical');
+    const hit = tryCand(canon, "stash_canonical");
     if (hit) return hit;
 
     const warm = readPairingDetailSnapshot(pairingSnapshotKey(canon));
     if (warm) {
-      const hitW = tryCand(warm, 'warm_cache');
+      const hitW = tryCand(warm, "warm_cache");
       if (hitW) return hitW;
     }
   }
 
   if (monthCenter) {
-    const committed = pickBestCommittedTrip(tripId, pointer?.pairingCode ?? fallbackVisibleTrip?.pairingCode, monthCenter);
-    const hitC = tryCand(committed, 'committed_month');
+    const committed = pickBestCommittedTrip(
+      tripId,
+      pointer?.pairingCode ?? fallbackVisibleTrip?.pairingCode,
+      monthCenter,
+    );
+    const hitC = tryCand(committed, "committed_month");
     if (hitC) return hitC;
   }
 
@@ -365,8 +444,11 @@ export async function resolveRenderablePairingSnapshot(
     (pairingUuidFromRoute && UUID_RE.test(String(pairingUuidFromRoute).trim())
       ? String(pairingUuidFromRoute).trim()
       : undefined) ??
-    (pointer?.schedulePairingId && UUID_RE.test(pointer.schedulePairingId) ? pointer.schedulePairingId : undefined) ??
-    (fallbackVisibleTrip?.schedulePairingId && UUID_RE.test(String(fallbackVisibleTrip.schedulePairingId).trim())
+    (pointer?.schedulePairingId && UUID_RE.test(pointer.schedulePairingId)
+      ? pointer.schedulePairingId
+      : undefined) ??
+    (fallbackVisibleTrip?.schedulePairingId &&
+    UUID_RE.test(String(fallbackVisibleTrip.schedulePairingId).trim())
       ? String(fallbackVisibleTrip.schedulePairingId).trim()
       : undefined);
 
@@ -393,15 +475,20 @@ export async function resolveRenderablePairingSnapshot(
   if (pairingDbId) {
     const fromDb = await fetchCrewScheduleTripByPairingUuid(pairingDbId);
     if (fromDb) {
-      const schedulePairingId = fromDb.schedulePairingId ?? pairingDbId ?? fromDb.id;
-      const mergedForKey: CrewScheduleTrip = { ...fromDb, id: tripId, schedulePairingId };
-      const hitDb = tryCand(mergedForKey, 'db_uuid');
+      const schedulePairingId =
+        fromDb.schedulePairingId ?? pairingDbId ?? fromDb.id;
+      const mergedForKey: CrewScheduleTrip = {
+        ...fromDb,
+        id: tripId,
+        schedulePairingId,
+      };
+      const hitDb = tryCand(mergedForKey, "db_uuid");
       if (hitDb) return hitDb;
     }
   }
 
   const legacy = await loadLegacyTripWithDuties(tripId);
-  const hitL = tryCand(legacy, 'legacy_entries');
+  const hitL = tryCand(legacy, "legacy_entries");
   if (hitL) return hitL;
 
   return null;

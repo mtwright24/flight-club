@@ -1,4 +1,4 @@
-import type { CrewScheduleTrip, ScheduleMonthMetrics } from './types';
+import type { CrewScheduleTrip, ScheduleMonthMetrics } from "./types";
 
 export type ScheduleMonthCached = {
   trips: CrewScheduleTrip[];
@@ -9,14 +9,19 @@ const store = new Map<string, ScheduleMonthCached>();
 
 /** `YYYY-MM` key for `(year, month)` (month 1–12). */
 export function monthCalendarKey(year: number, month: number): string {
-  return `${year}-${String(month).padStart(2, '0')}`;
+  return `${year}-${String(month).padStart(2, "0")}`;
 }
 
-export function readScheduleMonthCache(key: string): ScheduleMonthCached | undefined {
+export function readScheduleMonthCache(
+  key: string,
+): ScheduleMonthCached | undefined {
   return store.get(key);
 }
 
-export function writeScheduleMonthCache(key: string, data: ScheduleMonthCached): void {
+export function writeScheduleMonthCache(
+  key: string,
+  data: ScheduleMonthCached,
+): void {
   store.set(key, data);
 }
 
@@ -24,9 +29,14 @@ export function writeScheduleMonthCache(key: string, data: ScheduleMonthCached):
 export function invalidateScheduleMonthCacheKeys(keys: string[]): void {
   for (const k of keys) store.delete(k);
   queueMicrotask(() => {
-    import('./scheduleStableSnapshots')
+    import("./scheduleStableSnapshots")
       .then((m) => {
         m.invalidateCommittedMonthSnapshotsForKeys(keys);
+      })
+      .catch(() => {});
+    import("./j4195FakeMay29SessionCleanup")
+      .then((m) => {
+        m.runJ4195FakeMay292026SessionCleanup();
       })
       .catch(() => {});
   });

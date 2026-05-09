@@ -4,11 +4,15 @@
  * the monthly ledger shows pairing on every "first day" of each fragment and breaks FC-style rows.
  * Display-only — does not change Supabase.
  */
-import { addIsoDays } from './ledgerContext';
-import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
-import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleDutyStatus } from './types';
-import { isFlicaNonFlyingActivityId } from '../../services/flicaScheduleHtmlParser';
-import { classicTripSummaryFromMergedTrip } from './tripMapper';
+import { isFlicaNonFlyingActivityId } from "../../services/flicaScheduleHtmlParser";
+import { addIsoDays } from "./ledgerContext";
+import { departureTimeForDutyDaySortKey } from "./scheduleNormalizer";
+import { classicTripSummaryFromMergedTrip } from "./tripMapper";
+import type {
+    CrewScheduleLeg,
+    CrewScheduleTrip,
+    ScheduleDutyStatus,
+} from "./types";
 
 function calendarSpanDays(startIso: string, endIso: string): number {
   const a = new Date(`${startIso}T12:00:00`);
@@ -18,39 +22,76 @@ function calendarSpanDays(startIso: string, endIso: string): number {
 
 function isRealPairing(p: string): boolean {
   const u = p.trim().toUpperCase();
-  return u.length > 0 && u !== 'CONT' && u !== '—' && u !== 'RDO' && !isFlicaNonFlyingActivityId(u);
+  return (
+    u.length > 0 &&
+    u !== "CONT" &&
+    u !== "—" &&
+    u !== "RDO" &&
+    !isFlicaNonFlyingActivityId(u)
+  );
 }
 
 function isMergeableDuty(t: CrewScheduleTrip): boolean {
   if (!isRealPairing(t.pairingCode)) return false;
-  if (t.status === 'off' || t.status === 'pto' || t.status === 'ptv' || t.status === 'rsv' || t.status === 'training')
+  if (
+    t.status === "off" ||
+    t.status === "pto" ||
+    t.status === "ptv" ||
+    t.status === "rsv" ||
+    t.status === "training"
+  )
     return false;
-  if (t.status === 'other') return false;
+  if (t.status === "other") return false;
   return true;
 }
 
 function legSortKey(l: CrewScheduleLeg): string {
   /** Same calendar day + multiple sectors: Crewline chronological dep (0009 after 1926). */
   const dk = departureTimeForDutyDaySortKey(l.departLocal);
-  return `${l.dutyDate ?? ''}::${dk}::${l.id ?? ''}`;
+  return `${l.dutyDate ?? ""}::${dk}::${l.id ?? ""}`;
 }
 
-function pickMergedStatus(a: CrewScheduleTrip, b: CrewScheduleTrip, legs: CrewScheduleLeg[]): ScheduleDutyStatus {
+function pickMergedStatus(
+  a: CrewScheduleTrip,
+  b: CrewScheduleTrip,
+  legs: CrewScheduleLeg[],
+): ScheduleDutyStatus {
   if (!legs.length) return a.status;
-  if (a.status === 'deadhead' && b.status === 'deadhead' && legs.every((l) => l.isDeadhead)) {
-    return 'deadhead';
+  if (
+    a.status === "deadhead" &&
+    b.status === "deadhead" &&
+    legs.every((l) => l.isDeadhead)
+  ) {
+    return "deadhead";
   }
-  if (a.status === 'flying' || b.status === 'flying' || a.status === 'deadhead' || b.status === 'deadhead') {
-    return 'flying';
+  if (
+    a.status === "flying" ||
+    b.status === "flying" ||
+    a.status === "deadhead" ||
+    b.status === "deadhead"
+  ) {
+    return "flying";
   }
-  if (a.status === 'continuation' || b.status === 'continuation') return 'flying';
+  if (a.status === "continuation" || b.status === "continuation")
+    return "flying";
   return a.status;
 }
 
-function mergeTwoTrips(a: CrewScheduleTrip, b: CrewScheduleTrip): CrewScheduleTrip {
-  const legs: CrewScheduleLeg[] = [...a.legs, ...b.legs].sort((x, y) => legSortKey(x).localeCompare(legSortKey(y)));
-  const lay: Record<string, string> = { ...a.layoverByDate, ...b.layoverByDate };
-  const stn: Record<string, string> = { ...a.layoverStationByDate, ...b.layoverStationByDate };
+function mergeTwoTrips(
+  a: CrewScheduleTrip,
+  b: CrewScheduleTrip,
+): CrewScheduleTrip {
+  const legs: CrewScheduleLeg[] = [...a.legs, ...b.legs].sort((x, y) =>
+    legSortKey(x).localeCompare(legSortKey(y)),
+  );
+  const lay: Record<string, string> = {
+    ...a.layoverByDate,
+    ...b.layoverByDate,
+  };
+  const stn: Record<string, string> = {
+    ...a.layoverStationByDate,
+    ...b.layoverStationByDate,
+  };
   const canon = { ...a.canonicalPairingDays, ...b.canonicalPairingDays };
   // Caller only merges `b` when it is the calendar day after `a`'s `endDate`, so the block is [a.start, b.end].
   const startDate = a.startDate;
@@ -70,11 +111,18 @@ function mergeTwoTrips(a: CrewScheduleTrip, b: CrewScheduleTrip): CrewScheduleTr
     origin: first?.departureAirport ?? a.origin,
     destination: last?.arrivalAirport ?? b.destination,
     layoverByDate: Object.keys(lay).length > 0 ? lay : a.layoverByDate,
-    layoverStationByDate: Object.keys(stn).length > 0 ? stn : a.layoverStationByDate,
+    layoverStationByDate:
+      Object.keys(stn).length > 0 ? stn : a.layoverStationByDate,
     ...(Object.keys(canon).length > 0 ? { canonicalPairingDays: canon } : {}),
     ledgerContext: {
-      carryInFromPriorMonth: Boolean(a.ledgerContext?.carryInFromPriorMonth || b.ledgerContext?.carryInFromPriorMonth),
-      carryOutToNextMonth: Boolean(a.ledgerContext?.carryOutToNextMonth || b.ledgerContext?.carryOutToNextMonth),
+      carryInFromPriorMonth: Boolean(
+        a.ledgerContext?.carryInFromPriorMonth ||
+        b.ledgerContext?.carryInFromPriorMonth,
+      ),
+      carryOutToNextMonth: Boolean(
+        a.ledgerContext?.carryOutToNextMonth ||
+        b.ledgerContext?.carryOutToNextMonth,
+      ),
     },
   };
   const summary = classicTripSummaryFromMergedTrip(merged);
@@ -84,9 +132,14 @@ function mergeTwoTrips(a: CrewScheduleTrip, b: CrewScheduleTrip): CrewScheduleTr
 /**
  * If two trip rows are the next calendar day and share the same pairing, merge for ledger math.
  */
-export function mergeContiguousPairingTrips(trips: CrewScheduleTrip[]): CrewScheduleTrip[] {
+export function mergeContiguousPairingTrips(
+  trips: CrewScheduleTrip[],
+): CrewScheduleTrip[] {
   const sorted = [...trips].sort(
-    (a, b) => a.startDate.localeCompare(b.startDate) || a.pairingCode.localeCompare(b.pairingCode) || a.id.localeCompare(b.id),
+    (a, b) =>
+      a.startDate.localeCompare(b.startDate) ||
+      a.pairingCode.localeCompare(b.pairingCode) ||
+      a.id.localeCompare(b.id),
   );
   const out: CrewScheduleTrip[] = [];
   for (const t of sorted) {
@@ -127,11 +180,14 @@ function exclusiveGapDayCount(endA: string, startB: string): number {
  */
 export function mergeGappedContiguousPairingTrips(
   trips: CrewScheduleTrip[],
-  maxGapDays: number
+  maxGapDays: number,
 ): CrewScheduleTrip[] {
   if (maxGapDays < 1) return trips;
   const sorted = [...trips].sort(
-    (a, b) => a.startDate.localeCompare(b.startDate) || a.pairingCode.localeCompare(b.pairingCode) || a.id.localeCompare(b.id),
+    (a, b) =>
+      a.startDate.localeCompare(b.startDate) ||
+      a.pairingCode.localeCompare(b.pairingCode) ||
+      a.id.localeCompare(b.id),
   );
   const out: CrewScheduleTrip[] = [];
   for (const t of sorted) {
@@ -140,7 +196,11 @@ export function mergeGappedContiguousPairingTrips(
       continue;
     }
     const last = out[out.length - 1];
-    if (!last || !isMergeableDuty(last) || last.pairingCode.trim() !== t.pairingCode.trim()) {
+    if (
+      !last ||
+      !isMergeableDuty(last) ||
+      last.pairingCode.trim() !== t.pairingCode.trim()
+    ) {
       out.push(t);
       continue;
     }
@@ -160,10 +220,16 @@ export function mergeGappedContiguousPairingTrips(
 }
 
 /** Contiguous + one-day-gap merge (import often splits a pairing across `trip_group_id` / missing CONT row). */
-export function mergeLedgerPairingBlocks(trips: CrewScheduleTrip[], maxGapDays = 1): CrewScheduleTrip[] {
+export function mergeLedgerPairingBlocks(
+  trips: CrewScheduleTrip[],
+  maxGapDays = 1,
+): CrewScheduleTrip[] {
   let cur = mergeContiguousPairingTrips(trips);
   for (let i = 0; i < 4; i += 1) {
-    const next = mergeGappedContiguousPairingTrips(mergeContiguousPairingTrips(cur), maxGapDays);
+    const next = mergeGappedContiguousPairingTrips(
+      mergeContiguousPairingTrips(cur),
+      maxGapDays,
+    );
     if (next.length === cur.length) return next;
     cur = next;
   }

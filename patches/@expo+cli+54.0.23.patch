@@ -1,7 +1,16 @@
 diff --git a/node_modules/@expo/cli/build/src/start/server/AsyncNgrok.js b/node_modules/@expo/cli/build/src/start/server/AsyncNgrok.js
-index 4c42029..4403e4d 100644
+index 4c42029..9a4b76e 100644
 --- a/node_modules/@expo/cli/build/src/start/server/AsyncNgrok.js
 +++ b/node_modules/@expo/cli/build/src/start/server/AsyncNgrok.js
+@@ -96,7 +96,7 @@ const NGROK_CONFIG = {
+     authToken: '5W1bR67GNbWcXqmxZzBG1_56GezNeaX6sSRvn8npeQ8',
+     domain: 'exp.direct'
+ };
+-const TUNNEL_TIMEOUT = 10 * 1000;
++const TUNNEL_TIMEOUT = 60 * 1000;
+ class AsyncNgrok {
+     constructor(projectRoot, port){
+         this.projectRoot = projectRoot;
 @@ -204,7 +204,7 @@ class AsyncNgrok {
              const urlProps = await this._getConnectionPropsAsync();
              const url = await instance.connect({
@@ -11,3 +20,14 @@ index 4c42029..4403e4d 100644
                  configPath,
                  onStatusChange (status) {
                      if (status === 'closed') {
+@@ -228,8 +228,8 @@ class AsyncNgrok {
+                 }
+                 throw new _errors.CommandError('NGROK_CONNECT', error.toString() + _chalk().default.gray('\nCheck the Ngrok status page for outages: https://status.ngrok.com/'));
+             };
+-            // Attempt to connect 3 times
+-            if (attempts >= 2) {
++            // Attempt to connect a few extra times (slow / flaky networks, HTTP/2 "gone away")
++            if (attempts >= 5) {
+                 assertNgrok();
+             }
+             // Attempt to fix the issue

@@ -1,13 +1,22 @@
-import { monthCalendarKey } from './scheduleMonthCache';
-import type { CrewScheduleTrip } from './types';
-import { canSealPairingSurface, isDetailReadyPairing } from './pairingDetailReadiness';
+import {
+    logTripsForJ4195FakeMay29,
+    tripHasJ4195StaleMay292026,
+} from "./j4195FakeMay29Audit";
+import {
+    canSealPairingSurface,
+    isDetailReadyPairing,
+} from "./pairingDetailReadiness";
+import { monthCalendarKey } from "./scheduleMonthCache";
+import type { CrewScheduleTrip } from "./types";
 
 type CacheRow = { trip: CrewScheduleTrip; identityKey: string };
 
 const store = new Map<string, CacheRow>();
 
 /** Reserved for future frozen-surface bookkeeping; pairing detail cache uses committed snapshots only. */
-export function pairingDetailRegisterFrozenSurface(_tripId: string | null): void {}
+export function pairingDetailRegisterFrozenSurface(
+  _tripId: string | null,
+): void {}
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
@@ -22,9 +31,10 @@ function cloneTrip(t: CrewScheduleTrip): CrewScheduleTrip {
 }
 
 function monthKeysTouchingTripSpan(trip: CrewScheduleTrip): string[] {
-  const sd = String(trip.startDate ?? '').slice(0, 10);
-  const ed = String(trip.endDate ?? '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(sd) || !/^\d{4}-\d{2}-\d{2}$/.test(ed)) return [];
+  const sd = String(trip.startDate ?? "").slice(0, 10);
+  const ed = String(trip.endDate ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sd) || !/^\d{4}-\d{2}-\d{2}$/.test(ed))
+    return [];
   const out = new Set<string>();
   const s = new Date(`${sd}T12:00:00`);
   const e = new Date(`${ed}T12:00:00`);
@@ -35,15 +45,19 @@ function monthKeysTouchingTripSpan(trip: CrewScheduleTrip): string[] {
   return [...out];
 }
 
-function isoDaysInSpanForMonth(trip: CrewScheduleTrip, monthKey: string): string[] {
-  const parts = monthKey.split('-');
-  const y = parseInt(parts[0] ?? '', 10);
-  const mo = parseInt(parts[1] ?? '', 10);
+function isoDaysInSpanForMonth(
+  trip: CrewScheduleTrip,
+  monthKey: string,
+): string[] {
+  const parts = monthKey.split("-");
+  const y = parseInt(parts[0] ?? "", 10);
+  const mo = parseInt(parts[1] ?? "", 10);
   if (!Number.isFinite(y) || !Number.isFinite(mo)) return [];
   const last = new Date(y, mo, 0).getDate();
-  const sd = String(trip.startDate ?? '').slice(0, 10);
-  const ed = String(trip.endDate ?? '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(sd) || !/^\d{4}-\d{2}-\d{2}$/.test(ed)) return [];
+  const sd = String(trip.startDate ?? "").slice(0, 10);
+  const ed = String(trip.endDate ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sd) || !/^\d{4}-\d{2}-\d{2}$/.test(ed))
+    return [];
   const out: string[] = [];
   for (let d = 1; d <= last; d += 1) {
     const iso = `${y}-${pad2(mo)}-${pad2(d)}`;
@@ -61,8 +75,11 @@ export function storeDetailReadyPairingInMonthCaches(
   identityKey: string,
   stashMonthKey?: string | null,
 ): void {
-  const id = String(trip.id ?? '').trim();
+  const id = String(trip.id ?? "").trim();
   if (!id) return;
+  if (tripHasJ4195StaleMay292026(trip)) {
+    return;
+  }
   if (!canSealPairingSurface(trip)) {
     return;
   }
@@ -72,21 +89,51 @@ export function storeDetailReadyPairingInMonthCaches(
   if (stashMonthKey) months.add(stashMonthKey);
 
   for (const mk of months) {
-    store.set(cacheKey(mk, id, '*'), { trip: cloneTrip(payload), identityKey });
+    store.set(cacheKey(mk, id, "*"), { trip: cloneTrip(payload), identityKey });
     for (const iso of isoDaysInSpanForMonth(trip, mk)) {
-      store.set(cacheKey(mk, id, iso), { trip: cloneTrip(payload), identityKey });
+      store.set(cacheKey(mk, id, iso), {
+        trip: cloneTrip(payload),
+        identityKey,
+      });
     }
   }
 }
 
-function readInternal(monthKey: string, id: string, anchor: string): CrewScheduleTrip | undefined {
-  const row = store.get(cacheKey(monthKey, id, anchor));
+function readInternal(
+  monthKey: string,
+  id: string,
+  anchor: string,
+): CrewScheduleTrip | undefined {
+  const ck = cacheKey(monthKey, id, anchor);
+  const row = store.get(ck);
   if (!row) return undefined;
+  if (tripHasJ4195StaleMay292026(row.trip)) {
+    store.delete(ck);
+    logTripsForJ4195FakeMay29(
+      [row.trip],
+      "pairingDetailMonthCache.evict_on_read",
+      "local_cache_only",
+    );
+    return undefined;
+  }
   if (!isDetailReadyPairing(row.trip)) {
-    store.delete(cacheKey(monthKey, id, anchor));
+    store.delete(ck);
     return undefined;
   }
   return cloneTrip(row.trip);
+}
+
+export function purgePairingDetailMonthCacheJ4195FakeMay292026(): void {
+  for (const [k, row] of [...store.entries()]) {
+    if (tripHasJ4195StaleMay292026(row.trip)) {
+      logTripsForJ4195FakeMay29(
+        [row.trip],
+        "pairingDetailMonthCache.purge",
+        "local_cache_only",
+      );
+      store.delete(k);
+    }
+  }
 }
 
 export function readPairingDetailFromMonthCache(
@@ -94,7 +141,7 @@ export function readPairingDetailFromMonthCache(
   monthKey: string,
   rowDateIso: string | null | undefined,
 ): CrewScheduleTrip | undefined {
-  const id = String(tripId ?? '').trim();
+  const id = String(tripId ?? "").trim();
   if (!id || !monthKey) {
     return undefined;
   }
@@ -108,7 +155,7 @@ export function readPairingDetailFromMonthCache(
       return hit;
     }
   }
-  const wild = readInternal(monthKey, id, '*');
+  const wild = readInternal(monthKey, id, "*");
   if (wild) {
     return wild;
   }

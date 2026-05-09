@@ -1,47 +1,47 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { BlurView } from "expo-blur";
 import type { Session } from "@supabase/supabase-js";
+import { BlurView } from "expo-blur";
 import React, {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
 } from "react";
 import {
-  ActivityIndicator,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
+    ActivityIndicator,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../../hooks/useAuth";
 import {
-  readPairingDetailFromMonthCache,
-  storeDetailReadyPairingInMonthCaches,
+    readPairingDetailFromMonthCache,
+    storeDetailReadyPairingInMonthCaches,
 } from "../pairingDetailMonthCache";
 import { canSealPairingSurface } from "../pairingDetailReadiness";
 import { validateVisibleTripHandoff } from "../pairingHandoff";
 import { isExemptFromStrictPairingPaint } from "../pairingRenderableGate";
 import {
-  buildPairingFirstPaintDecision,
-  resolveRenderablePairingSnapshot,
+    buildPairingFirstPaintDecision,
+    resolveRenderablePairingSnapshot,
 } from "../resolveRenderablePairingSnapshot";
 import { monthCalendarKey } from "../scheduleMonthCache";
 import { readCommittedMonthSnapshot } from "../scheduleStableSnapshots";
 import { scheduleTheme as T } from "../scheduleTheme";
 import { shouldRejectWeakerPairingRender } from "../tripDetailNavCache";
 import {
-  buildTripDetailViewModel,
-  getDisplaySpanAndDutyDayCount,
-  type TripDayViewModel,
-  type TripDetailViewModel,
-  type TripStatTile,
+    buildTripDetailViewModel,
+    getDisplaySpanAndDutyDayCount,
+    type TripDayViewModel,
+    type TripDetailViewModel,
+    type TripStatTile,
 } from "../tripDetailViewModel";
 import type { CrewScheduleLeg, CrewScheduleTrip } from "../types";
 
@@ -225,10 +225,10 @@ export default function TripQuickPreviewSheet({
 
   const showErrorStub = Boolean(
     visible &&
-      trip &&
-      !isExemptFromStrictPairingPaint(trip) &&
-      resolveSettled &&
-      !resolvedTrip,
+    trip &&
+    !isExemptFromStrictPairingPaint(trip) &&
+    resolveSettled &&
+    !resolvedTrip,
   );
 
   const vm = useMemo(() => {
@@ -267,10 +267,7 @@ export default function TripQuickPreviewSheet({
       : { displayStartDate: "", displayEndDate: "" };
   const dateRangeFormatted =
     vm && paintTrip
-      ? formatPairingPopupDateRange(
-          span.displayStartDate,
-          span.displayEndDate,
-        )
+      ? formatPairingPopupDateRange(span.displayStartDate, span.displayEndDate)
       : "";
 
   const pairingTail =
@@ -349,7 +346,12 @@ export default function TripQuickPreviewSheet({
                     style={styles.hydrateSpinner}
                     color={T.accent}
                   />
-                  <PrimaryCta onPress={() => { onClose(); onOpenFullTrip(); }} />
+                  <PrimaryCta
+                    onPress={() => {
+                      onClose();
+                      onOpenFullTrip();
+                    }}
+                  />
                 </View>
               ) : showErrorStub ? (
                 <View style={styles.hydrateShell}>
@@ -357,14 +359,21 @@ export default function TripQuickPreviewSheet({
                   <Text style={styles.muted13}>
                     Preview unavailable for this assignment.
                   </Text>
-                  <PrimaryCta onPress={() => { onClose(); onOpenFullTrip(); }} />
+                  <PrimaryCta
+                    onPress={() => {
+                      onClose();
+                      onOpenFullTrip();
+                    }}
+                  />
                 </View>
               ) : vm && paintTrip ? (
                 <>
                   <View style={styles.modalHeaderCenter}>
                     <RouteHeadline routeSummary={vm.routeSummary} />
 
-                    <Text style={styles.dateRangeDow}>{dateRangeFormatted}</Text>
+                    <Text style={styles.dateRangeDow}>
+                      {dateRangeFormatted}
+                    </Text>
 
                     <Text style={styles.pairingMetaLine}>
                       <Text style={styles.pairingAccent}>{vm.pairingCode}</Text>
@@ -399,7 +408,12 @@ export default function TripQuickPreviewSheet({
                   <Text style={styles.crewLabel}>CREW</Text>
                   <CrewChipsRow members={vm.crewMembers} session={session} />
 
-                  <PrimaryCta onPress={() => { onClose(); onOpenFullTrip(); }} />
+                  <PrimaryCta
+                    onPress={() => {
+                      onClose();
+                      onOpenFullTrip();
+                    }}
+                  />
                 </>
               ) : null}
             </ScrollView>
@@ -537,10 +551,7 @@ function MetricsStrip({
           {i > 0 ? <View style={styles.metricDivider} /> : null}
           <View style={styles.metricCell}>
             <Text style={styles.metricLabel}>{c.label}</Text>
-            <Text
-              style={[styles.metricVal, c.valueStyle]}
-              numberOfLines={1}
-            >
+            <Text style={[styles.metricVal, c.valueStyle]} numberOfLines={1}>
               {c.value}
             </Text>
           </View>
@@ -582,7 +593,7 @@ function CompactLegPreviewRow({
             <View style={styles.legRowMain}>
               <Text style={styles.legRouteTxt}>
                 {dep} → {arr}
-                {fn ? <Text style={styles.legFn}>  {fn}</Text> : null}
+                {fn ? <Text style={styles.legFn}> {fn}</Text> : null}
               </Text>
               <Text style={styles.legTimeLine}>
                 {depT} — {arrT}
@@ -683,16 +694,13 @@ function LayoverStaysCard({
   );
 }
 
-function LayoverCityBlock({
-  col,
-  wide,
-}: {
-  col: LayoverCol;
-  wide?: boolean;
-}) {
+function LayoverCityBlock({ col, wide }: { col: LayoverCol; wide?: boolean }) {
   return (
     <View
-      style={[styles.layoverCityBlock, wide ? styles.layoverCityBlockWide : null]}
+      style={[
+        styles.layoverCityBlock,
+        wide ? styles.layoverCityBlockWide : null,
+      ]}
     >
       <Text style={styles.layoverCityCode}>{col.code}</Text>
       <View style={styles.layoverWeatherRow}>
@@ -786,7 +794,9 @@ function CrewChipsRow({
               </View>
             );
           })}
-          {pair.length === 1 ? <View style={styles.crewGridCellSpacer} /> : null}
+          {pair.length === 1 ? (
+            <View style={styles.crewGridCellSpacer} />
+          ) : null}
         </View>
       ))}
     </View>
@@ -818,7 +828,10 @@ function formatCrewNameFirstLastInitial(raw: string): string {
   if (parts.length === 1) return titleCaseToken(parts[0]!);
   const first = titleCaseToken(parts[0]!);
   const last = parts[parts.length - 1]!;
-  const letter = last.replace(/[^A-Za-z]/g, "").slice(0, 1).toUpperCase();
+  const letter = last
+    .replace(/[^A-Za-z]/g, "")
+    .slice(0, 1)
+    .toUpperCase();
   return letter ? `${first} ${letter}.` : first;
 }
 
@@ -995,8 +1008,7 @@ function layoverCardModelExpanded(
     tripHotel?.name?.trim() ||
     sh?.name?.trim() ||
     (preview?.hotelLine ? preview.hotelLine.split("·")[0]!.trim() : "");
-  const hotelCity =
-    tripHotel?.city?.trim() || sh?.city?.trim() || "";
+  const hotelCity = tripHotel?.city?.trim() || sh?.city?.trim() || "";
 
   const hotelLineParts =
     preview?.hotelLine
@@ -1014,10 +1026,7 @@ function layoverCardModelExpanded(
         weatherKind: "sunny",
         weatherText: "— · —",
         hotelLine:
-          hotelLineParts[0] ??
-          hotelName ??
-          preview?.hotelLine?.trim() ??
-          "",
+          hotelLineParts[0] ?? hotelName ?? preview?.hotelLine?.trim() ?? "",
       });
     }
   } else {
@@ -1028,7 +1037,7 @@ function layoverCardModelExpanded(
         (idx === 0
           ? hotelName
           : hotelLineParts[0]
-            ? hotelLineParts[hotelLineParts.length - 1] ?? ""
+            ? (hotelLineParts[hotelLineParts.length - 1] ?? "")
             : hotelName || hotelCity || "");
       columns.push({
         code: short,
@@ -1043,8 +1052,9 @@ function layoverCardModelExpanded(
     return preview?.layoverLine || preview?.hotelLine
       ? {
           nightsLine: "Layover",
-          detailLine:
-            [preview.layoverLine, preview.hotelLine].filter(Boolean).join(" · "),
+          detailLine: [preview.layoverLine, preview.hotelLine]
+            .filter(Boolean)
+            .join(" · "),
           columns: preview.hotelLine
             ? [
                 {

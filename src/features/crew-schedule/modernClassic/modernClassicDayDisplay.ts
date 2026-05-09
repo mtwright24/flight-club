@@ -1,7 +1,9 @@
 import type { CrewScheduleLeg, CrewScheduleTrip } from "../types";
 
 function dutyIso(leg: CrewScheduleLeg): string | null {
-  const d = String(leg.dutyDate ?? "").trim().slice(0, 10);
+  const d = String(leg.dutyDate ?? "")
+    .trim()
+    .slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
 }
 
@@ -30,7 +32,8 @@ export function legsForDutyDate(
 ): CrewScheduleLeg[] {
   const legs = trip.legs ?? [];
   const hit = legs.filter((l) => dutyIso(l) === dateIso);
-  if (hit.length) return [...hit].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+  if (hit.length)
+    return [...hit].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
   return [];
 }
 
@@ -77,25 +80,29 @@ export function dutyDayIndexLabel(
 ): { current: number; total: number } | null {
   const days = [
     ...new Set(
-      (trip.legs ?? [])
-        .map((l) => dutyIso(l))
-        .filter((x): x is string => !!x),
+      (trip.legs ?? []).map((l) => dutyIso(l)).filter((x): x is string => !!x),
     ),
   ].sort();
   if (!days.length) {
     const total = Math.max(1, trip.dutyDays ?? 1);
     const start = trip.startDate.slice(0, 10);
     if (dateIso < start) return { current: 1, total };
-    let cur = 1 + Math.round(
-      (new Date(`${dateIso}T12:00:00`).getTime() -
-        new Date(`${start}T12:00:00`).getTime()) /
-        86400000,
-    );
+    let cur =
+      1 +
+      Math.round(
+        (new Date(`${dateIso}T12:00:00`).getTime() -
+          new Date(`${start}T12:00:00`).getTime()) /
+          86400000,
+      );
     cur = Math.min(total, Math.max(1, cur));
     return { current: cur, total };
   }
   const idx = days.indexOf(dateIso);
-  if (idx < 0) return { current: 1, total: Math.max(days.length, trip.dutyDays ?? days.length) };
+  if (idx < 0)
+    return {
+      current: 1,
+      total: Math.max(days.length, trip.dutyDays ?? days.length),
+    };
   return {
     current: idx + 1,
     total: Math.max(days.length, trip.dutyDays ?? days.length),
@@ -106,10 +113,7 @@ export function dailyCreditDisplay(
   trip: CrewScheduleTrip,
   _dateIso: string,
 ): { main: string; plus: string | null } {
-  const total =
-    trip.pairingCreditHours ??
-    trip.creditHours ??
-    null;
+  const total = trip.pairingCreditHours ?? trip.creditHours ?? null;
   const dutyN = Math.max(1, trip.dutyDays ?? 1);
   const daily = total != null ? total / dutyN : null;
   if (daily == null || Number.isNaN(daily)) {

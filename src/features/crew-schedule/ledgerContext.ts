@@ -3,22 +3,25 @@
  * `trip_group_id` wiring — only helps the native UI connect trips that break across month boundaries
  * (same `pairing_code` + calendar-adjacent dates in adjacent month queries).
  */
-import type { ScheduleEntryRow } from './scheduleApi';
-import type { CrewScheduleTrip } from './types';
+import type { ScheduleEntryRow } from "./scheduleApi";
+import type { CrewScheduleTrip } from "./types";
 
 export function addIsoDays(iso: string, deltaDays: number): string {
-  const [y, m, d] = iso.split('-').map((x) => parseInt(x, 10));
+  const [y, m, d] = iso.split("-").map((x) => parseInt(x, 10));
   const t = new Date(y, m - 1, d, 12, 0, 0, 0);
   t.setDate(t.getDate() + deltaDays);
   return t.toISOString().slice(0, 10);
 }
 
-function maxDateForPairing(rows: ScheduleEntryRow[], pred: (p: string) => boolean): Map<string, string> {
+function maxDateForPairing(
+  rows: ScheduleEntryRow[],
+  pred: (p: string) => boolean,
+): Map<string, string> {
   const m = new Map<string, string>();
   for (const r of rows) {
-    const p = (r.pairing_code ?? '').trim();
+    const p = (r.pairing_code ?? "").trim();
     if (!p || !pred(p)) continue;
-    const d = (r.date ?? '').trim();
+    const d = (r.date ?? "").trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
     const cur = m.get(p);
     if (!cur || d > cur) m.set(p, d);
@@ -26,12 +29,15 @@ function maxDateForPairing(rows: ScheduleEntryRow[], pred: (p: string) => boolea
   return m;
 }
 
-function minDateForPairing(rows: ScheduleEntryRow[], pred: (p: string) => boolean): Map<string, string> {
+function minDateForPairing(
+  rows: ScheduleEntryRow[],
+  pred: (p: string) => boolean,
+): Map<string, string> {
   const m = new Map<string, string>();
   for (const r of rows) {
-    const p = (r.pairing_code ?? '').trim();
+    const p = (r.pairing_code ?? "").trim();
     if (!p || !pred(p)) continue;
-    const d = (r.date ?? '').trim();
+    const d = (r.date ?? "").trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
     const cur = m.get(p);
     if (!cur || d < cur) m.set(p, d);
@@ -41,7 +47,7 @@ function minDateForPairing(rows: ScheduleEntryRow[], pred: (p: string) => boolea
 
 function isRealPairingCode(p: string): boolean {
   const u = p.toUpperCase();
-  return u.length > 0 && u !== 'CONT' && u !== '—' && u !== 'RDO';
+  return u.length > 0 && u !== "CONT" && u !== "—" && u !== "RDO";
 }
 
 export type EnrichTripsWithLedgerContextOpts = {
@@ -69,12 +75,12 @@ export function enrichTripsWithLedgerContext(
 
   const monthStart =
     opts?.viewYear != null && opts?.viewMonth != null
-      ? `${opts.viewYear}-${String(opts.viewMonth).padStart(2, '0')}-01`
+      ? `${opts.viewYear}-${String(opts.viewMonth).padStart(2, "0")}-01`
       : null;
   const currentRows = opts?.currentMonthRows;
 
   return trips.map((t) => {
-    const p = (t.pairingCode ?? '').trim();
+    const p = (t.pairingCode ?? "").trim();
     if (!isRealPairingCode(p)) return t;
     const lp = lastPrev.get(p);
     const fn = firstNext.get(p);
@@ -97,8 +103,12 @@ export function enrichTripsWithLedgerContext(
       monthStart &&
       currentRows &&
       t.startDate < monthStart &&
-      prevMonthRows.some((r) => (r.pairing_code ?? '').trim().toUpperCase() === p.toUpperCase()) &&
-      currentRows.some((r) => (r.pairing_code ?? '').trim().toUpperCase() === p.toUpperCase())
+      prevMonthRows.some(
+        (r) => (r.pairing_code ?? "").trim().toUpperCase() === p.toUpperCase(),
+      ) &&
+      currentRows.some(
+        (r) => (r.pairing_code ?? "").trim().toUpperCase() === p.toUpperCase(),
+      )
     ) {
       carryIn = true;
     }

@@ -1,93 +1,125 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  fetchScheduleEntriesForMonth,
-  fetchScheduleMonthMetrics,
-  fetchTripMetadataForTripGroups,
-  mergeScheduleEntriesLegDatePreferring,
-  mergeTripMetadataIntoTrips,
-} from '../scheduleApi';
-import type { ScheduleEntryRow } from '../scheduleApi';
-import { fetchScheduleEntriesForViewMonthByLegDate } from '../pairingDayModel';
-import { enrichTripsWithLedgerContext } from '../ledgerContext';
-import { mergeLedgerPairingBlocks } from '../pairingBlockMerge';
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from "react";
+import { supabase } from "../../../lib/supabaseClient";
+import { isFlicaNonFlyingActivityId } from "../../../services/flicaScheduleHtmlParser";
+import { enrichTripsWithLedgerContext } from "../ledgerContext";
+import { mergeLedgerPairingBlocks } from "../pairingBlockMerge";
+import { attachCanonicalPairingDaysToTrips } from "../pairingDayApply";
 import {
-  entriesToTrips,
-  mergeCarryInTripsByContiguousPairing,
-  mergeTripsWithPriorMonthRows,
-} from '../tripMapper';
-import { attachCanonicalPairingDaysToTrips } from '../pairingDayApply';
+    fetchPairingCalendarBlocksByPairingIdsForUserMonth,
+    fetchPairingCalendarBlocksForBatchIds,
+    mergePairingBlockLists,
+    uniqueBatchIdsFromEntryRows,
+} from "../pairingDayFetch";
+import { fetchScheduleEntriesForViewMonthByLegDate } from "../pairingDayModel";
+import type { ScheduleEntryRow } from "../scheduleApi";
 import {
-  fetchPairingCalendarBlocksByPairingIdsForUserMonth,
-  fetchPairingCalendarBlocksForBatchIds,
-  mergePairingBlockLists,
-  uniqueBatchIdsFromEntryRows,
-} from '../pairingDayFetch';
+    fetchScheduleEntriesForMonth,
+    fetchScheduleMonthMetrics,
+    fetchTripMetadataForTripGroups,
+    mergeScheduleEntriesLegDatePreferring,
+    mergeTripMetadataIntoTrips,
+} from "../scheduleApi";
 import {
-  monthCalendarKey,
-  readScheduleMonthCache,
-  writeScheduleMonthCache,
-  type ScheduleMonthCached,
-} from '../scheduleMonthCache';
+    monthCalendarKey,
+    readScheduleMonthCache,
+    writeScheduleMonthCache,
+    type ScheduleMonthCached,
+} from "../scheduleMonthCache";
 import {
-  isScheduleMonthUISnapshotCoherent,
-  readScheduleMonthUISnapshot,
-} from '../scheduleSnapshotCache';
+    isScheduleMonthUISnapshotCoherent,
+    readScheduleMonthUISnapshot,
+} from "../scheduleSnapshotCache";
 import {
-  commitMonthSnapshotAtomic,
-  computeStableMonthIdentityKey,
-  readCommittedMonthSnapshot,
-} from '../scheduleStableSnapshots';
-import { supabase } from '../../../lib/supabaseClient';
-import type { CrewScheduleTrip, ScheduleMonthMetrics } from '../types';
-import { isFlicaNonFlyingActivityId } from '../../../services/flicaScheduleHtmlParser';
+    commitMonthSnapshotAtomic,
+    computeStableMonthIdentityKey,
+    readCommittedMonthSnapshot,
+} from "../scheduleStableSnapshots";
+import {
+    entriesToTrips,
+    mergeCarryInTripsByContiguousPairing,
+    mergeTripsWithPriorMonthRows,
+} from "../tripMapper";
+import type { CrewScheduleTrip, ScheduleMonthMetrics } from "../types";
 
 const inflight = new Map<string, Promise<ScheduleMonthCached>>();
 
 /** `month_key` OR calendar `date` in month — leg-date rows win on id (display-only; no import RPC change). */
-async function fetchScheduleEntriesMerged(year: number, month: number): Promise<ScheduleEntryRow[]> {
+async function fetchScheduleEntriesMerged(
+  year: number,
+  month: number,
+): Promise<ScheduleEntryRow[]> {
   const keyRows = await fetchScheduleEntriesForMonth(year, month);
-  const legRows = await fetchScheduleEntriesForViewMonthByLegDate(year, month).catch(() => null);
+  const legRows = await fetchScheduleEntriesForViewMonthByLegDate(
+    year,
+    month,
+  ).catch(() => null);
   if (!legRows?.length) return keyRows;
   return mergeScheduleEntriesLegDatePreferring(keyRows, legRows);
 }
 
-async function fetchScheduleMonthData(year: number, month: number): Promise<ScheduleMonthCached> {
+async function fetchScheduleMonthData(
+  year: number,
+  month: number,
+): Promise<ScheduleMonthCached> {
   const prevM = month === 1 ? 12 : month - 1;
   const prevY = month === 1 ? year - 1 : year;
   const nextM = month === 12 ? 1 : month + 1;
   const nextY = month === 12 ? year + 1 : year;
   const [rows, prevRows, nextRows] = await Promise.all([
     fetchScheduleEntriesMerged(year, month),
-    fetchScheduleEntriesMerged(prevY, prevM).catch(() => [] as ScheduleEntryRow[]),
-    fetchScheduleEntriesMerged(nextY, nextM).catch(() => [] as ScheduleEntryRow[]),
+    fetchScheduleEntriesMerged(prevY, prevM).catch(
+      () => [] as ScheduleEntryRow[],
+    ),
+    fetchScheduleEntriesMerged(nextY, nextM).catch(
+      () => [] as ScheduleEntryRow[],
+    ),
   ]);
   const tripGroups = [...new Set(rows.map((r) => r.trip_group_id))];
   const [metrics, meta] = await Promise.all([
     fetchScheduleMonthMetrics(year, month).catch(() => null),
-    tripGroups.length > 0 ? fetchTripMetadataForTripGroups(tripGroups).catch(() => []) : Promise.resolve([]),
+    tripGroups.length > 0
+      ? fetchTripMetadataForTripGroups(tripGroups).catch(() => [])
+      : Promise.resolve([]),
   ]);
   const baseTrips = entriesToTrips(rows);
-  const idMerged = mergeTripsWithPriorMonthRows(baseTrips, rows, prevRows, year, month);
-  const mergedCarry = mergeCarryInTripsByContiguousPairing(idMerged, rows, prevRows, year, month);
+  const idMerged = mergeTripsWithPriorMonthRows(
+    baseTrips,
+    rows,
+    prevRows,
+    year,
+    month,
+  );
+  const mergedCarry = mergeCarryInTripsByContiguousPairing(
+    idMerged,
+    rows,
+    prevRows,
+    year,
+    month,
+  );
   const mergedBlocks = mergeLedgerPairingBlocks(mergedCarry, 1);
   const batchIds = uniqueBatchIdsFromEntryRows([rows, prevRows, nextRows]);
   const pairingCodesForCanon = [
     ...new Set(
       mergedCarry
         .map((t) =>
-          String(t.pairingCode ?? '')
+          String(t.pairingCode ?? "")
             .trim()
             .toUpperCase(),
         )
-        .filter(
-          (c) =>
-            Boolean(
-              c &&
-                c !== 'CONT' &&
-                c !== '—' &&
-                c !== 'RDO' &&
-                !isFlicaNonFlyingActivityId(c),
-            ),
+        .filter((c) =>
+          Boolean(
+            c &&
+            c !== "CONT" &&
+            c !== "—" &&
+            c !== "RDO" &&
+            !isFlicaNonFlyingActivityId(c),
+          ),
         ),
     ),
   ];
@@ -98,10 +130,20 @@ async function fetchScheduleMonthData(year: number, month: number): Promise<Sche
     if (uid) {
       try {
         const fromBatch = batchIds.length
-          ? await fetchPairingCalendarBlocksForBatchIds(uid, batchIds, year, month)
+          ? await fetchPairingCalendarBlocksForBatchIds(
+              uid,
+              batchIds,
+              year,
+              month,
+            )
           : [];
         const fromCodes = pairingCodesForCanon.length
-          ? await fetchPairingCalendarBlocksByPairingIdsForUserMonth(uid, pairingCodesForCanon, year, month)
+          ? await fetchPairingCalendarBlocksByPairingIdsForUserMonth(
+              uid,
+              pairingCodesForCanon,
+              year,
+              month,
+            )
           : [];
         const blocks = mergePairingBlockLists(fromBatch, fromCodes);
         withCanon = attachCanonicalPairingDaysToTrips(mergedBlocks, blocks);
@@ -110,16 +152,24 @@ async function fetchScheduleMonthData(year: number, month: number): Promise<Sche
       }
     }
   }
-  const withLedger = enrichTripsWithLedgerContext(withCanon, prevRows, nextRows, {
-    currentMonthRows: rows,
-    viewYear: year,
-    viewMonth: month,
-  });
+  const withLedger = enrichTripsWithLedgerContext(
+    withCanon,
+    prevRows,
+    nextRows,
+    {
+      currentMonthRows: rows,
+      viewYear: year,
+      viewMonth: month,
+    },
+  );
   const trips = mergeTripMetadataIntoTrips(withLedger, meta);
   return { trips, monthMetrics: metrics };
 }
 
-async function dedupFetchScheduleMonth(year: number, month: number): Promise<ScheduleMonthCached> {
+async function dedupFetchScheduleMonth(
+  year: number,
+  month: number,
+): Promise<ScheduleMonthCached> {
   const key = monthCalendarKey(year, month);
   let p = inflight.get(key);
   if (!p) {
@@ -137,7 +187,10 @@ async function dedupFetchScheduleMonth(year: number, month: number): Promise<Sch
 }
 
 /** Hydrate month cache the same way as the schedule tab (for post-import navigation gate). */
-export function prefetchScheduleMonthSnapshot(year: number, month: number): Promise<ScheduleMonthCached> {
+export function prefetchScheduleMonthSnapshot(
+  year: number,
+  month: number,
+): Promise<ScheduleMonthCached> {
   return dedupFetchScheduleMonth(year, month);
 }
 
@@ -159,7 +212,9 @@ function prefetchAdjacentMonths(centerYear: number, centerMonth: number): void {
 
 export function useScheduleTripsForMonth(year: number, month: number) {
   const [trips, setTrips] = useState<CrewScheduleTrip[]>([]);
-  const [monthMetrics, setMonthMetrics] = useState<ScheduleMonthMetrics | null>(null);
+  const [monthMetrics, setMonthMetrics] = useState<ScheduleMonthMetrics | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [backgroundRefreshing] = useState(false);
@@ -245,10 +300,13 @@ export function useScheduleTripsForMonth(year: number, month: number) {
         if (isPull) setRefreshing(true);
         else {
           const uiSnap = readScheduleMonthUISnapshot(key);
-          const uiOk = uiSnap && isScheduleMonthUISnapshotCoherent(uiSnap, year, month);
+          const uiOk =
+            uiSnap && isScheduleMonthUISnapshotCoherent(uiSnap, year, month);
           const com = readCommittedMonthSnapshot(key);
           const uidRef = userIdRef.current;
-          const comOk = Boolean(com?.trips?.length && (!uidRef || com.userId === uidRef));
+          const comOk = Boolean(
+            com?.trips?.length && (!uidRef || com.userId === uidRef),
+          );
           if (!readScheduleMonthCache(key) && !uiOk && !comOk) {
             setLoading(true);
           }
@@ -257,11 +315,14 @@ export function useScheduleTripsForMonth(year: number, month: number) {
       setError(null);
       try {
         const data = await dedupFetchScheduleMonth(year, month);
-        if (targetMonthKeyRef.current !== key || buildGenAtStart !== monthBuildGenerationRef.current) {
+        if (
+          targetMonthKeyRef.current !== key ||
+          buildGenAtStart !== monthBuildGenerationRef.current
+        ) {
           return;
         }
         const { data: auth } = await supabase.auth.getUser();
-        const uid = auth.user?.id ?? 'anon';
+        const uid = auth.user?.id ?? "anon";
         const identityKey = computeStableMonthIdentityKey({
           userId: uid,
           year,
@@ -287,7 +348,10 @@ export function useScheduleTripsForMonth(year: number, month: number) {
         if (!stillTarget) {
           return;
         }
-        if (!readScheduleMonthCache(key) && !(uiSnap && isScheduleMonthUISnapshotCoherent(uiSnap, year, month))) {
+        if (
+          !readScheduleMonthCache(key) &&
+          !(uiSnap && isScheduleMonthUISnapshotCoherent(uiSnap, year, month))
+        ) {
           const committed = readCommittedMonthSnapshot(key);
           if (!committed) {
             setTrips([]);

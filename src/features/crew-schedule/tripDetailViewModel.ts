@@ -3,18 +3,27 @@
  * Single adapter over `CrewScheduleTrip` — no duplicate fetch logic.
  */
 
-import { routeSummaryFromCanonicalLedgerCities } from './pairingDayApply';
-import { departureTimeForDutyDaySortKey } from './scheduleNormalizer';
-import { formatLayoverColumnDisplay } from './scheduleTime';
-import { normBaseForScoring, statFieldsPresent } from './pairingDetailResolve';
-import { isExemptFromStrictPairingPaint } from './pairingRenderableGate';
-import type { PairingDay } from './pairingDayModel';
-import type { CrewScheduleLeg, CrewScheduleTrip, ScheduleCrewMember, ScheduleDutyStatus } from './types';
+import { routeSummaryFromCanonicalLedgerCities } from "./pairingDayApply";
+import type { PairingDay } from "./pairingDayModel";
+import { normBaseForScoring, statFieldsPresent } from "./pairingDetailResolve";
+import { isExemptFromStrictPairingPaint } from "./pairingRenderableGate";
+import { departureTimeForDutyDaySortKey } from "./scheduleNormalizer";
+import { formatLayoverColumnDisplay } from "./scheduleTime";
+import type {
+    CrewScheduleLeg,
+    CrewScheduleTrip,
+    ScheduleCrewMember,
+    ScheduleDutyStatus,
+} from "./types";
 
-type TripWithDuties = CrewScheduleTrip & { duties?: { duty_date?: string | null }[] };
+type TripWithDuties = CrewScheduleTrip & {
+  duties?: { duty_date?: string | null }[];
+};
 
 function normDutyIso(raw: string | null | undefined): string | null {
-  const t = String(raw ?? '').trim().slice(0, 10);
+  const t = String(raw ?? "")
+    .trim()
+    .slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null;
 }
 
@@ -72,12 +81,13 @@ export function getDisplaySpanAndDutyDayCount(trip: CrewScheduleTrip): {
 } {
   const operating = getOperatingDutyDatesIso(trip);
   if (operating.length === 0) {
-    const sd = String(trip.startDate ?? '').slice(0, 10);
-    const ed = String(trip.endDate ?? '').slice(0, 10);
+    const sd = String(trip.startDate ?? "").slice(0, 10);
+    const ed = String(trip.endDate ?? "").slice(0, 10);
     return {
       displayStartDate: sd,
       displayEndDate: ed,
-      dutyDayCount: trip.dutyDays != null && trip.dutyDays > 0 ? trip.dutyDays : 0,
+      dutyDayCount:
+        trip.dutyDays != null && trip.dutyDays > 0 ? trip.dutyDays : 0,
     };
   }
   return {
@@ -126,68 +136,89 @@ export type TripDetailViewModel = {
 
 export function statusLabelFromTrip(trip: CrewScheduleTrip): string {
   switch (trip.status) {
-    case 'flying':
-      return 'Flying';
-    case 'deadhead':
-      return 'Deadhead';
-    case 'continuation':
-      return 'Continuation';
-    case 'off':
-      return 'Off';
-    case 'pto':
-      return 'PTO';
-    case 'ptv':
-      return 'PTV';
-    case 'rsv':
-      return 'Reserve';
-    case 'training':
-      return 'Training';
+    case "flying":
+      return "Flying";
+    case "deadhead":
+      return "Deadhead";
+    case "continuation":
+      return "Continuation";
+    case "off":
+      return "Off";
+    case "pto":
+      return "PTO";
+    case "ptv":
+      return "PTV";
+    case "rsv":
+      return "Reserve";
+    case "training":
+      return "Training";
     default:
-      return 'Duty';
+      return "Duty";
   }
 }
 
-function formatDisplayDateRangeLabel(displayStartDate: string, displayEndDate: string): string {
-  const sd = String(displayStartDate ?? '').slice(0, 10);
-  const ed = String(displayEndDate ?? '').slice(0, 10);
+function formatDisplayDateRangeLabel(
+  displayStartDate: string,
+  displayEndDate: string,
+): string {
+  const sd = String(displayStartDate ?? "").slice(0, 10);
+  const ed = String(displayEndDate ?? "").slice(0, 10);
   const a = new Date(`${sd}T12:00:00`);
   const b = new Date(`${ed}T12:00:00`);
-  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' };
+  const opts: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  };
   if (sd === ed) return a.toLocaleDateString(undefined, opts);
   return `${a.toLocaleDateString(undefined, opts)} → ${b.toLocaleDateString(undefined, opts)}`;
 }
 
 /** Long trip detail hero / header copy (weekday + short month + day + year). Display-only. */
-export function formatDisplayDateRangeLabelWithDow(displayStartDate: string, displayEndDate: string): string {
-  const sd = String(displayStartDate ?? '').slice(0, 10);
-  const ed = String(displayEndDate ?? '').slice(0, 10);
+export function formatDisplayDateRangeLabelWithDow(
+  displayStartDate: string,
+  displayEndDate: string,
+): string {
+  const sd = String(displayStartDate ?? "").slice(0, 10);
+  const ed = String(displayEndDate ?? "").slice(0, 10);
   const a = new Date(`${sd}T12:00:00`);
   const b = new Date(`${ed}T12:00:00`);
-  const opts: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' };
+  const opts: Intl.DateTimeFormatOptions = {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  };
   if (sd === ed) return a.toLocaleDateString(undefined, opts);
   return `${a.toLocaleDateString(undefined, opts)} → ${b.toLocaleDateString(undefined, opts)}`;
 }
 
 export function formatTripDateRange(trip: CrewScheduleTrip): string {
-  const { displayStartDate, displayEndDate } = getDisplaySpanAndDutyDayCount(trip);
+  const { displayStartDate, displayEndDate } =
+    getDisplaySpanAndDutyDayCount(trip);
   return formatDisplayDateRangeLabel(displayStartDate, displayEndDate);
 }
 
 export function formatHoursH(h: number | null | undefined | string): string {
-  const n = typeof h === 'number' ? h : Number(h);
-  if (h == null || h === '' || !Number.isFinite(n)) return '—';
+  const n = typeof h === "number" ? h : Number(h);
+  if (h == null || h === "" || !Number.isFinite(n)) return "—";
   return `${n.toFixed(2)}`;
 }
 
-export function formatLayoverTotalMinutes(m: number | null | undefined): string {
-  if (m == null || !Number.isFinite(m)) return '—';
+export function formatLayoverTotalMinutes(
+  m: number | null | undefined,
+): string {
+  if (m == null || !Number.isFinite(m)) return "—";
   const mm = Math.round(m);
   const h = Math.floor(mm / 60);
   const rest = mm % 60;
-  return `${h}:${String(rest).padStart(2, '0')}`;
+  return `${h}:${String(rest).padStart(2, "0")}`;
 }
 
-function layoverRestForDate(trip: CrewScheduleTrip, dateIso: string): string | null {
+function layoverRestForDate(
+  trip: CrewScheduleTrip,
+  dateIso: string,
+): string | null {
   const raw = trip.layoverByDate?.[dateIso];
   if (!raw?.trim()) return null;
   const v = formatLayoverColumnDisplay(raw).trim();
@@ -202,24 +233,26 @@ function segmentTimeForUi(t: string | null | undefined): string | undefined {
 }
 
 function depTimeLocalForSort(leg: CrewScheduleLeg): string {
-  return String(leg.departLocal ?? leg.reportLocal ?? '').trim();
+  return String(leg.departLocal ?? leg.reportLocal ?? "").trim();
 }
 
-function sortLegsByDepartureForTripDetail(legs: CrewScheduleLeg[]): CrewScheduleLeg[] {
+function sortLegsByDepartureForTripDetail(
+  legs: CrewScheduleLeg[],
+): CrewScheduleLeg[] {
   if (legs.length < 2) return legs;
   return [...legs].sort((a, b) => {
     const ka = departureTimeForDutyDaySortKey(depTimeLocalForSort(a));
     const kb = departureTimeForDutyDaySortKey(depTimeLocalForSort(b));
     const c = ka.localeCompare(kb);
     if (c !== 0) return c;
-    return (a.id ?? '').localeCompare(b.id ?? '');
+    return (a.id ?? "").localeCompare(b.id ?? "");
   });
 }
 
 function dayOfWeekShortLabel(iso: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso).trim().slice(0, 10))) return '—';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso).trim().slice(0, 10))) return "—";
   const d = new Date(`${String(iso).trim().slice(0, 10)}T12:00:00`);
-  return d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
+  return d.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
 }
 
 function dateShortMmDd(iso: string): string {
@@ -248,7 +281,10 @@ function clockToMinutes(raw: string | null | undefined): number | null {
 }
 
 /** Ground time between consecutive legs on the same operating calendar date (arrival → next departure). */
-function groundGapMinutesSameDay(prev: CrewScheduleLeg, next: CrewScheduleLeg): number | null {
+function groundGapMinutesSameDay(
+  prev: CrewScheduleLeg,
+  next: CrewScheduleLeg,
+): number | null {
   const arr = clockToMinutes(prev.arriveLocal);
   const dep = clockToMinutes(next.departLocal);
   if (arr == null || dep == null) return null;
@@ -261,7 +297,11 @@ function groundGapMinutesSameDay(prev: CrewScheduleLeg, next: CrewScheduleLeg): 
 const OPERATING_SPLIT_GAP_MINUTES = 180;
 
 /** When {@link CrewScheduleTrip.canonicalPairingDays} is set, per-leg flight / block / equipment match `schedule_pairing_legs`. */
-function crewLegsFromCanonicalPairingDay(pd: PairingDay, dateIso: string, tripId: string): CrewScheduleLeg[] {
+function crewLegsFromCanonicalPairingDay(
+  pd: PairingDay,
+  dateIso: string,
+  tripId: string,
+): CrewScheduleLeg[] {
   if (!pd.segments.length) return [];
   return pd.segments.map((seg, index) => ({
     id: `${tripId}-canon-${dateIso}-${index}`,
@@ -288,7 +328,10 @@ function crewLegsFromCanonicalPairingDay(pd: PairingDay, dateIso: string, tripId
 export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
   const byDate = new Map<string, CrewScheduleLeg[]>();
   for (const leg of trip.legs) {
-    const d = (leg.dutyDate && /^\d{4}-\d{2}-\d{2}$/.test(leg.dutyDate) ? leg.dutyDate : trip.startDate) ?? trip.startDate;
+    const d =
+      (leg.dutyDate && /^\d{4}-\d{2}-\d{2}$/.test(leg.dutyDate)
+        ? leg.dutyDate
+        : trip.startDate) ?? trip.startDate;
     const arr = byDate.get(d) ?? [];
     arr.push(leg);
     byDate.set(d, arr);
@@ -297,7 +340,10 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
     for (const [dateIso, pd] of Object.entries(trip.canonicalPairingDays)) {
       if (pd?.phantomBlankDay) continue;
       if (pd?.segments?.length) {
-        byDate.set(dateIso, crewLegsFromCanonicalPairingDay(pd, dateIso, trip.id));
+        byDate.set(
+          dateIso,
+          crewLegsFromCanonicalPairingDay(pd, dateIso, trip.id),
+        );
       }
     }
   }
@@ -317,9 +363,11 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
     for (let i = 0; i < sorted.length; i++) {
       const leg = sorted[i]!;
       const prev = cur.length > 0 ? cur[cur.length - 1]! : null;
-      const hasExplicitReport = leg.reportLocal != null && String(leg.reportLocal).trim() !== '';
+      const hasExplicitReport =
+        leg.reportLocal != null && String(leg.reportLocal).trim() !== "";
       const gapMin = prev ? groundGapMinutesSameDay(prev, leg) : null;
-      const splitByGap = prev != null && gapMin != null && gapMin >= OPERATING_SPLIT_GAP_MINUTES;
+      const splitByGap =
+        prev != null && gapMin != null && gapMin >= OPERATING_SPLIT_GAP_MINUTES;
       const splitByReport = prev != null && hasExplicitReport;
       const startNew = splitByReport || splitByGap;
 
@@ -366,7 +414,9 @@ export function buildTripDays(trip: CrewScheduleTrip): TripDayViewModel[] {
   return panels;
 }
 
-export function shouldHideOperationalStatsPlaceholders(trip: CrewScheduleTrip): boolean {
+export function shouldHideOperationalStatsPlaceholders(
+  trip: CrewScheduleTrip,
+): boolean {
   if (isExemptFromStrictPairingPaint(trip)) return false;
   return statFieldsPresent(trip) < 1 && normBaseForScoring(trip.base) == null;
 }
@@ -375,50 +425,66 @@ function buildSummaryLineMinimal(trip: CrewScheduleTrip): string {
   const { dutyDayCount } = getDisplaySpanAndDutyDayCount(trip);
   const parts: string[] = [];
   if (dutyDayCount > 0) {
-    parts.push(`${dutyDayCount} duty day${dutyDayCount === 1 ? '' : 's'}`);
+    parts.push(`${dutyDayCount} duty day${dutyDayCount === 1 ? "" : "s"}`);
   }
   const legCount = trip.legs?.length ?? 0;
-  if (legCount > 0) parts.push(`${legCount} leg${legCount === 1 ? '' : 's'}`);
-  return parts.length > 0 ? parts.join(' · ') : 'Operating details';
+  if (legCount > 0) parts.push(`${legCount} leg${legCount === 1 ? "" : "s"}`);
+  return parts.length > 0 ? parts.join(" · ") : "Operating details";
 }
 
 function buildSummaryLine(trip: CrewScheduleTrip): string {
   const { dutyDayCount } = getDisplaySpanAndDutyDayCount(trip);
   const parts: string[] = [];
   if (dutyDayCount > 0) {
-    parts.push(`${dutyDayCount} duty day${dutyDayCount === 1 ? '' : 's'}`);
+    parts.push(`${dutyDayCount} duty day${dutyDayCount === 1 ? "" : "s"}`);
   }
   const block = trip.pairingBlockHours;
   const credit = trip.pairingCreditHours ?? trip.creditHours;
   const legCount = trip.legs?.length ?? 0;
-  if (legCount > 0) parts.push(`${legCount} leg${legCount === 1 ? '' : 's'}`);
-  if (block != null && Number.isFinite(block)) parts.push(`${block.toFixed(2)} block`);
-  if (credit != null && Number.isFinite(Number(credit))) parts.push(`${Number(credit).toFixed(2)} credit`);
-  return parts.length > 0 ? parts.join(' · ') : 'Operating details';
+  if (legCount > 0) parts.push(`${legCount} leg${legCount === 1 ? "" : "s"}`);
+  if (block != null && Number.isFinite(block))
+    parts.push(`${block.toFixed(2)} block`);
+  if (credit != null && Number.isFinite(Number(credit)))
+    parts.push(`${Number(credit).toFixed(2)} credit`);
+  return parts.length > 0 ? parts.join(" · ") : "Operating details";
 }
 
 function buildStatTiles(trip: CrewScheduleTrip): TripStatTile[] {
   let layVal: string;
-  if (trip.tripLayoverTotalMinutes != null && Number.isFinite(trip.tripLayoverTotalMinutes)) {
+  if (
+    trip.tripLayoverTotalMinutes != null &&
+    Number.isFinite(trip.tripLayoverTotalMinutes)
+  ) {
     layVal = formatLayoverTotalMinutes(trip.tripLayoverTotalMinutes);
   } else if (trip.layoverCity?.trim()) {
     layVal = trip.layoverCity.trim();
   } else {
-    layVal = '—';
+    layVal = "—";
   }
   return [
-    { id: 'block', label: 'Block', value: formatHoursH(trip.pairingBlockHours) },
-    { id: 'credit', label: 'Credit', value: formatHoursH(trip.pairingCreditHours ?? trip.creditHours) },
-    { id: 'tafb', label: 'TAFB', value: formatHoursH(trip.pairingTafbHours) },
-    { id: 'layover', label: 'Layover', value: layVal },
+    {
+      id: "block",
+      label: "Block",
+      value: formatHoursH(trip.pairingBlockHours),
+    },
+    {
+      id: "credit",
+      label: "Credit",
+      value: formatHoursH(trip.pairingCreditHours ?? trip.creditHours),
+    },
+    { id: "tafb", label: "TAFB", value: formatHoursH(trip.pairingTafbHours) },
+    { id: "layover", label: "Layover", value: layVal },
   ];
 }
 
-function buildLayoverHotelPreview(trip: CrewScheduleTrip): TripLayoverHotelPreview | null {
+function buildLayoverHotelPreview(
+  trip: CrewScheduleTrip,
+): TripLayoverHotelPreview | null {
   const hotel = trip.hotel;
   const hotelLine =
     hotel?.name != null
-      ? [hotel.name, hotel.city, hotel.phone].filter(Boolean).join(' · ') || hotel.name
+      ? [hotel.name, hotel.city, hotel.phone].filter(Boolean).join(" · ") ||
+        hotel.name
       : null;
   const lay = trip.layoverCity?.trim() || null;
   if (!lay && !hotelLine) return null;
@@ -428,8 +494,11 @@ function buildLayoverHotelPreview(trip: CrewScheduleTrip): TripLayoverHotelPrevi
 /**
  * Single entry point: map loaded `CrewScheduleTrip` (already merged with metadata if applicable) to UI view-model.
  */
-export function buildTripDetailViewModel(trip: CrewScheduleTrip): TripDetailViewModel {
-  const pairingCode = trip.pairingCode !== '—' && trip.pairingCode ? trip.pairingCode : 'Duty';
+export function buildTripDetailViewModel(
+  trip: CrewScheduleTrip,
+): TripDetailViewModel {
+  const pairingCode =
+    trip.pairingCode !== "—" && trip.pairingCode ? trip.pairingCode : "Duty";
   const routeFromCanon = routeSummaryFromCanonicalLedgerCities(trip)?.trim();
   const days = buildTripDays(trip);
   const thinSummary = shouldHideOperationalStatsPlaceholders(trip);
@@ -441,8 +510,13 @@ export function buildTripDetailViewModel(trip: CrewScheduleTrip): TripDetailView
     routeSummary: routeFromCanon || trip.routeSummary || pairingCode,
     status: trip.status,
     statusLabel: statusLabelFromTrip(trip),
-    dateRangeLabel: formatDisplayDateRangeLabel(displaySpan.displayStartDate, displaySpan.displayEndDate),
-    summaryLine: thinSummary ? buildSummaryLineMinimal(trip) : buildSummaryLine(trip),
+    dateRangeLabel: formatDisplayDateRangeLabel(
+      displaySpan.displayStartDate,
+      displaySpan.displayEndDate,
+    ),
+    summaryLine: thinSummary
+      ? buildSummaryLineMinimal(trip)
+      : buildSummaryLine(trip),
     statTiles: buildStatTiles(trip),
     crewMembers: trip.crewMembers ?? [],
     layoverHotelPreview: buildLayoverHotelPreview(trip),
@@ -453,5 +527,5 @@ export function buildTripDetailViewModel(trip: CrewScheduleTrip): TripDetailView
 export function shortDateLabel(iso: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
   const d = new Date(`${iso}T12:00:00`);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
