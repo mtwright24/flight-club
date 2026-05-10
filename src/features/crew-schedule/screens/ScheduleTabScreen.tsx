@@ -25,15 +25,12 @@ import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
 import { supabase } from "../../../lib/supabaseClient";
 import type {
     FlicaMonthStats,
-    FlicaPairing,
 } from "../../../services/flicaScheduleHtmlParser";
 import CalendarMonthView from "../components/CalendarMonthView";
 import ClassicListView from "../components/ClassicListView";
-import FlicaCrewScheduleSection from "../components/FlicaCrewScheduleSection";
 import ModernClassicListView from "../components/ModernClassicListView";
 import ModernScheduleChrome from "../components/ModernScheduleChrome";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
-import SmartListView from "../components/SmartListView";
 import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
 import { useScheduleTripsForMonth } from "../hooks/useScheduleTripsForMonth";
 import { buildMonthlyStatsStripValues } from "../modernClassic/modernClassicHeaderMetrics";
@@ -70,7 +67,6 @@ import {
     loadScheduleViewMode,
     saveLastMonthCursor,
 } from "../scheduleViewStorage";
-import { tradePostPrefillParams } from "../tradePostPrefillParams";
 import { stashTripForDetailNavigation } from "../tripDetailNavCache";
 import type { CrewScheduleTrip, ScheduleViewMode } from "../types";
 import { DEFAULT_SCHEDULE_VIEW } from "../types";
@@ -465,20 +461,6 @@ export default function ScheduleTabScreen() {
     [router, displayTrips, year, month],
   );
 
-  const openTradePost = useCallback(
-    (trip?: CrewScheduleTrip) => {
-      if (trip) {
-        router.push({
-          pathname: "/crew-exchange/create-post",
-          params: tradePostPrefillParams(trip),
-        });
-      } else {
-        router.push("/crew-exchange/create-post");
-      }
-    },
-    [router],
-  );
-
   const onPressCalendarDay = useCallback(
     (iso: string) => {
       const onDay = displayTrips.filter(
@@ -496,14 +478,6 @@ export default function ScheduleTabScreen() {
   const visibleFlicaRow = useMemo(
     () => (flicaRow?.month_key === requestedKey ? flicaRow : null),
     [flicaRow, requestedKey],
-  );
-
-  const flicaPairings = useMemo(
-    () =>
-      Array.isArray(visibleFlicaRow?.pairings)
-        ? (visibleFlicaRow.pairings as FlicaPairing[])
-        : [],
-    [visibleFlicaRow],
   );
 
   /**
@@ -700,13 +674,6 @@ export default function ScheduleTabScreen() {
             </>
           ) : (
             <>
-              {flicaPairings.length > 0 && viewMode !== "classic" ? (
-                <FlicaCrewScheduleSection
-                  stats={flicaStats}
-                  pairings={flicaPairings}
-                  importedAt={visibleFlicaRow?.imported_at}
-                />
-              ) : null}
               {viewMode === "classic" && (
                 <ClassicListView
                   year={year}
@@ -735,27 +702,6 @@ export default function ScheduleTabScreen() {
                   onOpenTrip={openTrip}
                   flicaCellByIso={flicaCellByIso}
                   flicaCalendarListModel={flicaCalendarListModel}
-                />
-              )}
-              {viewMode === "smart" && (
-                <SmartListView
-                  trips={displayTrips}
-                  flicaCalendarListModel={flicaCalendarListModel}
-                  onPressTrip={openTrip}
-                  onPost={(trip) => openTradePost(trip)}
-                  onChat={(trip) =>
-                    router.push({
-                      pathname: "/crew-schedule/trip-chat",
-                      params: { tripId: trip.id },
-                    })
-                  }
-                  onManageSchedule={() => router.push("/crew-schedule/manage")}
-                  onAlert={(trip) =>
-                    router.push({
-                      pathname: "/crew-schedule/alerts",
-                      params: { tripId: trip.id },
-                    })
-                  }
                 />
               )}
             </>

@@ -13,8 +13,7 @@ export async function loadScheduleViewMode(): Promise<ScheduleViewMode> {
     if (
       v === 'modernClassic' ||
       v === 'classic' ||
-      v === 'calendar' ||
-      v === 'smart'
+      v === 'calendar'
     )
       return v;
   } catch {

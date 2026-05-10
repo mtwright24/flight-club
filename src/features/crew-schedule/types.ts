@@ -184,6 +184,6 @@ export interface CrewScheduleMonthState {
   employeeId?: string;
 }
 
-export type ScheduleViewMode = 'modernClassic' | 'classic' | 'calendar' | 'smart';
+export type ScheduleViewMode = 'modernClassic' | 'classic' | 'calendar';
 
 export const DEFAULT_SCHEDULE_VIEW: ScheduleViewMode = 'modernClassic';

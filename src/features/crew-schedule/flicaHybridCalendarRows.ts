@@ -520,12 +520,31 @@ export function buildHybridFlicaCalendarRows({
     }
 
     const withLegs = { ...withTimes, layoverText: layoverTextOut };
+    const suppressAdjacentDutyDetailsOnDashContinuation =
+      ledgerPairingBlankContinuation &&
+      ledgerCity === "-" &&
+      rawDetailMatchReason.startsWith("adjacent_day_same_pairing");
+    const suppressAllFieldsOnBlankOffDay =
+      ledgerPairingBlankContinuation && !ledgerCity;
+    const finalRow = suppressAllFieldsOnBlankOffDay
+      ? {
+          ...withLegs,
+          pairingText: "",
+          reportText: "",
+          cityText: "",
+          dEndText: "",
+          layoverText: "",
+          wxText: "",
+        }
+      : suppressAdjacentDutyDetailsOnDashContinuation
+        ? { ...withLegs, dEndText: "", layoverText: "" }
+        : withLegs;
 
     if (
       matchedBy === "trip_fallback" &&
-      (String(withLegs.reportText).trim() ||
-        String(withLegs.dEndText).trim() ||
-        String(withLegs.layoverText).trim())
+      (String(finalRow.reportText).trim() ||
+        String(finalRow.dEndText).trim() ||
+        String(finalRow.layoverText).trim())
     ) {
       matchedBy = "legs_overlay";
     } else if (
@@ -533,9 +552,9 @@ export function buildHybridFlicaCalendarRows({
       (!String(merged.reportText).trim() ||
         !String(merged.dEndText).trim() ||
         !String(merged.layoverText).trim()) &&
-      (String(withLegs.reportText).trim() ||
-        String(withLegs.dEndText).trim() ||
-        String(withLegs.layoverText).trim())
+      (String(finalRow.reportText).trim() ||
+        String(finalRow.dEndText).trim() ||
+        String(finalRow.layoverText).trim())
     ) {
       matchedBy = "duty_pool+legs_overlay";
     }
@@ -557,7 +576,7 @@ export function buildHybridFlicaCalendarRows({
         : null,
     });
 
-    const normalized = finalizeHybridLayoverColumn(withLegs);
+    const normalized = finalizeHybridLayoverColumn(finalRow);
 
     if (isCarryoverLedgerRow && !rawMatch && !String(normalized.layoverText).trim()) {
       rowsStillMissingRawDetailMatch += 1;

@@ -45,7 +45,6 @@ const VIEW_OPTIONS: {
     icon: 'list-outline',
   },
   { id: 'classic', label: 'Classic/List View', description: 'Ledger', icon: 'list-outline' },
-  { id: 'smart', label: 'Tile View', description: 'Card-style list', icon: 'layers-outline' },
   { id: 'calendar', label: 'Calendar View', description: 'Month grid', icon: 'calendar-outline' },
 ];
 

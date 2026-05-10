@@ -1159,6 +1159,10 @@ export function buildClassicRowsFromDuties(
       }
 
       if (dateIso < enumerateEnd) {
+        const isHeaderLeadDisplayRow =
+          headerLeadBeforeFirstDuty &&
+          dateIso === opStart &&
+          tripDutiesSorted.length > 0;
         const legAttachIso =
           headerLeadBeforeFirstDuty &&
           dateIso === opStart &&
@@ -1173,7 +1177,7 @@ export function buildClassicRowsFromDuties(
         let gapReport = legF.report;
         let gapDEnd = legF.dEnd;
         let gapLayoverRest = legF.layoverRest;
-        if (headerLeadBeforeFirstDuty && dateIso === opStart && tripDutiesSorted.length) {
+        if (isHeaderLeadDisplayRow) {
           const fd = tripDutiesSorted[0]!;
           const fdIso = sliceDutyIso(fd.duty_date);
           const lay0 =
@@ -1203,6 +1207,9 @@ export function buildClassicRowsFromDuties(
           gapLayoverRest =
             layoverRawLead ??
             (legFields.layoverRest && (usedLegTimesLead || cityMatchesLegLead) ? legFields.layoverRest : null);
+        } else {
+          gapDEnd = null;
+          gapLayoverRest = null;
         }
         let rowType: RowType = dateIso === tripLabelIso ? 'TRIP_START' : 'TRIP_CONTINUATION';
         if (monthLastForCarry != null && dateIso > monthLastForCarry && rowType !== 'TRIP_START') rowType = 'CARRY_OUT';
