@@ -85,6 +85,11 @@ export type StashTripHandoffOpts = {
   rowDateIso?: string | null;
 };
 
+function normIsoDate(raw: string | null | undefined): string | null {
+  const iso = String(raw ?? "").trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : null;
+}
+
 /**
  * Tap handoff: pairing row is a pointer only — stash canonical merged pairing for detail/summary.
  */
@@ -101,10 +106,7 @@ export function stashTripForDetailNavigation(
   const sidRaw = String(selected.schedulePairingId ?? "").trim();
   const pointer: DetailHandoffPointer = {
     pairingCode: normCodeRaw(selected.pairingCode),
-    selectedDateIso:
-      rowDateIso && /^\d{4}-\d{2}-\d{2}/.test(rowDateIso)
-        ? rowDateIso.slice(0, 10)
-        : null,
+    selectedDateIso: normIsoDate(rowDateIso),
     selectedMonthKey,
     schedulePairingId: UUID_RE_STASH.test(sidRaw) ? sidRaw : undefined,
   };

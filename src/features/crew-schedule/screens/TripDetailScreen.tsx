@@ -27,6 +27,11 @@ import {
   type PairingDetailDbHotelRow,
   type ScheduleTripMetadataRow,
 } from '../scheduleApi';
+import {
+  applyPairingOccurrenceDisplaySpanToTrip,
+  resolvePairingOccurrenceDisplaySpan,
+  type PairingOccurrenceDisplaySpan,
+} from '../pairingOccurrenceDisplaySpan';
 import { getMockTripById } from '../mockScheduleData';
 import { tradePostPrefillParams } from '../tradePostPrefillParams';
 import {
@@ -750,6 +755,8 @@ export default function TripDetailScreen() {
   const [trackingLegId, setTrackingLegId] = useState<string | null>(null);
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
   const [pairingHotels, setPairingHotels] = useState<PairingDetailDbHotelRow[]>([]);
+  const [occurrenceDisplaySpan, setOccurrenceDisplaySpan] =
+    useState<PairingOccurrenceDisplaySpan | null>(null);
   const panelPagerRef = useRef<FlatList<TripDayViewModel>>(null);
   const operatingDayChipsRef = useRef<React.ComponentRef<typeof GHScrollView>>(null);
   const selectionSourceRef = useRef<'pager' | 'tap' | 'programmatic'>('programmatic');
@@ -907,9 +914,43 @@ export default function TripDetailScreen() {
     setLoadingTrip(true);
   }, [tripId]);
 
-  const display = useMemo(
+  const displayBase = useMemo(
     () => (trip ? mergeTripWithMetadataRow(trip, tripMeta) : undefined),
     [trip, tripMeta]
+  );
+  const detailPointer = useMemo(
+    () => (tripId ? peekStashedDetailPointer(tripId) : undefined),
+    [tripId],
+  );
+  const needsOccurrenceSpan = Boolean(detailPointer?.selectedDateIso);
+
+  useEffect(() => {
+    let cancelled = false;
+    setOccurrenceDisplaySpan(null);
+    if (!tripId || !displayBase) return;
+    void resolvePairingOccurrenceDisplaySpan({ trip: displayBase, pointer: detailPointer }).then((span) => {
+      if (!cancelled) setOccurrenceDisplaySpan(span);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    tripId,
+    displayBase?.id,
+    displayBase?.pairingCode,
+    displayBase?.startDate,
+    displayBase?.endDate,
+    detailPointer?.selectedDateIso,
+    detailPointer?.selectedMonthKey,
+  ]);
+
+  const display = useMemo(
+    () => {
+      if (!displayBase) return undefined;
+      if (needsOccurrenceSpan && !occurrenceDisplaySpan) return undefined;
+      return applyPairingOccurrenceDisplaySpanToTrip(displayBase, occurrenceDisplaySpan);
+    },
+    [displayBase, occurrenceDisplaySpan, needsOccurrenceSpan],
   );
 
   const vm = useMemo(() => (display ? buildTripDetailViewModel(display) : null), [display]);
@@ -932,8 +973,12 @@ export default function TripDetailScreen() {
   );
 
   const displaySpan = useMemo(
-    () => (display ? getDisplaySpanAndDutyDayCount(display) : null),
-    [display],
+    () =>
+      occurrenceDisplaySpan ??
+      (!needsOccurrenceSpan && display
+          ? getDisplaySpanAndDutyDayCount(display)
+          : null),
+    [display, occurrenceDisplaySpan, needsOccurrenceSpan],
   );
   const dateRangeHero = useMemo(
     () =>
@@ -943,7 +988,7 @@ export default function TripDetailScreen() {
     [displaySpan],
   );
 
-  const dutyDayCount = displaySpan?.dutyDayCount ?? 0;
+  const dutyDayCount = occurrenceDisplaySpan?.dutyDayCount ?? displaySpan?.dutyDayCount ?? 0;
   const metadataLine =
     dutyDayCount > 0
       ? `${vm?.pairingCode ?? '—'} • ${dutyDayCount}-Day Pairing`

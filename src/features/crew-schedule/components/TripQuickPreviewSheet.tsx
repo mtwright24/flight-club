@@ -35,7 +35,12 @@ import {
 import { monthCalendarKey } from "../scheduleMonthCache";
 import { readCommittedMonthSnapshot } from "../scheduleStableSnapshots";
 import { scheduleTheme as T } from "../scheduleTheme";
-import { shouldRejectWeakerPairingRender } from "../tripDetailNavCache";
+import { peekStashedDetailPointer, shouldRejectWeakerPairingRender } from "../tripDetailNavCache";
+import {
+    applyPairingOccurrenceDisplaySpanToTrip,
+    resolvePairingOccurrenceDisplaySpan,
+    type PairingOccurrenceDisplaySpan,
+} from "../pairingOccurrenceDisplaySpan";
 import {
     buildTripDetailViewModel,
     getDisplaySpanAndDutyDayCount,
@@ -85,6 +90,8 @@ export default function TripQuickPreviewSheet({
     null,
   );
   const [resolveSettled, setResolveSettled] = useState(false);
+  const [occurrenceDisplaySpan, setOccurrenceDisplaySpan] =
+    useState<PairingOccurrenceDisplaySpan | null>(null);
   const previewTargetTripIdRef = useRef<string>("");
   const previewPaintSealedRef = useRef(false);
 
@@ -213,11 +220,39 @@ export default function TripQuickPreviewSheet({
     };
   }, [visible, trip, pairingUuid]);
 
-  const paintTrip = useMemo((): CrewScheduleTrip | null => {
+  useEffect(() => {
+    let cancelled = false;
+    setOccurrenceDisplaySpan(null);
+    if (!visible || !trip) return;
+    const pointer = peekStashedDetailPointer(trip.id);
+    void resolvePairingOccurrenceDisplaySpan({ trip, pointer }).then((span) => {
+      if (!cancelled) setOccurrenceDisplaySpan(span);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, trip?.id, trip?.pairingCode, trip?.startDate, trip?.endDate]);
+
+  const previewPointer = trip ? peekStashedDetailPointer(trip.id) : undefined;
+  const needsOccurrenceSpan = Boolean(previewPointer?.selectedDateIso);
+
+  const paintTripBase = useMemo((): CrewScheduleTrip | null => {
     if (!trip) return null;
+    if (needsOccurrenceSpan && !occurrenceDisplaySpan) return null;
     if (isExemptFromStrictPairingPaint(trip)) return trip;
     return resolvedTrip;
-  }, [trip, resolvedTrip]);
+  }, [trip, resolvedTrip, needsOccurrenceSpan, occurrenceDisplaySpan]);
+
+  const paintTrip = useMemo(
+    () =>
+      paintTripBase
+        ? applyPairingOccurrenceDisplaySpanToTrip(
+            paintTripBase,
+            occurrenceDisplaySpan,
+          )
+        : null,
+    [paintTripBase, occurrenceDisplaySpan],
+  );
 
   const showLoadingShell = Boolean(
     visible && trip && !isExemptFromStrictPairingPaint(trip) && !resolveSettled,
@@ -254,20 +289,23 @@ export default function TripQuickPreviewSheet({
 
   if (!trip) return null;
 
+  const visibleSpan =
+    occurrenceDisplaySpan ??
+    (needsOccurrenceSpan ? null : getDisplaySpanAndDutyDayCount(paintTrip ?? trip));
   const dutyN =
-    paintTrip && vm
-      ? getDisplaySpanAndDutyDayCount(paintTrip).dutyDayCount ||
-        paintTrip.dutyDays ||
-        vm.days.length
+    vm
+      ? (occurrenceDisplaySpan?.dutyDayCount ??
+          (visibleSpan?.dutyDayCount ||
+            (!needsOccurrenceSpan ? trip.dutyDays : 0) ||
+            vm.days.length))
       : 0;
   const legCountVm = paintTrip?.legs?.length ?? 0;
-  const span =
-    vm && paintTrip
-      ? getDisplaySpanAndDutyDayCount(paintTrip)
-      : { displayStartDate: "", displayEndDate: "" };
   const dateRangeFormatted =
-    vm && paintTrip
-      ? formatPairingPopupDateRange(span.displayStartDate, span.displayEndDate)
+    vm
+      ? formatPairingPopupDateRange(
+          visibleSpan?.displayStartDate ?? "",
+          visibleSpan?.displayEndDate ?? "",
+        )
       : "";
 
   const pairingTail =

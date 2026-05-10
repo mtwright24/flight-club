@@ -507,7 +507,7 @@ export function buildTripDetailViewModel(
   return {
     trip,
     pairingCode,
-    routeSummary: routeFromCanon || trip.routeSummary || pairingCode,
+    routeSummary: trip.routeSummary || routeFromCanon || pairingCode,
     status: trip.status,
     statusLabel: statusLabelFromTrip(trip),
     dateRangeLabel: formatDisplayDateRangeLabel(
