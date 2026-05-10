@@ -1,7 +1,7 @@
 /**
  * Calendar/list display source for imported FLICA months (`crew_schedule`).
- * When a row exists for the visible month, mini-calendar HTML is the only allowed list/grid source;
- * duty-derived rows and UI snapshots must not override it.
+ * When a row exists for the visible month, mini-calendar HTML is the only allowed list/grid source.
+ * Rows for other months are stale async state during navigation and should not block rendering.
  */
 
 import { buildFlicaCalendarDisplayLedgerFromHtml } from "./flicaMiniCalendarTableLedger";
@@ -27,7 +27,7 @@ export type FlicaCalendarListModel =
   | {
       mode: "flica_blocked";
       visibleMonth: string;
-      reason: "no_raw_html" | "month_key_mismatch";
+      reason: "no_raw_html";
       crewScheduleMonthKey?: string;
     };
 
@@ -47,14 +47,18 @@ export function buildFlicaCalendarListModel(
   const hasRaw = html.length > 0;
   const monthMatch = flicaRow.month_key === mk;
 
-  if (!hasRaw || !monthMatch) {
+  if (!monthMatch) {
+    return { mode: "trip_derived" };
+  }
+
+  if (!hasRaw) {
     if (FC_FLICA_LEDGER_EMERGENCY_DUTY_FALLBACK) {
       return { mode: "trip_derived" };
     }
     return {
       mode: "flica_blocked",
       visibleMonth: mk,
-      reason: !hasRaw ? "no_raw_html" : "month_key_mismatch",
+      reason: "no_raw_html",
       crewScheduleMonthKey: flicaRow.month_key,
     };
   }

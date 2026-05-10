@@ -294,7 +294,7 @@ export function buildModernCanonicalPairingModel(
     }
 
     if (candidates.length > 1 && codeGuess) {
-      const hint = linked?.startDate.slice(0, 10];
+      const hint = linked?.startDate.slice(0, 10);
       const narrowed = candidates.filter((s) => s.firstDutyDate === hint);
       if (narrowed.length === 1) {
         candidates = narrowed;

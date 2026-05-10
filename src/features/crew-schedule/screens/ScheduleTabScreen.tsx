@@ -254,6 +254,9 @@ export default function ScheduleTabScreen() {
       "crew_schedule: select id,month_key,pairings,stats,raw_html,imported_at — eq user_id + airline + month_key maybeSingle";
     try {
       const row = await fetchCrewScheduleFlicaForMonth(year, month);
+      const current = ymRef.current;
+      const currentMk = `${current.year}-${String(current.month).padStart(2, "0")}`;
+      if (currentMk !== mk) return;
       setFlicaRow(row);
       const readPayload = {
         visibleMonth: mk,
@@ -270,6 +273,9 @@ export default function ScheduleTabScreen() {
       }
       fcDevMirrorScheduleLogToFile("FC_RAW_HTML_READ_CHECK", readPayload);
     } catch (e) {
+      const current = ymRef.current;
+      const currentMk = `${current.year}-${String(current.month).padStart(2, "0")}`;
+      if (currentMk !== mk) return;
       setFlicaRow(null);
       const readPayload = {
         visibleMonth: mk,
@@ -487,12 +493,17 @@ export default function ScheduleTabScreen() {
     router.push("/crew-schedule/manage");
   }, [router]);
 
+  const visibleFlicaRow = useMemo(
+    () => (flicaRow?.month_key === requestedKey ? flicaRow : null),
+    [flicaRow, requestedKey],
+  );
+
   const flicaPairings = useMemo(
     () =>
-      Array.isArray(flicaRow?.pairings)
-        ? (flicaRow.pairings as FlicaPairing[])
+      Array.isArray(visibleFlicaRow?.pairings)
+        ? (visibleFlicaRow.pairings as FlicaPairing[])
         : [],
-    [flicaRow],
+    [visibleFlicaRow],
   );
 
   /**
@@ -501,18 +512,18 @@ export default function ScheduleTabScreen() {
    */
   const flicaCalendarListModel = useMemo((): FlicaCalendarListModel => {
     const mk = `${year}-${String(month).padStart(2, "0")}`;
-    const model = buildFlicaCalendarListModel(year, month, flicaRow);
-    const rawLen = flicaRow?.raw_html?.length ?? 0;
+    const model = buildFlicaCalendarListModel(year, month, visibleFlicaRow);
+    const rawLen = visibleFlicaRow?.raw_html?.length ?? 0;
 
     if (typeof __DEV__ !== "undefined" && __DEV__) {
       const cells =
         model.mode === "flica_mini_table" ? model.cells : null;
       const wiringPayload = {
         visibleMonth: mk,
-        crewScheduleMonthKey: flicaRow?.month_key ?? null,
+        crewScheduleMonthKey: visibleFlicaRow?.month_key ?? null,
         hasRawHtml: rawLen > 0,
         rawHtmlLength: rawLen,
-        monthMatch: flicaRow?.month_key === mk,
+        monthMatch: visibleFlicaRow?.month_key === mk,
         ledgerRowCount: cells?.length ?? 0,
         listMode: model.mode,
         first5LedgerRows: (cells ?? []).slice(0, 5).map((c) => ({
@@ -538,7 +549,7 @@ export default function ScheduleTabScreen() {
     }
 
     return model;
-  }, [flicaRow, year, month]);
+  }, [visibleFlicaRow, year, month]);
 
   const flicaCellByIso = useMemo(() => {
     const m = new Map<string, FlicaCalendarCell>();
@@ -550,7 +561,7 @@ export default function ScheduleTabScreen() {
   }, [flicaCalendarListModel]);
 
   const flicaStats: FlicaMonthStats = useMemo(() => {
-    const raw = (flicaRow?.stats ?? {}) as Partial<FlicaMonthStats>;
+    const raw = (visibleFlicaRow?.stats ?? {}) as Partial<FlicaMonthStats>;
     return {
       block: raw.block ?? "",
       credit: raw.credit ?? "",
@@ -558,7 +569,7 @@ export default function ScheduleTabScreen() {
       ytd: raw.ytd ?? "",
       daysOff: typeof raw.daysOff === "number" ? raw.daysOff : 0,
     };
-  }, [flicaRow]);
+  }, [visibleFlicaRow]);
 
   const statsStripValues = useMemo(
     () => buildMonthlyStatsStripValues(displayMetrics, flicaStats),
@@ -693,7 +704,7 @@ export default function ScheduleTabScreen() {
                 <FlicaCrewScheduleSection
                   stats={flicaStats}
                   pairings={flicaPairings}
-                  importedAt={flicaRow?.imported_at}
+                  importedAt={visibleFlicaRow?.imported_at}
                 />
               ) : null}
               {viewMode === "classic" && (
