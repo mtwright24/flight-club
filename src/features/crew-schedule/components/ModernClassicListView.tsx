@@ -904,7 +904,7 @@ export default function ModernClassicListView({
                           >
                             {" "}
                             · D-End {dend}
-                            {lay ? ` · ${lay}` : ""}
+                            {lay ? ` · Layover ${lay}` : ""}
                           </Text>
                         </Text>
                       </View>

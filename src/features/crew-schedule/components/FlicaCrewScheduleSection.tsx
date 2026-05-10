@@ -54,12 +54,15 @@ export default function FlicaCrewScheduleSection({ stats, pairings, importedAt }
         </View>
       </View>
 
-      {pairings.map((p) => {
+      {pairings.map((p, pairingIndex) => {
         const layovers = [
           ...new Set(p.legs.map((l) => l.layoverCity).filter(Boolean)),
         ] as string[];
         return (
-          <View key={p.id} style={styles.pairingCard}>
+          <View
+            key={`${p.id}:${p.startDate}:${p.endDate}:${pairingIndex}`}
+            style={styles.pairingCard}
+          >
             <Text style={styles.pairingId}>
               {p.id} · {p.startDate} → {p.endDate}
             </Text>
@@ -72,7 +75,10 @@ export default function FlicaCrewScheduleSection({ stats, pairings, importedAt }
             </Text>
             <View style={styles.legsBlock}>
               {p.legs.map((leg, i) => (
-                <Text key={`${p.id}-${i}`} style={styles.legLine}>
+                <Text
+                  key={`${p.id}:${p.startDate}:${p.endDate}:${i}`}
+                  style={styles.legLine}
+                >
                   {formatLegLine(leg)}
                   {leg.isDeadhead ? ' · DH' : ''}
                 </Text>
