@@ -9,6 +9,7 @@ export type PairingOccurrenceDisplaySpan = {
   displayEndDate: string;
   dutyDayCount: number;
   source: "flica_ledger" | "raw_pairing_detail" | "trip_span";
+  pairingCreditHours?: number;
 };
 
 const MAX_NORMAL_PAIRING_DAYS = 7;
@@ -49,11 +50,21 @@ function makeSpan(
   startIso: string,
   endIso: string,
   source: PairingOccurrenceDisplaySpan["source"],
+  pairingCreditMinutes?: number | null,
 ): PairingOccurrenceDisplaySpan | null {
   if (!iso10(startIso) || !iso10(endIso) || endIso < startIso) return null;
   const days = spanDays(startIso, endIso);
   if (days <= 0) return null;
-  return { displayStartDate: startIso, displayEndDate: endIso, dutyDayCount: days, source };
+  return {
+    displayStartDate: startIso,
+    displayEndDate: endIso,
+    dutyDayCount: days,
+    source,
+    pairingCreditHours:
+      pairingCreditMinutes != null && Number.isFinite(pairingCreditMinutes)
+        ? pairingCreditMinutes / 60
+        : undefined,
+  };
 }
 
 function monthParts(monthKey: string | null | undefined): { year: number; month: number } | null {
@@ -76,7 +87,10 @@ function resolveFromRawPairingDetail(
   const selectedDate = iso10(pointer?.selectedDateIso) ?? iso10(trip.startDate);
   if (!code || !selectedDate) return null;
 
-  const groups = new Map<string, { start: string; end: string; dutyDates: Set<string> }>();
+  const groups = new Map<
+    string,
+    { start: string; end: string; dutyDates: Set<string>; creditMinutes: number | null }
+  >();
   for (const entry of cellsModel.rawPairingDetailIndex.entries) {
     if (entry.pairingCodeNorm !== code) continue;
     const start = iso10(entry.pairingStartIso);
@@ -84,8 +98,20 @@ function resolveFromRawPairingDetail(
     const duty = iso10(entry.dutyIso);
     if (!start || !end || !duty) continue;
     const key = `${start}:${end}:${entry.scheduleLabel ?? ""}`;
-    const group = groups.get(key) ?? { start, end, dutyDates: new Set<string>() };
+    const group = groups.get(key) ?? {
+      start,
+      end,
+      dutyDates: new Set<string>(),
+      creditMinutes: null,
+    };
     group.dutyDates.add(duty);
+    if (
+      group.creditMinutes == null &&
+      entry.totalCreditMinutes != null &&
+      Number.isFinite(entry.totalCreditMinutes)
+    ) {
+      group.creditMinutes = entry.totalCreditMinutes;
+    }
     groups.set(key, group);
   }
 
@@ -96,7 +122,7 @@ function resolveFromRawPairingDetail(
       const dutyEnd = dutyDates[dutyDates.length - 1] ?? group.end;
       const start = group.start <= dutyStart ? group.start : dutyStart;
       const end = group.end >= dutyEnd ? group.end : dutyEnd;
-      return makeSpan(start, end, "raw_pairing_detail");
+      return makeSpan(start, end, "raw_pairing_detail", group.creditMinutes);
     })
     .filter((span): span is PairingOccurrenceDisplaySpan => {
       if (!span) return false;
@@ -227,7 +253,7 @@ function occurrenceRouteSummaryFromLegs(
 
 export function applyPairingOccurrenceDisplaySpanToTrip(
   trip: CrewScheduleTrip,
-  span: Pick<PairingOccurrenceDisplaySpan, "displayStartDate" | "displayEndDate" | "dutyDayCount"> | null | undefined,
+  span: Pick<PairingOccurrenceDisplaySpan, "displayStartDate" | "displayEndDate" | "dutyDayCount" | "pairingCreditHours"> | null | undefined,
 ): CrewScheduleTrip {
   if (!span) return trip;
   const start = iso10(span.displayStartDate);
@@ -245,6 +271,10 @@ export function applyPairingOccurrenceDisplaySpanToTrip(
     startDate: start,
     endDate: end,
     dutyDays: span.dutyDayCount,
+    pairingCreditHours:
+      span.pairingCreditHours != null && Number.isFinite(span.pairingCreditHours)
+        ? span.pairingCreditHours
+        : trip.pairingCreditHours,
     routeSummary,
     legs,
     layoverByDate: filterDateRecord(trip.layoverByDate, start, end),
@@ -270,11 +300,11 @@ export async function resolvePairingOccurrenceDisplaySpan(args: {
   } catch {
     return fallbackFromTripSpan(args.trip, args.pointer);
   }
-  const ledgerSpan = resolveFromFlicaLedger(args.trip, args.pointer, model);
-  if (ledgerSpan) return ledgerSpan;
-
   const rawSpan = resolveFromRawPairingDetail(args.trip, args.pointer, model);
   if (rawSpan) return rawSpan;
+
+  const ledgerSpan = resolveFromFlicaLedger(args.trip, args.pointer, model);
+  if (ledgerSpan) return ledgerSpan;
 
   return fallbackFromTripSpan(args.trip, args.pointer);
 }
