@@ -12,6 +12,7 @@ export type ModernRawPairingBlockForCanonical = {
   pairingStartIso: string;
   scheduleLabel: string | null;
   orderedDates: string[];
+  totalCreditMinutes: number | null;
 };
 
 /**
@@ -44,6 +45,7 @@ export function enumerateRawPairingBlocksForModern(
       pairingStartIso: head.pairingStartIso,
       scheduleLabel: head.scheduleLabel ?? null,
       orderedDates,
+      totalCreditMinutes: head.totalCreditMinutes ?? null,
     });
   }
   return out;

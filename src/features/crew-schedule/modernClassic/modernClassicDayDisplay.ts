@@ -125,3 +125,23 @@ export function dailyCreditDisplay(
   const main = `${hh}:${String(mm).padStart(2, "0")}`;
   return { main, plus: `+CR ${main}` };
 }
+
+export function tripCreditDisplay(
+  trip: CrewScheduleTrip,
+): { main: string; plus: string | null } {
+  const candidates = [
+    trip.pairingCreditHours,
+    trip.creditHours,
+    trip.summary?.creditTotal,
+  ];
+  const total =
+    candidates.find((value) => {
+      const n = Number(value);
+      return value != null && Number.isFinite(n) && n > 0;
+    }) ?? null;
+  if (total == null || Number.isNaN(Number(total))) {
+    return { main: "", plus: null };
+  }
+  const main = Number(total).toFixed(2);
+  return { main, plus: null };
+}

@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import {
     ActivityIndicator,
     FlatList,
@@ -8,16 +8,18 @@ import {
     Text,
     View,
 } from "react-native";
+import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
+import type { FlicaCalendarListModel } from "../flicaCalendarDisplaySource";
 import { type DayRow } from "../modernClassic/classicMonthGridCore";
 import {
     additionalLegsSummary,
-    dailyCreditDisplay,
     primaryDayRoute,
+    tripCreditDisplay,
 } from "../modernClassic/modernClassicDayDisplay";
 import {
     buildModernDayCountAudit,
-    type ModernRowDayMeta,
     type ModernCanonicalSequenceAudit,
+    type ModernRowDayMeta,
 } from "../modernClassic/modernListPairingSequence";
 import {
     ModernPairingRailBridge,
@@ -25,16 +27,14 @@ import {
 } from "../modernClassic/ModernPairingRailColumn";
 import { computeModernPairingRailLayout } from "../modernClassic/modernPairingRailLayout";
 import { useClassicMonthDayRows } from "../modernClassic/useClassicMonthDayRows";
-import { mergeLayoverOntoLegDates } from "../scheduleTime";
 import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
 import { scheduleTheme as T } from "../scheduleTheme";
 import {
     PAIRING_DETAIL_STAT_DIGIT_TRACKING,
     PAIRING_DETAIL_STAT_DIGIT_TYPE,
 } from "../scheduleTileNumerals";
+import { mergeLayoverOntoLegDates } from "../scheduleTime";
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from "../types";
-import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
-import type { FlicaCalendarListModel } from "../flicaCalendarDisplaySource";
 
 /** Pairing row: avoid "800" — on Android default sans-serif often ignores light weights. */
 const PAIRING_CODE_TYPE = Platform.select({
@@ -68,6 +68,403 @@ function fmtDutyClock(raw: string): string {
   }
   if (/L$/i.test(s)) return s.replace(/l$/i, "L");
   return `${s}L`;
+}
+
+function modernNonEmptyLabel(...values: Array<string | null | undefined>): string {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text && text !== "-" && text !== "—" && text !== "–") return text;
+  }
+  return "";
+}
+
+const MODERN_DOW = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+
+function modernIsoDateFromLocalDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function modernMonthDates(year: number, month: number): string[] {
+  const last = new Date(year, month, 0).getDate();
+  const mm = String(month).padStart(2, "0");
+  return Array.from(
+    { length: last },
+    (_, i) => `${year}-${mm}-${String(i + 1).padStart(2, "0")}`,
+  );
+}
+
+function modernEmptyDayRow(dateIso: string, todayIso: string): DayRow {
+  const d = new Date(`${dateIso}T12:00:00`);
+  const dayIdx = d.getDay();
+  return {
+    id: `modern-empty:${dateIso}`,
+    dateIso,
+    kind: "off",
+    trip: null,
+    dayCode: MODERN_DOW[dayIdx] ?? "",
+    dayNum: d.getDate(),
+    isWeekend: dayIdx === 0 || dayIdx === 6,
+    pairingText: "",
+    reportText: "",
+    cityText: "",
+    dEndText: "",
+    layoverText: "",
+    wxText: "",
+    statusText: "",
+    reportMinutes: null,
+    releaseMinutes: null,
+    isToday: dateIso === todayIso,
+    groupedWithPrev: false,
+    groupedWithNext: false,
+  };
+}
+
+function ensureModernVisibleMonthDateRows(
+  rows: DayRow[],
+  year: number,
+  month: number,
+): DayRow[] {
+  const visibleYm = `${year}-${String(month).padStart(2, "0")}`;
+  const present = new Set(
+    rows
+      .map((row) => row.dateIso.slice(0, 10))
+      .filter((dateIso) => dateIso.slice(0, 7) === visibleYm),
+  );
+  const todayIso = modernIsoDateFromLocalDate(new Date());
+  const additions = modernMonthDates(year, month)
+    .filter((dateIso) => !present.has(dateIso))
+    .map((dateIso) => modernEmptyDayRow(dateIso, todayIso));
+  if (!additions.length) return rows;
+
+  const originalOrder = new Map(rows.map((row, idx) => [row.id, idx]));
+  return [...rows, ...additions].sort((a, b) => {
+    const da = a.dateIso.slice(0, 10);
+    const db = b.dateIso.slice(0, 10);
+    if (da !== db) return da.localeCompare(db);
+    return (originalOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+      (originalOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER);
+  });
+}
+
+function modernPairingCodeForRenderedSpan(row: DayRow): string {
+  const fromRow = String(row.pairingText ?? "")
+    .trim()
+    .toUpperCase()
+    .split("·")[0]
+    ?.trim() ?? "";
+  if (fromRow && fromRow !== "-" && fromRow !== "—" && fromRow !== "–" && fromRow !== "CONT") {
+    return fromRow;
+  }
+  const fromTrip = String(row.trip?.pairingCode ?? "")
+    .trim()
+    .toUpperCase()
+    .split("·")[0]
+    ?.trim() ?? "";
+  if (fromTrip && fromTrip !== "-" && fromTrip !== "—" && fromTrip !== "–" && fromTrip !== "CONT") {
+    return fromTrip;
+  }
+  return "";
+}
+
+function modernRenderedDatesBetween(first: string, last: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(first) || !/^\d{4}-\d{2}-\d{2}$/.test(last)) {
+    return [];
+  }
+  if (last < first) return [];
+  const out: string[] = [];
+  const cur = new Date(`${first}T12:00:00`);
+  const end = new Date(`${last}T12:00:00`);
+  while (cur <= end) {
+    out.push(modernIsoDateFromLocalDate(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+function modernRenderedRailPosition(
+  dayNumber: number,
+  totalDays: number,
+): ModernRowDayMeta["railSegmentPosition"] {
+  if (totalDays <= 0 || dayNumber <= 0) return null;
+  if (totalDays === 1) return "single";
+  if (dayNumber === 1) return "start";
+  if (dayNumber === totalDays) return "end";
+  return "middle";
+}
+
+function modernRenderedDayDiff(first: string, second: string): number {
+  const a = new Date(`${first}T12:00:00`);
+  const b = new Date(`${second}T12:00:00`);
+  if (!Number.isFinite(a.getTime()) || !Number.isFinite(b.getTime())) return 0;
+  return Math.round((b.getTime() - a.getTime()) / 864e5);
+}
+
+function modernRenderedAddDays(first: string, days: number): string {
+  const d = new Date(`${first}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return modernIsoDateFromLocalDate(d);
+}
+
+function modernRouteCity(row: DayRow): string {
+  return String(row.cityText ?? "").trim().toUpperCase();
+}
+
+function modernTripBase(row: DayRow, meta: ModernRowDayMeta | undefined): string {
+  return String(row.trip?.base ?? meta?.linkedTrip?.base ?? "JFK")
+    .trim()
+    .toUpperCase();
+}
+
+function shouldStartNewSameCodeOccurrence(
+  previous: DayRow,
+  current: DayRow,
+  previousMeta: ModernRowDayMeta | undefined,
+  currentMeta: ModernRowDayMeta | undefined,
+): boolean {
+  const base = modernTripBase(previous, previousMeta) || modernTripBase(current, currentMeta);
+  const prevCity = modernRouteCity(previous);
+  const currCity = modernRouteCity(current);
+  if (!base || !prevCity || !currCity) return false;
+  if (prevCity !== base) return false;
+  if (currCity === base || currCity === "-" || currCity === "—" || currCity === "–") {
+    return false;
+  }
+  return true;
+}
+
+function overrideModernRenderedPairingSpans(
+  rows: DayRow[],
+  source: Map<string, ModernRowDayMeta>,
+): Map<string, ModernRowDayMeta> {
+  const next = new Map(source);
+  const explicitStartsByCode = new Map<string, string[]>();
+  const codedRowsByCode = new Map<
+    string,
+    Array<{ iso: string; city: string; base: string }>
+  >();
+  const occurrenceLengthByCode = new Map<string, number>();
+  const displayTemplateByCodeDay = new Map<
+    string,
+    {
+      routeText: string;
+      reportText: string;
+      dEndText: string;
+      layoverText: string;
+    }
+  >();
+  for (const row of rows) {
+    const code = String(row.pairingText ?? "")
+      .trim()
+      .toUpperCase()
+      .split("·")[0]
+      ?.trim() ?? "";
+    if (!code || code === "-" || code === "—" || code === "–" || code === "CONT") {
+      continue;
+    }
+    const meta = next.get(row.id);
+    if (meta?.totalDays && meta.totalDays >= 2 && meta.totalDays <= 7) {
+      occurrenceLengthByCode.set(code, meta.totalDays);
+      if (meta.dayNumber >= 1 && meta.dayNumber <= meta.totalDays) {
+        const key = `${code}:${meta.dayNumber}`;
+        if (!displayTemplateByCodeDay.has(key)) {
+          displayTemplateByCodeDay.set(key, {
+            routeText: String(row.cityText ?? "").trim(),
+            reportText: String(row.reportText ?? "").trim(),
+            dEndText: String(row.dEndText ?? "").trim(),
+            layoverText: String(row.layoverText ?? "").trim(),
+          });
+        }
+      }
+    }
+    const base = modernTripBase(row, meta);
+    const city = modernRouteCity(row);
+    const codeRows = codedRowsByCode.get(code) ?? [];
+    codeRows.push({ iso: row.dateIso.slice(0, 10), city, base });
+    codedRowsByCode.set(code, codeRows);
+    if (city && city !== base && city !== "-" && city !== "—" && city !== "–") {
+      const arr = explicitStartsByCode.get(code) ?? [];
+      arr.push(row.dateIso.slice(0, 10));
+      explicitStartsByCode.set(code, arr);
+    }
+  }
+
+  const inferredStartByDate = new Map<string, { code: string; first: string; totalDays: number }>();
+  const inferredRowIds = new Set<string>();
+  for (const [code, startsRaw] of explicitStartsByCode) {
+    const starts = [...new Set(startsRaw)].sort();
+    const codedRows = (codedRowsByCode.get(code) ?? []).sort((a, b) =>
+      a.iso.localeCompare(b.iso),
+    );
+    for (const first of starts) {
+      const endRow = codedRows.find((rowInfo) => {
+        const diff = modernRenderedDayDiff(first, rowInfo.iso);
+        return (
+          diff >= 1 &&
+          diff <= 6 &&
+          rowInfo.city === rowInfo.base
+        );
+      });
+      if (!endRow) continue;
+      const totalDaysFromEnd = modernRenderedDayDiff(first, endRow.iso) + 1;
+      if (totalDaysFromEnd < 2 || totalDaysFromEnd > 7) continue;
+      for (let d = 0; d < totalDaysFromEnd; d += 1) {
+        const dateIso = modernRenderedAddDays(first, d);
+        inferredStartByDate.set(dateIso, {
+          code,
+          first,
+          totalDays: totalDaysFromEnd,
+        });
+      }
+    }
+
+    const totalDays = occurrenceLengthByCode.get(code);
+    if (!totalDays || totalDays < 2) continue;
+    for (const first of starts) {
+      for (let d = 0; d < totalDays; d += 1) {
+        const dateIso = modernRenderedAddDays(first, d);
+        inferredStartByDate.set(dateIso, { code, first, totalDays });
+      }
+    }
+    for (let i = 0; i < starts.length - 1; i += 1) {
+      const first = starts[i]!;
+      const nextStart = starts[i + 1]!;
+      const gap = modernRenderedDayDiff(first, nextStart);
+      if (gap <= totalDays || gap % totalDays !== 0) continue;
+      for (let offset = totalDays; offset < gap; offset += totalDays) {
+        const inferredFirst = modernRenderedAddDays(first, offset);
+        for (let d = 0; d < totalDays; d += 1) {
+          const dateIso = modernRenderedAddDays(inferredFirst, d);
+          inferredStartByDate.set(dateIso, { code, first: inferredFirst, totalDays });
+        }
+      }
+    }
+  }
+
+  for (const row of rows) {
+    const dateIso = row.dateIso.slice(0, 10);
+    const inferred = inferredStartByDate.get(dateIso);
+    if (!inferred) continue;
+    const rowCode = modernPairingCodeForRenderedSpan(row);
+    if (rowCode && rowCode !== inferred.code) continue;
+    const current = next.get(row.id);
+    if (!current) continue;
+    const dayNumber = modernRenderedDayDiff(inferred.first, dateIso) + 1;
+    if (dayNumber < 1 || dayNumber > inferred.totalDays) continue;
+    const orderedDates = modernRenderedDatesBetween(
+      inferred.first,
+      modernRenderedAddDays(inferred.first, inferred.totalDays - 1),
+    );
+    const dayLine = `Day ${dayNumber} of ${inferred.totalDays}`;
+    const template = displayTemplateByCodeDay.get(`${inferred.code}:${dayNumber}`);
+    next.set(row.id, {
+      ...current,
+      canonicalSequenceId: `rendered:${inferred.code}:${inferred.first}:${orderedDates[orderedDates.length - 1]!}`,
+      linkedTrip: current.linkedTrip ?? row.trip ?? null,
+      pairingCodeUsed: inferred.code,
+      pairingDisplay: inferred.code,
+      dayNumber,
+      totalDays: inferred.totalDays,
+      orderedTripDates: orderedDates,
+      tripSpanDates: orderedDates,
+      chosenSource: "row_span",
+      railSegmentPosition: modernRenderedRailPosition(dayNumber, inferred.totalDays),
+      dayLine,
+      renderAsPairingCard: true,
+      renderAsMiscCard: false,
+      isDayOff: false,
+      renderedTitle: `${inferred.code} · ${dayLine}`,
+      reasonIfNoDayCount: null,
+      displayRouteText: template?.routeText,
+      displayReportText: template?.reportText,
+      displayDEndText: template?.dEndText,
+      displayLayoverText: template?.layoverText,
+    });
+    inferredRowIds.add(row.id);
+  }
+
+  let blockCode = "";
+  let blockRows: DayRow[] = [];
+
+  const applyBlock = () => {
+    if (!blockCode || blockRows.length < 2) {
+      blockRows = [];
+      return;
+    }
+    const first = blockRows[0]!.dateIso.slice(0, 10);
+    const last = blockRows[blockRows.length - 1]!.dateIso.slice(0, 10);
+    const orderedDates = modernRenderedDatesBetween(first, last);
+    if (orderedDates.length < 2) {
+      blockRows = [];
+      return;
+    }
+    const sequenceId = `rendered:${blockCode}:${first}:${last}`;
+    for (const row of blockRows) {
+      const dateIso = row.dateIso.slice(0, 10);
+      const idx = orderedDates.indexOf(dateIso);
+      if (idx < 0) continue;
+      const dayNumber = idx + 1;
+      const totalDays = orderedDates.length;
+      const dayLine = `Day ${dayNumber} of ${totalDays}`;
+      const current = next.get(row.id);
+      if (!current || current.isDayOff) continue;
+      next.set(row.id, {
+        ...current,
+        canonicalSequenceId: sequenceId,
+        pairingCodeUsed: blockCode,
+        pairingDisplay: blockCode,
+        dayNumber,
+        totalDays,
+        orderedTripDates: orderedDates,
+        tripSpanDates: orderedDates,
+        chosenSource: "row_span",
+        railSegmentPosition: modernRenderedRailPosition(dayNumber, totalDays),
+        dayLine,
+        renderAsPairingCard: true,
+        renderAsMiscCard: false,
+        isDayOff: false,
+        renderedTitle: `${blockCode} · ${dayLine}`,
+        reasonIfNoDayCount: null,
+      });
+    }
+    blockRows = [];
+  };
+
+  for (const row of rows) {
+    const meta = next.get(row.id);
+    const code = meta?.isDayOff || inferredRowIds.has(row.id)
+      ? ""
+      : modernPairingCodeForRenderedSpan(row);
+    if (!code) {
+      applyBlock();
+      blockCode = "";
+      continue;
+    }
+    const previous = blockRows[blockRows.length - 1];
+    if (
+      blockCode &&
+      (code !== blockCode ||
+        (previous &&
+          shouldStartNewSameCodeOccurrence(
+            previous,
+            row,
+            next.get(previous.id),
+            meta,
+          )))
+    ) {
+      applyBlock();
+      blockCode = code;
+      blockRows = [row];
+      continue;
+    }
+    if (!blockCode) blockCode = code;
+    blockRows.push(row);
+  }
+  applyBlock();
+
+  return next;
 }
 
 type ListSeg =
@@ -144,24 +541,33 @@ export default function ModernClassicListView({
       ? flicaCalendarListModel.rawPairingDetailIndex
       : null;
 
+  const renderRows = useMemo(
+    () =>
+      rows
+        ? ensureModernVisibleMonthDateRows(rows, year, month)
+        : rows,
+    [rows, year, month],
+  );
+
   const { modernMetaByRowId, modernCanonicalSequenceAudit } = useMemo(() => {
-    if (!rows?.length) {
+    if (!renderRows?.length) {
       return {
         modernMetaByRowId: new Map<string, ModernRowDayMeta>(),
-        modernCanonicalSequenceAudit: null as ModernCanonicalSequenceAudit | null,
+        modernCanonicalSequenceAudit:
+          null as ModernCanonicalSequenceAudit | null,
       };
     }
     const { metaByRowId, canonicalAudit } = buildModernDayCountAudit(
-      rows,
+      renderRows,
       mergedTripsForModern,
       visibleMonth,
       rawPairingDetailIndex,
     );
     return {
-      modernMetaByRowId: metaByRowId,
+      modernMetaByRowId: overrideModernRenderedPairingSpans(renderRows, metaByRowId),
       modernCanonicalSequenceAudit: canonicalAudit,
     };
-  }, [rows, visibleMonth, mergedTripsForModern, rawPairingDetailIndex]);
+  }, [renderRows, visibleMonth, mergedTripsForModern, rawPairingDetailIndex]);
 
   useEffect(() => {
     if (typeof __DEV__ === "undefined" || !__DEV__) return;
@@ -179,20 +585,9 @@ export default function ModernClassicListView({
   }, [modernCanonicalSequenceAudit, visibleMonth]);
 
   const listData = useMemo((): ListSeg[] => {
-    if (!rows?.length) return [];
-    const out: ListSeg[] = [];
-    let lastWeek = -1;
-    for (const row of rows) {
-      const dom = parseInt(row.dateIso.slice(8, 10), 10);
-      const week = Number.isFinite(dom) ? Math.floor((dom - 1) / 7) + 1 : 1;
-      if (week !== lastWeek) {
-        out.push({ kind: "week", key: `w-${row.dateIso}-${week}`, week });
-        lastWeek = week;
-      }
-      out.push({ kind: "row", key: row.id, row });
-    }
-    return out;
-  }, [rows]);
+    if (!renderRows?.length) return [];
+    return renderRows.map((row) => ({ kind: "row", key: row.id, row }));
+  }, [renderRows]);
 
   const modernPairingRailByRowId = useMemo(
     () => computeModernPairingRailLayout(listData, modernMetaByRowId),
@@ -226,7 +621,7 @@ export default function ModernClassicListView({
     );
   }, [listData, modernMetaByRowId, modernPairingRailByRowId]);
 
-  if (emptyMonth) {
+  if (emptyMonth && (!renderRows || renderRows.length === 0)) {
     return (
       <View style={styles.emptyBox}>
         <Text style={styles.emptyTitle}>No schedule for this month</Text>
@@ -247,9 +642,9 @@ export default function ModernClassicListView({
       <View style={styles.emptyBox}>
         <Text style={styles.emptyTitle}>Mini-calendar table unavailable</Text>
         <Text style={styles.emptyBody}>
-          This month has no saved FLICA schedule HTML in Flight Club. Re-import from
-          Manage — list and calendar views use the FLICA mini calendar only (not
-          pairing legs).
+          This month has no saved FLICA schedule HTML in Flight Club. Re-import
+          from Manage — list and calendar views use the FLICA mini calendar only
+          (not pairing legs).
         </Text>
         {typeof __DEV__ !== "undefined" && __DEV__ ? (
           <Text style={styles.devBlockedHint}>
@@ -266,7 +661,7 @@ export default function ModernClassicListView({
     );
   }
 
-  if (!isReady || !rows) {
+  if (!isReady || !renderRows) {
     return (
       <View style={styles.loadingBox}>
         <ActivityIndicator color={SCHEDULE_MOCK_HEADER_RED} size="small" />
@@ -288,11 +683,375 @@ export default function ModernClassicListView({
           const row = item.row;
           const meta = modernMetaByRowId.get(row.id)!;
           const isOff = meta.isDayOff;
+          const renderDayOffTile = () => (
+            <View style={styles.nonPairingDayTileRowWrap}>
+              <View
+                style={[
+                  styles.offCardOuter,
+                  row.isToday && styles.tileOutlineToday,
+                ]}
+              >
+                <View style={styles.offCardInner}>
+                  <View style={styles.offLeftSpacerRail} />
+                  <View style={styles.offDateRail}>
+                    <Text style={styles.tripDow}>
+                      {row.dayCode.slice(0, 2)}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.tripDom,
+                        row.isToday && styles.tripDomToday,
+                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                      ]}
+                    >
+                      {row.dayNum}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.offDivider,
+                      row.isToday && styles.railDividerToday,
+                    ]}
+                  />
+                  <View style={styles.offCenter}>
+                    <View style={styles.offPill}>
+                      <Text style={styles.offPillText}>DAY OFF</Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            </View>
+          );
 
           if (isOff) {
+            return renderDayOffTile();
+          }
+
+          if (meta.renderAsPairingCard) {
+            const trip = meta.linkedTrip;
+            const route = meta.displayRouteText?.trim() ||
+              (row.useFlicaLedgerLabels
+              ? String(row.cityText ?? "").trim() || "—"
+              : trip
+                ? primaryDayRoute(trip, row.dateIso, row.cityText)
+                : String(row.cityText ?? "").trim() || "—");
+            const extra =
+              trip && !row.useFlicaLedgerLabels
+                ? additionalLegsSummary(trip, row.dateIso)
+                : null;
+            const dayLine = meta.dayLine;
+            const showTripCredit = meta.dayNumber === 1;
+            const credit = showTripCredit && meta.displayCreditText
+              ? { main: meta.displayCreditText, plus: null as string | null }
+              : trip && showTripCredit
+                ? tripCreditDisplay(trip)
+                : { main: "", plus: null as string | null };
+
+            const pairing = meta.pairingDisplay || "—";
+
+            const lay = String(meta.displayLayoverText ?? row.layoverText ?? "").trim();
+            const rpt = fmtDutyClock(meta.displayReportText ?? row.reportText);
+            const dend = fmtDutyClock(meta.displayDEndText ?? row.dEndText);
+            const canOpenTrip = Boolean(trip);
+
+            const pairingRail = modernPairingRailByRowId.get(row.id);
+            const showPairingRail = Boolean(
+              meta.canonicalSequenceId && pairingRail?.railPosition,
+            );
+            const collapsePairingGapAbove = Boolean(
+              showPairingRail && pairingRail?.collapseGapAbove,
+            );
+            const collapsePairingGapBelow = Boolean(
+              showPairingRail && pairingRail?.collapseGapBelow,
+            );
+            const needsTopDotClearance = Boolean(
+              showPairingRail &&
+                !collapsePairingGapAbove &&
+                !pairingRail?.suppressTopCap &&
+                (pairingRail?.railPosition === "start" ||
+                  pairingRail?.railPosition === "single"),
+            );
+            const needsBottomDotClearance = Boolean(
+              showPairingRail &&
+                !collapsePairingGapBelow &&
+                !pairingRail?.suppressBottomCap &&
+                (pairingRail?.railPosition === "end" ||
+                  pairingRail?.railPosition === "single"),
+            );
+
             return (
-              <View style={styles.dayTileRowWrap}>
-                <View
+              <View
+                style={[
+                  styles.dayTileRowWrap,
+                  needsTopDotClearance && styles.dayTileRowWrapTopDotClearance,
+                  needsBottomDotClearance &&
+                    styles.dayTileRowWrapBottomDotClearance,
+                  collapsePairingGapAbove && styles.dayTileRowWrapNoTopGap,
+                  collapsePairingGapBelow && styles.dayTileRowWrapNoBottomGap,
+                ]}
+              >
+                <View style={styles.pairingRailRowAnchor}>
+                  {showPairingRail && pairingRail!.bridgeAbove > 0 ? (
+                    <View
+                      style={[
+                        styles.pairingRailBridgeAbove,
+                        {
+                          left: MODERN_PAIRING_RAIL_SLOT_LEFT,
+                          height: pairingRail!.bridgeAbove + 10,
+                        },
+                      ]}
+                    >
+                      <ModernPairingRailBridge
+                        color={SCHEDULE_MOCK_HEADER_RED}
+                        height={pairingRail!.bridgeAbove + 10}
+                      />
+                    </View>
+                  ) : null}
+                  <Pressable
+                    onPress={
+                      canOpenTrip
+                        ? () => onOpenFullTrip(trip!, row.dateIso)
+                        : undefined
+                    }
+                    disabled={!canOpenTrip}
+                    style={({ pressed }) => [
+                      pressed && canOpenTrip && styles.cardStackPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      canOpenTrip
+                        ? `Open pairing ${pairing}`
+                        : `Schedule ${pairing} ${row.dateIso}`
+                    }
+                  >
+                    <View
+                      style={[
+                        styles.tripCardMain,
+                        extra ? styles.tripCardMainNoBottomRadius : null,
+                        row.isToday && styles.tileOutlineToday,
+                        showPairingRail && styles.tripCardMainRailVisible,
+                      ]}
+                    >
+                      <View style={styles.offLeftSpacerRail} />
+                      <View style={styles.tripDateRail}>
+                        <Text style={styles.tripDow}>
+                          {row.dayCode.slice(0, 2)}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.tripDom,
+                            row.isToday && styles.tripDomToday,
+                            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                          ]}
+                        >
+                          {row.dayNum}
+                        </Text>
+                      </View>
+                      {showPairingRail ? (
+                        <ModernPairingRailColumn
+                          color={SCHEDULE_MOCK_HEADER_RED}
+                          railPosition={pairingRail!.railPosition!}
+                          suppressTopCap={pairingRail!.suppressTopCap}
+                          suppressBottomCap={pairingRail!.suppressBottomCap}
+                          centerBottomCapInGap={
+                            pairingRail!.centerBottomCapInGap
+                          }
+                        />
+                      ) : null}
+                      <View
+                        style={[
+                          styles.tripDivider,
+                          row.isToday && styles.railDividerToday,
+                        ]}
+                      />
+                      <View style={styles.tripMid}>
+                        <Text style={styles.pairingRow} numberOfLines={1}>
+                          <Text style={[styles.pairingCode, PAIRING_CODE_TYPE]}>
+                            {pairing}
+                          </Text>
+                          {dayLine ? (
+                            <Text
+                              style={[styles.pairingDayPart, PAIRING_DAY_TYPE]}
+                            >
+                              {` · ${dayLine}`}
+                            </Text>
+                          ) : null}
+                        </Text>
+                        <Text
+                          style={[styles.routeLine, ROUTE_TYPE]}
+                          numberOfLines={1}
+                        >
+                          {route}
+                        </Text>
+                        <Text style={styles.reportLine} numberOfLines={2}>
+                          <Text
+                            style={[
+                              styles.rptStrong,
+                              PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                              PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                            ]}
+                          >
+                            Rpt {rpt}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.rptRest,
+                              PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                              PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                            ]}
+                          >
+                            {" "}
+                            · D-End {dend}
+                            {lay ? ` · ${lay}` : ""}
+                          </Text>
+                        </Text>
+                      </View>
+                      <View style={styles.tripRight}>
+                        <Text
+                          style={[
+                            styles.creditTop,
+                            PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                            PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {credit.main || " "}
+                        </Text>
+                        <Text style={styles.wxEmoji} numberOfLines={1}>
+                          {row.wxText || "—"}
+                        </Text>
+                      </View>
+                    </View>
+                    {extra ? (
+                      <View style={styles.continuationAttached}>
+                        <View style={styles.continuationDot} />
+                        <Text style={styles.continuationText} numberOfLines={2}>
+                          {extra}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                  {showPairingRail && pairingRail!.bridgeBelow > 0 ? (
+                    <View
+                      style={[
+                        styles.pairingRailBridgeBelow,
+                        {
+                          left: MODERN_PAIRING_RAIL_SLOT_LEFT,
+                          height: pairingRail!.bridgeBelow + 10,
+                        },
+                      ]}
+                    >
+                      <ModernPairingRailBridge
+                        color={SCHEDULE_MOCK_HEADER_RED}
+                        height={pairingRail!.bridgeBelow + 10}
+                      />
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+            );
+          }
+
+          if (meta.renderAsMiscCard) {
+            const label = modernNonEmptyLabel(row.pairingText, row.cityText);
+            const showDayOff = !label && !row.trip;
+            if (showDayOff) return renderDayOffTile();
+            return (
+              <View style={styles.nonPairingDayTileRowWrap}>
+                <Pressable
+                  onPress={
+                    row.trip
+                      ? () => onOpenFullTrip(row.trip!, row.dateIso)
+                      : undefined
+                  }
+                  disabled={!row.trip}
+                  style={({ pressed }) => [
+                    styles.emptyDayCardOuter,
+                    pressed && row.trip && styles.cardStackPressed,
+                  ]}
+                >
+                  <View style={styles.emptyDayCardInner}>
+                    <View style={styles.offLeftSpacerRail} />
+                    <View style={styles.tripDateRail}>
+                      <Text style={styles.tripDow}>
+                        {row.dayCode.slice(0, 2)}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.tripDom,
+                          row.isToday && styles.tripDomToday,
+                          PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                          PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                        ]}
+                      >
+                        {row.dayNum}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.tripDivider,
+                        row.isToday && styles.railDividerToday,
+                      ]}
+                    />
+                    <View style={styles.emptyDayCenter}>
+                      <Text style={styles.miscText} numberOfLines={2}>
+                        {label}
+                      </Text>
+                    </View>
+                  </View>
+                </Pressable>
+              </View>
+            );
+          }
+          const label = modernNonEmptyLabel(row.pairingText, row.cityText);
+          const showDayOff = !label && !row.trip;
+          if (showDayOff) return renderDayOffTile();
+          return (
+            <View style={styles.nonPairingDayTileRowWrap}>
+              <View
+                style={[
+                  styles.emptyDayCardOuter,
+                  row.isToday && styles.tileOutlineToday,
+                ]}
+              >
+                <View style={styles.emptyDayCardInner}>
+                  <View style={styles.offLeftSpacerRail} />
+                  <View style={styles.tripDateRail}>
+                    <Text style={styles.tripDow}>{row.dayCode.slice(0, 2)}</Text>
+                    <Text
+                      style={[
+                        styles.tripDom,
+                        row.isToday && styles.tripDomToday,
+                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                      ]}
+                    >
+                      {row.dayNum}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.tripDivider,
+                      row.isToday && styles.railDividerToday,
+                    ]}
+                  />
+                  <View style={styles.emptyDayCenter}>
+                    <Text style={styles.miscText} numberOfLines={2}>
+                      {label}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+          );
+        }}
+      />
+    </View>
+  );
+}
+/*
                   style={[
                     styles.offCardOuter,
                     row.isToday && styles.tileOutlineToday,
@@ -335,10 +1094,10 @@ export default function ModernClassicListView({
           if (meta.renderAsPairingCard) {
             const trip = meta.linkedTrip;
             const route = row.useFlicaLedgerLabels
-              ? (String(row.cityText ?? "").trim() || "—")
+              ? String(row.cityText ?? "").trim() || "—"
               : trip
                 ? primaryDayRoute(trip, row.dateIso, row.cityText)
-                : (String(row.cityText ?? "").trim() || "—");
+                : String(row.cityText ?? "").trim() || "—";
             const extra =
               trip && !row.useFlicaLedgerLabels
                 ? additionalLegsSummary(trip, row.dateIso)
@@ -359,9 +1118,21 @@ export default function ModernClassicListView({
             const showPairingRail = Boolean(
               meta.canonicalSequenceId && pairingRail?.railPosition,
             );
+            const collapsePairingGapAbove = Boolean(
+              showPairingRail && pairingRail?.collapseGapAbove,
+            );
+            const collapsePairingGapBelow = Boolean(
+              showPairingRail && pairingRail?.collapseGapBelow,
+            );
 
             return (
-              <View style={styles.dayTileRowWrap}>
+              <View
+                style={[
+                  styles.dayTileRowWrap,
+                  collapsePairingGapAbove && styles.dayTileRowWrapNoTopGap,
+                  collapsePairingGapBelow && styles.dayTileRowWrapNoBottomGap,
+                ]}
+              >
                 <View style={styles.pairingRailRowAnchor}>
                   {showPairingRail && pairingRail!.bridgeAbove > 0 ? (
                     <View
@@ -531,7 +1302,8 @@ export default function ModernClassicListView({
           }
 
           if (meta.renderAsMiscCard) {
-            const label = row.pairingText || row.cityText || "—";
+            const label = modernNonEmptyLabel(row.pairingText, row.cityText);
+            const showDayOff = !label && !row.trip;
             return (
               <View style={styles.dayTileRowWrap}>
                 <Pressable
@@ -542,23 +1314,92 @@ export default function ModernClassicListView({
                   }
                   disabled={!row.trip}
                   style={({ pressed }) => [
-                    styles.miscCard,
+                    styles.emptyDayCardOuter,
                     pressed && row.trip && styles.cardStackPressed,
                   ]}
                 >
-                  <Text style={styles.miscText} numberOfLines={2}>
-                    {label}
-                  </Text>
+                  <View style={styles.emptyDayCardInner}>
+                    <View style={styles.offLeftSpacerRail} />
+                    <View style={styles.tripDateRail}>
+                      <Text style={styles.tripDow}>
+                        {row.dayCode.slice(0, 2)}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.tripDom,
+                          row.isToday && styles.tripDomToday,
+                          PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                          PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                        ]}
+                      >
+                        {row.dayNum}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.tripDivider,
+                        row.isToday && styles.railDividerToday,
+                      ]}
+                    />
+                    <View style={styles.emptyDayCenter}>
+                      {showDayOff ? (
+                        <View style={styles.offPill}>
+                          <Text style={styles.offPillText}>DAY OFF</Text>
+                        </View>
+                      ) : label ? (
+                        <Text style={styles.miscText} numberOfLines={2}>
+                          {label}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </View>
                 </Pressable>
               </View>
             );
           }
+          const label = modernNonEmptyLabel(row.pairingText, row.cityText);
+          const showDayOff = !label && !row.trip;
           return (
             <View style={styles.dayTileRowWrap}>
-              <View style={styles.miscCard}>
-                <Text style={styles.miscText} numberOfLines={2}>
-                  {row.pairingText || row.cityText || "—"}
-                </Text>
+              <View
+                style={[
+                  styles.emptyDayCardOuter,
+                  row.isToday && styles.tileOutlineToday,
+                ]}
+              >
+                <View style={styles.emptyDayCardInner}>
+                  <View style={styles.offLeftSpacerRail} />
+                  <View style={styles.tripDateRail}>
+                    <Text style={styles.tripDow}>{row.dayCode.slice(0, 2)}</Text>
+                    <Text
+                      style={[
+                        styles.tripDom,
+                        row.isToday && styles.tripDomToday,
+                        PAIRING_DETAIL_STAT_DIGIT_TYPE,
+                        PAIRING_DETAIL_STAT_DIGIT_TRACKING,
+                      ]}
+                    >
+                      {row.dayNum}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.tripDivider,
+                      row.isToday && styles.railDividerToday,
+                    ]}
+                  />
+                  <View style={styles.emptyDayCenter}>
+                    {showDayOff ? (
+                      <View style={styles.offPill}>
+                        <Text style={styles.offPillText}>DAY OFF</Text>
+                      </View>
+                    ) : label ? (
+                      <Text style={styles.miscText} numberOfLines={2}>
+                        {label}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
               </View>
             </View>
           );
@@ -568,6 +1409,7 @@ export default function ModernClassicListView({
   );
 }
 
+*/
 const CARD_RADIUS = 10;
 const CARD_BORDER = "#E2E8F0";
 /** Vertical rule between date rail and trip body — matches calendar grid weight. */
@@ -576,16 +1418,18 @@ const DAY_RAIL_DIVIDER = "#D2DAE6";
  * Vertical gap between calendar day tiles — split as margin above and below each card
  * so spacing matches the mock (breathing room top + bottom).
  */
-const TILE_STACK_GAP = 4;
+const TILE_STACK_GAP = 12;
 
-/** Left edge of pairing rail slot: `offLeftSpacerRail` + `tripDateRail`. */
-const MODERN_PAIRING_RAIL_SLOT_LEFT = 3 + 36;
+/** Bridge slot is centered on the date/body divider: spacer + date rail - half bridge width. */
+const MODERN_PAIRING_RAIL_SLOT_LEFT = 3 + 36 - 5;
 
 const styles = StyleSheet.create({
   root: {
     paddingHorizontal: 12,
-    paddingBottom: 10,
+    paddingTop: 10,
+    paddingBottom: 18,
     backgroundColor: T.bg,
+    overflow: "visible",
   },
   weekLabel: {
     marginTop: 6,
@@ -596,10 +1440,26 @@ const styles = StyleSheet.create({
     color: T.textSecondary,
     letterSpacing: 0.4,
   },
-  /** Same vertical inset for every day row (pairing, OFF, misc) — margins on `Pressable` are unreliable. */
+  /** Pairing row gap stays small so rail continuity remains tight. */
   dayTileRowWrap: {
     marginVertical: TILE_STACK_GAP / 2,
     overflow: "visible",
+  },
+  nonPairingDayTileRowWrap: {
+    marginVertical: TILE_STACK_GAP / 2,
+    overflow: "visible",
+  },
+  dayTileRowWrapNoTopGap: {
+    marginTop: 0,
+  },
+  dayTileRowWrapNoBottomGap: {
+    marginBottom: 0,
+  },
+  dayTileRowWrapTopDotClearance: {
+    marginTop: 10,
+  },
+  dayTileRowWrapBottomDotClearance: {
+    marginBottom: 10,
   },
   pairingRailRowAnchor: {
     position: "relative",
@@ -804,7 +1664,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: StyleSheet.hairlineWidth,
     borderLeftColor: "#D2DAE6",
   },
-  creditTop: { fontSize: 10, fontWeight: "800", color: T.text },
+  creditTop: { fontSize: 10, fontWeight: "800", color: "#16A34A" },
   creditPlus: {
     fontSize: 8,
     fontWeight: "800",
@@ -813,12 +1673,30 @@ const styles = StyleSheet.create({
   },
   wxEmoji: { fontSize: 10, marginTop: 3 },
 
-  miscCard: {
-    padding: 8,
-    backgroundColor: "#fff",
+  emptyDayCardOuter: {
     borderRadius: CARD_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
+    backgroundColor: "#fff",
+    shadowColor: "#000",
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  emptyDayCardInner: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    minHeight: 54,
+    overflow: "hidden",
+    borderRadius: CARD_RADIUS,
+  },
+  emptyDayCenter: {
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    minWidth: 0,
   },
   miscText: { fontSize: 10, color: T.textSecondary },
   loadingBox: {

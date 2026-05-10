@@ -7,41 +7,50 @@ import React from "react";
 import { StyleSheet, View } from "react-native";
 import type { ModernPairingRailPosition } from "./modernPairingRailLayout";
 
-const SLOT_W = 10;
+const BRIDGE_SLOT_W = 10;
+const COLUMN_SLOT_W = BRIDGE_SLOT_W;
 const LINE_W = 3;
-const CAP_R = 4;
+const CAP_R = 5;
 
 type Props = {
   color: string;
   railPosition: ModernPairingRailPosition;
+  suppressTopCap?: boolean;
+  suppressBottomCap?: boolean;
+  centerBottomCapInGap?: boolean;
 };
 
 /**
- * Vertical spine inside the day card only (caps + line). Bridges use the same `LINE_W` / X center as slot.
+ * Vertical spine inside the day card. Dot caps are centered on the card edge,
+ * not laid out inside the tile body.
  */
-export function ModernPairingRailColumn({ color, railPosition }: Props) {
-  const topCap = railPosition === "single" || railPosition === "start";
-  const bottomCap = railPosition === "single" || railPosition === "end";
+export function ModernPairingRailColumn({
+  color,
+  railPosition,
+  suppressTopCap = false,
+  suppressBottomCap = false,
+  centerBottomCapInGap = false,
+}: Props) {
+  const topCap =
+    (railPosition === "single" || railPosition === "start") && !suppressTopCap;
+  const bottomCap =
+    (railPosition === "single" || railPosition === "end") && !suppressBottomCap;
 
   return (
     <View style={styles.slot} pointerEvents="none">
+      <View style={[styles.lineFill, { backgroundColor: color }]} />
       {topCap ? (
-        <View style={[styles.cap, { backgroundColor: color }]} />
-      ) : (
-        <View style={styles.lineJoinTop}>
-          <View style={[styles.lineCore, { backgroundColor: color }]} />
-        </View>
-      )}
-      <View style={styles.lineStretch}>
-        <View style={[styles.lineCore, { backgroundColor: color, flex: 1 }]} />
-      </View>
+        <View style={[styles.cap, styles.capTop, { backgroundColor: color }]} />
+      ) : null}
       {bottomCap ? (
-        <View style={[styles.cap, { backgroundColor: color }]} />
-      ) : (
-        <View style={styles.lineJoinBottom}>
-          <View style={[styles.lineCore, { backgroundColor: color }]} />
-        </View>
-      )}
+        <View
+          style={[
+            styles.cap,
+            centerBottomCapInGap ? styles.capBottomInGap : styles.capBottom,
+            { backgroundColor: color },
+          ]}
+        />
+      ) : null}
     </View>
   );
 }
@@ -64,41 +73,49 @@ export function ModernPairingRailBridge({
 
 const styles = StyleSheet.create({
   slot: {
-    width: SLOT_W,
+    width: COLUMN_SLOT_W,
+    marginLeft: -COLUMN_SLOT_W / 2,
+    marginRight: -COLUMN_SLOT_W / 2,
     alignSelf: "stretch",
     alignItems: "center",
     overflow: "visible",
+    position: "relative",
+    zIndex: 5,
+    elevation: 5,
   },
   cap: {
+    position: "absolute",
+    left: (COLUMN_SLOT_W - CAP_R * 2) / 2,
     width: CAP_R * 2,
     height: CAP_R * 2,
     borderRadius: CAP_R,
+    zIndex: 2,
   },
-  lineJoinTop: {
-    width: SLOT_W,
-    height: CAP_R,
-    alignItems: "center",
-    justifyContent: "flex-end",
+  capTop: {
+    top: -(CAP_R * 2),
   },
-  lineJoinBottom: {
-    width: SLOT_W,
-    height: CAP_R,
-    alignItems: "center",
-    justifyContent: "flex-start",
+  capBottom: {
+    bottom: -(CAP_R * 2),
   },
-  lineStretch: {
-    width: SLOT_W,
-    flex: 1,
-    minHeight: 6,
-    alignItems: "center",
+  capBottomInGap: {
+    bottom: -(CAP_R * 2 + 3),
   },
   lineCore: {
     width: LINE_W,
     minHeight: LINE_W,
     alignSelf: "center",
   },
+  lineFill: {
+    position: "absolute",
+    top: -(CAP_R * 2),
+    bottom: -(CAP_R * 2),
+    width: LINE_W,
+    minHeight: LINE_W,
+    alignSelf: "center",
+    zIndex: 1,
+  },
   bridge: {
-    width: SLOT_W,
+    width: BRIDGE_SLOT_W,
     alignItems: "center",
     overflow: "visible",
   },

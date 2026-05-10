@@ -78,6 +78,7 @@ export type FlicaRawPairingDutyIndexEntry = {
   reportFromPairingHeader: string;
   pairingStartIso: string;
   pairingEndIso: string;
+  totalCreditMinutes: number | null;
 };
 
 /** Dev / audit summary of what made it into the index (proves coverage for carryover blocks). */
@@ -222,6 +223,10 @@ export function buildFlicaRawPairingDetailIndex(
         reportFromPairingHeader: reportHeader,
         pairingStartIso: p.startDate.slice(0, 10),
         pairingEndIso: (p.endDate ?? p.startDate).slice(0, 10),
+        totalCreditMinutes:
+          p.totalCreditMinutes != null && Number.isFinite(p.totalCreditMinutes)
+            ? p.totalCreditMinutes
+            : null,
       });
     }
   }

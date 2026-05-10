@@ -13,8 +13,8 @@ export type ModernListSegForRail =
 /** Must match `weekLabel` vertical footprint in ModernClassicListView. */
 export const MODERN_LIST_WEEK_HEADER_VERTICAL = 6 + 3 + 12;
 
-/** Half of `TILE_STACK_GAP` on `dayTileRowWrap`. */
-export const MODERN_LIST_ROW_WRAP_MARGIN = 2;
+/** Same-pairing Modern rows collapse tile margins, so rail bridges only cover intervening week headers. */
+export const MODERN_LIST_PAIRING_ROW_WRAP_MARGIN = 0;
 
 export type ModernPairingRailPosition = NonNullable<
   ModernRowDayMeta["railSegmentPosition"]
@@ -24,6 +24,11 @@ export type ModernPairingRailLayoutEntry = {
   railPosition: ModernPairingRailPosition | null;
   bridgeAbove: number;
   bridgeBelow: number;
+  collapseGapAbove: boolean;
+  collapseGapBelow: boolean;
+  suppressTopCap: boolean;
+  suppressBottomCap: boolean;
+  centerBottomCapInGap: boolean;
   linkedTripId: string | null;
   prevRowLinkedTripId: string | null;
   nextRowLinkedTripId: string | null;
@@ -45,14 +50,14 @@ function measureBridgeBetweenRowIndices(
   fromRowListIndex: number,
   toRowListIndex: number,
 ): number {
-  let total = MODERN_LIST_ROW_WRAP_MARGIN;
+  let total = MODERN_LIST_PAIRING_ROW_WRAP_MARGIN;
   for (let j = fromRowListIndex + 1; j < toRowListIndex; j += 1) {
     const seg = listData[j];
     if (seg?.kind === "week") {
       total += MODERN_LIST_WEEK_HEADER_VERTICAL;
     }
   }
-  total += MODERN_LIST_ROW_WRAP_MARGIN;
+  total += MODERN_LIST_PAIRING_ROW_WRAP_MARGIN;
   return total;
 }
 
@@ -116,6 +121,10 @@ export function computeModernPairingRailLayout(
 
     let bridgeAbove = 0;
     let bridgeBelow = 0;
+    let collapseGapAbove = false;
+    let collapseGapBelow = false;
+    let samePrev = false;
+    let sameNext = false;
 
     if (gid && railPosition && meta.orderedTripDates.length) {
       const dates = meta.orderedTripDates;
@@ -124,7 +133,6 @@ export function computeModernPairingRailLayout(
       const nextDuty =
         idx >= 0 && idx < dates.length - 1 ? dates[idx + 1]! : null;
 
-      let samePrev = false;
       if (prevRI >= 0 && prevDuty && prevMeta) {
         const pr = listData[prevRI]!;
         if (pr.kind === "row") {
@@ -134,7 +142,6 @@ export function computeModernPairingRailLayout(
         }
       }
 
-      let sameNext = false;
       if (nextRI >= 0 && nextDuty && nextMeta) {
         const nr = listData[nextRI]!;
         if (nr.kind === "row") {
@@ -148,12 +155,35 @@ export function computeModernPairingRailLayout(
         bridgeBelow = measureBridgeBetweenRowIndices(listData, i, nextRI);
       if (samePrev)
         bridgeAbove = measureBridgeBetweenRowIndices(listData, prevRI, i);
+      collapseGapBelow = sameNext;
+      collapseGapAbove = samePrev;
     }
+
+    const differentPairingPrev =
+      Boolean(gid && prevMeta?.canonicalSequenceId) &&
+      modernRailGroupId(prevMeta!) !== gid;
+    const suppressTopCap =
+      railPosition === "start" &&
+      differentPairingPrev &&
+      prevMeta?.railSegmentPosition === "end";
+    const suppressBottomCap = false;
+    const differentPairingNext =
+      Boolean(gid && nextMeta?.canonicalSequenceId) &&
+      modernRailGroupId(nextMeta!) !== gid;
+    const centerBottomCapInGap =
+      railPosition === "end" &&
+      differentPairingNext &&
+      nextMeta?.railSegmentPosition === "start";
 
     out.set(rowId, {
       railPosition: railPosition ?? null,
       bridgeAbove,
       bridgeBelow,
+      collapseGapAbove,
+      collapseGapBelow,
+      suppressTopCap,
+      suppressBottomCap,
+      centerBottomCapInGap,
       linkedTripId: tripIdForRail(meta),
       prevRowLinkedTripId,
       nextRowLinkedTripId,

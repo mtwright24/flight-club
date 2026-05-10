@@ -10,12 +10,16 @@ import type { DayRow } from "./classicMonthGridCore";
 import { isTripLikeKind } from "./classicMonthGridCore";
 import { enumerateRawPairingBlocksForModern } from "./modernRawPairingDutyDatesForModern";
 
-export function normalizeModernLedgerPairing(raw: string | undefined | null): string {
-  return String(raw ?? "")
-    .trim()
-    .toUpperCase()
-    .split("·")[0]
-    ?.trim() ?? "";
+export function normalizeModernLedgerPairing(
+  raw: string | undefined | null,
+): string {
+  return (
+    String(raw ?? "")
+      .trim()
+      .toUpperCase()
+      .split("·")[0]
+      ?.trim() ?? ""
+  );
 }
 
 export function isPlaceholderPairingCode(code: string): boolean {
@@ -31,33 +35,39 @@ function isOnlyDashCity(cityRaw: string | undefined | null): boolean {
  * Unambiguous calendar gap / day off (ledger dash-only continuation is not "off" here).
  */
 export function isModernTrueDayOffRow(row: DayRow): boolean {
-  if (row.trip) return false;
-  if (row.kind !== "empty" && row.kind !== "off") return false;
+  const pt = normalizeModernLedgerPairing(row.pairingText);
+  if (!isPlaceholderPairingCode(pt)) return false;
+  const city = String(row.cityText ?? "").trim();
+  if (city && !isOnlyDashCity(row.cityText)) return false;
+  if (row.useFlicaLedgerLabels) return true;
   const hasDuty =
     String(row.reportText ?? "").trim() ||
     String(row.dEndText ?? "").trim() ||
     String(row.layoverText ?? "").trim();
   if (hasDuty) return false;
-  const pt = normalizeModernLedgerPairing(row.pairingText);
-  if (!isPlaceholderPairingCode(pt)) return false;
-  if (row.useFlicaLedgerLabels && isOnlyDashCity(row.cityText)) {
-    return false;
-  }
-  const city = String(row.cityText ?? "").trim();
-  if (city && !isOnlyDashCity(row.cityText)) return false;
+  if (row.trip) return false;
+  if (row.kind !== "empty" && row.kind !== "off") return false;
   return true;
 }
 
+function isModernInjectedEmptyRow(row: DayRow): boolean {
+  return String(row.id ?? "").startsWith("modern-empty:");
+}
+
 export function tripPairingBase(t: CrewScheduleTrip): string {
-  return String(t.pairingCode ?? "")
-    .trim()
-    .toUpperCase()
-    .split("·")[0]
-    ?.trim() ?? "";
+  return (
+    String(t.pairingCode ?? "")
+      .trim()
+      .toUpperCase()
+      .split("·")[0]
+      ?.trim() ?? ""
+  );
 }
 
 /** Every calendar YYYY-MM-DD from trip start through end, inclusive, sorted ascending. */
-export function orderedCalendarDatesInTripSpan(trip: CrewScheduleTrip): string[] {
+export function orderedCalendarDatesInTripSpan(
+  trip: CrewScheduleTrip,
+): string[] {
   const a = trip.startDate.slice(0, 10);
   const b = trip.endDate.slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b)) {
@@ -127,7 +137,10 @@ export function resolveModernLinkedTrip(
   return inSpan[0]!;
 }
 
-export type ModernChosenDaySource = "raw_pairing_detail" | "trip_span";
+export type ModernChosenDaySource =
+  | "raw_pairing_detail"
+  | "trip_span"
+  | "row_span";
 
 /** Vertical rail cap / spine segment inside the pairing row tile. */
 export type ModernRailSegmentPosition = "single" | "start" | "middle" | "end";
@@ -142,6 +155,7 @@ export type ModernCanonicalPairingSequence = {
   totalDays: number;
   dateSet: ReadonlySet<string>;
   isPtv: boolean;
+  pairingCreditHours?: number;
 };
 
 export type ModernCanonicalRowAssignment = {
@@ -166,6 +180,157 @@ function datesOverlap(a: readonly string[], b: readonly string[]): boolean {
   return a.some((d) => bs.has(d));
 }
 
+function sameOrderedDates(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((d, idx) => d === b[idx]);
+}
+
+function modernTripSpanDayCount(trip: CrewScheduleTrip | null): number {
+  return trip ? orderedCalendarDatesInTripSpan(trip).length : 0;
+}
+
+function orderedDatesBetween(first: string, last: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(first) || !/^\d{4}-\d{2}-\d{2}$/.test(last)) {
+    return [];
+  }
+  if (last < first) return [];
+  const out: string[] = [];
+  let cur = first;
+  while (cur <= last) {
+    out.push(cur);
+    cur = addIsoDays(cur, 1);
+  }
+  return out;
+}
+
+function modernSequenceRouteCity(row: DayRow): string {
+  return String(row.cityText ?? "").trim().toUpperCase();
+}
+
+function modernSequenceTripBase(row: DayRow): string {
+  return String(row.trip?.base ?? "JFK").trim().toUpperCase();
+}
+
+function shouldStartNewModernRowSpanOccurrence(
+  previous: DayRow,
+  current: DayRow,
+  blockFirst: string,
+  currentIso: string,
+): boolean {
+  const base = modernSequenceTripBase(previous) || modernSequenceTripBase(current);
+  const currCity = modernSequenceRouteCity(current);
+  if (!base || !currCity) return false;
+  const currentLooksLikePairingStart =
+    currCity !== base && !isOnlyDashCity(currCity);
+  if (!currentLooksLikePairingStart) return false;
+  return dayIndexInCalendarSpan(blockFirst, currentIso) >= 2;
+}
+
+function buildModernRowSpanSequences(
+  rows: DayRow[],
+  rowDateSet: ReadonlySet<string>,
+): ModernCanonicalPairingSequence[] {
+  const codedRows = rows
+    .map((row) => ({
+      row,
+      iso: row.dateIso.slice(0, 10),
+      code: normalizeModernLedgerPairing(row.pairingText),
+    }))
+    .filter(
+      (x) =>
+        /^\d{4}-\d{2}-\d{2}$/.test(x.iso) &&
+        !isPlaceholderPairingCode(x.code) &&
+        x.code !== "PTV",
+    )
+    .sort((a, b) => a.iso.localeCompare(b.iso));
+
+  const sequences: ModernCanonicalPairingSequence[] = [];
+  let blockCode = "";
+  let blockFirst = "";
+  let blockLast = "";
+  let blockLastRow: DayRow | null = null;
+
+  const flush = () => {
+    if (!blockCode || !blockFirst || !blockLast) return;
+    const orderedDates = orderedDatesBetween(blockFirst, blockLast);
+    if (orderedDates.length < 2) return;
+    if (!orderedDates.length || !datesIntersectSet(orderedDates, rowDateSet)) return;
+    const id = `row:${blockCode}:${blockFirst}:${blockLast}`;
+    sequences.push({
+      id,
+      pairingCodeNorm: blockCode,
+      sourceUsed: "row_span",
+      orderedDates,
+      firstDutyDate: orderedDates[0]!,
+      lastDutyDate: orderedDates[orderedDates.length - 1]!,
+      totalDays: orderedDates.length,
+      dateSet: new Set(orderedDates),
+      isPtv: false,
+    });
+  };
+
+  for (const item of codedRows) {
+    if (!blockCode) {
+      blockCode = item.code;
+      blockFirst = item.iso;
+      blockLast = item.iso;
+      blockLastRow = item.row;
+      continue;
+    }
+
+    const sameBlock =
+      item.code === blockCode &&
+      item.iso >= blockLast &&
+      !(blockLastRow &&
+        shouldStartNewModernRowSpanOccurrence(
+          blockLastRow,
+          item.row,
+          blockFirst,
+          item.iso,
+        ));
+
+    if (!sameBlock) {
+      flush();
+      blockCode = item.code;
+      blockFirst = item.iso;
+    }
+    blockLast = item.iso;
+    blockLastRow = item.row;
+  }
+  flush();
+
+  return sequences;
+}
+
+function modernSequenceSourceRank(source: ModernChosenDaySource): number {
+  switch (source) {
+    case "trip_span":
+      return 3;
+    case "row_span":
+      return 2;
+    case "raw_pairing_detail":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function chooseLongestModernSequence(
+  candidates: ModernCanonicalPairingSequence[],
+): ModernCanonicalPairingSequence[] {
+  if (candidates.length <= 1) return candidates;
+  const rowSpans = candidates.filter((s) => s.sourceUsed === "row_span");
+  const rawSpans = candidates.filter((s) => s.sourceUsed === "raw_pairing_detail");
+  const sourceCandidates =
+    rowSpans.length > 0 ? rowSpans : rawSpans.length > 0 ? rawSpans : candidates;
+  const sorted = [...sourceCandidates].sort((a, b) => {
+    if (a.totalDays !== b.totalDays) return b.totalDays - a.totalDays;
+    const sr = modernSequenceSourceRank(b.sourceUsed) - modernSequenceSourceRank(a.sourceUsed);
+    if (sr !== 0) return sr;
+    return a.firstDutyDate.localeCompare(b.firstDutyDate);
+  });
+  return [sorted[0]!];
+}
+
 /**
  * STEP 1 — Build one canonical sequence per pairing block (raw block or trip span), once per month model.
  * Raw and trip spans are never mixed inside one sequence.
@@ -188,9 +353,18 @@ export function buildModernCanonicalPairingModel(
   const sequences: ModernCanonicalPairingSequence[] = [];
   const seenTripSequenceIds = new Set<string>();
 
+  sequences.push(...buildModernRowSpanSequences(rows, rowDateSet));
+
   const rawBlocks = enumerateRawPairingBlocksForModern(rawPairingDetailIndex);
   for (const block of rawBlocks) {
-    const { orderedDates, pairingCodeNorm, pairingStartIso, scheduleLabel } = block;
+    const {
+      orderedDates,
+      pairingCodeNorm,
+      pairingStartIso,
+      scheduleLabel,
+      totalCreditMinutes,
+    } =
+      block;
     if (!orderedDates.length || !pairingCodeNorm) continue;
     if (!datesIntersectSet(orderedDates, rowDateSet)) continue;
 
@@ -206,6 +380,10 @@ export function buildModernCanonicalPairingModel(
       totalDays: orderedDates.length,
       dateSet: new Set(orderedDates),
       isPtv: false,
+      pairingCreditHours:
+        totalCreditMinutes != null && Number.isFinite(totalCreditMinutes)
+          ? totalCreditMinutes / 60
+          : undefined,
     });
   }
 
@@ -215,18 +393,10 @@ export function buildModernCanonicalPairingModel(
     if (!code) continue;
 
     const tripDates = orderedCalendarDatesInTripSpan(trip);
-    if (!tripDates.length || !datesIntersectSet(tripDates, rowDateSet)) continue;
+    if (!tripDates.length || !datesIntersectSet(tripDates, rowDateSet))
+      continue;
 
-    if (!tripIsPtv) {
-      const rawCovers = sequences.some(
-        (s) =>
-          !s.isPtv &&
-          s.pairingCodeNorm === code &&
-          s.sourceUsed === "raw_pairing_detail" &&
-          datesOverlap(s.orderedDates, tripDates),
-      );
-      if (rawCovers) continue;
-    } else {
+    if (tripIsPtv) {
       const dupPtv = sequences.some(
         (s) =>
           s.isPtv &&
@@ -262,56 +432,86 @@ export function buildModernCanonicalPairingModel(
     const iso = row.dateIso.slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
 
-    const linkedOffProbe = resolveModernLinkedTrip(row, mergedTrips);
-    if (isModernTrueDayOffRow(row) && !linkedOffProbe) continue;
-
     const wantPtv =
-      row.kind === "ptv" || normalizeModernLedgerPairing(row.pairingText) === "PTV";
+      row.kind === "ptv" ||
+      normalizeModernLedgerPairing(row.pairingText) === "PTV";
 
     let codeGuess = "";
-    const linked = linkedOffProbe;
-    if (linked) {
+    const rowPairingNorm = normalizeModernLedgerPairing(row.pairingText);
+    const rowCity = String(row.cityText ?? "").trim();
+    const isBlankFlicaLedgerDate =
+      Boolean(row.useFlicaLedgerLabels) &&
+      isPlaceholderPairingCode(rowPairingNorm) &&
+      (!rowCity || isOnlyDashCity(rowCity));
+    const linked = resolveModernLinkedTrip(row, mergedTrips);
+    const linkedSpanDays = modernTripSpanDayCount(linked);
+    const linkedLooksLikeMergedRun = linkedSpanDays > 7;
+    if (linked && (!isBlankFlicaLedgerDate || !linkedLooksLikeMergedRun)) {
       codeGuess = tripPairingBase(linked);
     } else {
-      const pt = normalizeModernLedgerPairing(row.pairingText);
-      if (!isPlaceholderPairingCode(pt)) codeGuess = pt;
+      if (!isPlaceholderPairingCode(rowPairingNorm)) codeGuess = rowPairingNorm;
     }
-    if (!codeGuess && row.trip) {
+    if (
+      !codeGuess &&
+      row.trip &&
+      (!isBlankFlicaLedgerDate || modernTripSpanDayCount(row.trip) <= 7)
+    ) {
       codeGuess = tripPairingBase(row.trip);
     }
 
-    const basePool = sequences.filter(
+    let basePool = sequences.filter(
       (s) => s.isPtv === wantPtv && s.dateSet.has(iso),
     );
+    if (isBlankFlicaLedgerDate) {
+      basePool = basePool.filter(
+        (s) => s.sourceUsed !== "trip_span" || s.totalDays <= 7,
+      );
+    }
 
-    let candidates =
-      codeGuess ?
-        basePool.filter((s) => s.pairingCodeNorm === codeGuess)
+    let candidates = codeGuess
+      ? basePool.filter((s) => s.pairingCodeNorm === codeGuess)
       : basePool;
 
     if (candidates.length !== 1 && !codeGuess && basePool.length === 1) {
       candidates = basePool;
     }
 
-    if (candidates.length > 1 && codeGuess) {
-      const hint = linked?.startDate.slice(0, 10);
-      const narrowed = candidates.filter((s) => s.firstDutyDate === hint);
-      if (narrowed.length === 1) {
-        candidates = narrowed;
-      } else if (linked) {
-        const linkedSpan = new Set(orderedCalendarDatesInTripSpan(linked));
-        const ov = candidates.filter((s) =>
-          s.orderedDates.some((d) => linkedSpan.has(d)),
+    if (candidates.length > 1) {
+      const canonicalFromRowsOrRaw = candidates.filter(
+        (s) => s.sourceUsed !== "trip_span",
+      );
+      if (canonicalFromRowsOrRaw.length > 0) {
+        candidates = chooseLongestModernSequence(canonicalFromRowsOrRaw);
+      }
+      if (candidates.length > 1 && linked) {
+        const linkedDates = orderedCalendarDatesInTripSpan(linked);
+        const exactTripSpan = candidates.filter(
+          (s) =>
+            s.sourceUsed === "trip_span" &&
+            s.firstDutyDate === linked.startDate.slice(0, 10) &&
+            s.lastDutyDate === linked.endDate.slice(0, 10) &&
+            sameOrderedDates(s.orderedDates, linkedDates),
         );
-        if (ov.length === 1) candidates = ov;
-        else {
-          const ts = linked.startDate.slice(0, 10);
-          const te = linked.endDate.slice(0, 10);
-          const inSpan = candidates.filter(
-            (s) => s.firstDutyDate <= te && s.lastDutyDate >= ts,
+        if (exactTripSpan.length === 1) {
+          candidates = exactTripSpan;
+        } else {
+          const linkedSpan = new Set(linkedDates);
+          const ov = candidates.filter((s) =>
+            s.orderedDates.some((d) => linkedSpan.has(d)),
           );
-          if (inSpan.length === 1) candidates = inSpan;
+          if (ov.length === 1) candidates = ov;
+          else {
+            const ts = linked.startDate.slice(0, 10);
+            const te = linked.endDate.slice(0, 10);
+            const inSpan = candidates.filter(
+              (s) => s.firstDutyDate <= te && s.lastDutyDate >= ts,
+            );
+            if (inSpan.length === 1) candidates = inSpan;
+          }
         }
+      }
+      if (candidates.length > 1) {
+        candidates = chooseLongestModernSequence(candidates);
       }
     }
 
@@ -343,6 +543,16 @@ function railSegmentFromDayIndex(
   return "middle";
 }
 
+function dayIndexInCalendarSpan(firstIso: string, iso: string): number {
+  const start = new Date(`${firstIso}T12:00:00`);
+  const current = new Date(`${iso}T12:00:00`);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(current.getTime())) {
+    return -1;
+  }
+  const diff = Math.round((current.getTime() - start.getTime()) / 864e5);
+  return diff >= 0 ? diff : -1;
+}
+
 function pickLinkedTripForCanonicalRow(
   row: DayRow,
   seq: ModernCanonicalPairingSequence,
@@ -372,6 +582,15 @@ function pickLinkedTripForCanonicalRow(
   return resolved;
 }
 
+function modernTripSequenceId(trip: CrewScheduleTrip): string {
+  const code = tripPairingBase(trip);
+  const identity = String(trip.schedulePairingId ?? trip.id ?? "").replace(
+    /\|/g,
+    "_",
+  );
+  return `trip:${identity}:${code}:${trip.startDate.slice(0, 10)}:${trip.endDate.slice(0, 10)}`;
+}
+
 export type ModernRowDayMeta = {
   linkedTrip: CrewScheduleTrip | null;
   /** Stable id for rail grouping; one per canonical sequence. */
@@ -391,7 +610,19 @@ export type ModernRowDayMeta = {
   isDayOff: boolean;
   renderedTitle: string;
   reasonIfNoDayCount: string | null;
+  displayRouteText?: string;
+  displayReportText?: string;
+  displayDEndText?: string;
+  displayLayoverText?: string;
+  displayCreditText?: string;
 };
+
+function modernCreditTextFromHours(hours: number | null | undefined): string | undefined {
+  if (hours == null || !Number.isFinite(Number(hours)) || Number(hours) <= 0) {
+    return undefined;
+  }
+  return Number(hours).toFixed(2);
+}
 
 function buildMetaForRow(
   row: DayRow,
@@ -402,8 +633,71 @@ function buildMetaForRow(
     assignmentByRowId: Map<string, ModernCanonicalRowAssignment>;
   },
 ): ModernRowDayMeta {
+  const trueOffRow = isModernTrueDayOffRow(row);
+  const injectedEmptyRow = isModernInjectedEmptyRow(row);
   const linkedProbe = resolveModernLinkedTrip(row, mergedTrips);
-  const isDayOffTile = isModernTrueDayOffRow(row) && !linkedProbe;
+
+  const assign = canonical.assignmentByRowId.get(row.id);
+  if (assign) {
+    const seq = canonical.sequenceById.get(assign.sequenceId);
+    if (seq) {
+      const linked = pickLinkedTripForCanonicalRow(row, seq, mergedTrips);
+      const iso = row.dateIso.slice(0, 10);
+      const idx = dayIndexInCalendarSpan(seq.firstDutyDate, iso);
+      const dayNumber = idx >= 0 ? idx + 1 : 0;
+      const totalDays = dayIndexInCalendarSpan(seq.firstDutyDate, seq.lastDutyDate) + 1;
+      let reasonIfNoDayCount: string | null = null;
+      if (idx < 0 || iso > seq.lastDutyDate)
+        reasonIfNoDayCount = "date_outside_chosen_span";
+
+      const pairingDisplay = seq.pairingCodeNorm;
+      const dayLine =
+        reasonIfNoDayCount || totalDays === 0
+          ? ""
+          : `Day ${dayNumber} of ${totalDays}`;
+      const renderedTitle = dayLine
+        ? `${pairingDisplay} · ${dayLine}`
+        : pairingDisplay;
+
+      const tripSpanForAudit = linked
+        ? orderedCalendarDatesInTripSpan(linked)
+        : [];
+
+      return {
+        linkedTrip: linked,
+        canonicalSequenceId: seq.id,
+        pairingCodeUsed: seq.pairingCodeNorm,
+        pairingDisplay,
+        dayNumber,
+        totalDays,
+        orderedTripDates: orderedDatesBetween(seq.firstDutyDate, seq.lastDutyDate),
+        tripSpanDates:
+          seq.sourceUsed === "trip_span"
+            ? orderedDatesBetween(seq.firstDutyDate, seq.lastDutyDate)
+            : tripSpanForAudit,
+        rawPairingDetailDates:
+          seq.sourceUsed === "raw_pairing_detail" ? [...seq.orderedDates] : [],
+        chosenSource: seq.sourceUsed,
+        railSegmentPosition: railSegmentFromDayIndex(dayNumber, totalDays),
+        dayLine,
+        renderAsPairingCard: true,
+        renderAsMiscCard: false,
+        isDayOff: false,
+        renderedTitle,
+        reasonIfNoDayCount,
+        displayCreditText:
+          dayNumber === 1
+            ? modernCreditTextFromHours(seq.pairingCreditHours)
+            : undefined,
+      };
+    }
+  }
+
+  const linkedProbeSpanDays = modernTripSpanDayCount(linkedProbe);
+  const isDayOffTile =
+    trueOffRow &&
+    !injectedEmptyRow &&
+    (!linkedProbe || linkedProbeSpanDays > 7);
 
   if (isDayOffTile) {
     return {
@@ -427,81 +721,42 @@ function buildMetaForRow(
     };
   }
 
-  const assign = canonical.assignmentByRowId.get(row.id);
-  if (assign) {
-    const seq = canonical.sequenceById.get(assign.sequenceId);
-    if (seq) {
-      const linked = pickLinkedTripForCanonicalRow(row, seq, mergedTrips);
-      const iso = row.dateIso.slice(0, 10);
-      const idx = seq.orderedDates.indexOf(iso);
-      const dayNumber = idx >= 0 ? idx + 1 : 0;
-      const totalDays = seq.totalDays;
-      let reasonIfNoDayCount: string | null = null;
-      if (idx < 0) reasonIfNoDayCount = "date_outside_chosen_span";
-
-      const pairingDisplay = seq.pairingCodeNorm;
-      const dayLine =
-        reasonIfNoDayCount || totalDays === 0 ? "" : `Day ${dayNumber} of ${totalDays}`;
-      const renderedTitle = dayLine
-        ? `${pairingDisplay} · ${dayLine}`
-        : pairingDisplay;
-
-      const tripSpanForAudit = linked ? orderedCalendarDatesInTripSpan(linked) : [];
-
-      return {
-        linkedTrip: linked,
-        canonicalSequenceId: seq.id,
-        pairingCodeUsed: seq.pairingCodeNorm,
-        pairingDisplay,
-        dayNumber,
-        totalDays,
-        orderedTripDates: [...seq.orderedDates],
-        tripSpanDates:
-          seq.sourceUsed === "trip_span" ? [...seq.orderedDates] : tripSpanForAudit,
-        rawPairingDetailDates:
-          seq.sourceUsed === "raw_pairing_detail" ? [...seq.orderedDates] : [],
-        chosenSource: seq.sourceUsed,
-        railSegmentPosition: railSegmentFromDayIndex(dayNumber, totalDays),
-        dayLine,
-        renderAsPairingCard: true,
-        renderAsMiscCard: false,
-        isDayOff: false,
-        renderedTitle,
-        reasonIfNoDayCount,
-      };
-    }
-  }
-
   const linked = linkedProbe;
 
   if (linked) {
     const tripSpanDates = orderedCalendarDatesInTripSpan(linked);
     const code = tripPairingBase(linked) || "—";
+    const iso = row.dateIso.slice(0, 10);
+    const dayIndex = tripSpanDates.indexOf(iso);
+    const dayNumber = dayIndex >= 0 ? dayIndex + 1 : 0;
+    const totalDays = tripSpanDates.length;
+    const dayLine =
+      dayNumber > 0 && totalDays > 0 ? `Day ${dayNumber} of ${totalDays}` : "";
     const ledgerNorm = normalizeModernLedgerPairing(row.pairingText);
     const rawPairing = String(row.pairingText ?? "").trim();
     const pairingDisplay =
       rawPairing && !isPlaceholderPairingCode(ledgerNorm)
-        ? rawPairing.toUpperCase().split("·")[0]?.trim() ?? code
+        ? (rawPairing.toUpperCase().split("·")[0]?.trim() ?? code)
         : code;
 
     return {
       linkedTrip: linked,
-      canonicalSequenceId: null,
+      canonicalSequenceId: dayLine ? modernTripSequenceId(linked) : null,
       pairingCodeUsed: code,
       pairingDisplay,
-      dayNumber: 0,
-      totalDays: 0,
+      dayNumber,
+      totalDays,
       orderedTripDates: [],
       tripSpanDates,
       rawPairingDetailDates: [],
-      chosenSource: null,
-      railSegmentPosition: null,
-      dayLine: "",
+      chosenSource: dayLine ? "trip_span" : null,
+      railSegmentPosition: railSegmentFromDayIndex(dayNumber, totalDays),
+      dayLine,
       renderAsPairingCard: true,
       renderAsMiscCard: false,
       isDayOff: false,
-      renderedTitle: pairingDisplay,
-      reasonIfNoDayCount: "no_canonical_sequence_match",
+      renderedTitle: dayLine ? `${pairingDisplay} · ${dayLine}` : pairingDisplay,
+      reasonIfNoDayCount: dayLine ? null : "no_canonical_sequence_match",
     };
   }
 
