@@ -141,35 +141,14 @@ export function buildFlicaCalendarDisplayLedgerFromHtml(
   html: string,
   monthKey: string,
 ): FlicaCalendarDisplayLedger {
-  const devLog = typeof __DEV__ !== "undefined" && __DEV__;
-  if (devLog) {
-    console.log("[FLICA_CALENDAR_TABLE_LEDGER]", "parse_start", { monthKey });
-  }
-
   const y = parseInt(monthKey.slice(0, 4), 10);
   const viewM = parseInt(monthKey.slice(5, 7), 10);
   if (!Number.isFinite(y) || !Number.isFinite(viewM) || viewM < 1 || viewM > 12) {
-    if (devLog) {
-      console.log("[FLICA_CALENDAR_TABLE_LEDGER]", "parse_end", {
-        monthKey,
-        miniTableRowCount: 0,
-        totalRowCount: 0,
-        note: "invalid_monthKey",
-      });
-    }
     return { monthKey, cells: [] };
   }
 
   const inner = extractTable2Inner(html);
   if (!inner) {
-    if (devLog) {
-      console.log("[FLICA_CALENDAR_TABLE_LEDGER]", "parse_end", {
-        monthKey,
-        miniTableRowCount: 0,
-        totalRowCount: 0,
-        note: "no_table2_inner",
-      });
-    }
     return { monthKey, cells: [] };
   }
 
@@ -206,13 +185,6 @@ export function buildFlicaCalendarDisplayLedgerFromHtml(
       isAdjacentMonth,
       isWeekendStripe,
       rawHtml: rowHtml,
-    });
-  }
-
-  if (devLog) {
-    console.log("[FLICA_CALENDAR_TABLE_LEDGER]", "mini_table_rows_found", {
-      monthKey,
-      count: rawRows.length,
     });
   }
 
@@ -273,25 +245,6 @@ export function buildFlicaCalendarDisplayLedgerFromHtml(
       isAdjacentMonth: r.isAdjacentMonth,
       isWeekend,
       rawHtml: r.rawHtml,
-    });
-  }
-
-  if (devLog) {
-    for (const c of cells) {
-      console.log("[FLICA_CALENDAR_TABLE_ROW]", {
-        isoDate: c.isoDate,
-        dow: c.dayOfWeekLabel,
-        dayOfMonth: c.dayOfMonth,
-        pairingText: c.displayCode,
-        cityText: c.displayCity,
-        isAdjacentMonth: c.isAdjacentMonth,
-        isWeekend: c.isWeekend,
-      });
-    }
-    console.log("[FLICA_CALENDAR_TABLE_LEDGER]", "parse_end", {
-      monthKey,
-      miniTableRowCount: rawRows.length,
-      totalRowCount: cells.length,
     });
   }
 

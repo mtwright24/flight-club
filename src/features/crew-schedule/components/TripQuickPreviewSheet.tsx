@@ -92,6 +92,8 @@ export default function TripQuickPreviewSheet({
   const [resolveSettled, setResolveSettled] = useState(false);
   const [occurrenceDisplaySpan, setOccurrenceDisplaySpan] =
     useState<PairingOccurrenceDisplaySpan | null>(null);
+  const [occurrenceResolveSettled, setOccurrenceResolveSettled] =
+    useState(false);
   const previewTargetTripIdRef = useRef<string>("");
   const previewPaintSealedRef = useRef(false);
 
@@ -223,18 +225,27 @@ export default function TripQuickPreviewSheet({
   useEffect(() => {
     let cancelled = false;
     setOccurrenceDisplaySpan(null);
-    if (!visible || !trip) return;
+    setOccurrenceResolveSettled(false);
+    if (!visible || !trip) {
+      setOccurrenceResolveSettled(true);
+      return;
+    }
     const pointer = peekStashedDetailPointer(trip.id);
-    void resolvePairingOccurrenceDisplaySpan({ trip, pointer }).then((span) => {
-      if (!cancelled) setOccurrenceDisplaySpan(span);
-    });
+    void resolvePairingOccurrenceDisplaySpan({ trip, pointer })
+      .then((span) => {
+        if (!cancelled) setOccurrenceDisplaySpan(span);
+      })
+      .finally(() => {
+        if (!cancelled) setOccurrenceResolveSettled(true);
+      });
     return () => {
       cancelled = true;
     };
   }, [visible, trip?.id, trip?.pairingCode, trip?.startDate, trip?.endDate]);
 
-  const previewPointer = trip ? peekStashedDetailPointer(trip.id) : undefined;
-  const needsOccurrenceSpan = Boolean(previewPointer?.selectedDateIso);
+  const needsOccurrenceSpan = Boolean(
+    trip && !isExemptFromStrictPairingPaint(trip),
+  );
 
   const paintTripBase = useMemo((): CrewScheduleTrip | null => {
     if (!trip) return null;
@@ -255,15 +266,20 @@ export default function TripQuickPreviewSheet({
   );
 
   const showLoadingShell = Boolean(
-    visible && trip && !isExemptFromStrictPairingPaint(trip) && !resolveSettled,
+    visible &&
+      trip &&
+      !isExemptFromStrictPairingPaint(trip) &&
+      (!resolveSettled || (needsOccurrenceSpan && !occurrenceResolveSettled)),
   );
 
   const showErrorStub = Boolean(
     visible &&
-    trip &&
-    !isExemptFromStrictPairingPaint(trip) &&
-    resolveSettled &&
-    !resolvedTrip,
+      trip &&
+      !isExemptFromStrictPairingPaint(trip) &&
+      ((resolveSettled && !resolvedTrip) ||
+        (needsOccurrenceSpan &&
+          occurrenceResolveSettled &&
+          !occurrenceDisplaySpan)),
   );
 
   const vm = useMemo(() => {
