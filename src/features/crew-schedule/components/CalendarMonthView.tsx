@@ -16,6 +16,8 @@ import {
   sanitizeFlicaLedgerCityText,
 } from "../flicaMiniCalendarTableLedger";
 import { tripForFlicaCalendarCell } from "../flicaCalendarLedgerDayRows";
+import { stashTripForDetailNavigation } from "../tripDetailNavCache";
+import TripQuickPreviewSheet from "./TripQuickPreviewSheet";
 
 const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 const PAGE_BG = "#F3F5F8";
@@ -765,6 +767,8 @@ export default function CalendarMonthView({
     initialSelectedIso(year, month),
   );
   const [displayMode, setDisplayMode] = useState<"compact" | "detailed" | "route">("detailed");
+  const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
+  const [previewDateIso, setPreviewDateIso] = useState<string | null>(null);
 
   useEffect(() => {
     setSelectedIso(initialSelectedIso(year, month));
@@ -813,6 +817,39 @@ export default function CalendarMonthView({
   const openSelectedTrip = useCallback(() => {
     if (selectedTrip && onOpenTrip) onOpenTrip(selectedTrip, selectedIso);
   }, [selectedTrip, selectedIso, onOpenTrip]);
+  const openRailDetail = useCallback(
+    (rail: CalendarTripRail, iso: string) => {
+      if (rail.trip && onOpenTrip) {
+        setSelectedIso(iso);
+        onOpenTrip(rail.trip, iso);
+      }
+    },
+    [onOpenTrip],
+  );
+  const openRailSummary = useCallback(
+    (rail: CalendarTripRail, iso: string) => {
+      if (!rail.trip) return;
+      setSelectedIso(iso);
+      stashTripForDetailNavigation(rail.trip, trips, {
+        visibleMonth: { year, month },
+        rowDateIso: iso,
+      });
+      setPreviewTrip(rail.trip);
+      setPreviewDateIso(iso);
+    },
+    [month, trips, year],
+  );
+  const closePreview = useCallback(() => {
+    setPreviewTrip(null);
+    setPreviewDateIso(null);
+  }, []);
+  const openFullFromPreview = useCallback(() => {
+    const trip = previewTrip;
+    const iso = previewDateIso ?? undefined;
+    setPreviewTrip(null);
+    setPreviewDateIso(null);
+    if (trip && onOpenTrip) onOpenTrip(trip, iso);
+  }, [onOpenTrip, previewDateIso, previewTrip]);
 
   return (
     <View style={styles.page}>
@@ -931,12 +968,14 @@ export default function CalendarMonthView({
                     {cell.day}
                   </Text>
                   {selected ? <View style={styles.selectedDayRing} /> : null}
-                  <View style={styles.railLayer} pointerEvents="none">
+                  <View style={styles.railLayer} pointerEvents="box-none">
                     {segments.map((segment) => (
                       <CalendarRailSegmentView
                         key={`${segment.rail.id}-${iso}`}
                         segment={segment}
                         currentIso={iso}
+                        onPressRail={openRailDetail}
+                        onLongPressRail={openRailSummary}
                       />
                     ))}
                   </View>
@@ -953,6 +992,13 @@ export default function CalendarMonthView({
         canOpen={Boolean(selectedTrip && onOpenTrip)}
         onOpen={openSelectedTrip}
       />
+      <TripQuickPreviewSheet
+        visible={previewTrip != null}
+        trip={previewTrip}
+        pairingUuid={previewTrip?.schedulePairingId}
+        onClose={closePreview}
+        onOpenFullTrip={openFullFromPreview}
+      />
     </View>
   );
 }
@@ -960,15 +1006,34 @@ export default function CalendarMonthView({
 function CalendarRailSegmentView({
   segment,
   currentIso,
+  onPressRail,
+  onLongPressRail,
 }: {
   segment: RailSegment;
   currentIso: string;
+  onPressRail: (rail: CalendarTripRail, iso: string) => void;
+  onLongPressRail: (rail: CalendarTripRail, iso: string) => void;
 }) {
   const color = railHex(segment.rail.railColor);
   const top = 30 + segment.rail.lane * 13;
   const isSingleDay = segment.isStart && segment.isEnd;
+  const canOpen = Boolean(segment.rail.trip);
   return (
-    <View style={[styles.segmentWrap, { top }]}>
+    <Pressable
+      disabled={!canOpen}
+      onPress={() => onPressRail(segment.rail, currentIso)}
+      onLongPress={() => onLongPressRail(segment.rail, currentIso)}
+      delayLongPress={420}
+      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+      style={({ pressed }) => [
+        styles.segmentWrap,
+        { top },
+        pressed && canOpen && styles.segmentPressed,
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={`Open pairing ${segment.rail.pairingCode}`}
+      accessibilityHint="Opens pairing detail. Long press for pairing summary."
+    >
       <View
         style={[
           styles.railLine,
@@ -1017,7 +1082,7 @@ function CalendarRailSegmentView({
           </Text>
         </View>
       ))}
-    </View>
+    </Pressable>
   );
 }
 
@@ -1337,6 +1402,9 @@ const styles = StyleSheet.create({
     height: 18,
     alignItems: "center",
     justifyContent: "center",
+  },
+  segmentPressed: {
+    opacity: 0.72,
   },
   railLine: {
     position: "absolute",

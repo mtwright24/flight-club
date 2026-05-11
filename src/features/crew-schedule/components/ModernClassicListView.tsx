@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     FlatList,
@@ -8,7 +8,6 @@ import {
     Text,
     View,
 } from "react-native";
-import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
 import type { FlicaCalendarListModel } from "../flicaCalendarDisplaySource";
 import { type DayRow } from "../modernClassic/classicMonthGridCore";
 import {
@@ -18,7 +17,6 @@ import {
 } from "../modernClassic/modernClassicDayDisplay";
 import {
     buildModernDayCountAudit,
-    type ModernCanonicalSequenceAudit,
     type ModernRowDayMeta,
 } from "../modernClassic/modernListPairingSequence";
 import {
@@ -34,7 +32,9 @@ import {
     PAIRING_DETAIL_STAT_DIGIT_TYPE,
 } from "../scheduleTileNumerals";
 import { mergeLayoverOntoLegDates } from "../scheduleTime";
+import { stashTripForDetailNavigation } from "../tripDetailNavCache";
 import type { CrewScheduleTrip, ScheduleMonthMetrics } from "../types";
+import TripQuickPreviewSheet from "./TripQuickPreviewSheet";
 
 /** Pairing row: avoid "800" — on Android default sans-serif often ignores light weights. */
 const PAIRING_CODE_TYPE = Platform.select({
@@ -495,6 +495,8 @@ export default function ModernClassicListView({
   onOpenManage,
   flicaCalendarListModel,
 }: Props) {
+  const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
+  const [previewDateIso, setPreviewDateIso] = useState<string | null>(null);
   const { rows, isReady, emptyMonth } = useClassicMonthDayRows({
     trips,
     year,
@@ -504,26 +506,6 @@ export default function ModernClassicListView({
     tripLayerReady,
     flicaCalendarListModel,
   });
-
-  useEffect(() => {
-    if (typeof __DEV__ === "undefined" || !__DEV__) return;
-    const mode = flicaCalendarListModel.mode;
-    const payload = {
-      listMode: mode,
-      ledgerRowCount:
-        mode === "flica_mini_table" ? flicaCalendarListModel.cells.length : 0,
-      isReady,
-      displayMode:
-        mode === "flica_mini_table"
-          ? "ledger_plus_duty_hybrid"
-          : mode === "flica_blocked"
-            ? "flica_blocked_no_fallback"
-            : "duty_classic_rows",
-      rowCount: rows?.length ?? 0,
-    };
-    console.log("[FC_MODERN_LIST_SOURCE]", payload);
-    fcDevMirrorScheduleLogToFile("FC_MODERN_LIST_SOURCE", payload);
-  }, [flicaCalendarListModel, rows, isReady]);
 
   const visibleMonth = `${year}-${String(month).padStart(2, "0")}`;
 
@@ -540,6 +522,7 @@ export default function ModernClassicListView({
     flicaCalendarListModel.mode === "flica_mini_table"
       ? flicaCalendarListModel.rawPairingDetailIndex
       : null;
+  const todayIso = modernIsoDateFromLocalDate(new Date());
 
   const renderRows = useMemo(
     () =>
@@ -549,40 +532,35 @@ export default function ModernClassicListView({
     [rows, year, month],
   );
 
-  const { modernMetaByRowId, modernCanonicalSequenceAudit } = useMemo(() => {
+  const modernMetaByRowId = useMemo(() => {
     if (!renderRows?.length) {
-      return {
-        modernMetaByRowId: new Map<string, ModernRowDayMeta>(),
-        modernCanonicalSequenceAudit:
-          null as ModernCanonicalSequenceAudit | null,
-      };
+      return new Map<string, ModernRowDayMeta>();
     }
-    const { metaByRowId, canonicalAudit } = buildModernDayCountAudit(
+    const { metaByRowId } = buildModernDayCountAudit(
       renderRows,
       mergedTripsForModern,
       visibleMonth,
       rawPairingDetailIndex,
     );
-    return {
-      modernMetaByRowId: overrideModernRenderedPairingSpans(renderRows, metaByRowId),
-      modernCanonicalSequenceAudit: canonicalAudit,
-    };
+    return overrideModernRenderedPairingSpans(renderRows, metaByRowId);
   }, [renderRows, visibleMonth, mergedTripsForModern, rawPairingDetailIndex]);
 
-  useEffect(() => {
-    if (typeof __DEV__ === "undefined" || !__DEV__) return;
-    if (!modernCanonicalSequenceAudit) return;
-    const payload = {
-      visibleMonth,
-      pairings: modernCanonicalSequenceAudit.pairings,
-      rows: modernCanonicalSequenceAudit.rows,
-    };
-    console.log("[FC_MODERN_CANONICAL_SEQUENCE_AUDIT]", payload);
-    fcDevMirrorScheduleLogToFile(
-      "FC_MODERN_CANONICAL_SEQUENCE_AUDIT",
-      payload as unknown as Record<string, unknown>,
-    );
-  }, [modernCanonicalSequenceAudit, visibleMonth]);
+  const activePairingSequenceIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const meta of modernMetaByRowId.values()) {
+      const sequenceDates = meta.orderedTripDates.length
+        ? meta.orderedTripDates
+        : meta.tripSpanDates;
+      if (
+        meta.renderAsPairingCard &&
+        meta.canonicalSequenceId &&
+        sequenceDates.includes(todayIso)
+      ) {
+        ids.add(meta.canonicalSequenceId);
+      }
+    }
+    return ids;
+  }, [modernMetaByRowId, todayIso]);
 
   const listData = useMemo((): ListSeg[] => {
     if (!renderRows?.length) return [];
@@ -594,32 +572,30 @@ export default function ModernClassicListView({
     [listData, modernMetaByRowId],
   );
 
-  useEffect(() => {
-    if (typeof __DEV__ === "undefined" || !__DEV__) return;
-    if (!listData.length) return;
-    const auditRows = listData.flatMap((item, listIndex) => {
-      if (item.kind !== "row") return [];
-      const meta = modernMetaByRowId.get(item.row.id);
-      const rail = modernPairingRailByRowId.get(item.row.id);
-      return [
-        {
-          listIndex,
-          dateIso: item.row.dateIso.slice(0, 10),
-          pairingCode: meta?.pairingCodeUsed ?? meta?.pairingDisplay ?? "",
-          linkedTripId: rail?.linkedTripId ?? null,
-          railPosition: rail?.railPosition ?? ("none" as const),
-          previousRowLinkedTripId: rail?.prevRowLinkedTripId ?? null,
-          nextRowLinkedTripId: rail?.nextRowLinkedTripId ?? null,
-        },
-      ];
-    });
-    const payload = { rowCount: auditRows.length, rows: auditRows };
-    console.log("[FC_MODERN_PAIRING_RAIL_AUDIT]", payload);
-    fcDevMirrorScheduleLogToFile(
-      "FC_MODERN_PAIRING_RAIL_AUDIT",
-      payload as unknown as Record<string, unknown>,
-    );
-  }, [listData, modernMetaByRowId, modernPairingRailByRowId]);
+  const openPairingSummary = useCallback(
+    (trip: CrewScheduleTrip, rowDateIso?: string) => {
+      stashTripForDetailNavigation(trip, trips, {
+        visibleMonth: { year, month },
+        rowDateIso: rowDateIso ?? null,
+      });
+      setPreviewTrip(trip);
+      setPreviewDateIso(rowDateIso ?? null);
+    },
+    [trips, year, month],
+  );
+
+  const closePreview = useCallback(() => {
+    setPreviewTrip(null);
+    setPreviewDateIso(null);
+  }, []);
+
+  const openFullFromPreview = useCallback(() => {
+    const trip = previewTrip;
+    const rowDateIso = previewDateIso ?? undefined;
+    setPreviewTrip(null);
+    setPreviewDateIso(null);
+    if (trip) onOpenFullTrip(trip, rowDateIso);
+  }, [onOpenFullTrip, previewDateIso, previewTrip]);
 
   if (emptyMonth && (!renderRows || renderRows.length === 0)) {
     return (
@@ -682,6 +658,12 @@ export default function ModernClassicListView({
           }
           const row = item.row;
           const meta = modernMetaByRowId.get(row.id)!;
+          const rowIso = row.dateIso.slice(0, 10);
+          const isPastDate = rowIso < todayIso;
+          const isActivePairingTile = Boolean(
+            meta.canonicalSequenceId &&
+              activePairingSequenceIds.has(meta.canonicalSequenceId),
+          );
           const isOff = meta.isDayOff;
           const renderDayOffTile = () => (
             <View style={styles.nonPairingDayTileRowWrap}>
@@ -689,6 +671,7 @@ export default function ModernClassicListView({
                 style={[
                   styles.offCardOuter,
                   row.isToday && styles.tileOutlineToday,
+                  isPastDate && styles.pastDayTile,
                 ]}
               >
                 <View style={styles.offCardInner}>
@@ -814,6 +797,12 @@ export default function ModernClassicListView({
                         ? () => onOpenFullTrip(trip!, row.dateIso)
                         : undefined
                     }
+                    onLongPress={
+                      canOpenTrip
+                        ? () => openPairingSummary(trip!, row.dateIso)
+                        : undefined
+                    }
+                    delayLongPress={420}
                     disabled={!canOpenTrip}
                     style={({ pressed }) => [
                       pressed && canOpenTrip && styles.cardStackPressed,
@@ -824,13 +813,16 @@ export default function ModernClassicListView({
                         ? `Open pairing ${pairing}`
                         : `Schedule ${pairing} ${row.dateIso}`
                     }
+                    accessibilityHint="Opens pairing detail. Long press for pairing summary."
                   >
                     <View
                       style={[
                         styles.tripCardMain,
                         extra ? styles.tripCardMainNoBottomRadius : null,
+                        isActivePairingTile && styles.activePairingTile,
                         row.isToday && styles.tileOutlineToday,
                         showPairingRail && styles.tripCardMainRailVisible,
+                        isPastDate && styles.pastDayTile,
                       ]}
                     >
                       <View style={styles.offLeftSpacerRail} />
@@ -925,7 +917,14 @@ export default function ModernClassicListView({
                       </View>
                     </View>
                     {extra ? (
-                      <View style={styles.continuationAttached}>
+                      <View
+                        style={[
+                          styles.continuationAttached,
+                          isActivePairingTile &&
+                            styles.activePairingContinuation,
+                          isPastDate && styles.pastDayTile,
+                        ]}
+                      >
                         <View style={styles.continuationDot} />
                         <Text style={styles.continuationText} numberOfLines={2}>
                           {extra}
@@ -970,6 +969,7 @@ export default function ModernClassicListView({
                   style={({ pressed }) => [
                     styles.emptyDayCardOuter,
                     pressed && row.trip && styles.cardStackPressed,
+                    isPastDate && styles.pastDayTile,
                   ]}
                 >
                   <View style={styles.emptyDayCardInner}>
@@ -1014,6 +1014,7 @@ export default function ModernClassicListView({
                 style={[
                   styles.emptyDayCardOuter,
                   row.isToday && styles.tileOutlineToday,
+                  isPastDate && styles.pastDayTile,
                 ]}
               >
                 <View style={styles.emptyDayCardInner}>
@@ -1047,6 +1048,13 @@ export default function ModernClassicListView({
             </View>
           );
         }}
+      />
+      <TripQuickPreviewSheet
+        visible={previewTrip != null}
+        trip={previewTrip}
+        pairingUuid={previewTrip?.schedulePairingId}
+        onClose={closePreview}
+        onOpenFullTrip={openFullFromPreview}
       />
     </View>
   );
@@ -1487,6 +1495,22 @@ const styles = StyleSheet.create({
   tileOutlineToday: {
     borderColor: SCHEDULE_MOCK_HEADER_RED,
     borderWidth: 2,
+  },
+  activePairingTile: {
+    backgroundColor: "#FFF7F7",
+    borderColor: "rgba(181, 22, 30, 0.55)",
+    shadowColor: SCHEDULE_MOCK_HEADER_RED,
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  activePairingContinuation: {
+    backgroundColor: "#FFF1F2",
+    borderColor: "rgba(181, 22, 30, 0.38)",
+  },
+  pastDayTile: {
+    opacity: 0.62,
   },
   /** Today-only: vertical rule between date rail and body/route column. */
   railDividerToday: {
