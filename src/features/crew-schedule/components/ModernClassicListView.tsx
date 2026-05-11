@@ -1,7 +1,7 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
-    FlatList,
+    Dimensions,
     Platform,
     Pressable,
     StyleSheet,
@@ -490,7 +490,52 @@ type Props = {
   onOpenManage?: () => void;
   /** FLICA `crew_schedule` display source (mini-table vs trip-derived vs blocked). */
   flicaCalendarListModel: FlicaCalendarListModel;
+  onInitialFocusOffset?: (y: number) => void;
 };
+
+function isModernFocusDutyRow(
+  row: DayRow,
+  meta: ModernRowDayMeta | undefined,
+): boolean {
+  if (!meta) return Boolean(row.trip);
+  if (meta.isDayOff) return false;
+  return Boolean(
+    meta.renderAsPairingCard ||
+      meta.renderAsMiscCard ||
+      row.trip ||
+      (row.kind !== "off" && row.kind !== "empty"),
+  );
+}
+
+function findModernInitialFocusIndex(
+  items: ListSeg[],
+  metaByRowId: Map<string, ModernRowDayMeta>,
+  todayIso: string,
+): number {
+  const todayCandidates = items
+    .map((item, index) => ({ item, index }))
+    .filter(
+      ({ item }) =>
+        item.kind === "row" && item.row.dateIso.slice(0, 10) === todayIso,
+    );
+  const todayDuty = todayCandidates.find(
+    ({ item }) =>
+      item.kind === "row" &&
+      isModernFocusDutyRow(item.row, metaByRowId.get(item.row.id)),
+  );
+  if (todayDuty) return todayDuty.index;
+  if (todayCandidates[0]) return todayCandidates[0].index;
+
+  const upcomingDuty = items
+    .map((item, index) => ({ item, index }))
+    .find(
+      ({ item }) =>
+        item.kind === "row" &&
+        item.row.dateIso.slice(0, 10) > todayIso &&
+        isModernFocusDutyRow(item.row, metaByRowId.get(item.row.id)),
+    );
+  return upcomingDuty?.index ?? -1;
+}
 
 export default function ModernClassicListView({
   year,
@@ -502,9 +547,14 @@ export default function ModernClassicListView({
   onOpenFullTrip,
   onOpenManage,
   flicaCalendarListModel,
+  onInitialFocusOffset,
 }: Props) {
   const [previewTrip, setPreviewTrip] = useState<CrewScheduleTrip | null>(null);
   const [previewDateIso, setPreviewDateIso] = useState<string | null>(null);
+  const autoScrollMonthRef = useRef<string | null>(null);
+  const rootYRef = useRef<number | null>(null);
+  const rowYByIndexRef = useRef(new Map<number, number>());
+  const [targetRowLayoutVersion, setTargetRowLayoutVersion] = useState(0);
   const { rows, isReady, emptyMonth } = useClassicMonthDayRows({
     trips,
     year,
@@ -580,6 +630,56 @@ export default function ModernClassicListView({
     [listData, modernMetaByRowId],
   );
 
+  const initialFocusIndex = useMemo(() => {
+    const todayMonth = todayIso.slice(0, 7);
+    if (visibleMonth < todayMonth) return -1;
+    return findModernInitialFocusIndex(listData, modernMetaByRowId, todayIso);
+  }, [listData, modernMetaByRowId, todayIso, visibleMonth]);
+
+  const recordInitialFocusRowLayout = useCallback(
+    (index: number, y: number) => {
+      if (index !== initialFocusIndex) return;
+      const previous = rowYByIndexRef.current.get(index);
+      if (previous != null && Math.abs(previous - y) < 1) return;
+      rowYByIndexRef.current.set(index, y);
+      setTargetRowLayoutVersion((version) => version + 1);
+    },
+    [initialFocusIndex],
+  );
+
+  useEffect(() => {
+    rowYByIndexRef.current.clear();
+    rootYRef.current = null;
+    setTargetRowLayoutVersion((version) => version + 1);
+  }, [visibleMonth, listData.length]);
+
+  useEffect(() => {
+    if (!onInitialFocusOffset) return;
+    if (!isReady || !renderRows || !listData.length) return;
+    if (initialFocusIndex < 0) return;
+    if (autoScrollMonthRef.current === visibleMonth) return;
+    const rootY = rootYRef.current;
+    const rowY = rowYByIndexRef.current.get(initialFocusIndex);
+    if (rootY == null || rowY == null) return;
+
+    autoScrollMonthRef.current = visibleMonth;
+    const timeout = setTimeout(() => {
+      requestAnimationFrame(() => {
+        const focusInset = Dimensions.get("window").height * 0.34;
+        onInitialFocusOffset(rootY + rowY - focusInset);
+      });
+    }, 80);
+    return () => clearTimeout(timeout);
+  }, [
+    initialFocusIndex,
+    isReady,
+    listData.length,
+    onInitialFocusOffset,
+    renderRows,
+    targetRowLayoutVersion,
+    visibleMonth,
+  ]);
+
   const openPairingSummary = useCallback(
     (trip: CrewScheduleTrip, rowDateIso?: string) => {
       stashTripForDetailNavigation(trip, trips, {
@@ -654,15 +754,39 @@ export default function ModernClassicListView({
   }
 
   return (
-    <View style={styles.root}>
-      <FlatList
-        data={listData}
-        keyExtractor={(i) => i.key}
-        scrollEnabled={false}
-        removeClippedSubviews={false}
-        renderItem={({ item }) => {
+    <View
+      style={styles.root}
+      onLayout={(event) => {
+        const nextY = event.nativeEvent.layout.y;
+        if (rootYRef.current != null && Math.abs(rootYRef.current - nextY) < 1) {
+          return;
+        }
+        rootYRef.current = nextY;
+        setTargetRowLayoutVersion((version) => version + 1);
+      }}
+    >
+      <View>
+        {listData.map((item, index) => {
+          const withInitialFocusLayout = (node: React.ReactElement) =>
+            index === initialFocusIndex ? (
+              <View
+                key={item.key}
+                onLayout={(event) =>
+                  recordInitialFocusRowLayout(
+                    index,
+                    event.nativeEvent.layout.y,
+                  )
+                }
+              >
+                {node}
+              </View>
+            ) : (
+              <React.Fragment key={item.key}>{node}</React.Fragment>
+            );
           if (item.kind === "week") {
-            return <Text style={styles.weekLabel}>{`WEEK ${item.week}`}</Text>;
+            return withInitialFocusLayout(
+              <Text style={styles.weekLabel}>{`WEEK ${item.week}`}</Text>,
+            );
           }
           const row = item.row;
           const meta = modernMetaByRowId.get(row.id)!;
@@ -716,7 +840,7 @@ export default function ModernClassicListView({
           );
 
           if (isOff) {
-            return renderDayOffTile();
+            return withInitialFocusLayout(renderDayOffTile());
           }
 
           if (meta.renderAsPairingCard) {
@@ -771,7 +895,7 @@ export default function ModernClassicListView({
                   pairingRail?.railPosition === "single"),
             );
 
-            return (
+            return withInitialFocusLayout(
               <View
                 style={[
                   styles.dayTileRowWrap,
@@ -957,15 +1081,15 @@ export default function ModernClassicListView({
                     </View>
                   ) : null}
                 </View>
-              </View>
+              </View>,
             );
           }
 
           if (meta.renderAsMiscCard) {
             const label = modernNonEmptyLabel(row.pairingText, row.cityText);
             const showDayOff = !label && !row.trip;
-            if (showDayOff) return renderDayOffTile();
-            return (
+            if (showDayOff) return withInitialFocusLayout(renderDayOffTile());
+            return withInitialFocusLayout(
               <View style={styles.nonPairingDayTileRowWrap}>
                 <Pressable
                   onPress={
@@ -1017,13 +1141,13 @@ export default function ModernClassicListView({
                     </View>
                   </View>
                 </Pressable>
-              </View>
+              </View>,
             );
           }
           const label = modernNonEmptyLabel(row.pairingText, row.cityText);
           const showDayOff = !label && !row.trip;
-          if (showDayOff) return renderDayOffTile();
-          return (
+          if (showDayOff) return withInitialFocusLayout(renderDayOffTile());
+          return withInitialFocusLayout(
             <View style={styles.nonPairingDayTileRowWrap}>
               <View
                 style={[
@@ -1060,10 +1184,10 @@ export default function ModernClassicListView({
                   </View>
                 </View>
               </View>
-            </View>
+            </View>,
           );
-        }}
-      />
+        })}
+      </View>
       <TripQuickPreviewSheet
         visible={previewTrip != null}
         trip={previewTrip}

@@ -173,6 +173,12 @@ export default function ScheduleTabScreen() {
   );
   const [flicaRow, setFlicaRow] = useState<CrewScheduleFlicaRow | null>(null);
   const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
+  const scheduleScrollRef = useRef<ScrollView | null>(null);
+  const scheduleUserScrolledRef = useRef(false);
+
+  useEffect(() => {
+    scheduleUserScrolledRef.current = false;
+  }, [viewMode, year, month]);
 
   React.useEffect(() => {
     void loadLastMonthCursor().then((c) => {
@@ -529,6 +535,14 @@ export default function ScheduleTabScreen() {
     router.push("/crew-schedule/import-flica-direct?autoSync=1");
   }, [router]);
 
+  const scrollModernScheduleToOffset = useCallback((y: number) => {
+    if (scheduleUserScrolledRef.current) return;
+    scheduleScrollRef.current?.scrollTo({
+      y: Math.max(0, y),
+      animated: false,
+    });
+  }, []);
+
   return (
     <View
       style={[
@@ -580,6 +594,7 @@ export default function ScheduleTabScreen() {
       ) : null}
 
       <ScrollView
+        ref={scheduleScrollRef}
         style={[
           styles.scroll,
           viewMode === "modernClassic" && styles.scrollModern,
@@ -590,6 +605,11 @@ export default function ScheduleTabScreen() {
         ]}
         keyboardShouldPersistTaps="handled"
         nestedScrollEnabled
+        onScrollBeginDrag={() => {
+          if (viewMode === "modernClassic") {
+            scheduleUserScrolledRef.current = true;
+          }
+        }}
         refreshControl={
           <RefreshControl
             progressViewOffset={Platform.OS === "android" ? 0 : undefined}
@@ -632,6 +652,7 @@ export default function ScheduleTabScreen() {
                 onOpenFullTrip={openTrip}
                 onOpenManage={openManage}
                 flicaCalendarListModel={flicaCalendarListModel}
+                onInitialFocusOffset={scrollModernScheduleToOffset}
               />
             </>
           ) : (
