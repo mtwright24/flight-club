@@ -421,7 +421,7 @@ export function resolveFullPairingForDetail(params: ResolveFullPairingForDetailP
   const hasCarryLedger = expanded.some(
     (t) => t.ledgerContext?.carryInFromPriorMonth === true || t.ledgerContext?.carryOutToNextMonth === true,
   );
-  const shouldMerge = expanded.length > 1 && (crossesMonths || hasCarryLedger || bestScore < 180);
+  const shouldMerge = expanded.length > 1 && (crossesMonths || hasCarryLedger);
 
   let trip: CrewScheduleTrip;
   let source: ResolveFullPairingForDetailResult['source'];

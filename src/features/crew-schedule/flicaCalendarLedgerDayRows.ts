@@ -11,6 +11,41 @@ import {
 } from "./modernClassic/classicMonthGridCore";
 import type { CrewScheduleTrip } from "./types";
 
+function iso10(raw: string | null | undefined): string {
+  return String(raw ?? "").trim().slice(0, 10);
+}
+
+function spanDays(startIso: string, endIso: string): number {
+  const a = new Date(`${startIso}T12:00:00`);
+  const b = new Date(`${endIso}T12:00:00`);
+  if (!Number.isFinite(a.getTime()) || !Number.isFinite(b.getTime())) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return Math.round((b.getTime() - a.getTime()) / 86400000) + 1;
+}
+
+function nonDashCity(cell: FlicaCalendarCell): boolean {
+  const city = String(cell.displayCity ?? "").trim();
+  return Boolean(city && city !== "-" && city !== "—" && city !== "–");
+}
+
+function shortestMatchingTrip(
+  trips: CrewScheduleTrip[],
+  predicate: (trip: CrewScheduleTrip) => boolean,
+): CrewScheduleTrip | null {
+  return (
+    trips
+      .filter(predicate)
+      .sort((a, b) => {
+        const spanDelta =
+          spanDays(iso10(a.startDate), iso10(a.endDate)) -
+          spanDays(iso10(b.startDate), iso10(b.endDate));
+        if (spanDelta !== 0) return spanDelta;
+        return iso10(b.startDate).localeCompare(iso10(a.startDate));
+      })[0] ?? null
+  );
+}
+
 export function tripForFlicaCalendarCell(
   trips: CrewScheduleTrip[],
   cell: FlicaCalendarCell,
@@ -39,16 +74,33 @@ export function tripForFlicaCalendarCell(
     return hit ?? null;
   }
 
-  if (!code) return null;
+  if (!code) {
+    if (!nonDashCity(cell)) {
+      return shortestMatchingTrip(
+        trips,
+        (t) =>
+          String(t.id ?? "").startsWith("flica-raw-carry:synthetic-calendar-gap:") &&
+          t.status !== "off" &&
+          iso >= iso10(t.startDate) &&
+          iso <= iso10(t.endDate),
+      );
+    }
+    return shortestMatchingTrip(
+      trips,
+      (t) =>
+        t.status !== "off" &&
+        iso >= iso10(t.startDate) &&
+        iso <= iso10(t.endDate),
+    );
+  }
 
-  for (const t of trips) {
-    if (iso < t.startDate.slice(0, 10) || iso > t.endDate.slice(0, 10))
-      continue;
+  return shortestMatchingTrip(trips, (t) => {
+    if (iso < iso10(t.startDate) || iso > iso10(t.endDate))
+      return false;
     const pc = (t.pairingCode ?? "").trim().toUpperCase();
     const base = pc.split("·")[0]?.trim() ?? pc;
-    if (base === u || pc === u) return t;
-  }
-  return null;
+    return base === u || pc === u;
+  });
 }
 
 export function kindFromLedgerCell(
@@ -57,6 +109,7 @@ export function kindFromLedgerCell(
 ): RowKind {
   const c = (cell.displayCode ?? "").trim().toUpperCase();
   if (!c) {
+    if (trip) return "continuation";
     const city = (cell.displayCity ?? "").trim();
     if (city && city !== "-" && city !== "—") return "continuation";
     return "empty";

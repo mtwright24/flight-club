@@ -7,7 +7,6 @@ import {
     isThinScheduleOnlyPairing,
 } from "./pairingDetailReadiness";
 import {
-    buildMonthTripsByKeyCache,
     dbEnrichmentAddsAuthoritativeFields,
     isDbEnrichedPairing,
     isPartialVisiblePairing,
@@ -28,10 +27,7 @@ import {
     validatePairingSummaryPaintReady,
 } from "./pairingRenderableGate";
 import { monthCalendarKey } from "./scheduleMonthCache";
-import {
-    pairingNavigationSessionKey,
-    warmPairingDetailSnapshot,
-} from "./scheduleStableSnapshots";
+import { pairingNavigationSessionKey } from "./scheduleStableSnapshots";
 import type { CrewScheduleTrip } from "./types";
 
 const UUID_RE_STASH =
@@ -68,13 +64,12 @@ function canonicalTripForStash(
   overlayTrips: CrewScheduleTrip[],
   pointer: DetailHandoffPointer,
 ): CrewScheduleTrip {
-  const cache = buildMonthTripsByKeyCache(pointer.selectedMonthKey);
   const { trip } = resolveFullPairingForDetail({
     pairingCode: pointer.pairingCode,
     selectedDateIso: pointer.selectedDateIso,
     selectedMonthKey: pointer.selectedMonthKey,
     visibleTrips: overlayTrips,
-    monthTripsByKeyCache: cache,
+    monthTripsByKeyCache: {},
     tripGroupId: selected.id,
   });
   return trip;
@@ -122,12 +117,6 @@ export function stashTripForDetailNavigation(
 
   stashByTripId.set(selected.id, { pointer, overlayTrips: overlay });
 
-  if (
-    isInstantPaintablePairing(canonical) ||
-    validatePairingSummaryPaintReady(canonical, pointer.selectedDateIso).ok
-  ) {
-    warmPairingDetailSnapshot(deepCloneTrip(canonical));
-  }
 }
 
 /** Pointer + overlay for DB/detail resolution (pairing row is not render-ready). */
@@ -150,7 +139,7 @@ function readCanonicalFromStash(tripId: string): CrewScheduleTrip | undefined {
     selectedDateIso: e.pointer.selectedDateIso,
     selectedMonthKey: e.pointer.selectedMonthKey,
     visibleTrips: e.overlayTrips,
-    monthTripsByKeyCache: buildMonthTripsByKeyCache(e.pointer.selectedMonthKey),
+    monthTripsByKeyCache: {},
     tripGroupId: tripId,
   });
   return trip;

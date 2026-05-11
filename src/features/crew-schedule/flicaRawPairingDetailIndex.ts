@@ -6,6 +6,8 @@
 import {
   isFlicaNonFlyingActivityId,
   parseFlicaScheduleHtml,
+  type FlicaCrew,
+  type FlicaPairingHotel,
   type FlicaPairing,
   type FlicaLeg,
 } from "../../services/flicaScheduleHtmlParser";
@@ -71,14 +73,33 @@ export type FlicaRawPairingDutyIndexEntry = {
   scheduleLabel: string | null;
   dutyIso: string;
   route: string;
+  flightNumber: string;
+  arriveLocal: string;
+  blockTime: string;
+  equipment: string;
+  isDeadhead: boolean;
   layoverCity: string;
   layoverRestRaw: string;
+  hotelName: string;
+  hotelPhone: string;
   dEndLocal: string;
+  nextReportLocal: string;
   departLocal: string;
+  reportLocal: string;
   reportFromPairingHeader: string;
   pairingStartIso: string;
   pairingEndIso: string;
+  operatingStartIso: string;
+  operatingEndIso: string;
+  daysOfWeek: string;
+  base: string;
+  routeSummary: string;
+  totalBlockMinutes: number | null;
   totalCreditMinutes: number | null;
+  totalTafbMinutes: number | null;
+  layoverTotalMinutes: number | null;
+  crewMembers: FlicaCrew[];
+  hotels: FlicaPairingHotel[];
 };
 
 /** Dev / audit summary of what made it into the index (proves coverage for carryover blocks). */
@@ -108,6 +129,28 @@ function pairingCodeForIndex(p: FlicaPairing): string {
   return normalizePairingCode(
     String((p.applyPairingCode ?? p.id) ?? "").trim(),
   );
+}
+
+function extractOperationWindowIso(pairing: FlicaPairing): {
+  start: string;
+  end: string;
+} {
+  const html = pairing.rawPairingHtml ?? "";
+  const m = html.match(/viewOperationDates\([^,]+,\s*(\d{8})\s*,\s*(\d{8})/i);
+  const toIso = (raw: string | undefined) =>
+    raw && /^\d{8}$/.test(raw)
+      ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+      : "";
+  if (m) {
+    return {
+      start: toIso(m[1]),
+      end: toIso(m[2]),
+    };
+  }
+  return {
+    start: pairing.startDate.slice(0, 10),
+    end: (pairing.endDate || pairing.startDate).slice(0, 10),
+  };
 }
 
 function buildIndexAudit(
@@ -200,15 +243,30 @@ export function buildFlicaRawPairingDetailIndex(
 
     const scheduleLabel = p.rawScheduleLabel ?? null;
     const reportHeader = (p.reportTime ?? p.baseReport ?? "").trim();
+    const operationWindow = extractOperationWindowIso(p);
     const legs = p.legs ?? [];
     if (!legs.length) continue;
 
     const dutyIsos = assignDutyIsoPerLegOrdered(p, legs);
+    const reportByDutyIso = new Map<string, string>();
+    let previousDutyIso: string | null = null;
+    let previousDutyNextReport = "";
+    for (let i = 0; i < legs.length; i += 1) {
+      const dutyIso = dutyIsos[i];
+      if (!dutyIso) continue;
+      if (dutyIso !== previousDutyIso && !reportByDutyIso.has(dutyIso)) {
+        reportByDutyIso.set(dutyIso, previousDutyNextReport || reportHeader);
+      }
+      const nextReport = (legs[i]?.nextReportTime ?? "").trim();
+      if (nextReport) previousDutyNextReport = nextReport;
+      previousDutyIso = dutyIso;
+    }
 
     for (let i = 0; i < legs.length; i += 1) {
       const leg = legs[i]!;
       const dutyIso = dutyIsos[i];
       if (!dutyIso) continue;
+      const isFirstLegForDuty = dutyIsos.findIndex((iso) => iso === dutyIso) === i;
 
       entries.push({
         pairingCodeNorm: codeKey,
@@ -216,17 +274,45 @@ export function buildFlicaRawPairingDetailIndex(
         scheduleLabel,
         dutyIso,
         route: leg.route,
+        flightNumber: (leg.flightNumber ?? "").trim(),
+        arriveLocal: (leg.arriveLocal ?? "").trim(),
+        blockTime: (leg.blockTime ?? "").trim(),
+        equipment: (leg.equipment ?? "").trim(),
+        isDeadhead: Boolean(leg.isDeadhead),
         layoverCity: (leg.layoverCity ?? "").trim(),
         layoverRestRaw: (leg.layoverTime ?? "").trim(),
+        hotelName: (leg.hotel ?? "").trim(),
+        hotelPhone: (leg.hotelPhone ?? "").trim(),
         dEndLocal: (leg.dEndLocal ?? "").trim(),
+        nextReportLocal: (leg.nextReportTime ?? "").trim(),
         departLocal: (leg.departLocal ?? "").trim(),
+        reportLocal: isFirstLegForDuty ? (reportByDutyIso.get(dutyIso) ?? "").trim() : "",
         reportFromPairingHeader: reportHeader,
         pairingStartIso: p.startDate.slice(0, 10),
         pairingEndIso: (p.endDate ?? p.startDate).slice(0, 10),
+        operatingStartIso: operationWindow.start,
+        operatingEndIso: operationWindow.end,
+        daysOfWeek: (p.daysOfWeek ?? "").trim(),
+        base: (p.baseCode ?? p.base ?? "").trim(),
+        routeSummary: (p.routeSummary ?? "").trim(),
+        totalBlockMinutes:
+          p.totalBlockMinutes != null && Number.isFinite(p.totalBlockMinutes)
+            ? p.totalBlockMinutes
+            : null,
         totalCreditMinutes:
           p.totalCreditMinutes != null && Number.isFinite(p.totalCreditMinutes)
             ? p.totalCreditMinutes
             : null,
+        totalTafbMinutes:
+          p.totalTafbMinutes != null && Number.isFinite(p.totalTafbMinutes)
+            ? p.totalTafbMinutes
+            : null,
+        layoverTotalMinutes:
+          p.layoverTotalMinutes != null && Number.isFinite(p.layoverTotalMinutes)
+            ? p.layoverTotalMinutes
+            : null,
+        crewMembers: p.crewMembers ?? [],
+        hotels: p.hotels ?? [],
       });
     }
   }
@@ -297,17 +383,6 @@ export function matchLedgerRowToRawPairingDuty(input: {
     const exact = byDate(iso);
     const rExact = pickDisambiguated(exact, city, "date_pairing");
     if (rExact) return rExact;
-
-    const neighbors = [
-      ...byDate(addIsoDays(iso, -1)),
-      ...byDate(addIsoDays(iso, 1)),
-    ];
-    const rNear = pickDisambiguated(
-      neighbors,
-      city,
-      "adjacent_day_same_pairing",
-    );
-    if (rNear) return rNear;
 
     return null;
   }

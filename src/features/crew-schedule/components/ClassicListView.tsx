@@ -911,13 +911,16 @@ export default function ClassicListView({
     if (useFlicaBlocked) {
       return [];
     }
-    if (!viewModelRows) return null;
     const todayIso = dateToIsoDateLocal(new Date());
-    const tripRows = attachDayRowGrouping(
-      viewModelRows.map((item, rowIdx) => displayItemToDayRow(item, mergedTrips, todayIso, rowIdx)),
-    );
     if (useFlicaMiniTable) {
       const visibleMonth = `${year}-${String(month).padStart(2, "0")}`;
+      const tripRows = viewModelRows
+        ? attachDayRowGrouping(
+            viewModelRows.map((item, rowIdx) =>
+              displayItemToDayRow(item, mergedTrips, todayIso, rowIdx),
+            ),
+          )
+        : [];
       return buildHybridFlicaCalendarRows({
         ledgerCells: flicaCalendarListModel.cells,
         tripDerivedRows: tripRows,
@@ -927,29 +930,12 @@ export default function ClassicListView({
         rawPairingDetailIndex: flicaCalendarListModel.rawPairingDetailIndex,
       });
     }
+    if (!viewModelRows) return null;
+    const tripRows = attachDayRowGrouping(
+      viewModelRows.map((item, rowIdx) => displayItemToDayRow(item, mergedTrips, todayIso, rowIdx)),
+    );
     return tripRows;
   }, [useFlicaMiniTable, useFlicaBlocked, flicaCalendarListModel, viewModelRows, mergedTrips, year, month]);
-
-  useEffect(() => {
-    if (typeof __DEV__ === "undefined" || !__DEV__) return;
-    const mode = flicaCalendarListModel.mode;
-    const payload = {
-      listMode: mode,
-      ledgerRowCount:
-        mode === "flica_mini_table" ? flicaCalendarListModel.cells.length : 0,
-      isReady,
-      useFlicaMiniTable,
-      displayMode:
-        mode === "flica_mini_table"
-          ? "ledger_plus_duty_hybrid"
-          : mode === "flica_blocked"
-            ? "flica_blocked_no_fallback"
-            : "duty_classic_rows",
-      rowCount: rows?.length ?? 0,
-    };
-    console.log("[FC_CLASSIC_LIST_SOURCE]", payload);
-    fcDevMirrorScheduleLogToFile("FC_CLASSIC_LIST_SOURCE", payload);
-  }, [flicaCalendarListModel, rows, isReady, useFlicaMiniTable]);
 
   if (
     isReady &&

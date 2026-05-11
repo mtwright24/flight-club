@@ -2,16 +2,14 @@
  * Merge FLICA mini-calendar ledger rows (label skeleton) with duty/trip-derived `DayRow` detail fields.
  */
 
-import { fcDevMirrorScheduleLogToFile } from "../../dev/fcDevFileLogger";
 import { isFlicaNonFlyingActivityId } from "../../services/flicaScheduleHtmlParser";
-import type { CrewScheduleLeg, CrewScheduleTrip } from "./types";
+import type { CrewScheduleTrip } from "./types";
 import type { FlicaCalendarCell } from "./flicaMiniCalendarTableLedger";
 import { sanitizeFlicaLedgerCityText } from "./flicaMiniCalendarTableLedger";
 import {
   kindFromLedgerCell,
   tripForFlicaCalendarCell,
 } from "./flicaCalendarLedgerDayRows";
-import { addIsoDays } from "./ledgerContext";
 import { formatLayoverColumnDisplay } from "./scheduleTime";
 import {
   legsForDutyDate,
@@ -42,27 +40,6 @@ function takeFromPool(
   if (i < 0) return null;
   const [row] = pool.splice(i, 1);
   return row ?? null;
-}
-
-/**
- * When strict `dutyDate` legs are missing for this calendar row, scan nearby days on the same trip
- * for **report / D-END overlay only** (never used for layover column).
- */
-function legsForDutyDateWithBracketScan(
-  trip: CrewScheduleTrip,
-  dateIso: string,
-  allowBracketScan: boolean,
-): CrewScheduleLeg[] {
-  const iso = dateIso.slice(0, 10);
-  let legs = legsForDutyDate(trip, iso);
-  if (legs.length || !allowBracketScan) return legs;
-  for (let k = 1; k <= 7; k += 1) {
-    legs = legsForDutyDate(trip, addIsoDays(iso, k));
-    if (legs.length) return legs;
-    legs = legsForDutyDate(trip, addIsoDays(iso, -k));
-    if (legs.length) return legs;
-  }
-  return [];
 }
 
 /**
@@ -226,25 +203,13 @@ function finalizeHybridLayoverColumn(row: DayRow): DayRow {
   return { ...row, layoverText: lay };
 }
 
-type MergeMeta = {
-  matchedBy: string;
-  matchedDutyRow: { id: string; reportText: string; dEndText: string; layoverText: string } | null;
-};
-
-function overlayTripLegDetailsOntoRow(row: DayRow, cell: FlicaCalendarCell): DayRow {
+function overlayTripLegDetailsOntoRow(row: DayRow, _cell: FlicaCalendarCell): DayRow {
   const t = row.trip;
   if (!t) return row;
   let next = row;
   const iso = row.dateIso.slice(0, 10);
 
-  const legsStrict = legsForDutyDate(t, iso);
-  const allowBracketScan =
-    cell.isAdjacentMonth ||
-    (legsStrict.length === 0 && isDateWithinTripSpan(t, iso));
-  const legsForTimes =
-    legsStrict.length > 0
-      ? legsStrict
-      : legsForDutyDateWithBracketScan(t, iso, allowBracketScan);
+  const legsForTimes = legsForDutyDate(t, iso);
 
   if (!String(row.reportText).trim() || !String(row.dEndText).trim()) {
     if (legsForTimes.length) {
@@ -269,51 +234,39 @@ function overlayTripLegDetailsOntoRow(row: DayRow, cell: FlicaCalendarCell): Day
   return next;
 }
 
-function rowHasUnexpectedGaps(
-  row: DayRow,
-  ledgerCell: FlicaCalendarCell | undefined,
-): boolean {
-  if (!row.trip || !ledgerCell) return false;
-  const ledgerPair = String(ledgerCell.displayCode ?? "").trim();
-  const hasLedgerPair = ledgerPair.length > 0;
-  const pairingBlank = !String(row.pairingText ?? "").trim();
-  if (hasLedgerPair && pairingBlank) return true;
-
-  const fly =
-    row.kind === "trip" ||
-    row.kind === "continuation" ||
-    row.kind === "deadhead";
-  if (fly) {
-    if (
-      !String(row.reportText ?? "").trim() ||
-      !String(row.dEndText ?? "").trim()
-    )
-      return true;
-  }
-
-  const t = row.trip;
-  const iso = row.dateIso.slice(0, 10);
-  const fromTripLay =
-    (t.layoverByDate?.[iso] ?? "").trim() ||
-    (t.layoverStationByDate?.[iso] ?? "").trim() ||
-    "";
-  if (fly && fromTripLay && !String(row.layoverText ?? "").trim()) {
-    return true;
-  }
-
-  return false;
-}
-
 function formatFlicaDetailTimeToken(raw: string | null | undefined): string {
   const s = String(raw ?? "").trim();
   if (!s) return "";
   return s.replace(/\s+/g, "");
 }
 
+function syntheticCalendarGapDisplayForRow(
+  trip: CrewScheduleTrip | null,
+  dateIso: string,
+): { pairingText: string; cityText: string } | null {
+  if (!isSyntheticCalendarGapTrip(trip)) {
+    return null;
+  }
+  const iso = dateIso.slice(0, 10);
+  const day = trip?.canonicalPairingDays?.[iso];
+  const start = trip?.startDate.slice(0, 10) ?? "";
+  const end = trip?.endDate.slice(0, 10) ?? "";
+  const continuationDash = start && end && iso > start && iso < end ? "-" : "";
+  return {
+    pairingText: iso === start ? trip.pairingCode : "",
+    cityText: day?.displayCityLedger ?? continuationDash,
+  };
+}
+
+function isSyntheticCalendarGapTrip(trip: CrewScheduleTrip | null): boolean {
+  return String(trip?.id ?? "").startsWith(
+    "flica-raw-carry:synthetic-calendar-gap:",
+  );
+}
+
 export function buildHybridFlicaCalendarRows({
   ledgerCells,
   tripDerivedRows,
-  visibleMonth,
   mergedTrips,
   todayIso,
   rawPairingDetailIndex,
@@ -336,28 +289,8 @@ export function buildHybridFlicaCalendarRows({
   let prevTrip: CrewScheduleTrip | null = null;
 
   const out: DayRow[] = [];
-  const mergeMeta: MergeMeta[] = [];
-  const rawDetailAuditRows: Array<Record<string, unknown>> = [];
 
   let sequencePairingNorm = "";
-
-  let miniCalendarDateRangeStart = "";
-  let miniCalendarDateRangeEnd = "";
-  for (const c of ledgerCells) {
-    const d = c.isoDate.slice(0, 10);
-    if (!miniCalendarDateRangeStart || d < miniCalendarDateRangeStart) {
-      miniCalendarDateRangeStart = d;
-    }
-    if (!miniCalendarDateRangeEnd || d > miniCalendarDateRangeEnd) {
-      miniCalendarDateRangeEnd = d;
-    }
-  }
-
-  let carryoverRowsDetected = 0;
-  let carryoverRowsMatchedToRawPairingBlock = 0;
-  let rowsStillMissingRawDetailMatch = 0;
-
-  const visibleYm = visibleMonth.trim().slice(0, 7);
 
   ledgerCells.forEach((cell, rowIdx) => {
     const dateIso = cell.isoDate;
@@ -436,27 +369,18 @@ export function buildHybridFlicaCalendarRows({
 
     if (trip) prevTrip = trip;
 
-    const rawMatch = matchLedgerRowToRawPairingDuty({
-      dateIso,
-      ledgerPairingNorm: ledgerVisibleFlyingPairing ? lc : "",
-      ledgerCitySanitized: ledgerCity,
-      inferredSequencePairingNorm: sequencePairingNorm,
-      index: rawPairingDetailIndex,
-    });
-
-    const isCarryoverLedgerRow =
-      cell.isAdjacentMonth || iso10.slice(0, 7) !== visibleYm;
-    if (isCarryoverLedgerRow) carryoverRowsDetected += 1;
-    if (isCarryoverLedgerRow && rawMatch) {
-      carryoverRowsMatchedToRawPairingBlock += 1;
-    }
+    const syntheticGapDisplay = syntheticCalendarGapDisplayForRow(trip, dateIso);
+    const rawMatch = isSyntheticCalendarGapTrip(trip)
+      ? null
+      : matchLedgerRowToRawPairingDuty({
+          dateIso,
+          ledgerPairingNorm: ledgerVisibleFlyingPairing ? lc : "",
+          ledgerCitySanitized: ledgerCity,
+          inferredSequencePairingNorm: sequencePairingNorm,
+          index: rawPairingDetailIndex,
+        });
 
     const kind = kindFromLedgerCell(cell, trip);
-
-    let matchedBy: MergeMeta["matchedBy"];
-    if (picked) matchedBy = "duty_pool";
-    else if (fallbackTrip) matchedBy = "trip_fallback";
-    else matchedBy = "none";
 
     const merged: DayRow = {
       id: `flica-hybrid:${dateIso}:${rowIdx}`,
@@ -466,8 +390,8 @@ export function buildHybridFlicaCalendarRows({
       dayCode: cell.dayOfWeekLabel,
       dayNum: cell.dayOfMonth,
       isWeekend: cell.isWeekend,
-      pairingText: ledgerPairingText,
-      cityText: cityForRow,
+      pairingText: ledgerPairingText || syntheticGapDisplay?.pairingText || "",
+      cityText: cityForRow || syntheticGapDisplay?.cityText || "",
       reportText: picked?.reportText ?? "",
       dEndText: picked?.dEndText ?? "",
       layoverText: picked?.layoverText ?? "",
@@ -492,10 +416,7 @@ export function buildHybridFlicaCalendarRows({
     let withTimes = overlayTripLegDetailsOntoRow(merged, cell);
 
     let layoverTextOut = layRes.text;
-    let rawDetailMatchReason = "";
-
     if (rawMatch) {
-      rawDetailMatchReason = rawMatch.reason;
       const layFromRaw = hybridLayoverTokenFromParsedRaw(
         rawMatch.entry.layoverRestRaw,
       );
@@ -520,12 +441,13 @@ export function buildHybridFlicaCalendarRows({
     }
 
     const withLegs = { ...withTimes, layoverText: layoverTextOut };
-    const suppressAdjacentDutyDetailsOnDashContinuation =
+    const rowCityForPlacement = String(withLegs.cityText ?? "").trim();
+    const suppressContinuationReportAndLayover =
       ledgerPairingBlankContinuation &&
-      ledgerCity === "-" &&
-      rawDetailMatchReason.startsWith("adjacent_day_same_pairing");
+      !ledgerPairingText.trim() &&
+      (!rowCityForPlacement || rowCityForPlacement === "-");
     const suppressAllFieldsOnBlankOffDay =
-      ledgerPairingBlankContinuation && !ledgerCity;
+      ledgerPairingBlankContinuation && !ledgerCity && !trip;
     const finalRow = suppressAllFieldsOnBlankOffDay
       ? {
           ...withLegs,
@@ -536,156 +458,16 @@ export function buildHybridFlicaCalendarRows({
           layoverText: "",
           wxText: "",
         }
-      : suppressAdjacentDutyDetailsOnDashContinuation
-        ? { ...withLegs, dEndText: "", layoverText: "" }
+      : suppressContinuationReportAndLayover
+        ? { ...withLegs, reportText: "", dEndText: "", layoverText: "" }
         : withLegs;
 
-    if (
-      matchedBy === "trip_fallback" &&
-      (String(finalRow.reportText).trim() ||
-        String(finalRow.dEndText).trim() ||
-        String(finalRow.layoverText).trim())
-    ) {
-      matchedBy = "legs_overlay";
-    } else if (
-      picked &&
-      (!String(merged.reportText).trim() ||
-        !String(merged.dEndText).trim() ||
-        !String(merged.layoverText).trim()) &&
-      (String(finalRow.reportText).trim() ||
-        String(finalRow.dEndText).trim() ||
-        String(finalRow.layoverText).trim())
-    ) {
-      matchedBy = "duty_pool+legs_overlay";
-    }
-
-    if (rawMatch) {
-      matchedBy =
-        matchedBy === "none" ? "raw_pairing_detail" : `${matchedBy}+raw_detail`;
-    }
-
-    mergeMeta.push({
-      matchedBy,
-      matchedDutyRow: picked
-        ? {
-            id: picked.id,
-            reportText: picked.reportText,
-            dEndText: picked.dEndText,
-            layoverText: picked.layoverText,
-          }
-        : null,
-    });
-
     const normalized = finalizeHybridLayoverColumn(finalRow);
-
-    if (isCarryoverLedgerRow && !rawMatch && !String(normalized.layoverText).trim()) {
-      rowsStillMissingRawDetailMatch += 1;
-    }
-
-    if (typeof __DEV__ !== "undefined" && __DEV__) {
-      const reasonIfBlank: string | null = String(normalized.layoverText).trim()
-        ? null
-        : (layRes.audit.blankReason ?? "no_parsed_layover");
-
-      rawDetailAuditRows.push({
-        dateIso,
-        pairingTextLedger: ledgerPairingText,
-        cityTextLedger: ledgerCity,
-        inferredSequencePairingCode: sequencePairingNorm || null,
-        rawPairingBlockMatched: Boolean(rawMatch),
-        rawPairingBlockCode: rawMatch?.entry.pairingCodeRaw ?? null,
-        rawPairingScheduleLabel: rawMatch?.entry.scheduleLabel ?? null,
-        rawDutyRowDateMatched: rawMatch?.entry.dutyIso ?? null,
-        rawDutyRouteMatched: rawMatch?.entry.route ?? null,
-        rawDutyLayoverMatched: rawMatch?.entry.layoverRestRaw ?? null,
-        finalLayoverText: normalized.layoverText,
-        finalReportText: normalized.reportText,
-        finalDEndText: normalized.dEndText,
-        rawDetailMatchReason: rawDetailMatchReason || null,
-        reasonIfBlank,
-      });
-    }
 
     out.push(normalized);
   });
 
   const mergedRows = attachDayRowGrouping(out);
-
-  if (typeof __DEV__ !== "undefined" && __DEV__) {
-    const rowSnapshots = mergedRows.map((r, i) => ({
-      dateIso: r.dateIso,
-      pairingText: r.pairingText,
-      cityText: r.cityText,
-      reportText: r.reportText,
-      dutyEndText: r.dEndText,
-      layoverText: r.layoverText,
-      isAdjacentMonth: ledgerCells[i]?.isAdjacentMonth ?? false,
-      hasTrip: Boolean(r.trip),
-      matchedDutyRow: mergeMeta[i]?.matchedDutyRow ?? null,
-      matchedBy: mergeMeta[i]?.matchedBy ?? "unknown",
-    }));
-
-    const payload = {
-      visibleMonth,
-      ledgerRowCount: ledgerCells.length,
-      tripDerivedRowCount: tripDerivedRows.length,
-      mergedRowCount: mergedRows.length,
-      rows: rowSnapshots,
-    };
-    console.log("[FC_HYBRID_CALENDAR_ROWS]", payload);
-    fcDevMirrorScheduleLogToFile("FC_HYBRID_CALENDAR_ROWS", payload);
-
-    const gapRows = mergedRows
-      .map((r, i) => {
-        if (!rowHasUnexpectedGaps(r, ledgerCells[i])) return null;
-        const cell = ledgerCells[i]!;
-        const rk = r.kind as RowKind;
-        const meta = mergeMeta[i]!;
-        return {
-          dateIso: r.dateIso,
-          ledgerPairingText: String(cell.displayCode ?? ""),
-          resolvedPairingId: r.trip?.pairingCode ?? null,
-          pairingText: r.pairingText,
-          cityText: r.cityText,
-          reportText: r.reportText,
-          dutyEndText: r.dEndText,
-          layoverText: r.layoverText,
-          isAdjacentMonth: cell.isAdjacentMonth,
-          rowKind: rk,
-          hasTrip: true,
-          matchedDutyRow: meta.matchedDutyRow,
-          matchedBy: meta.matchedBy,
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => x != null);
-    if (gapRows.length) {
-      const gapPayload = {
-        visibleMonth,
-        gapCount: gapRows.length,
-        rows: gapRows,
-      };
-      fcDevMirrorScheduleLogToFile("FC_HYBRID_ROW_GAPS", gapPayload);
-      console.log("[FC_HYBRID_ROW_GAPS]", gapPayload);
-    }
-
-    const rawIdxPayload = {
-      visibleMonth,
-      miniCalendarDateRangeStart,
-      miniCalendarDateRangeEnd,
-      rawPairingBlockCount: rawPairingDetailIndex.rawPairingBlockCount,
-      indexedDutyRowCount: rawPairingDetailIndex.indexedDutyRowCount,
-      indexAudit: rawPairingDetailIndex.indexAudit,
-      carryoverRowsDetected,
-      carryoverRowsMatchedToRawPairingBlock,
-      rowsStillMissingRawDetailMatch,
-      rows: rawDetailAuditRows,
-    };
-    fcDevMirrorScheduleLogToFile(
-      "FC_RAW_PAIRING_DETAIL_INDEX_AUDIT",
-      rawIdxPayload,
-    );
-    console.log("[FC_RAW_PAIRING_DETAIL_INDEX_AUDIT]", rawIdxPayload);
-  }
 
   return mergedRows;
 }

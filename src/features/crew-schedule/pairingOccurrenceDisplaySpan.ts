@@ -34,6 +34,16 @@ function isPairingCode(raw: string | null | undefined): boolean {
   return Boolean(code && code !== "-" && code !== "—" && code !== "–" && code !== "CONT");
 }
 
+function routeArrivalAirport(raw: string | null | undefined): string {
+  const parts = String(raw ?? "")
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const last = parts[parts.length - 1] ?? "";
+  return /^[A-Z0-9]{3,4}$/.test(last) ? last : "";
+}
+
 function addIsoDays(iso: string, days: number): string {
   const d = new Date(`${iso}T12:00:00`);
   d.setDate(d.getDate() + days);
@@ -87,9 +97,10 @@ function resolveFromRawPairingDetail(
   const selectedDate = iso10(pointer?.selectedDateIso) ?? iso10(trip.startDate);
   if (!code || !selectedDate) return null;
 
+  type RawOccurrenceEntry = (typeof cellsModel.rawPairingDetailIndex.entries)[number];
   const groups = new Map<
     string,
-    { start: string; end: string; dutyDates: Set<string>; creditMinutes: number | null }
+    { start: string; end: string; entries: RawOccurrenceEntry[]; creditMinutes: number | null }
   >();
   for (const entry of cellsModel.rawPairingDetailIndex.entries) {
     if (entry.pairingCodeNorm !== code) continue;
@@ -101,10 +112,10 @@ function resolveFromRawPairingDetail(
     const group = groups.get(key) ?? {
       start,
       end,
-      dutyDates: new Set<string>(),
+      entries: [],
       creditMinutes: null,
     };
-    group.dutyDates.add(duty);
+    group.entries.push(entry);
     if (
       group.creditMinutes == null &&
       entry.totalCreditMinutes != null &&
@@ -115,14 +126,50 @@ function resolveFromRawPairingDetail(
     groups.set(key, group);
   }
 
-  const candidates = [...groups.values()]
+  const base = String(trip.base ?? "JFK").trim().toUpperCase();
+  const candidateGroups: Array<{
+    start: string;
+    end: string;
+    dutyDates: string[];
+    creditMinutes: number | null;
+  }> = [];
+  for (const group of groups.values()) {
+    const ordered = [...group.entries].sort((a, b) => {
+      const ad = iso10(a.dutyIso) ?? "";
+      const bd = iso10(b.dutyIso) ?? "";
+      if (ad !== bd) return ad.localeCompare(bd);
+      return String(a.departLocal ?? "").localeCompare(String(b.departLocal ?? ""));
+    });
+    let segmentDutyDates: string[] = [];
+    const flushSegment = () => {
+      const dutyDates = [...new Set(segmentDutyDates)].sort();
+      if (dutyDates.length) {
+        candidateGroups.push({
+          start: group.start,
+          end: group.end,
+          dutyDates,
+          creditMinutes: group.creditMinutes,
+        });
+      }
+      segmentDutyDates = [];
+    };
+    for (const entry of ordered) {
+      const duty = iso10(entry.dutyIso);
+      if (!duty) continue;
+      segmentDutyDates.push(duty);
+      if (base && routeArrivalAirport(entry.route) === base) {
+        flushSegment();
+      }
+    }
+    flushSegment();
+  }
+
+  const candidates = candidateGroups
     .map((group) => {
-      const dutyDates = [...group.dutyDates].sort();
+      const dutyDates = group.dutyDates;
       const dutyStart = dutyDates[0] ?? group.start;
       const dutyEnd = dutyDates[dutyDates.length - 1] ?? group.end;
-      const start = group.start <= dutyStart ? group.start : dutyStart;
-      const end = group.end >= dutyEnd ? group.end : dutyEnd;
-      return makeSpan(start, end, "raw_pairing_detail", group.creditMinutes);
+      return makeSpan(dutyStart, dutyEnd, "raw_pairing_detail", group.creditMinutes);
     })
     .filter((span): span is PairingOccurrenceDisplaySpan => {
       if (!span) return false;
@@ -145,6 +192,28 @@ function cityIsBase(cell: FlicaCalendarCell, trip: CrewScheduleTrip): boolean {
   return Boolean(city && base && city === base);
 }
 
+function hasLedgerCellEvidence(cell: FlicaCalendarCell | undefined, code: string): boolean {
+  if (!cell) return false;
+  if (normPairingCode(cell.displayCode) === code) return true;
+  const city = sanitizeFlicaLedgerCityText(cell.displayCity).trim();
+  return Boolean(city && city !== "-" && city !== "—" && city !== "–");
+}
+
+function tripHasDateEvidence(trip: CrewScheduleTrip, dateIso: string): boolean {
+  if (
+    String(trip.id ?? "").startsWith("flica-ledger:") &&
+    dateIso >= String(trip.startDate ?? "").slice(0, 10) &&
+    dateIso <= String(trip.endDate ?? "").slice(0, 10)
+  ) {
+    return true;
+  }
+  if (trip.legs?.some((leg) => iso10(leg.dutyDate) === dateIso)) return true;
+  const canonicalDay = trip.canonicalPairingDays?.[dateIso];
+  if (canonicalDay?.segments?.length) return true;
+  if (trip.layoverByDate?.[dateIso] || trip.layoverStationByDate?.[dateIso]) return true;
+  return trip.status === "continuation";
+}
+
 function resolveFromFlicaLedger(
   trip: CrewScheduleTrip,
   pointer: DetailHandoffPointer | undefined,
@@ -158,6 +227,13 @@ function resolveFromFlicaLedger(
   const cells = [...cellsModel.cells].sort((a, b) => a.isoDate.localeCompare(b.isoDate));
   const selectedIndex = cells.findIndex((cell) => cell.isoDate === selectedDate);
   if (selectedIndex < 0) return null;
+  const selectedCell = cells[selectedIndex];
+  if (
+    !hasLedgerCellEvidence(selectedCell, code) &&
+    !tripHasDateEvidence(trip, selectedDate)
+  ) {
+    return null;
+  }
 
   let startIndex = -1;
   for (let i = selectedIndex; i >= 0; i -= 1) {
@@ -209,6 +285,23 @@ function fallbackFromTripSpan(
   const span = makeSpan(start, end, "trip_span");
   if (!span || span.dutyDayCount > MAX_NORMAL_PAIRING_DAYS) return null;
   return span;
+}
+
+function pickShortestNormalSpan(
+  spans: Array<PairingOccurrenceDisplaySpan | null>,
+): PairingOccurrenceDisplaySpan | null {
+  const candidates = spans.filter(
+    (span): span is PairingOccurrenceDisplaySpan => Boolean(span),
+  );
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => {
+    const normalA = a.dutyDayCount > 0 && a.dutyDayCount <= MAX_NORMAL_PAIRING_DAYS ? 0 : 1;
+    const normalB = b.dutyDayCount > 0 && b.dutyDayCount <= MAX_NORMAL_PAIRING_DAYS ? 0 : 1;
+    if (normalA !== normalB) return normalA - normalB;
+    if (a.dutyDayCount !== b.dutyDayCount) return a.dutyDayCount - b.dutyDayCount;
+    return a.displayStartDate.localeCompare(b.displayStartDate);
+  });
+  return candidates[0] ?? null;
 }
 
 function filterDateRecord<T>(
@@ -287,11 +380,14 @@ export async function resolvePairingOccurrenceDisplaySpan(args: {
   trip: CrewScheduleTrip;
   pointer?: DetailHandoffPointer;
 }): Promise<PairingOccurrenceDisplaySpan | null> {
+  const hasExplicitSelectedDate = Boolean(iso10(args.pointer?.selectedDateIso));
   const monthKey =
     args.pointer?.selectedMonthKey ??
     `${args.trip.year}-${String(args.trip.month).padStart(2, "0")}`;
   const parts = monthParts(monthKey);
-  if (!parts) return fallbackFromTripSpan(args.trip, args.pointer);
+  if (!parts) {
+    return fallbackFromTripSpan(args.trip, args.pointer);
+  }
 
   let model: ReturnType<typeof buildFlicaCalendarListModel>;
   try {
@@ -300,11 +396,31 @@ export async function resolvePairingOccurrenceDisplaySpan(args: {
   } catch {
     return fallbackFromTripSpan(args.trip, args.pointer);
   }
-  const rawSpan = resolveFromRawPairingDetail(args.trip, args.pointer, model);
-  if (rawSpan) return rawSpan;
-
+  const selectedDate = iso10(args.pointer?.selectedDateIso);
+  if (selectedDate && model.mode === "flica_mini_table") {
+    const code = normPairingCode(args.pointer?.pairingCode || args.trip.pairingCode);
+    const selectedCell = model.cells.find((cell) => cell.isoDate === selectedDate);
+    if (
+      !hasLedgerCellEvidence(selectedCell, code) &&
+      !tripHasDateEvidence(args.trip, selectedDate)
+    ) {
+      return null;
+    }
+  }
   const ledgerSpan = resolveFromFlicaLedger(args.trip, args.pointer, model);
-  if (ledgerSpan) return ledgerSpan;
+  const rawSpan = resolveFromRawPairingDetail(args.trip, args.pointer, model);
+  const tripSpan = fallbackFromTripSpan(args.trip, args.pointer);
 
+  const bestSpan = pickShortestNormalSpan([rawSpan, tripSpan, ledgerSpan]);
+  if (bestSpan) {
+    return {
+      ...bestSpan,
+      pairingCreditHours: bestSpan.pairingCreditHours ?? rawSpan?.pairingCreditHours,
+    };
+  }
+
+  if (hasExplicitSelectedDate) {
+    return fallbackFromTripSpan(args.trip, args.pointer);
+  }
   return fallbackFromTripSpan(args.trip, args.pointer);
 }

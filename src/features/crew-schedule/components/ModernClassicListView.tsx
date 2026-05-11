@@ -279,6 +279,14 @@ function overrideModernRenderedPairingSpans(
         }
       }
     }
+    if (
+      meta?.chosenSource === "trip_span" &&
+      meta.linkedTrip &&
+      meta.totalDays >= 2 &&
+      meta.totalDays <= 7
+    ) {
+      continue;
+    }
     const base = modernTripBase(row, meta);
     const city = modernRouteCity(row);
     const codeRows = codedRowsByCode.get(code) ?? [];
@@ -877,7 +885,7 @@ export default function ModernClassicListView({
                         >
                           {route}
                         </Text>
-                        <Text style={styles.reportLine} numberOfLines={2}>
+                        <Text style={styles.reportLine} numberOfLines={1}>
                           <Text
                             style={[
                               styles.rptStrong,
@@ -965,7 +973,14 @@ export default function ModernClassicListView({
                       ? () => onOpenFullTrip(row.trip!, row.dateIso)
                       : undefined
                   }
+                  onLongPress={
+                    row.trip
+                      ? () => openPairingSummary(row.trip!, row.dateIso)
+                      : undefined
+                  }
+                  delayLongPress={420}
                   disabled={!row.trip}
+                  accessibilityHint="Opens pairing detail. Long press for pairing summary."
                   style={({ pressed }) => [
                     styles.emptyDayCardOuter,
                     pressed && row.trip && styles.cardStackPressed,
@@ -1230,7 +1245,7 @@ export default function ModernClassicListView({
                         >
                           {route}
                         </Text>
-                        <Text style={styles.reportLine} numberOfLines={2}>
+                        <Text style={styles.reportLine} numberOfLines={1}>
                           <Text
                             style={[
                               styles.rptStrong,
@@ -1320,7 +1335,14 @@ export default function ModernClassicListView({
                       ? () => onOpenFullTrip(row.trip!, row.dateIso)
                       : undefined
                   }
+                  onLongPress={
+                    row.trip
+                      ? () => openPairingSummary(row.trip!, row.dateIso)
+                      : undefined
+                  }
+                  delayLongPress={420}
                   disabled={!row.trip}
+                  accessibilityHint="Opens pairing detail. Long press for pairing summary."
                   style={({ pressed }) => [
                     styles.emptyDayCardOuter,
                     pressed && row.trip && styles.cardStackPressed,

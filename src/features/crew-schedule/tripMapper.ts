@@ -508,6 +508,26 @@ function isCarryMergePairing(p: string): boolean {
   return true;
 }
 
+function isLeadingCarryContinuationTrip(
+  trip: CrewScheduleTrip,
+  currentRows: ScheduleEntryRow[],
+  viewMonthStart: string,
+): boolean {
+  if (trip.startDate !== viewMonthStart) return false;
+  if (!currentRows.length) return false;
+  return currentRows.every((row) => {
+    const pairing = normPairingCode(row.pairing_code ?? "");
+    const status = normPairingCode(row.status_code ?? "");
+    return (
+      !pairing ||
+      pairing === "CONT" ||
+      pairing === "-" ||
+      pairing === "—" ||
+      status === "CONT"
+    );
+  });
+}
+
 /**
  * FLICA / `schedule_import_replace_month` often assigns **different** `trip_group_id` per month. Then
  * March J1016 and April J1016 are two trips; id-based merge misses them. Merge when the same pairing
@@ -531,6 +551,36 @@ export function mergeCarryInTripsByContiguousPairing(
 
   return trips.map((t) => {
     const withYm = { ...t, year: viewYear, month: viewMonth };
+    const cRowsForTrip = currentMonthRows.filter((r) => r.trip_group_id === t.id);
+    if (isLeadingCarryContinuationTrip(t, cRowsForTrip, viewMonthStart)) {
+      for (const p of prevTrips) {
+        if (usedPrevIds.has(p.id)) continue;
+        const pCode = normPairingCode(p.pairingCode);
+        if (!isCarryMergePairing(pCode)) continue;
+        const touchesBoundary =
+          p.endDate >= t.startDate || addIsoDays(p.endDate, 1) === t.startDate;
+        if (!touchesBoundary) continue;
+
+        const pRows = prevMonthRows.filter((r) => r.trip_group_id === p.id);
+        if (!pRows.length || !cRowsForTrip.length) continue;
+
+        const combined = [...pRows, ...cRowsForTrip].sort((a, b) =>
+          a.date.localeCompare(b.date),
+        );
+        const merged = entriesToSingleTrip(combined);
+        if (!merged) continue;
+
+        usedPrevIds.add(p.id);
+        return {
+          ...merged,
+          year: viewYear,
+          month: viewMonth,
+          id: t.id,
+          ledgerContext: t.ledgerContext ?? merged.ledgerContext,
+        };
+      }
+    }
+
     if (t.startDate < viewMonthStart) {
       return withYm;
     }
@@ -546,7 +596,7 @@ export function mergeCarryInTripsByContiguousPairing(
       if (addIsoDays(p.endDate, 1) !== t.startDate) continue;
 
       const pRows = prevMonthRows.filter((r) => r.trip_group_id === p.id);
-      const cRows = currentMonthRows.filter((r) => r.trip_group_id === t.id);
+      const cRows = cRowsForTrip;
       if (!pRows.length || !cRows.length) continue;
 
       const combined = [...pRows, ...cRows].sort((a, b) =>

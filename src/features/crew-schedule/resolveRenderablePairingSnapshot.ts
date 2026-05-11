@@ -1,7 +1,5 @@
 import { dutiesToCrewScheduleLegs } from "./jetblueFlicaImport";
 import {
-    adjacentMonthKeys,
-    buildMonthTripsByKeyCache,
     isDbEnrichedPairing,
     resolveFullPairingForDetail,
     scorePairingCompleteness,
@@ -23,24 +21,12 @@ import {
     resolveSchedulePairingDbIdByOverlap,
     type ScheduleTripMetadataRow,
 } from "./scheduleApi";
-import { monthCalendarKey } from "./scheduleMonthCache";
-import {
-    pairingSnapshotKey,
-    readCommittedMonthSnapshot,
-    readPairingDetailSnapshot,
-} from "./scheduleStableSnapshots";
 import { getDetailNavigationStashForResolve } from "./tripDetailNavCache";
 import { entriesToSingleTrip } from "./tripMapper";
 import type { CrewScheduleTrip } from "./types";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function normCode(s: string | undefined | null): string {
-  return String(s ?? "")
-    .trim()
-    .toUpperCase();
-}
 
 function isoOk(s: string | null | undefined): boolean {
   return /^\d{4}-\d{2}-\d{2}/.test(String(s ?? "").slice(0, 10));
@@ -60,29 +46,6 @@ function anchorInSpan(
   if (isExemptFromStrictPairingPaint(trip)) return true;
   const d = anchorIso.slice(0, 10);
   return d >= trip.startDate.slice(0, 10) && d <= trip.endDate.slice(0, 10);
-}
-
-function pickBestCommittedTrip(
-  tripId: string,
-  pairingCode: string | undefined,
-  monthCenterKey: string,
-): CrewScheduleTrip | null {
-  let best: CrewScheduleTrip | null = null;
-  let bestScore = -1;
-  const code = pairingCode ? normCode(pairingCode) : "";
-  for (const mk of adjacentMonthKeys(monthCenterKey)) {
-    const snap = readCommittedMonthSnapshot(mk);
-    for (const t of snap?.trips ?? []) {
-      if (String(t.id) !== String(tripId)) continue;
-      if (code && normCode(t.pairingCode) !== code) continue;
-      const sc = scorePairingCompleteness(t);
-      if (sc > bestScore) {
-        bestScore = sc;
-        best = t;
-      }
-    }
-  }
-  return best;
 }
 
 function finalizeAsyncCandidate(
@@ -134,7 +97,7 @@ function canonicalFromStashEntry(tripId: string): CrewScheduleTrip | null {
     selectedDateIso: pointer.selectedDateIso,
     selectedMonthKey: pointer.selectedMonthKey,
     visibleTrips: overlayTrips,
-    monthTripsByKeyCache: buildMonthTripsByKeyCache(pointer.selectedMonthKey),
+    monthTripsByKeyCache: {},
     tripGroupId: tripId,
   }).trip;
 }
@@ -143,6 +106,52 @@ export type InstantPaintPick = { trip: CrewScheduleTrip; source: string };
 
 function withTripId(tripId: string, t: CrewScheduleTrip): CrewScheduleTrip {
   return { ...t, id: tripId };
+}
+
+function iso10(raw: string | null | undefined): string {
+  return String(raw ?? "").slice(0, 10);
+}
+
+function spanDayCount(startIso: string, endIso: string): number {
+  const start = Date.parse(`${startIso}T12:00:00`);
+  const end = Date.parse(`${endIso}T12:00:00`);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return Number.MAX_SAFE_INTEGER;
+  return Math.round((end - start) / 86400000) + 1;
+}
+
+function mergeCanonicalOccurrenceOverDb(
+  fromDb: CrewScheduleTrip,
+  canon: CrewScheduleTrip | null,
+  anchorIso: string | null,
+): CrewScheduleTrip {
+  if (!canon) return fromDb;
+  if (String(fromDb.pairingCode ?? '').trim().toUpperCase() !== String(canon.pairingCode ?? '').trim().toUpperCase()) {
+    return fromDb;
+  }
+  const canonStart = iso10(canon.startDate);
+  const canonEnd = iso10(canon.endDate);
+  const anchor = iso10(anchorIso);
+  const canonIsConcrete =
+    /^\d{4}-\d{2}-\d{2}$/.test(canonStart) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(canonEnd) &&
+    canonEnd >= canonStart &&
+    spanDayCount(canonStart, canonEnd) <= 7 &&
+    (!anchor || (anchor >= canonStart && anchor <= canonEnd));
+  if (!canonIsConcrete) return fromDb;
+  return {
+    ...fromDb,
+    startDate: canon.startDate,
+    endDate: canon.endDate,
+    dutyDays: canon.dutyDays,
+    routeSummary: canon.routeSummary || fromDb.routeSummary,
+    origin: canon.origin ?? fromDb.origin,
+    destination: canon.destination ?? fromDb.destination,
+    layoverCity: canon.layoverCity ?? fromDb.layoverCity,
+    legs: canon.legs?.length ? canon.legs : fromDb.legs,
+    canonicalPairingDays: canon.canonicalPairingDays ?? fromDb.canonicalPairingDays,
+    layoverByDate: canon.layoverByDate ?? fromDb.layoverByDate,
+    layoverStationByDate: canon.layoverStationByDate ?? fromDb.layoverStationByDate,
+  };
 }
 
 function scoreCandidate(
@@ -163,32 +172,6 @@ function scoreCandidate(
       t: withTripId(tripId, canon),
       source: "stash_canonical",
     });
-    const warm = readPairingDetailSnapshot(pairingSnapshotKey(canon));
-    if (warm) {
-      candidates.push({ t: withTripId(tripId, warm), source: "warm_cache" });
-    }
-  }
-
-  const codeForCommitted =
-    entry?.pointer.pairingCode ?? fallbackVisibleTrip?.pairingCode;
-  const monthCenterResolved =
-    entry?.pointer.selectedMonthKey ??
-    (fallbackVisibleTrip
-      ? monthCalendarKey(fallbackVisibleTrip.year, fallbackVisibleTrip.month)
-      : null);
-
-  if (monthCenterResolved) {
-    const committed = pickBestCommittedTrip(
-      tripId,
-      codeForCommitted,
-      monthCenterResolved,
-    );
-    if (committed) {
-      candidates.push({
-        t: withTripId(tripId, committed),
-        source: "committed_month",
-      });
-    }
   }
 
   if (entry) {
@@ -260,32 +243,6 @@ export function buildPairingFirstPaintDecision(
   const pointerAnchor = pointer?.selectedDateIso ?? anchorIso ?? null;
 
   const canon = canonicalFromStashEntry(tripId);
-  const warmExists = Boolean(
-    canon && readPairingDetailSnapshot(pairingSnapshotKey(canon)),
-  );
-
-  const monthCenterResolved =
-    pointer?.selectedMonthKey ??
-    (fallbackVisibleTrip
-      ? monthCalendarKey(fallbackVisibleTrip.year, fallbackVisibleTrip.month)
-      : null);
-  const codeProbe = pointer?.pairingCode ?? fallbackVisibleTrip?.pairingCode;
-  const committedKeys: string[] = [];
-  if (monthCenterResolved) {
-    for (const mk of adjacentMonthKeys(monthCenterResolved)) {
-      const snap = readCommittedMonthSnapshot(mk);
-      if (!snap?.trips?.length) continue;
-      if (
-        snap.trips.some(
-          (x) =>
-            String(x.id) === String(tripId) &&
-            (!codeProbe || normCode(x.pairingCode) === normCode(codeProbe)),
-        )
-      ) {
-        committedKeys.push(mk);
-      }
-    }
-  }
 
   const { candidates: candidatesAnchored, pick: pickAnchored } = scoreCandidate(
     tripId,
@@ -323,11 +280,11 @@ export function buildPairingFirstPaintDecision(
     pairingCode:
       pointer?.pairingCode ?? fallbackVisibleTrip?.pairingCode ?? null,
     selectedDateIso: pointerAnchor,
-    selectedMonthKey: monthCenterResolved ?? null,
+    selectedMonthKey: pointer?.selectedMonthKey ?? null,
     routeTripId: tripId,
     stashExists: Boolean(entry),
-    warmSnapshotExists: warmExists,
-    committedSnapshotKeysFound: committedKeys,
+    warmSnapshotExists: false,
+    committedSnapshotKeysFound: [],
     candidateCount: candidatesListed.length,
     selectedCandidateId: chosen?.id ?? null,
     selectedCandidateRoute: chosen?.routeSummary ?? null,
@@ -373,7 +330,7 @@ export type ResolveRenderablePairingSnapshotResult = {
 };
 
 /**
- * Full resolver: stash / warm / committed → DB UUID → legacy entries. Network rows need strict OR DB-enriched.
+ * Full resolver: current navigation stash → DB UUID → legacy entries. Network rows need strict OR DB-enriched.
  */
 export async function resolveRenderablePairingSnapshot(
   tripId: string,
@@ -392,12 +349,6 @@ export async function resolveRenderablePairingSnapshot(
       : null);
 
   const canon = canonicalFromStashEntry(tripId);
-  const monthCenter =
-    pointer?.selectedMonthKey ??
-    (fallbackVisibleTrip
-      ? monthCalendarKey(fallbackVisibleTrip.year, fallbackVisibleTrip.month)
-      : null);
-
   const tryCand = (
     raw: CrewScheduleTrip | null | undefined,
     source: string,
@@ -422,22 +373,6 @@ export async function resolveRenderablePairingSnapshot(
   if (canon) {
     const hit = tryCand(canon, "stash_canonical");
     if (hit) return hit;
-
-    const warm = readPairingDetailSnapshot(pairingSnapshotKey(canon));
-    if (warm) {
-      const hitW = tryCand(warm, "warm_cache");
-      if (hitW) return hitW;
-    }
-  }
-
-  if (monthCenter) {
-    const committed = pickBestCommittedTrip(
-      tripId,
-      pointer?.pairingCode ?? fallbackVisibleTrip?.pairingCode,
-      monthCenter,
-    );
-    const hitC = tryCand(committed, "committed_month");
-    if (hitC) return hitC;
   }
 
   let pairingDbId =
@@ -482,7 +417,12 @@ export async function resolveRenderablePairingSnapshot(
         id: tripId,
         schedulePairingId,
       };
-      const hitDb = tryCand(mergedForKey, "db_uuid");
+      const occurrenceMerged = mergeCanonicalOccurrenceOverDb(
+        mergedForKey,
+        canon,
+        anchorIso,
+      );
+      const hitDb = tryCand(occurrenceMerged, "db_uuid");
       if (hitDb) return hitDb;
     }
   }

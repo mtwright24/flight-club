@@ -308,10 +308,10 @@ function crewLegsFromCanonicalPairingDay(
     dutyDate: dateIso,
     departureAirport: seg.departureStation,
     arrivalAirport: seg.arrivalStation,
-    reportLocal: undefined,
+    reportLocal: index === 0 ? pd.reportTimeDisplay ?? undefined : undefined,
     departLocal: segmentTimeForUi(seg.departTimeLocal),
     arriveLocal: segmentTimeForUi(seg.arriveTimeLocal),
-    releaseLocal: undefined,
+    releaseLocal: index === pd.segments.length - 1 ? pd.dEndTimeDisplay ?? undefined : undefined,
     isDeadhead: seg.isDeadhead,
     flightNumber: seg.flightNumber ?? undefined,
     blockTimeLocal: seg.blockTimeLocal ?? undefined,
@@ -500,6 +500,11 @@ export function buildTripDetailViewModel(
   const pairingCode =
     trip.pairingCode !== "—" && trip.pairingCode ? trip.pairingCode : "Duty";
   const routeFromCanon = routeSummaryFromCanonicalLedgerCities(trip)?.trim();
+  const routeSummaryRaw = String(trip.routeSummary ?? "").trim();
+  const routeSummary =
+    routeFromCanon ||
+    (routeSummaryRaw && routeSummaryRaw !== pairingCode ? routeSummaryRaw : "") ||
+    pairingCode;
   const days = buildTripDays(trip);
   const thinSummary = shouldHideOperationalStatsPlaceholders(trip);
   const displaySpan = getDisplaySpanAndDutyDayCount(trip);
@@ -507,7 +512,7 @@ export function buildTripDetailViewModel(
   return {
     trip,
     pairingCode,
-    routeSummary: trip.routeSummary || routeFromCanon || pairingCode,
+    routeSummary,
     status: trip.status,
     statusLabel: statusLabelFromTrip(trip),
     dateRangeLabel: formatDisplayDateRangeLabel(

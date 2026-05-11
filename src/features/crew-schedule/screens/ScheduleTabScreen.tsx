@@ -43,6 +43,7 @@ import {
   buildFlicaCalendarListModel,
   type FlicaCalendarListModel,
 } from "../flicaCalendarDisplaySource";
+import { augmentTripsWithFlicaCarryoverDisplayTrips } from "../flicaCarryoverDisplayTrips";
 import type { FlicaCalendarCell } from "../flicaMiniCalendarTableLedger";
 import {
     canGoToNextImportedMonth,
@@ -226,15 +227,57 @@ export default function ScheduleTabScreen() {
     [requestedKey],
   );
 
+  const visibleFlicaRow = useMemo(
+    () => (flicaRow?.month_key === requestedKey ? flicaRow : null),
+    [flicaRow, requestedKey],
+  );
+
+  /**
+   * FLICA-imported months (`crew_schedule`): mini-calendar HTML only for list/grid.
+   * No duty/UI-snapshot override when a row exists but raw_html is missing (blocked + message).
+   */
+  const flicaCalendarListModel = useMemo((): FlicaCalendarListModel => {
+    const model = buildFlicaCalendarListModel(year, month, visibleFlicaRow);
+
+    if (model.mode === "flica_blocked") {
+      const blockedPayload = {
+        visibleMonth: model.visibleMonth,
+        reason: model.reason,
+      };
+      console.warn("[FC_FLICA_CALENDAR_BLOCKED]", blockedPayload);
+      fcDevMirrorScheduleLogToFile("FC_MONTH_GRID_SOURCE", blockedPayload);
+    }
+
+    return model;
+  }, [visibleFlicaRow, year, month]);
+
   const { displayTrips, displayMetrics } = useMemo(() => {
+    const baseTrips =
+      loading && stableMonthFallback?.trips?.length && trips.length === 0
+        ? stableMonthFallback.trips
+        : trips;
+    const augmentedTrips = augmentTripsWithFlicaCarryoverDisplayTrips(
+      baseTrips,
+      flicaCalendarListModel,
+      year,
+      month,
+    );
     if (loading && stableMonthFallback?.trips?.length && trips.length === 0) {
       return {
-        displayTrips: stableMonthFallback.trips,
+        displayTrips: augmentedTrips,
         displayMetrics: stableMonthFallback.monthMetrics,
       };
     }
-    return { displayTrips: trips, displayMetrics: monthMetrics };
-  }, [loading, stableMonthFallback, trips, monthMetrics, requestedKey]);
+    return { displayTrips: augmentedTrips, displayMetrics: monthMetrics };
+  }, [
+    loading,
+    stableMonthFallback,
+    trips,
+    monthMetrics,
+    flicaCalendarListModel,
+    year,
+    month,
+  ]);
 
   const monthBodyLoadingOverlay =
     loading && displayTrips.length === 0 && !stableMonthFallback?.trips?.length;
@@ -245,50 +288,19 @@ export default function ScheduleTabScreen() {
 
   const loadFlicaRow = useCallback(async () => {
     const mk = `${year}-${String(month).padStart(2, "0")}`;
-    const userId = session?.user?.id ?? null;
-    const queryUsed =
-      "crew_schedule: select id,month_key,pairings,stats,raw_html,imported_at — eq user_id + airline + month_key maybeSingle";
     try {
       const row = await fetchCrewScheduleFlicaForMonth(year, month);
       const current = ymRef.current;
       const currentMk = `${current.year}-${String(current.month).padStart(2, "0")}`;
       if (currentMk !== mk) return;
       setFlicaRow(row);
-      const readPayload = {
-        visibleMonth: mk,
-        found: Boolean(row),
-        crewScheduleMonthKey: row?.month_key ?? null,
-        rawHtmlLength: row?.raw_html?.length ?? 0,
-        userId,
-        profileId: userId,
-        queryUsed,
-        error: null,
-      };
-      if (typeof __DEV__ !== "undefined" && __DEV__) {
-        console.log("[FC_RAW_HTML_READ_CHECK]", readPayload);
-      }
-      fcDevMirrorScheduleLogToFile("FC_RAW_HTML_READ_CHECK", readPayload);
-    } catch (e) {
+    } catch {
       const current = ymRef.current;
       const currentMk = `${current.year}-${String(current.month).padStart(2, "0")}`;
       if (currentMk !== mk) return;
       setFlicaRow(null);
-      const readPayload = {
-        visibleMonth: mk,
-        found: false,
-        crewScheduleMonthKey: null,
-        rawHtmlLength: 0,
-        userId,
-        profileId: userId,
-        queryUsed,
-        error: e instanceof Error ? e.message : String(e),
-      };
-      if (typeof __DEV__ !== "undefined" && __DEV__) {
-        console.log("[FC_RAW_HTML_READ_CHECK]", readPayload);
-      }
-      fcDevMirrorScheduleLogToFile("FC_RAW_HTML_READ_CHECK", readPayload);
     }
-  }, [year, month, session?.user?.id]);
+  }, [year, month]);
 
   /** Refs: useFocusEffect must use a stable callback ([] deps). Otherwise any identity churn re-fires focus → setScheduleRefreshKey loops (maximum update depth). */
   const refreshSilentRef = useRef(refreshSilent);
@@ -474,56 +486,6 @@ export default function ScheduleTabScreen() {
   const openManage = useCallback(() => {
     router.push("/crew-schedule/manage");
   }, [router]);
-
-  const visibleFlicaRow = useMemo(
-    () => (flicaRow?.month_key === requestedKey ? flicaRow : null),
-    [flicaRow, requestedKey],
-  );
-
-  /**
-   * FLICA-imported months (`crew_schedule`): mini-calendar HTML only for list/grid.
-   * No duty/UI-snapshot override when a row exists but raw_html is missing (blocked + message).
-   */
-  const flicaCalendarListModel = useMemo((): FlicaCalendarListModel => {
-    const mk = `${year}-${String(month).padStart(2, "0")}`;
-    const model = buildFlicaCalendarListModel(year, month, visibleFlicaRow);
-    const rawLen = visibleFlicaRow?.raw_html?.length ?? 0;
-
-    if (typeof __DEV__ !== "undefined" && __DEV__) {
-      const cells =
-        model.mode === "flica_mini_table" ? model.cells : null;
-      const wiringPayload = {
-        visibleMonth: mk,
-        crewScheduleMonthKey: visibleFlicaRow?.month_key ?? null,
-        hasRawHtml: rawLen > 0,
-        rawHtmlLength: rawLen,
-        monthMatch: visibleFlicaRow?.month_key === mk,
-        ledgerRowCount: cells?.length ?? 0,
-        listMode: model.mode,
-        first5LedgerRows: (cells ?? []).slice(0, 5).map((c) => ({
-          isoDate: c.isoDate,
-          pairingText: c.displayCode ?? c.rawPairingText,
-          cityText: c.displayCity,
-          isAdjacentMonth: c.isAdjacentMonth,
-        })),
-      };
-      console.log("[FC_CAL_LEDGER_WIRING]", wiringPayload);
-      fcDevMirrorScheduleLogToFile("FC_CAL_LEDGER_WIRING", wiringPayload);
-    }
-
-    if (model.mode === "flica_blocked") {
-      const blockedPayload = {
-        source: "flica",
-        visibleMonth: model.visibleMonth,
-        reason: model.reason,
-        crewScheduleMonthKey: model.crewScheduleMonthKey ?? null,
-      };
-      console.warn("[FC_CAL_LEDGER_BLOCKED]", blockedPayload);
-      fcDevMirrorScheduleLogToFile("FC_CAL_LEDGER_BLOCKED", blockedPayload);
-    }
-
-    return model;
-  }, [visibleFlicaRow, year, month]);
 
   const flicaCellByIso = useMemo(() => {
     const m = new Map<string, FlicaCalendarCell>();

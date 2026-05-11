@@ -45,6 +45,12 @@ function tripIdForRail(meta: ModernRowDayMeta): string | null {
   return id != null && String(id) !== "" ? String(id) : null;
 }
 
+function railDatesForMeta(meta: ModernRowDayMeta): string[] {
+  return meta.orderedTripDates.length
+    ? meta.orderedTripDates
+    : meta.tripSpanDates;
+}
+
 function measureBridgeBetweenRowIndices(
   listData: readonly ModernListSegForRail[],
   fromRowListIndex: number,
@@ -126,8 +132,8 @@ export function computeModernPairingRailLayout(
     let samePrev = false;
     let sameNext = false;
 
-    if (gid && railPosition && meta.orderedTripDates.length) {
-      const dates = meta.orderedTripDates;
+    if (gid && railPosition && railDatesForMeta(meta).length) {
+      const dates = railDatesForMeta(meta);
       const idx = dates.indexOf(iso);
       const prevDuty = idx > 0 ? dates[idx - 1]! : null;
       const nextDuty =

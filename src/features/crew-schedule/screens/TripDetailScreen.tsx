@@ -44,13 +44,9 @@ import {
 import { buildPairingFirstPaintDecision, resolveRenderablePairingSnapshot } from '../resolveRenderablePairingSnapshot';
 import { scorePairingCompleteness } from '../pairingDetailResolve';
 import { canSealPairingSurface } from '../pairingDetailReadiness';
-import { monthCalendarKey } from '../scheduleMonthCache';
-import {
-  pairingDetailRegisterFrozenSurface,
-  readPairingDetailFromMonthCache,
-  storeDetailReadyPairingInMonthCaches,
-} from '../pairingDetailMonthCache';
-import { pairingNavigationSessionKey, readCommittedMonthSnapshot } from '../scheduleStableSnapshots';
+import { isExemptFromStrictPairingPaint } from '../pairingRenderableGate';
+import { pairingDetailRegisterFrozenSurface } from '../pairingDetailMonthCache';
+import { pairingNavigationSessionKey } from '../scheduleStableSnapshots';
 import { localCalendarDate } from '../../flight-tracker/flightDateLocal';
 import { useAuth } from '../../../hooks/useAuth';
 import { supabase } from '../../../lib/supabaseClient';
@@ -258,7 +254,7 @@ function pairingNavKeysSameTripAndCode(expected: string | null, got: string): bo
 function visibleRowFallbackForDetail(tripId: string) {
   const entry = getDetailNavigationStashForResolve(tripId);
   const fromOverlay = entry?.overlayTrips.find((t) => String(t.id) === String(tripId));
-  return fromOverlay ?? peekStashedTripForDetail(tripId) ?? null;
+  return peekStashedTripForDetail(tripId) ?? fromOverlay ?? null;
 }
 
 /**
@@ -340,6 +336,44 @@ function formatTimeForLegCard(raw: string | null | undefined): string {
   }
   if (/^\d{4}$/.test(s)) return `${s.slice(0, 2)}:${s.slice(2)}`;
   return s;
+}
+
+function reportForDayFromPairingSources(
+  trip: CrewScheduleTrip | undefined,
+  dateIso: string | null | undefined,
+): string | null {
+  const iso = String(dateIso ?? '').slice(0, 10);
+  if (!trip || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const canonicalReport = trip.canonicalPairingDays?.[iso]?.reportTimeDisplay?.trim();
+  if (canonicalReport) return canonicalReport;
+  const summaryReport = trip.summary?.legs?.find((leg) => String(leg.date ?? '').slice(0, 10) === iso)?.report?.trim();
+  if (summaryReport) return summaryReport;
+  const sameDateLegReport = trip.legs?.find((leg) => String(leg.dutyDate ?? '').slice(0, 10) === iso && leg.reportLocal?.trim())?.reportLocal?.trim();
+  return sameDateLegReport || null;
+}
+
+function routeTokensForHero(raw: string | null | undefined): string[] {
+  const out: string[] = [];
+  for (const token of String(raw ?? '').toUpperCase().split(/[^A-Z0-9]+/)) {
+    const t = token.trim();
+    if (/^[A-Z]{3,4}$/.test(t)) out.push(t);
+  }
+  return out;
+}
+
+function fallbackHeroCityForPanel(
+  trip: CrewScheduleTrip | undefined,
+  panelIndex: number,
+  totalPanels: number,
+): string {
+  if (!trip) return '—';
+  const routeTokens = routeTokensForHero(trip.routeSummary);
+  if (routeTokens.length >= 2) {
+    const base = trip.base?.trim().toUpperCase();
+    if (panelIndex === totalPanels - 1) return base || routeTokens[routeTokens.length - 1]!;
+    return routeTokens[Math.min(panelIndex + 1, routeTokens.length - 1)]!;
+  }
+  return trip.layoverCity?.trim().toUpperCase() || trip.destination?.trim().toUpperCase() || '—';
 }
 
 const NBSP = '\u00A0';
@@ -757,6 +791,8 @@ export default function TripDetailScreen() {
   const [pairingHotels, setPairingHotels] = useState<PairingDetailDbHotelRow[]>([]);
   const [occurrenceDisplaySpan, setOccurrenceDisplaySpan] =
     useState<PairingOccurrenceDisplaySpan | null>(null);
+  const [occurrenceResolveSettled, setOccurrenceResolveSettled] =
+    useState(false);
   const panelPagerRef = useRef<FlatList<TripDayViewModel>>(null);
   const operatingDayChipsRef = useRef<React.ComponentRef<typeof GHScrollView>>(null);
   const selectionSourceRef = useRef<'pager' | 'tap' | 'programmatic'>('programmatic');
@@ -875,28 +911,6 @@ export default function TripDetailScreen() {
     const pointer = peekStashedDetailPointer(tripId);
     const anchor = pointer?.selectedDateIso ?? null;
     const rowFallback = visibleRowFallbackForDetail(tripId);
-    const monthKey =
-      pointer?.selectedMonthKey ??
-      (rowFallback ? monthCalendarKey(rowFallback.year, rowFallback.month) : null);
-    const rowDate =
-      pointer?.selectedDateIso ??
-      (rowFallback?.startDate && /^\d{4}-\d{2}-\d{2}/.test(rowFallback.startDate)
-        ? rowFallback.startDate.slice(0, 10)
-        : null);
-
-    if (monthKey) {
-      const cached = readPairingDetailFromMonthCache(tripId, monthKey, rowDate);
-      if (cached && canSealPairingSurface(cached)) {
-        const navKey = pairingNavigationSessionKey(cached);
-        detailSessionKeyRef.current = navKey;
-        detailRenderScoreRef.current = scorePairingCompleteness(cached);
-        detailPaintSealedRef.current = true;
-        pairingDetailRegisterFrozenSurface(tripId);
-        setTrip(cached);
-        setLoadingTrip(false);
-        return;
-      }
-    }
 
     const { pick: instantPick } = buildPairingFirstPaintDecision(tripId, anchor, rowFallback);
     if (instantPick && canSealPairingSurface(instantPick.trip)) {
@@ -922,15 +936,25 @@ export default function TripDetailScreen() {
     () => (tripId ? peekStashedDetailPointer(tripId) : undefined),
     [tripId],
   );
-  const needsOccurrenceSpan = Boolean(detailPointer?.selectedDateIso);
+  const needsOccurrenceSpan = Boolean(
+    displayBase && !isExemptFromStrictPairingPaint(displayBase),
+  );
 
   useEffect(() => {
     let cancelled = false;
     setOccurrenceDisplaySpan(null);
-    if (!tripId || !displayBase) return;
-    void resolvePairingOccurrenceDisplaySpan({ trip: displayBase, pointer: detailPointer }).then((span) => {
-      if (!cancelled) setOccurrenceDisplaySpan(span);
-    });
+    setOccurrenceResolveSettled(false);
+    if (!tripId || !displayBase) {
+      setOccurrenceResolveSettled(true);
+      return;
+    }
+    void resolvePairingOccurrenceDisplaySpan({ trip: displayBase, pointer: detailPointer })
+      .then((span) => {
+        if (!cancelled) setOccurrenceDisplaySpan(span);
+      })
+      .finally(() => {
+        if (!cancelled) setOccurrenceResolveSettled(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -943,6 +967,8 @@ export default function TripDetailScreen() {
     detailPointer?.selectedDateIso,
     detailPointer?.selectedMonthKey,
   ]);
+
+  const resolvingOccurrence = needsOccurrenceSpan && !occurrenceResolveSettled;
 
   const display = useMemo(
     () => {
@@ -963,7 +989,10 @@ export default function TripDetailScreen() {
   const citiesByPanel = useMemo(() => {
     if (!vm?.days.length || !display) return [];
     const n = vm.days.length;
-    return vm.days.map((d, i) => primaryCityForPanel(d, display, i, n));
+    return vm.days.map((d, i) => {
+      const primary = primaryCityForPanel(d, display, i, n);
+      return primary && primary !== '—' ? primary : fallbackHeroCityForPanel(display, i, n);
+    });
   }, [vm?.days, display]);
 
   const activeCity = citiesByPanel[selectedDayIndex] ?? '—';
@@ -1003,9 +1032,12 @@ export default function TripDetailScreen() {
   const reportForSelectedDay = useMemo(() => {
     if (!vm?.days.length) return '—';
     const idx = Math.min(Math.max(0, selectedDayIndex), vm.days.length - 1);
-    const rep = vm.days[idx]!.legs.find((l) => l.reportLocal?.trim())?.reportLocal?.trim();
+    const day = vm.days[idx]!;
+    const rep =
+      day.legs.find((l) => l.reportLocal?.trim())?.reportLocal?.trim() ??
+      reportForDayFromPairingSources(display, day.dateIso);
     return rep ? formatTimeForLegCard(rep) : '—';
-  }, [vm?.days, selectedDayIndex]);
+  }, [display, vm?.days, selectedDayIndex]);
 
   useEffect(() => {
     setPairingHotels([]);
@@ -1182,10 +1214,6 @@ export default function TripDetailScreen() {
           detailPaintSealedRef.current = sealNow;
           if (sealNow) {
             pairingDetailRegisterFrozenSurface(tripId);
-            const pointer = peekStashedDetailPointer(tripId);
-            const mk = pointer?.selectedMonthKey ?? monthCalendarKey(resolved.trip.year, resolved.trip.month);
-            const idk = readCommittedMonthSnapshot(mk)?.identityKey ?? 'enriched';
-            storeDetailReadyPairingInMonthCaches(resolved.trip, idk, pointer?.selectedMonthKey ?? null);
           } else {
             pairingDetailRegisterFrozenSurface(null);
           }
@@ -1283,7 +1311,7 @@ export default function TripDetailScreen() {
     );
   }
 
-  if (loadingTrip && !trip) {
+  if ((loadingTrip && !trip) || resolvingOccurrence) {
     return (
       <View style={detailStyles.shell}>
         <CrewScheduleHeader title="Trip detail" />

@@ -799,6 +799,9 @@ export default function CalendarMonthView({
   const selectedRail = railForSelectedDate(selectedIso, segmentMap);
   const selectedTrip =
     selectedRail?.trip ??
+    (flicaCellByIso?.get(selectedIso)
+      ? tripForFlicaCalendarCell(trips, flicaCellByIso.get(selectedIso)!)
+      : null) ??
     tripForDay(selectedIso, trips);
   const selectedPreview = selectedRail
     ? previewForRail(selectedRail, selectedIso)
@@ -817,6 +820,38 @@ export default function CalendarMonthView({
   const openSelectedTrip = useCallback(() => {
     if (selectedTrip && onOpenTrip) onOpenTrip(selectedTrip, selectedIso);
   }, [selectedTrip, selectedIso, onOpenTrip]);
+  const tripForIso = useCallback(
+    (iso: string): CrewScheduleTrip | null => {
+      const railTrip = railForSelectedDate(iso, segmentMap)?.trip ?? null;
+      const ledgerTrip = flicaCellByIso?.get(iso)
+        ? tripForFlicaCalendarCell(trips, flicaCellByIso.get(iso)!)
+        : null;
+      return railTrip ?? ledgerTrip ?? tripForDay(iso, trips) ?? null;
+    },
+    [flicaCellByIso, segmentMap, trips],
+  );
+  const openDayDetail = useCallback(
+    (iso: string) => {
+      setSelectedIso(iso);
+      const trip = tripForIso(iso);
+      if (trip && onOpenTrip) onOpenTrip(trip, iso);
+    },
+    [onOpenTrip, tripForIso],
+  );
+  const openDaySummary = useCallback(
+    (iso: string) => {
+      const trip = tripForIso(iso);
+      if (!trip) return;
+      setSelectedIso(iso);
+      stashTripForDetailNavigation(trip, trips, {
+        visibleMonth: { year, month },
+        rowDateIso: iso,
+      });
+      setPreviewTrip(trip);
+      setPreviewDateIso(iso);
+    },
+    [month, tripForIso, trips, year],
+  );
   const openRailDetail = useCallback(
     (rail: CalendarTripRail, iso: string) => {
       if (rail.trip && onOpenTrip) {
@@ -946,14 +981,17 @@ export default function CalendarMonthView({
               return (
                 <Pressable
                   key={iso}
-                  onPress={() => setSelectedIso(iso)}
+                  onPress={() => openDayDetail(iso)}
+                  onLongPress={() => openDaySummary(iso)}
+                  delayLongPress={420}
                   style={[
                     styles.cellSlot,
                     hasPtv && styles.cellPtvTint,
                     hasReserve && styles.cellReserveTint,
                   ]}
                   accessibilityRole="button"
-                  accessibilityLabel={`Select ${iso}`}
+                  accessibilityLabel={`Open schedule for ${iso}`}
+                  accessibilityHint="Opens pairing detail when this date is part of a pairing. Long press for pairing summary."
                 >
                   <Text
                     style={[

@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
 import type { FlicaCalendarListModel } from "../flicaCalendarDisplaySource";
 import {
   buildClassicRowsFromDuties,
@@ -181,15 +180,16 @@ export function useClassicMonthDayRows({
     if (useFlicaBlocked) {
       return [];
     }
-    if (!viewModelRows) return null;
     const todayIso = dateToIsoDateLocal(new Date());
-    const tripRows = buildDayRowsFromDisplayItems(
-      viewModelRows,
-      mergedTrips,
-      todayIso,
-    );
     if (useFlicaMiniTable) {
       const visibleMonth = `${year}-${String(month).padStart(2, "0")}`;
+      const tripRows = viewModelRows
+        ? buildDayRowsFromDisplayItems(
+            viewModelRows,
+            mergedTrips,
+            todayIso,
+          )
+        : [];
       return buildHybridFlicaCalendarRows({
         ledgerCells: flicaCalendarListModel.cells,
         tripDerivedRows: tripRows,
@@ -199,6 +199,12 @@ export function useClassicMonthDayRows({
         rawPairingDetailIndex: flicaCalendarListModel.rawPairingDetailIndex,
       });
     }
+    if (!viewModelRows) return null;
+    const tripRows = buildDayRowsFromDisplayItems(
+      viewModelRows,
+      mergedTrips,
+      todayIso,
+    );
     return tripRows;
   }, [
     useFlicaMiniTable,
@@ -208,80 +214,6 @@ export function useClassicMonthDayRows({
     viewModelRows,
     year,
     month,
-  ]);
-
-  useEffect(() => {
-    if (typeof __DEV__ === "undefined" || !__DEV__) return;
-
-    if (useFlicaMiniTable) {
-      const payload = {
-        path: "flica_ledger_duty_hybrid_rows",
-        ymKey,
-        isReady,
-        rowCount: rows?.length ?? 0,
-        first10Rows: (rows ?? []).slice(0, 10).map((r) => ({
-          dateIso: r.dateIso,
-          pairingText: r.pairingText,
-          cityText: r.cityText,
-          reportText: r.reportText,
-          kind: r.kind,
-        })),
-      };
-      console.log("[FC_CLASSIC_ROWS_SOURCE]", payload);
-      fcDevMirrorScheduleLogToFile("FC_CLASSIC_ROWS_SOURCE", payload);
-      return;
-    }
-
-    if (useFlicaBlocked) {
-      const payload = {
-        path: "flica_ledger_blocked_empty_rows",
-        ymKey,
-        reason: flicaCalendarListModel.reason,
-        visibleMonth: flicaCalendarListModel.visibleMonth,
-        rowCount: 0,
-      };
-      console.log("[FC_CLASSIC_ROWS_SOURCE]", payload);
-      fcDevMirrorScheduleLogToFile("FC_CLASSIC_ROWS_SOURCE", payload);
-      return;
-    }
-
-    const why: string[] = [];
-    if (!tripLayerReady) why.push("trip_layer_not_ready");
-    if (!dutiesLoaded) why.push("duties_or_snapshot_not_ready");
-    if (!classicCommit || classicCommit.ymKey !== ymKey) {
-      why.push("classic_commit_not_coherent");
-    }
-    if (!viewModelRows) why.push("no_view_model_rows_yet");
-
-    const payload = {
-      path: "duty_classic_rows",
-      ymKey,
-      isReady,
-      tripLayerReady,
-      why,
-      parentLedgerHint:
-        "Trip-derived path: no crew_schedule row or emergency fallback. FLICA months use mini-table only.",
-      rowCount: rows?.length ?? 0,
-      first10Rows: (rows ?? []).slice(0, 10).map((r) => ({
-        dateIso: r.dateIso,
-        pairingText: r.pairingText,
-        cityText: r.cityText,
-        kind: r.kind,
-      })),
-    };
-    console.log("[FC_CLASSIC_ROWS_SOURCE]", payload);
-    fcDevMirrorScheduleLogToFile("FC_CLASSIC_ROWS_SOURCE", payload);
-  }, [
-    ymKey,
-    isReady,
-    useFlicaMiniTable,
-    useFlicaBlocked,
-    flicaCalendarListModel,
-    rows,
-    viewModelRows,
-    tripLayerReady,
-    dutiesLoaded,
-    classicCommit,
   ]);
 
   const emptyMonth = Boolean(
