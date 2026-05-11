@@ -29,6 +29,11 @@ function nonDashCity(cell: FlicaCalendarCell): boolean {
   return Boolean(city && city !== "-" && city !== "—" && city !== "–");
 }
 
+function isDashMarker(raw: string | null | undefined): boolean {
+  const value = String(raw ?? "").trim();
+  return value === "-" || value === "—" || value === "–";
+}
+
 function shortestMatchingTrip(
   trips: CrewScheduleTrip[],
   predicate: (trip: CrewScheduleTrip) => boolean,
@@ -46,6 +51,13 @@ function shortestMatchingTrip(
   );
 }
 
+function tripHasExactFlicaDutyDate(trip: CrewScheduleTrip, iso: string): boolean {
+  return Boolean(
+    trip.canonicalPairingDays?.[iso] ||
+      trip.legs?.some((leg) => iso10(leg.dutyDate) === iso),
+  );
+}
+
 export function tripForFlicaCalendarCell(
   trips: CrewScheduleTrip[],
   cell: FlicaCalendarCell,
@@ -53,6 +65,7 @@ export function tripForFlicaCalendarCell(
   const iso = cell.isoDate;
   const code = (cell.displayCode ?? "").trim();
   const u = code.toUpperCase();
+  const hasContinuationDash = isDashMarker(cell.displayCode) || isDashMarker(cell.displayCity);
 
   if (u === "PTV") {
     const hit =
@@ -74,12 +87,17 @@ export function tripForFlicaCalendarCell(
     return hit ?? null;
   }
 
-  if (!code) {
+  if (!code || isDashMarker(code)) {
     if (!nonDashCity(cell)) {
       return shortestMatchingTrip(
         trips,
         (t) =>
-          String(t.id ?? "").startsWith("flica-raw-carry:synthetic-calendar-gap:") &&
+          (String(t.id ?? "").startsWith("flica-raw-carry:synthetic-calendar-gap:") ||
+            (String(t.id ?? "").startsWith("flica-raw-carry:") &&
+              (tripHasExactFlicaDutyDate(t, iso) ||
+                (hasContinuationDash &&
+                  iso >= iso10(t.startDate) &&
+                  iso <= iso10(t.endDate))))) &&
           t.status !== "off" &&
           iso >= iso10(t.startDate) &&
           iso <= iso10(t.endDate),
@@ -108,7 +126,7 @@ export function kindFromLedgerCell(
   trip: CrewScheduleTrip | null,
 ): RowKind {
   const c = (cell.displayCode ?? "").trim().toUpperCase();
-  if (!c) {
+  if (!c || isDashMarker(c)) {
     if (trip) return "continuation";
     const city = (cell.displayCity ?? "").trim();
     if (city && city !== "-" && city !== "—") return "continuation";

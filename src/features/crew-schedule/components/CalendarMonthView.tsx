@@ -977,6 +977,11 @@ export default function CalendarMonthView({
               const selected = iso === selectedIso;
               const hasPtv = segments.some((segment) => segment.rail.type === "ptv");
               const hasReserve = segments.some((segment) => segment.rail.type === "reserve");
+              const hasWorkedPairing = segments.some(
+                (segment) =>
+                  segment.rail.type === "working" || segment.rail.type === "dh",
+              );
+              const isPastWorkedPairing = iso < todayIso && hasWorkedPairing;
 
               return (
                 <Pressable
@@ -988,6 +993,7 @@ export default function CalendarMonthView({
                     styles.cellSlot,
                     hasPtv && styles.cellPtvTint,
                     hasReserve && styles.cellReserveTint,
+                    isPastWorkedPairing && styles.pastWorkedPairingCell,
                   ]}
                   accessibilityRole="button"
                   accessibilityLabel={`Open schedule for ${iso}`}
@@ -1405,6 +1411,9 @@ const styles = StyleSheet.create({
   },
   cellReserveTint: {
     backgroundColor: "#FFFBEB",
+  },
+  pastWorkedPairingCell: {
+    opacity: 0.72,
   },
   dayNum: {
     position: "absolute",
