@@ -30,7 +30,13 @@ export async function saveScheduleViewMode(mode: ScheduleViewMode): Promise<void
   }
 }
 
-export type CrewScheduleTabName = 'index' | 'tradeboard' | 'trip-chat' | 'manage' | 'alerts';
+export type CrewScheduleTabName =
+  | 'index'
+  | 'tradeboard'
+  | 'opentime'
+  | 'trip-chat'
+  | 'manage'
+  | 'alerts';
 
 export async function loadLastTab(): Promise<CrewScheduleTabName | null> {
   try {
@@ -39,6 +45,7 @@ export async function loadLastTab(): Promise<CrewScheduleTabName | null> {
     if (
       v === 'index' ||
       v === 'tradeboard' ||
+      v === 'opentime' ||
       v === 'trip-chat' ||
       v === 'manage' ||
       v === 'alerts'

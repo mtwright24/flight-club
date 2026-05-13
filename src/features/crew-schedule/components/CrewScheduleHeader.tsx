@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter, type Href } from 'expo-router';
 import React from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,9 +7,20 @@ import { useNotificationsBadge } from '../../../hooks/useNotificationsBadge';
 import { useDmUnreadBadge } from '../../../hooks/useDmUnreadBadge';
 import { colors, radius, spacing } from '../../../styles/theme';
 import { useCrewScheduleHeaderBridge } from '../crewScheduleHeaderBridge';
+import { FLICA_NATIVE_URLS } from '../../flica-actions/flicaActionsNativeService';
 import { SCHEDULE_MOCK_HEADER_RED } from '../scheduleMockPalette';
 
-const TABS_HEADER_ICON = 21;
+const TABS_HEADER_ICON = 18;
+
+function crewScheduleTabTitleFromPath(pathname: string): string {
+  const p = (pathname ?? '').replace(/\/$/, '') || '/';
+  if (p.includes('tradeboard')) return 'Tradeboard';
+  if (p.includes('opentime')) return 'Open Time';
+  if (p.includes('trip-chat')) return 'Trip Chat';
+  if (p.includes('/alerts')) return 'Alerts';
+  if (p.includes('manage')) return 'Manage';
+  return 'Schedule';
+}
 
 type Props = {
   title?: string;
@@ -31,15 +42,22 @@ type Props = {
  * `scheduleTabsVariant` is set.
  */
 export default function CrewScheduleHeader({
-  title = 'Crew Schedule',
+  title: titleProp,
   relaxedBottomInset = false,
   scheduleTabsVariant = false,
 }: Props) {
   const router = useRouter();
+  const pathname = usePathname();
   const unread = useNotificationsBadge();
   const { count: dmUnread } = useDmUnreadBadge();
   const { subtitle } = useCrewScheduleHeaderBridge();
   const barRed = scheduleTabsVariant ? SCHEDULE_MOCK_HEADER_RED : colors.headerRed;
+  const tabsTitle =
+    scheduleTabsVariant && !titleProp
+      ? crewScheduleTabTitleFromPath(pathname ?? '')
+      : titleProp ?? 'Crew Schedule';
+  const isTradeboardTab =
+    scheduleTabsVariant && (pathname ?? '').replace(/\/$/, '').includes('tradeboard');
 
   const goBack = () => {
     if (router.canGoBack()) {
@@ -62,7 +80,7 @@ export default function CrewScheduleHeader({
                 ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.85 }
                 : { includeFontPadding: false })}
             >
-              {title}
+              {tabsTitle}
             </Text>
             {subtitle ? (
               <Text
@@ -97,13 +115,28 @@ export default function CrewScheduleHeader({
                 </View>
               ) : null}
             </Pressable>
-            <Pressable
-              onPress={() => router.push('/menu')}
-              style={({ pressed }) => [styles.tabsIconButton, pressed && styles.tabsIconButtonPressed]}
-              accessibilityLabel="Menu"
-            >
-              <Ionicons name="menu" size={TABS_HEADER_ICON} color={colors.cardBg} />
-            </Pressable>
+            {isTradeboardTab ? (
+              <Pressable
+                onPress={() =>
+                  router.push({
+                    pathname: '/crew-schedule/flica-web',
+                    params: { uri: encodeURIComponent(FLICA_NATIVE_URLS.tradePostRequest) },
+                  } as unknown as Href)
+                }
+                style={({ pressed }) => [styles.postPlusBtn, pressed && styles.tabsIconButtonPressed]}
+                accessibilityLabel="Post trade request"
+              >
+                <Text style={styles.postPlusText}>+ Post</Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={() => router.push('/menu')}
+                style={({ pressed }) => [styles.tabsIconButton, pressed && styles.tabsIconButtonPressed]}
+                accessibilityLabel="Menu"
+              >
+                <Ionicons name="menu" size={TABS_HEADER_ICON} color={colors.cardBg} />
+              </Pressable>
+            )}
           </View>
         </View>
       </SafeAreaView>
@@ -132,7 +165,7 @@ export default function CrewScheduleHeader({
               ? { adjustsFontSizeToMinimumFontScale: true, minimumFontScale: 0.82 }
               : {})}
           >
-            {title}
+            {tabsTitle}
           </Text>
         </View>
         <View style={styles.rightRow}>
@@ -335,5 +368,18 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
     lineHeight: 12,
+  },
+  postPlusBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: colors.cardBg,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  postPlusText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: SCHEDULE_MOCK_HEADER_RED,
   },
 });

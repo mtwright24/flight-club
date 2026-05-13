@@ -30,6 +30,28 @@ import {
   readFcScheduleDebugLogText,
 } from "../dev/fcDevFileLogger";
 import { clearAllScheduleMonthUISnapshots } from "../features/crew-schedule/scheduleSnapshotCache";
+import {
+  testFlicaSession,
+  fetchFlicaLeftMenuTest,
+  fetchFlicaOpenTimeTest,
+  fetchFlicaTradeboardTest,
+} from "../features/flica-actions/flicaActionsDevTests";
+import {
+  nativeFetchTradeBoardMyRequests,
+  nativeFetchTradeBoardAllRequests,
+  nativeFetchTradeBoardFavorites,
+  nativeFetchTradeBoardMyResponses,
+  nativeFetchTradeBoardPostRequest,
+  nativeFetchOpenTimePot,
+  nativeFetchOpenTimeMyRequests,
+  nativePreviewOpenTimeAddFlow,
+  nativePreviewOpenTimeDropFlow,
+  nativePreviewOpenTimeSwapFlow,
+  nativePreviewOpenTimeTradeFlow,
+} from "../features/flica-actions/flicaActionsNativeService";
+import { FlicaActionsActionMapSummaryButton } from "../features/flica-actions/FlicaActionsActionMapSummaryButton";
+import FlicaActionsWebView from "../features/flica-actions/FlicaActionsWebView";
+import type { FlicaActionsFetchResult } from "../features/flica-actions/flicaActionsTypes";
 
 /** System share message size cap (avoid iOS share failures on huge payloads). */
 const FC_DEBUG_LOG_SHARE_MAX = 120_000;
@@ -47,6 +69,15 @@ const FC_DEBUG_LOG_FILTER_TAGS = [
   "FC_HYBRID_CALENDAR_ROWS",
   "FC_CAL_LEDGER_BLOCKED",
   "FC_RAW_HTML_READ_CHECK",
+  "FC_FLICA_ACTIONS_SESSION_TEST",
+  "FC_FLICA_ACTIONS_LEFT_MENU_TEST",
+  "FC_FLICA_ACTIONS_OPENTIME_TEST",
+  "FC_FLICA_ACTIONS_TRADEBOARD_TEST",
+  "FC_FLICA_ACTIONS_WEBVIEW_INIT",
+  "FC_FLICA_ACTIONS_WEBVIEW_NAV",
+  "FC_FLICA_ACTIONS_LINK_CAPTURE",
+  "FC_FLICA_ACTIONS_CLICK_CAPTURE",
+  "FC_FLICA_ACTIONS_NATIVE_TEST",
 ] as const;
 
 type DebugLogFilterTag = (typeof FC_DEBUG_LOG_FILTER_TAGS)[number];
@@ -171,6 +202,440 @@ const stateOptions = [
   "WI",
   "WY",
 ];
+
+function FlicaActionsTestCard() {
+  const [loading, setLoading] = useState<string | null>(null);
+  const [result, setResult] = useState<FlicaActionsFetchResult | null>(null);
+
+  const run = async (
+    label: string,
+    fn: () => Promise<FlicaActionsFetchResult>,
+  ) => {
+    setLoading(label);
+    setResult(null);
+    try {
+      const r = await fn();
+      setResult(r);
+    } catch (e) {
+      setResult({
+        ok: false,
+        url: "",
+        error: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  return (
+    <View style={flicaActionsStyles.card}>
+      <Text style={flicaActionsStyles.title}>FLICA Actions Test</Text>
+      <Text style={flicaActionsStyles.helper}>
+        Read-only tests for Open Time and Tradeboard using your saved FLICA
+        session.
+      </Text>
+      <FlicaActionsWebView />
+      <View style={flicaActionsStyles.btnRow}>
+        <Pressable
+          style={flicaActionsStyles.btn}
+          onPress={() => run("Session", testFlicaSession)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.btnText}>
+            {loading === "Session" ? "Testing…" : "Test FLICA Session"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.btn}
+          onPress={() => run("LeftMenu", fetchFlicaLeftMenuTest)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.btnText}>
+            {loading === "LeftMenu" ? "Fetching…" : "Fetch FLICA Left Menu"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.btn}
+          onPress={() => run("OpenTime", fetchFlicaOpenTimeTest)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.btnText}>
+            {loading === "OpenTime" ? "Fetching…" : "Fetch Open Time Page"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.btn}
+          onPress={() => run("Tradeboard", fetchFlicaTradeboardTest)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.btnText}>
+            {loading === "Tradeboard" ? "Fetching…" : "Fetch Tradeboard Page"}
+          </Text>
+        </Pressable>
+      </View>
+      <Text style={flicaActionsStyles.nativeSectionLabel}>
+        Native parse layer (GET only — no submit)
+      </Text>
+      <View style={flicaActionsStyles.nativeBtnWrap}>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NTBMy", nativeFetchTradeBoardMyRequests)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NTBMy" ? "…" : "Fetch TradeBoard My Requests"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NTBAll", nativeFetchTradeBoardAllRequests)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NTBAll" ? "…" : "Fetch TradeBoard All Requests"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NTBFav", nativeFetchTradeBoardFavorites)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NTBFav" ? "…" : "Fetch TradeBoard Favorites"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NTBResp", nativeFetchTradeBoardMyResponses)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NTBResp" ? "…" : "Fetch TradeBoard My Responses"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NTBPost", nativeFetchTradeBoardPostRequest)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NTBPost" ? "…" : "Fetch TradeBoard Post Request"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NOTPot", nativeFetchOpenTimePot)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NOTPot" ? "…" : "Fetch OpenTime Pot"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NOTReq", nativeFetchOpenTimeMyRequests)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NOTReq" ? "…" : "Fetch OpenTime My Requests"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NPrevAdd", nativePreviewOpenTimeAddFlow)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NPrevAdd" ? "…" : "Preview Add Flow"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NPrevDrop", nativePreviewOpenTimeDropFlow)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NPrevDrop" ? "…" : "Preview Drop Flow"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NPrevSwap", nativePreviewOpenTimeSwapFlow)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NPrevSwap" ? "…" : "Preview Swap Flow"}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={flicaActionsStyles.nativeBtn}
+          onPress={() => run("NPrevTrade", nativePreviewOpenTimeTradeFlow)}
+          disabled={loading !== null}
+        >
+          <Text style={flicaActionsStyles.nativeBtnText}>
+            {loading === "NPrevTrade" ? "…" : "Preview Trade Flow"}
+          </Text>
+        </Pressable>
+        <FlicaActionsActionMapSummaryButton />
+      </View>
+      {loading && (
+        <ActivityIndicator
+          size="small"
+          color={colors.headerRed}
+          style={{ marginTop: spacing.sm }}
+        />
+      )}
+      {result && (
+        <View style={flicaActionsStyles.resultBox}>
+          {(() => {
+            const htmlLen = result.htmlLength ?? 0;
+            const webviewPost = result.tradeBoardPostWebviewRequired === true;
+            const effectiveOk =
+              (result.ok && htmlLen > 0) || (result.ok && webviewPost);
+            const np = result.nativeParse;
+            const buttons = np?.buttons ?? [];
+            const forms = np?.forms ?? [];
+            const rows = np?.rows ?? [];
+            const hiddenFields = np?.hiddenFields ?? [];
+            const actionEndpoints = np?.actionEndpoints ?? [];
+            const warnings = np?.warningsErrors ?? [];
+            const bodyPreviewText = String(result.bodyPreview ?? "");
+            const links = result.detectedLinks ?? [];
+            const postReqLongDebug =
+              bodyPreviewText.includes("--- TB Post Request") ||
+              String(result.error ?? "").includes("TradeBoard Post Request") ||
+              webviewPost;
+            return (
+              <>
+          <Text
+            style={[
+              flicaActionsStyles.resultStatus,
+              {
+                color: webviewPost
+                  ? "#1565c0"
+                  : effectiveOk
+                    ? "#2e7d32"
+                    : colors.headerRed,
+              },
+            ]}
+          >
+            {webviewPost
+              ? "WEBVIEW REQUIRED — Post Request page is available through FLICA WebView. Native GET intentionally skipped."
+              : effectiveOk
+                ? "SUCCESS"
+                : "FAILED"}
+            {!webviewPost && result.status != null
+              ? ` (HTTP ${result.status})`
+              : null}
+          </Text>
+          {!webviewPost && htmlLen === 0 ? (
+            <Text style={flicaActionsStyles.resultError} selectable>
+              {result.error ??
+                "Empty FLICA response. Frame warmup or referer failed."}
+              {result.nativeTradeBoardFetchDebug ? (
+                <>
+                  {"\n\n"}
+                  requestedUrl:{" "}
+                  {String(result.nativeTradeBoardFetchDebug.requestedUrl ?? "")}
+                  {"\n"}
+                  referer: {String(result.nativeTradeBoardFetchDebug.referer ?? "")}
+                  {result.nativeTradeBoardFetchDebug.fallbackUsed
+                    ? "\n(fallback GET was used)"
+                    : ""}
+                </>
+              ) : null}
+            </Text>
+          ) : null}
+          {webviewPost && result.tradeBoardPostRequestMeta ? (
+            <Text style={flicaActionsStyles.resultLine} selectable>
+              {String(result.tradeBoardPostRequestMeta.explanation ?? "")}
+              {"\n\n"}
+              requestedUrl:{" "}
+              {String(result.tradeBoardPostRequestMeta.requestedUrl ?? "")}
+              {"\n"}
+              referer: {String(result.tradeBoardPostRequestMeta.referer ?? "")}
+              {"\n"}
+              pageType:{" "}
+              {String(result.tradeBoardPostRequestMeta.pageType ?? "")}
+            </Text>
+          ) : null}
+          {result.htmlState ? (
+            <Text style={flicaActionsStyles.resultLine}>
+              State: {result.htmlState}
+            </Text>
+          ) : null}
+          {result.title ? (
+            <Text style={flicaActionsStyles.resultLine}>
+              Title: {result.title}
+            </Text>
+          ) : null}
+          <Text style={flicaActionsStyles.resultLine}>
+            HTML length: {htmlLen.toLocaleString()}
+          </Text>
+          {result.nativeTradeBoardFetchDebug && htmlLen > 0 ? (
+            <Text
+              style={flicaActionsStyles.resultLine}
+              numberOfLines={8}
+            >
+              {`TB fetch: requestedUrl=${String(result.nativeTradeBoardFetchDebug.requestedUrl ?? "")}\nreferer=${String(result.nativeTradeBoardFetchDebug.referer ?? "")} fallback=${String(result.nativeTradeBoardFetchDebug.fallbackUsed)}`}
+            </Text>
+          ) : null}
+          <Text style={flicaActionsStyles.resultLine}>
+            Table rows:{" "}
+            {result.rowCount != null
+              ? result.rowCount
+              : rows.length}
+          </Text>
+          {np && (htmlLen > 0 || webviewPost) ? (
+            <>
+              <Text style={flicaActionsStyles.resultLine}>
+                Parse pageType: {String(np.pageType ?? "")}
+              </Text>
+              {warnings.length > 0 ? (
+                <Text style={flicaActionsStyles.resultError} numberOfLines={4}>
+                  Warnings: {warnings.join(" | ")}
+                </Text>
+              ) : null}
+              <Text style={flicaActionsStyles.resultLine} numberOfLines={3}>
+                Buttons ({buttons.length}):{" "}
+                {buttons
+                  .slice(0, 8)
+                  .map((b) =>
+                    String(b?.text ?? b?.name ?? b?.type ?? ""),
+                  )
+                  .join("; ")}
+              </Text>
+              <Text style={flicaActionsStyles.resultLine} numberOfLines={2}>
+                Forms ({forms.length}):{" "}
+                {forms
+                  .slice(0, 4)
+                  .map((f) =>
+                    `${String(f?.method ?? "")} ${Number(f?.fieldCount ?? 0)} fields`,
+                  )
+                  .join(" | ")}
+              </Text>
+              <Text style={flicaActionsStyles.resultLine} numberOfLines={2}>
+                Hidden fields: {hiddenFields.length}
+              </Text>
+              <Text style={flicaActionsStyles.resultLine} numberOfLines={2}>
+                Action endpoints: {actionEndpoints.length}
+              </Text>
+            </>
+          ) : null}
+          {links.length > 0 ? (
+            <Text
+              style={flicaActionsStyles.resultLine}
+              numberOfLines={6}
+            >
+              Endpoints / links ({links.length}):{" "}
+              {links.join("; ")}
+            </Text>
+          ) : null}
+          {result.error && htmlLen > 0 ? (
+            <Text style={flicaActionsStyles.resultError}>
+              {result.error}
+            </Text>
+          ) : null}
+          {bodyPreviewText.length > 0 ? (
+            <Text
+              style={flicaActionsStyles.resultPreview}
+              numberOfLines={postReqLongDebug ? 28 : 12}
+            >
+              Preview: {bodyPreviewText}
+            </Text>
+          ) : null}
+              </>
+            );
+          })()}
+        </View>
+      )}
+    </View>
+  );
+}
+
+const flicaActionsStyles = StyleSheet.create({
+  card: {
+    marginBottom: spacing.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.cardBg,
+  },
+  title: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    marginBottom: spacing.xs,
+  },
+  helper: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginBottom: spacing.sm,
+  },
+  nativeSectionLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  nativeScroll: { marginBottom: spacing.sm, maxHeight: 44 },
+  nativeScrollContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingRight: spacing.md,
+  },
+  nativeBtnWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  nativeBtn: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: "#00695c",
+    backgroundColor: colors.cardBg,
+  },
+  nativeBtnText: { fontSize: 11, fontWeight: "600", color: "#00695c" },
+  btnRow: { gap: spacing.xs },
+  btn: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.accentBlue,
+    backgroundColor: colors.cardBg,
+    alignItems: "center",
+    marginBottom: spacing.xs,
+  },
+  btnText: { fontSize: 13, fontWeight: "600", color: colors.accentBlue },
+  resultBox: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.screenBg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  resultStatus: { fontSize: 13, fontWeight: "700", marginBottom: spacing.xs },
+  resultLine: { fontSize: 11, color: colors.textPrimary, marginBottom: 2 },
+  resultError: { fontSize: 11, color: colors.headerRed, marginTop: spacing.xs },
+  resultPreview: {
+    fontSize: 10,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
+    fontFamily: Platform.select({
+      ios: "Menlo",
+      android: "monospace",
+      default: "monospace",
+    }),
+  },
+});
 
 export default function AccountSettingsScreen() {
   const router = useRouter();
@@ -721,6 +1186,10 @@ export default function AccountSettingsScreen() {
                 </Pressable>
               </View>
             ),
+          },
+          {
+            key: "dev_flica_actions_test",
+            render: () => <FlicaActionsTestCard />,
           },
         ] satisfies Section[])
       : []),

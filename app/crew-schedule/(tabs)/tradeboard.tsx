@@ -1,6 +1,6 @@
 import React from 'react';
-import { CrewExchangeScreen } from '../../../src/screens/CrewExchangeScreen';
+import TradeboardTabScreen from '../../../src/features/crew-schedule/screens/TradeboardTabScreen';
 
 export default function CrewScheduleTradeboardTab() {
-  return <CrewExchangeScreen embedded />;
+  return <TradeboardTabScreen />;
 }

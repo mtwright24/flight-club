@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCrewScheduleSixTabBarLayout } from '../../../src/features/crew-schedule/crewScheduleTabBarConfig';
 import { scheduleTheme as T } from '../../../src/features/crew-schedule/scheduleTheme';
 import type { ScheduleViewMode } from '../../../src/features/crew-schedule/types';
 import {
@@ -51,6 +52,7 @@ const VIEW_OPTIONS: {
 export default function ManageTabScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const sixTabs = useCrewScheduleSixTabBarLayout();
   const { tripId } = useLocalSearchParams<{ tripId?: string }>();
   const tripContext =
     typeof tripId === 'string' ? tripId : Array.isArray(tripId) ? tripId[0] : undefined;
@@ -190,6 +192,19 @@ export default function ManageTabScreen() {
         <Text style={styles.screenTitle}>Manage</Text>
         <Text style={styles.subline}>Schedule tools and view controls</Text>
       </View>
+
+      {!sixTabs ? (
+        <View style={styles.alertsPromoWrap}>
+          <View style={styles.insetGroup}>
+            <ActionRow
+              icon="notifications-outline"
+              title="Alerts & Notifications"
+              subtitle="Crew schedule alerts, trip activity, and app notifications"
+              onPress={() => router.push('/crew-schedule/alerts' as Href)}
+            />
+          </View>
+        </View>
+      ) : null}
 
       {tripContext ? (
         <View style={styles.contextPill}>
@@ -357,6 +372,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   subline: { fontSize: 12, color: SUB, lineHeight: 16 },
+  alertsPromoWrap: { marginBottom: 12 },
   contextPill: {
     backgroundColor: T.surface,
     borderRadius: 8,

@@ -4,6 +4,7 @@ export default function CrewScheduleStackLayout() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="flica-web" options={{ headerShown: false }} />
       <Stack.Screen name="trip-detail" />
       <Stack.Screen name="import-schedule" />
       <Stack.Screen name="import-jetblue-source" />
