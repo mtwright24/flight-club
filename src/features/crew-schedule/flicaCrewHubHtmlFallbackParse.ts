@@ -3,7 +3,7 @@
  * or display-only rows, while real data still exists in page HTML / scripts.
  */
 import type { FlicaActionsFetchResult } from "../flica-actions/flicaActionsTypes";
-import type { OpenTimeTrip, TradeboardPost } from "./flicaCrewHubTypes";
+import type { OpenTimeTrip, TradeboardPost, TradeboardPostType } from "./flicaCrewHubTypes";
 import {
   djb2Hex,
   detectTradeboardType,
@@ -102,8 +102,25 @@ export type TradeboardExtractDebug = {
   first20PairingPatternContexts: { index: number; window: string }[];
   /** Raw HTML diagnostics for known screenshot pairing ids (+ 13MAY). */
   knownTokenProbes: TradeboardKnownTokenProbeResult[];
-  /** Primary All Requests: first table rows as `Type | Add to Favorites | J…` pipe lines. */
-  first10AllRequestsTablePipeLines: string[];
+  /** All Requests: first pipe-joined `<td>` table rows (fallback path). */
+  first10AllRequestsTablePipeLines?: string[];
+  /** All Requests: `r[n]=new A(...)` assignments found in page HTML. */
+  allRequestsARecordBodiesFound?: number;
+  /** All Requests: A-records that produced a {@link TradeboardPost}. */
+  allRequestsARecordPostsCount?: number;
+  /** First 5 A-record arg diagnostics (dev). */
+  allRequestsARecordFirst5ArgDiagnostics?: {
+    recordIndex: number;
+    argCount: number;
+    arg0?: string;
+    arg4?: string;
+    arg5?: string;
+    arg7?: string;
+    arg12?: string;
+    arg13?: string;
+    arg16?: string;
+    argsHeadPreview?: string[];
+  }[];
 };
 
 export type TradeboardKnownTokenProbeResult = {
@@ -1089,7 +1106,7 @@ function dedupePosts(posts: TradeboardPost[]): TradeboardPost[] {
   const seen = new Set<string>();
   const out: TradeboardPost[] = [];
   for (const p of posts) {
-    const k = `${p.pairingId}:${p.pairingDateLabel}:${p.type}:${p.rawText.slice(0, 80)}`;
+    const k = `${p.pairingId}:${p.pairingDateLabel}:${p.type}`;
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(p);
@@ -1791,6 +1808,239 @@ function rejectTradeboardRowCandidate(t: string): string | null {
   return null;
 }
 
+/** FLICA `new A(...)` placeholders: bare S, lowercase d, false, empty — not type code `D`. */
+function tradeboardBlankPlaceholderArg(raw: string): string {
+  let s = normalizeTaskArg(raw).trim();
+  const u = s.toUpperCase();
+  if (s === "" || u === "S" || s === "d" || u === "FALSE") return "";
+  return collapseWs(s);
+}
+
+function tradeboardTryDecodeURIComponent(s: string): string {
+  const t = String(s ?? "").trim();
+  if (!t) return "";
+  try {
+    return decodeURIComponent(t.replace(/\+/g, "%20"));
+  } catch {
+    return t;
+  }
+}
+
+function tradeboardMapRequestCodeToPostType(code: string): TradeboardPostType {
+  switch (normalizeTaskArg(code).trim().toUpperCase()) {
+    case "D":
+      return "drop";
+    case "X":
+      return "trade_drop";
+    case "T":
+      return "trade";
+    case "G":
+      return "pickup";
+    case "R":
+      return "unknown";
+    default:
+      return "unknown";
+  }
+}
+
+function tradeboardFormatEmployeeNumber(raw: string): string {
+  const t = tradeboardBlankPlaceholderArg(raw);
+  const m = t.match(/^\(\s*(\d+)\s*\)$/);
+  if (m) return m[1]!;
+  return t.replace(/[()]/g, "").trim();
+}
+
+function tradeboardResponseMethodLineFromType(type: TradeboardPostType): string {
+  const parts: string[] = [];
+  if (type === "pickup" || type === "drop" || type === "trade_drop") {
+    parts.push("Pickup Trip");
+  }
+  if (type === "trade" || type === "trade_drop" || type === "drop" || type === "swap") {
+    parts.push("Propose Trade");
+  }
+  return parts.join(" | ");
+}
+
+function extractTradeboardNewAInners(pageHtml: string): string[] {
+  const src = String(pageHtml ?? "");
+  const re = /\br\[\d+\]\s*=\s*new\s+A\s*\(/gi;
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    const full = m[0] ?? "";
+    const openIdx = m.index + full.length - 1;
+    if (src[openIdx] !== "(") continue;
+    const inner = sliceBalancedParenInner(src, openIdx);
+    if (inner != null && inner.length > 12) out.push(inner);
+  }
+  return out;
+}
+
+function tradeboardBuildPostFromNewAArgs(
+  args: string[],
+  sourceUrl: string,
+  rawInnerPreview: string,
+): TradeboardPost | null {
+  if (args.length < 28) return null;
+  const g = (i: number) => (i < args.length ? args[i]! : "");
+  const pairingId = tradeboardBlankPlaceholderArg(g(5)).toUpperCase();
+  const dateLabel = tradeboardBlankPlaceholderArg(g(7)).toUpperCase();
+  if (!/^J[A-Z0-9]{3,5}$/i.test(pairingId)) return null;
+  if (!/^\d{1,2}[A-Z]{3}$/i.test(dateLabel)) return null;
+
+  const codeRaw = normalizeTaskArg(g(4)).trim().toUpperCase();
+  const type = tradeboardMapRequestCodeToPostType(codeRaw);
+  let typeLabel = tradeboardTypeLongLabel(type);
+  if (codeRaw === "R") typeLabel = "Reserve / Other";
+
+  const first = tradeboardBlankPlaceholderArg(g(12));
+  const last = tradeboardBlankPlaceholderArg(g(13));
+  const posterName = collapseWs(`${first} ${last}`).trim() || "—";
+
+  let comments = tradeboardTryDecodeURIComponent(tradeboardBlankPlaceholderArg(g(14)));
+  comments = collapseWs(comments);
+  if (!comments || /^[\s_\-]+$/i.test(comments)) comments = "";
+
+  let layover = collapseWs(tradeboardBlankPlaceholderArg(g(24)).replace(/&nbsp;/gi, " "));
+  if (layover === "_" || layover.toUpperCase() === "NBSP") layover = "";
+
+  const base = tradeboardBlankPlaceholderArg(g(27)).toUpperCase();
+  const position = tradeboardBlankPlaceholderArg(g(29)).toUpperCase();
+  let seat = "_";
+  if (args.length > 37) {
+    const sv = tradeboardBlankPlaceholderArg(g(37));
+    seat = sv === "" ? "_" : sv;
+  }
+  const emp = tradeboardFormatEmployeeNumber(g(30));
+  const postedAtLabel = tradeboardBlankPlaceholderArg(g(16));
+  const reportTime = tradeboardBlankPlaceholderArg(g(20));
+  const days = tradeboardBlankPlaceholderArg(g(21));
+  const block = tradeboardBlankPlaceholderArg(g(22));
+  const credit = tradeboardBlankPlaceholderArg(g(23));
+  const departTime = tradeboardBlankPlaceholderArg(g(25));
+  const arriveTime = tradeboardBlankPlaceholderArg(g(26));
+
+  const routeSummary = `${pairingId}:${dateLabel}`;
+  const canPickup = type === "pickup" || type === "drop" || type === "trade_drop";
+  const canProposeTrade = type === "trade" || type === "trade_drop" || type === "drop" || type === "swap";
+  const responseMethodLabel = tradeboardResponseMethodLineFromType(type);
+
+  let worth: string | null = null;
+  for (let i = 34; i < args.length; i++) {
+    const x = tradeboardBlankPlaceholderArg(args[i]!);
+    const wm = x.match(/\$\s*[\d,]+(?:\.\d{2})?/);
+    if (wm) {
+      worth = wm[0]!.replace(/\s/g, "");
+      break;
+    }
+  }
+
+  const rawCells = args
+    .slice(0, Math.min(args.length, 42))
+    .map((a) => tradeboardBlankPlaceholderArg(a).slice(0, 96));
+  if (emp) rawCells.push(`employeeNumber=${emp}`);
+  rawCells.push(`seat=${seat}`);
+  const rawText = rawInnerPreview.slice(0, 520);
+  const id = djb2Hex(["tb-a", pairingId, dateLabel, codeRaw, posterName, type, rawText.slice(0, 160)]);
+
+  return {
+    id: `tb-${id}`,
+    type,
+    typeLabel,
+    posterName,
+    pairingId,
+    pairingDateLabel: dateLabel,
+    routeSummary,
+    base,
+    position,
+    date: dateLabel,
+    days,
+    reportTime,
+    departTime,
+    arriveTime,
+    block,
+    credit,
+    worth,
+    layover,
+    comments,
+    responseMethods: responseMethodLabel,
+    responseMethodLabel,
+    postedAt: postedAtLabel,
+    postedAtLabel,
+    canPickup,
+    canProposeTrade,
+    matchScore: null,
+    legalCompatibility: /\blegal\b/i.test(rawText) ? true : null,
+    sourceUrl,
+    rawCells,
+    rawText,
+    offerCount: null,
+  };
+}
+
+function parseTradeboardAllRequestsFromNewARecords(
+  pageHtml: string,
+  sourceUrl: string,
+): {
+  posts: TradeboardPost[];
+  bodiesFound: number;
+  postsAccepted: number;
+  first5Diagnostics: NonNullable<TradeboardExtractDebug["allRequestsARecordFirst5ArgDiagnostics"]>;
+} {
+  const inners = extractTradeboardNewAInners(pageHtml);
+  const posts: TradeboardPost[] = [];
+  const first5Diagnostics: NonNullable<TradeboardExtractDebug["allRequestsARecordFirst5ArgDiagnostics"]> =
+    [];
+
+  if (typeof __DEV__ !== "undefined" && __DEV__) {
+    console.log("[FLICA_TRADEBOARD_A_RECORD_COUNT]", inners.length);
+  }
+
+  inners.forEach((inner, idx) => {
+    const args = splitJsCallArgs(inner);
+    if (idx < 5) {
+      const argsHeadPreview = args.slice(0, 22).map((a) => tradeboardBlankPlaceholderArg(a).slice(0, 48));
+      const row = {
+        recordIndex: idx,
+        argCount: args.length,
+        arg0: tradeboardBlankPlaceholderArg(args[0] ?? "").slice(0, 24),
+        arg4: tradeboardBlankPlaceholderArg(args[4] ?? "").slice(0, 8),
+        arg5: tradeboardBlankPlaceholderArg(args[5] ?? "").slice(0, 16),
+        arg7: tradeboardBlankPlaceholderArg(args[7] ?? "").slice(0, 16),
+        arg12: tradeboardBlankPlaceholderArg(args[12] ?? "").slice(0, 16),
+        arg13: tradeboardBlankPlaceholderArg(args[13] ?? "").slice(0, 20),
+        arg16: tradeboardBlankPlaceholderArg(args[16] ?? "").slice(0, 40),
+        argsHeadPreview,
+      };
+      first5Diagnostics.push(row);
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log("[FLICA_TRADEBOARD_A_RECORD_ARGS]", row);
+      }
+    }
+    const p = tradeboardBuildPostFromNewAArgs(args, sourceUrl, inner);
+    if (p) {
+      posts.push(p);
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log("[FLICA_TRADEBOARD_A_ROW]", {
+          pairingDisplay: `${p.pairingId}:${p.pairingDateLabel}`,
+          type: p.type,
+          days: p.days,
+          reportTime: p.reportTime,
+          departTime: p.departTime,
+          arriveTime: p.arriveTime,
+          block: p.block,
+          credit: p.credit,
+          layover: p.layover,
+          posterName: p.posterName,
+          postedAtLabel: p.postedAtLabel,
+        });
+      }
+    }
+  });
+
+  return { posts, bodiesFound: inners.length, postsAccepted: posts.length, first5Diagnostics };
+}
+
 function tradeboardBuildJsProbe(html: string): TradeboardJsProbeDebug {
   const src = String(html ?? "");
   const arrPatterns = [
@@ -1841,6 +2091,11 @@ function extractTradeboardPostsFromPageHtml(
   const allRequestsDetected = tradeboardAllRequestsDetected(pageHtml, sourcePageType);
   const tradeboardOccurrenceContexts = tradeboardBuildOccurrenceContexts(pageHtml, 8);
   const jsProbe = tradeboardBuildJsProbe(pageHtml);
+  let allRequestsARecordBodiesFound = 0;
+  let allRequestsARecordPostsCount = 0;
+  let allRequestsARecordFirst5ArgDiagnostics: NonNullable<
+    TradeboardExtractDebug["allRequestsARecordFirst5ArgDiagnostics"]
+  > = [];
 
   const prepStats = tradeboardPrepareFullHtmlForFlexPairingWithStats(pageHtml);
   const knownTokenProbes =
@@ -1857,6 +2112,11 @@ function extractTradeboardPostsFromPageHtml(
     first20PairingPatternContexts: [] as { index: number; window: string }[],
     knownTokenProbes,
     first10AllRequestsTablePipeLines: [] as string[],
+    allRequestsARecordBodiesFound: 0,
+    allRequestsARecordPostsCount: 0,
+    allRequestsARecordFirst5ArgDiagnostics: [] as NonNullable<
+      TradeboardExtractDebug["allRequestsARecordFirst5ArgDiagnostics"]
+    >,
   };
 
   if (!tradeboardPageLooksLikeTradeboard(pageHtml)) {
@@ -1928,6 +2188,23 @@ function extractTradeboardPostsFromPageHtml(
   let acceptedRowCount = 0;
   let firstAcceptedRawBlock = "";
   let detectedExtractionMode = "none";
+
+  if (sourcePageType === "all_requests") {
+    const ar = parseTradeboardAllRequestsFromNewARecords(pageHtml, sourceUrl);
+    allRequestsARecordBodiesFound = ar.bodiesFound;
+    allRequestsARecordPostsCount = ar.postsAccepted;
+    allRequestsARecordFirst5ArgDiagnostics = ar.first5Diagnostics;
+    requestRowCandidateCount += ar.bodiesFound;
+    for (const p of ar.posts) {
+      const k = `${p.pairingId}:${p.pairingDateLabel}:${p.type}`;
+      if (seenPostKey.has(k)) continue;
+      seenPostKey.add(k);
+      posts.push(p);
+      acceptedRowCount++;
+      if (!firstAcceptedRawBlock) firstAcceptedRawBlock = p.rawText.slice(0, 900);
+    }
+    if (ar.posts.length > 0) detectedExtractionMode = "all_requests_new_a_records";
+  }
 
   const pushCandidateRow = (row: TradeboardRowCandidateDebug): void => {
     if (first10CandidateRows.length >= 10) return;
@@ -2031,7 +2308,7 @@ function extractTradeboardPostsFromPageHtml(
       return;
     }
     for (const p of mapped) {
-      const k = `${p.pairingId}:${p.pairingDateLabel}:${p.type}:${p.rawText.slice(0, 100)}`;
+      const k = `${p.pairingId}:${p.pairingDateLabel}:${p.type}`;
       if (seenPostKey.has(k)) continue;
       seenPostKey.add(k);
       posts.push(p);
@@ -2089,7 +2366,7 @@ function extractTradeboardPostsFromPageHtml(
     }
   }
 
-  if (acceptedRowCount === 0) {
+  if (posts.length === 0) {
     detectedExtractionMode =
       requestRowCandidateCount > 0 ? "failed_mapper_see_probe" : "failed_no_row_candidates_see_probe";
   }
@@ -2142,6 +2419,9 @@ function extractTradeboardPostsFromPageHtml(
       first20PairingPatternContexts,
       knownTokenProbes,
       first10AllRequestsTablePipeLines: allReqTablePipe.slice(0, 10),
+      allRequestsARecordBodiesFound,
+      allRequestsARecordPostsCount,
+      allRequestsARecordFirst5ArgDiagnostics,
     },
   };
 }
