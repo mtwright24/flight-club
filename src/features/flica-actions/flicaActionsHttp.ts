@@ -144,9 +144,18 @@ export async function syncWebViewSessionSnapshotFromSavedCookies(): Promise<bool
  * GET using only the FLICA Actions WebView cookie snapshot (no CookieManager merge, no mainmenu
  * preflight). Use after Actions WebView shows "Native fetch enabled".
  */
+export type FlicaWebViewSessionFetchOptions = {
+  referer?: string;
+  method?: "GET" | "POST";
+  /** Use with POST; sent as-is (caller should URL-encode). */
+  body?: string;
+  /** Defaults to application/x-www-form-urlencoded when body is set and method is POST. */
+  contentType?: string;
+};
+
 export async function fetchFlicaHtmlUsingWebViewSession(
   url: string,
-  options?: { referer?: string },
+  options?: FlicaWebViewSessionFetchOptions,
 ): Promise<{ status: number; html: string; url: string }> {
   const session = await getFlicaActionsWebViewSession();
   if (!session) {
@@ -161,6 +170,7 @@ export async function fetchFlicaHtmlUsingWebViewSession(
     );
   }
 
+  const method = (options?.method ?? "GET").toUpperCase() === "POST" ? "POST" : "GET";
   const headers: Record<string, string> = {
     Cookie: cookieHeader,
     "User-Agent": FLICA_WEBVIEW_USER_AGENT,
@@ -170,10 +180,16 @@ export async function fetchFlicaHtmlUsingWebViewSession(
   if (options?.referer) {
     headers["Referer"] = options.referer;
   }
+  if (method === "POST" && options?.body != null) {
+    headers["Content-Type"] =
+      options.contentType ?? "application/x-www-form-urlencoded; charset=UTF-8";
+    headers.Origin = FLICA_BASE;
+  }
 
   const resp = await fetch(url, {
-    method: "GET",
+    method,
     headers,
+    body: method === "POST" && options?.body != null ? options.body : undefined,
     redirect: "follow",
     credentials: "omit",
   });

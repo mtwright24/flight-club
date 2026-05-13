@@ -179,16 +179,20 @@ export default function TradeboardTabScreen() {
       let favR: Awaited<ReturnType<typeof nativeFetchTradeBoardFavorites>> | undefined;
       let respR: Awaited<ReturnType<typeof nativeFetchTradeBoardMyResponses>> | undefined;
 
+      const fetchOpts = {
+        base: profileBase,
+        position: formatRoleForHeader(profileRole ?? ""),
+      };
       if (__DEV__) {
         [allR, myR, favR, respR] = await Promise.all([
-          nativeFetchTradeBoardAllRequests(),
+          nativeFetchTradeBoardAllRequests(fetchOpts),
           nativeFetchTradeBoardMyRequests(),
           nativeFetchTradeBoardFavorites(),
           nativeFetchTradeBoardMyResponses(),
         ]);
       } else {
         [allR, myR] = await Promise.all([
-          nativeFetchTradeBoardAllRequests(),
+          nativeFetchTradeBoardAllRequests(fetchOpts),
           nativeFetchTradeBoardMyRequests(),
         ]);
       }
@@ -337,7 +341,7 @@ export default function TradeboardTabScreen() {
       setLoading(false);
       void refreshFlicaMonthRow();
     }
-  }, [refreshFlicaMonthRow, session?.user?.id]);
+  }, [refreshFlicaMonthRow, session?.user?.id, profileBase, profileRole]);
 
   useFocusEffect(
     useCallback(() => {

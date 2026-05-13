@@ -202,7 +202,7 @@ function extractHiddenFields(
     const attrs = safeStr(m[1]);
     const name = safeStr((attrs.match(/\bname\s*=\s*["']([^"']*)["']/i) || [])[1]);
     const value = safeStr((attrs.match(/\bvalue\s*=\s*["']([^"']*)["']/i) || [])[1]);
-    out.push({ name, value: value.slice(0, 200) });
+    out.push({ name, value: value.slice(0, 400) });
   }
   return out;
 }
@@ -290,6 +290,15 @@ export function summarizeNativeParseForPreview(p: FlicaNativePageModel, maxRows 
         .slice(0, 12)
         .map((b) => safeStr(b.text ?? b.name ?? b.value ?? b.type))
         .join("; ")}`,
+    );
+  }
+  const hidden = p.hiddenFields ?? [];
+  if (hidden.length) {
+    lines.push(
+      `hidden (name=value): ${hidden
+        .slice(0, 24)
+        .map((h) => `${safeStr(h.name)}=${safeStr(h.value).slice(0, 100)}`)
+        .join(" | ")}`,
     );
   }
   return lines.join("\n");

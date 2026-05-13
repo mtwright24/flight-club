@@ -48,7 +48,34 @@ export type FlicaNativeTradeBoardFetchDebug = {
   buttonsCount: number;
   formsCount: number;
   hiddenFieldsCount: number;
+  /** First N hidden inputs as `name=value` (values truncated) for filter-state debugging. */
+  hiddenFieldsNameValuePreview?: string[];
   actionEndpointsCount: number;
+};
+
+/** Native All Requests: GET + optional filter-reset POST diagnostics. */
+export type TradeBoardAllRequestsNativeDebug = {
+  steps: string[];
+  initialGet: {
+    requestedUrl: string;
+    method: "GET";
+    finalUrl: string;
+    pairingMatchCount: number;
+    nothingMatchesCriteria: boolean;
+  };
+  resetPost?: {
+    postUrl: string;
+    method: "POST";
+    requestBody: string;
+    finalUrl: string;
+    pairingMatchCount: number;
+    nothingMatchesCriteria: boolean;
+  };
+  /** Hidden fields parsed from the HTML of the initial GET (name + value). */
+  hiddenFieldsFromInitialPage: Array<{ name: string; value: string }>;
+  fullHtmlContainsPairingPattern: boolean;
+  nothingMatchesCriteriaFinal: boolean;
+  getCandidatesTried: string[];
 };
 
 export type FlicaActionsFetchResult = {
@@ -70,6 +97,8 @@ export type FlicaActionsFetchResult = {
   nativeParse?: FlicaNativePageModel;
   /** Present after native TradeBoard tab fetches that use warm-frame + session prep. */
   nativeTradeBoardFetchDebug?: FlicaNativeTradeBoardFetchDebug;
+  /** Present when {@link nativeFetchTradeBoardAllRequests} runs filter-reset / multi-endpoint logic. */
+  tradeBoardAllRequestsNativeDebug?: TradeBoardAllRequestsNativeDebug;
   /**
    * TradeBoard Post Request: native GET is skipped; page is only reliable in FLICA WebView.
    * Dev/test UI should show a WebView-required banner, not FAILED.

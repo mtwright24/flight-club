@@ -30,8 +30,8 @@ type Props = {
    */
   relaxedBottomInset?: boolean;
   /**
-   * Crew schedule **bottom tabs** only: mock reference red, title + subtitle row, search · notifications · menu
-   * (no back). Stack screens (import, trip detail, etc.) keep the default Flight Club chrome + back.
+   * Crew schedule **bottom tabs** only: mock reference red, title + subtitle row, search · notifications
+   * (Tradeboard: post shortcut icon) · menu (no back). Stack screens keep default Flight Club chrome + back.
    */
   scheduleTabsVariant?: boolean;
 };
@@ -123,20 +123,21 @@ export default function CrewScheduleHeader({
                     params: { uri: encodeURIComponent(FLICA_NATIVE_URLS.tradePostRequest) },
                   } as unknown as Href)
                 }
-                style={({ pressed }) => [styles.postPlusBtn, pressed && styles.tabsIconButtonPressed]}
-                accessibilityLabel="Post trade request"
-              >
-                <Text style={styles.postPlusText}>+ Post</Text>
-              </Pressable>
-            ) : (
-              <Pressable
-                onPress={() => router.push('/menu')}
                 style={({ pressed }) => [styles.tabsIconButton, pressed && styles.tabsIconButtonPressed]}
-                accessibilityLabel="Menu"
+                accessibilityLabel="Post trade request"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <Ionicons name="menu" size={TABS_HEADER_ICON} color={colors.cardBg} />
+                <Ionicons name="add-circle-outline" size={TABS_HEADER_ICON} color={colors.cardBg} />
               </Pressable>
-            )}
+            ) : null}
+            <Pressable
+              onPress={() => router.push('/menu')}
+              style={({ pressed }) => [styles.tabsIconButton, pressed && styles.tabsIconButtonPressed]}
+              accessibilityLabel="Menu"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="menu" size={TABS_HEADER_ICON} color={colors.cardBg} />
+            </Pressable>
           </View>
         </View>
       </SafeAreaView>
@@ -333,7 +334,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexShrink: 0,
     justifyContent: 'flex-end',
-    gap: 8,
+    gap: 10,
     alignSelf: 'center',
   },
   tabsIconButton: {
@@ -368,18 +369,5 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
     lineHeight: 12,
-  },
-  postPlusBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
-    backgroundColor: colors.cardBg,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  postPlusText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: SCHEDULE_MOCK_HEADER_RED,
   },
 });

@@ -398,24 +398,26 @@ export default function OpenTimeTabScreen() {
               <Text style={styles.badgeText}>{listedTrips.length}</Text>
             </View>
           </View>
-          <View style={styles.tableHead}>
-            <Text style={[styles.th, { flex: 0.85 }]}>PAIRING</Text>
-            <Text style={[styles.th, { flex: 1.2 }]}>ROUTE</Text>
-            <Text style={[styles.th, { flex: 0.55 }]}>BLOCK</Text>
-            <Text style={[styles.th, { flex: 0.5 }]}>CR</Text>
-            <Text style={[styles.th, { flex: 0.65 }]}>WORTH</Text>
-          </View>
-          {loading && listedTrips.length === 0 ? (
-            <ActivityIndicator style={{ marginTop: 16 }} color={SCHEDULE_MOCK_HEADER_RED} />
-          ) : null}
-          {listedTrips.map((t, idx) => {
-            const isBest = bestDollarPerCreditHour?.pairingId === t.pairingId;
-            return (
-              <Pressable
-                key={`${t.pairingId}-${idx}`}
-                style={styles.row}
-                onPress={() => setDetail(t)}
-              >
+          <View style={styles.potListSheet}>
+            <View style={styles.tableHead}>
+              <Text style={[styles.th, { flex: 0.85 }]}>PAIRING</Text>
+              <Text style={[styles.th, { flex: 1.2 }]}>ROUTE</Text>
+              <Text style={[styles.th, { flex: 0.55 }]}>BLOCK</Text>
+              <Text style={[styles.th, { flex: 0.5 }]}>CR</Text>
+              <Text style={[styles.th, { flex: 0.65 }]}>WORTH</Text>
+            </View>
+            {loading && listedTrips.length === 0 ? (
+              <ActivityIndicator style={{ marginTop: 16 }} color={SCHEDULE_MOCK_HEADER_RED} />
+            ) : null}
+            {listedTrips.map((t, idx) => {
+              const isBest = bestDollarPerCreditHour?.pairingId === t.pairingId;
+              const isLast = idx === listedTrips.length - 1;
+              return (
+                <Pressable
+                  key={`${t.pairingId}-${idx}`}
+                  style={[styles.row, isLast && styles.rowLast]}
+                  onPress={() => setDetail(t)}
+                >
                 <View style={{ flex: 0.85, minWidth: 0 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                     <Text style={styles.rowPairing}>{t.pairingId}</Text>
@@ -447,9 +449,10 @@ export default function OpenTimeTabScreen() {
                     {t.dollarPerCreditHour || ""}
                   </Text>
                 </View>
-              </Pressable>
-            );
-          })}
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
         <View style={{ height: 28 }} />
       </ScrollView>
@@ -548,24 +551,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   badgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
+  potListSheet: {
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#c8ced6",
+    overflow: "hidden",
+  },
   tableHead: {
     flexDirection: "row",
-    backgroundColor: "#e5e7eb",
-    borderRadius: 6,
-    paddingVertical: 4,
-    paddingHorizontal: 6,
-    marginBottom: 4,
+    backgroundColor: "#eef0f3",
+    paddingVertical: 5,
+    paddingHorizontal: 8,
     gap: 2,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(15, 23, 42, 0.18)",
   },
   th: { fontSize: 7, fontWeight: "800", color: "#6b7280" },
   row: {
     flexDirection: "row",
     alignItems: "flex-start",
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 8,
-    marginBottom: 6,
+    paddingVertical: 9,
+    paddingHorizontal: 8,
     gap: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(15, 23, 42, 0.14)",
+  },
+  rowLast: {
+    borderBottomWidth: 0,
   },
   rowPairing: { fontSize: 11, fontWeight: "900", color: SCHEDULE_MOCK_HEADER_RED },
   bestTag: {

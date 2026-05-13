@@ -1,6 +1,6 @@
 /**
- * Phase 1 FLICA Actions native dev/test layer: GET-only fetches using saved cookies.
- * Does not POST final submits or SubmitBids.
+ * Phase 1 FLICA Actions native fetches using WebView session cookies.
+ * TradeBoard All Requests may POST a filter reset after the tab GET (no bid submits).
  */
 
 import { fcDevMirrorScheduleLogToFile } from "../../dev/fcDevFileLogger";
@@ -14,7 +14,22 @@ import {
   sanitizedBodyPreview,
 } from "./flicaActionsParser";
 import { parseFlicaNativePage, summarizeNativeParseForPreview } from "./flicaActionsParsers";
-import type { FlicaActionsFetchResult, FlicaNativePageModel } from "./flicaActionsTypes";
+import type {
+  FlicaActionsFetchResult,
+  FlicaNativePageModel,
+  TradeBoardAllRequestsNativeDebug,
+} from "./flicaActionsTypes";
+import {
+  buildTradeBoardAllRequestsResetBody,
+  extractHiddenFieldsFromHtml,
+  findTradeBoardOtherRequestsForm,
+  tradeBoardAllRequestsGetCandidateUrls,
+  tradeBoardHtmlContainsNothingMatchesCriteria,
+  tradeBoardPairingMatchCount,
+} from "./flicaTradeBoardAllRequestsForm";
+import type { TradeBoardAllRequestsResetOptions } from "./flicaTradeBoardAllRequestsForm";
+
+export type TradeBoardAllRequestsFetchOptions = TradeBoardAllRequestsResetOptions;
 
 const BASE = "https://jetblue.flica.net";
 
@@ -79,6 +94,9 @@ function buildTradeBoardDebug(
   const forms = nativeParse.forms ?? [];
   const hidden = nativeParse.hiddenFields ?? [];
   const endpoints = nativeParse.actionEndpoints ?? [];
+  const hiddenFieldsNameValuePreview = hidden
+    .slice(0, 60)
+    .map((h) => `${h.name}=${String(h.value ?? "").slice(0, 160)}`);
   return {
     requestedUrl: meta.finalRequestedUrl,
     referer: meta.referer,
@@ -91,6 +109,7 @@ function buildTradeBoardDebug(
     buttonsCount: buttons.length,
     formsCount: forms.length,
     hiddenFieldsCount: hidden.length,
+    hiddenFieldsNameValuePreview,
     actionEndpointsCount: endpoints.length,
   };
 }
@@ -109,6 +128,7 @@ function toResult(
       firstRequestedUrl: string;
       finalRequestedUrl: string;
     };
+    tradeBoardAllRequestsNativeDebug?: TradeBoardAllRequestsNativeDebug;
   },
 ): FlicaActionsFetchResult {
   const safeHtml = String(html ?? "");
@@ -155,6 +175,7 @@ function toResult(
     nativeParse,
     error,
     nativeTradeBoardFetchDebug,
+    tradeBoardAllRequestsNativeDebug: opts?.tradeBoardAllRequestsNativeDebug,
   };
 }
 
@@ -225,11 +246,219 @@ export async function nativeFetchTradeBoardMyRequests(): Promise<FlicaActionsFet
   );
 }
 
-export async function nativeFetchTradeBoardAllRequests(): Promise<FlicaActionsFetchResult> {
-  return fetchTradeBoardTabUsingWebViewSession(
-    "trade_all_requests",
-    FLICA_NATIVE_URLS.tradeAllRequests,
-  );
+export async function nativeFetchTradeBoardAllRequests(
+  opts?: TradeBoardAllRequestsFetchOptions,
+): Promise<FlicaActionsFetchResult> {
+  const frameUrl = FLICA_NATIVE_URLS.tradeFrame;
+  const getCandidates = tradeBoardAllRequestsGetCandidateUrls(FLICA_NATIVE_TRADE_BCID);
+  const steps: string[] = [];
+
+  try {
+    const frame = await fetchFlicaHtmlUsingWebViewSession(frameUrl, {
+      referer: WEBVIEW_TRUSTED_REFERER,
+    });
+    const frameHtml = String(frame.html ?? "");
+    const frameSt = detectFlicaHtmlState(frameHtml);
+    if (frame.status !== 200 || frameSt !== "ok") {
+      const r = toResult(
+        frameUrl,
+        frame.status,
+        frameHtml,
+        String(frame.url ?? frameUrl),
+        {
+          error: `TradeBoard frame failed: ${frameSt}`,
+          okOverride: false,
+        },
+      );
+      logNative({
+        label: "trade_all_requests",
+        step: "frame",
+        ok: false,
+        url: r.url,
+        status: r.status,
+        htmlState: r.htmlState,
+        error: r.error,
+      });
+      return r;
+    }
+
+    let chosen: { url: string; html: string; finalUrl: string; status: number } | null = null;
+    for (const getUrl of getCandidates) {
+      const tab = await fetchFlicaHtmlUsingWebViewSession(getUrl, {
+        referer: TRADEBOARD_TAB_REFERER,
+      });
+      const html = String(tab.html ?? "");
+      const st = detectFlicaHtmlState(html);
+      const lower = html.toLowerCase();
+      const looksTb =
+        lower.includes("tradeboard") ||
+        lower.includes("all requests") ||
+        lower.includes("otherrequests") ||
+        lower.includes("tb_otherrequests");
+      if (tab.status === 200 && st === "ok" && looksTb) {
+        chosen = {
+          url: getUrl,
+          html,
+          finalUrl: String(tab.url ?? getUrl),
+          status: tab.status,
+        };
+        steps.push(`GET ok ${getUrl}`);
+        break;
+      }
+      steps.push(
+        `GET try ${getUrl} status=${tab.status} state=${st} looksTb=${looksTb}`,
+      );
+    }
+
+    if (!chosen) {
+      const tab = await fetchFlicaHtmlUsingWebViewSession(getCandidates[0]!, {
+        referer: TRADEBOARD_TAB_REFERER,
+      });
+      const html = String(tab.html ?? "");
+      const r = toResult(getCandidates[0]!, tab.status, html, String(tab.url ?? getCandidates[0]!), {
+        error: "All Requests: no candidate GET returned a TradeBoard-shaped page.",
+        okOverride: false,
+        tradeBoardAllRequestsNativeDebug: {
+          steps,
+          initialGet: {
+            requestedUrl: getCandidates[0]!,
+            method: "GET",
+            finalUrl: String(tab.url ?? getCandidates[0]!),
+            pairingMatchCount: tradeBoardPairingMatchCount(html),
+            nothingMatchesCriteria: tradeBoardHtmlContainsNothingMatchesCriteria(html),
+          },
+          hiddenFieldsFromInitialPage: extractHiddenFieldsFromHtml(html),
+          fullHtmlContainsPairingPattern: tradeBoardPairingMatchCount(html) > 0,
+          nothingMatchesCriteriaFinal: tradeBoardHtmlContainsNothingMatchesCriteria(html),
+          getCandidatesTried: getCandidates.slice(),
+        },
+      });
+      logNative({ label: "trade_all_requests", ok: false, error: r.error, steps });
+      return r;
+    }
+
+    const hiddenFromPage = extractHiddenFieldsFromHtml(chosen.html);
+    let htmlOut = chosen.html;
+    let statusOut = chosen.status;
+    let finalUrlOut = chosen.finalUrl;
+    let requestedUrlOut = chosen.url;
+
+    const pairingGet = tradeBoardPairingMatchCount(chosen.html);
+    const nmGet = tradeBoardHtmlContainsNothingMatchesCriteria(chosen.html);
+    const formPick = findTradeBoardOtherRequestsForm(chosen.html);
+    let resetPostDebug: TradeBoardAllRequestsNativeDebug["resetPost"] | undefined;
+
+    const shouldTryReset =
+      !!formPick &&
+      formPick.innerHtml.length > 40 &&
+      (pairingGet === 0 || nmGet);
+
+    if (shouldTryReset && formPick) {
+      const { body } = buildTradeBoardAllRequestsResetBody(formPick.innerHtml, opts);
+      const postUrl = formPick.actionUrl;
+      steps.push(`POST reset -> ${postUrl} (formMethod=${formPick.method})`);
+      try {
+        const post = await fetchFlicaHtmlUsingWebViewSession(postUrl, {
+          referer: chosen.finalUrl,
+          method: "POST",
+          body,
+        });
+        const postHtml = String(post.html ?? "");
+        const postSt = detectFlicaHtmlState(postHtml);
+        const pairingPost = tradeBoardPairingMatchCount(postHtml);
+        const nmPost = tradeBoardHtmlContainsNothingMatchesCriteria(postHtml);
+        resetPostDebug = {
+          postUrl,
+          method: "POST",
+          requestBody: body.slice(0, 8000),
+          finalUrl: String(post.url ?? postUrl),
+          pairingMatchCount: pairingPost,
+          nothingMatchesCriteria: nmPost,
+        };
+        steps.push(
+          `POST status=${post.status} state=${postSt} pairings=${pairingPost} nothingMatches=${nmPost}`,
+        );
+        if (
+          post.status === 200 &&
+          postSt === "ok" &&
+          (pairingPost > pairingGet ||
+            (pairingGet === 0 && pairingPost > 0) ||
+            (nmGet && !nmPost))
+        ) {
+          htmlOut = postHtml;
+          statusOut = post.status;
+          finalUrlOut = String(post.url ?? postUrl);
+          requestedUrlOut = chosen.url;
+        }
+      } catch (pe) {
+        const msg = pe instanceof Error ? pe.message : String(pe);
+        steps.push(`POST error: ${msg}`);
+      }
+    } else {
+      steps.push(
+        formPick
+          ? `Skip reset POST (pairingGet=${pairingGet} nmGet=${nmGet} formScore ok)`
+          : "Skip reset POST (no listing form parsed)",
+      );
+    }
+
+    const pairingFinal = tradeBoardPairingMatchCount(htmlOut);
+    const nmFinal = tradeBoardHtmlContainsNothingMatchesCriteria(htmlOut);
+
+    const arDebug: TradeBoardAllRequestsNativeDebug = {
+      steps,
+      initialGet: {
+        requestedUrl: chosen.url,
+        method: "GET",
+        finalUrl: chosen.finalUrl,
+        pairingMatchCount: pairingGet,
+        nothingMatchesCriteria: nmGet,
+      },
+      resetPost: resetPostDebug,
+      hiddenFieldsFromInitialPage: hiddenFromPage,
+      fullHtmlContainsPairingPattern: pairingFinal > 0,
+      nothingMatchesCriteriaFinal: nmFinal,
+      getCandidatesTried: getCandidates.slice(),
+    };
+
+    if (pairingFinal === 0) {
+      const logPayload = {
+        finalUrl: finalUrlOut,
+        methodEffective: resetPostDebug ? "GET_then_POST" : "GET",
+        requestBody: resetPostDebug?.requestBody ?? "(no reset POST)",
+        hiddenFieldsFromOriginalGet: hiddenFromPage.slice(0, 80),
+        nothingMatchesCriteria: nmFinal,
+        fullHtmlContainsPairingPattern: pairingFinal > 0,
+        steps,
+      };
+      console.warn("[FC_TRADEBOARD_ALL_REQUESTS_NO_TOKENS]", JSON.stringify(logPayload));
+      logNative({ label: "trade_all_requests", outcome: "no_pairing_tokens", ...logPayload });
+    }
+
+    const r = toResult(requestedUrlOut, statusOut, htmlOut, finalUrlOut, {
+      tradeBoardFetchMeta: {
+        referer: TRADEBOARD_TAB_REFERER,
+        fallbackUsed: chosen.url !== getCandidates[0],
+        firstRequestedUrl: chosen.url,
+        finalRequestedUrl: finalUrlOut,
+      },
+      tradeBoardAllRequestsNativeDebug: arDebug,
+    });
+    logNative({
+      label: "trade_all_requests",
+      ok: r.ok,
+      url: r.url,
+      pageType: r.nativeParse?.pageType,
+      rowCount: r.rowCount,
+      pairingFinal,
+      warnings: r.nativeParse?.warningsErrors,
+    });
+    return r;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logNative({ label: "trade_all_requests", ok: false, error: msg });
+    return { ok: false, requestedUrl: getCandidates[0] ?? "", url: getCandidates[0] ?? "", error: msg, htmlLength: 0 };
+  }
 }
 
 export async function nativeFetchTradeBoardFavorites(): Promise<FlicaActionsFetchResult> {
