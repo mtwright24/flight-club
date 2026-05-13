@@ -1,6 +1,6 @@
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter, type Href } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -15,17 +15,35 @@ import {
 import { useAuth } from "../../../hooks/useAuth";
 import { supabase } from "../../../lib/supabaseClient";
 import {
+  crewHubNativeFetchNeedsVerificationSheet,
+  logCrewHubAuth,
+} from "../crewHubFlicaAuthGate";
+import { flicaFetchNeedsWebVerification } from "../../flica-actions/flicaActionsHttp";
+import {
   FLICA_NATIVE_URLS,
   nativeFetchTradeBoardAllRequests,
+  nativeFetchTradeBoardFavorites,
   nativeFetchTradeBoardMyRequests,
+  nativeFetchTradeBoardMyResponses,
 } from "../../flica-actions/flicaActionsNativeService";
+import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
+import { FlicaCrewHubScheduleSessionRunner } from "../components/FlicaCrewHubScheduleSessionRunner";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
-import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
 import {
-  mapRowsToTradeboardPosts,
+  loadTradeboardHubCache,
+  upsertTradeboardHubCache,
+} from "../crewHubFlicaCache";
+import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
+import { mapTradeboardPostsWithHtmlFallback } from "../flicaCrewHubHtmlFallbackParse";
+import {
   tradeboardTypeBadgeColor,
   tradeboardTypeLabel,
 } from "../flicaCrewHubMappers";
+import {
+  buildCrewHubParseDebugFetchEntry,
+  commitTradeboardParseDebugSnapshot,
+  type FlicaCrewHubParseDebugPayload,
+} from "../flicaCrewHubParseDebug";
 import type { TradeboardPost } from "../flicaCrewHubTypes";
 import { useCrewScheduleMonthStrip } from "../hooks/useCrewScheduleMonthStrip";
 import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
@@ -82,6 +100,24 @@ export default function TradeboardTabScreen() {
   const [allPosts, setAllPosts] = useState<TradeboardPost[]>([]);
   const [myPosts, setMyPosts] = useState<TradeboardPost[]>([]);
   const [detailPost, setDetailPost] = useState<TradeboardPost | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [pullSessionRunnerActive, setPullSessionRunnerActive] = useState(false);
+  const pullSessionWaitersRef = useRef<{
+    resolve: () => void;
+    reject: (e: Error) => void;
+  } | null>(null);
+  const cacheHydratedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const uid = session?.user?.id;
+    if (!uid || cacheHydratedRef.current === uid) return;
+    cacheHydratedRef.current = uid;
+    void loadTradeboardHubCache(uid).then((c) => {
+      if (!c) return;
+      setAllPosts((prev) => (prev.length === 0 && c.allPosts.length > 0 ? c.allPosts : prev));
+      setMyPosts((prev) => (prev.length === 0 && c.myPosts.length > 0 ? c.myPosts : prev));
+    });
+  }, [session?.user?.id]);
 
   useEffect(() => {
     const uid = session?.user?.id;
@@ -114,41 +150,203 @@ export default function TradeboardTabScreen() {
     };
   }, [session?.user?.id]);
 
-  const load = useCallback(async () => {
+  const settlePullSessionSuccess = useCallback(() => {
+    pullSessionWaitersRef.current?.resolve();
+    pullSessionWaitersRef.current = null;
+    setPullSessionRunnerActive(false);
+  }, []);
+
+  const settlePullSessionFailure = useCallback((msg: string) => {
+    pullSessionWaitersRef.current?.reject(new Error(msg));
+    pullSessionWaitersRef.current = null;
+    setPullSessionRunnerActive(false);
+  }, []);
+
+  const load = useCallback(async (reason: "focus" | "pull" = "focus") => {
     setLoading(true);
     setError(null);
     try {
-      const [allR, myR] = await Promise.all([
-        nativeFetchTradeBoardAllRequests(),
-        nativeFetchTradeBoardMyRequests(),
-      ]);
-      const allRows = allR.nativeParse?.rows ?? [];
-      const myRows = myR.nativeParse?.rows ?? [];
-      setAllPosts(mapRowsToTradeboardPosts(allRows, allR.url));
-      setMyPosts(mapRowsToTradeboardPosts(myRows, myR.url));
-      if (!allR.ok && allR.error) {
+      if (reason === "pull") {
+        logCrewHubAuth("schedule_import_session_flow_start", { context: "tradeboard" });
+        await new Promise<void>((resolve, reject) => {
+          pullSessionWaitersRef.current = { resolve, reject };
+          setPullSessionRunnerActive(true);
+        });
+      }
+
+      let allR: Awaited<ReturnType<typeof nativeFetchTradeBoardAllRequests>>;
+      let myR: Awaited<ReturnType<typeof nativeFetchTradeBoardMyRequests>>;
+      let favR: Awaited<ReturnType<typeof nativeFetchTradeBoardFavorites>> | undefined;
+      let respR: Awaited<ReturnType<typeof nativeFetchTradeBoardMyResponses>> | undefined;
+
+      if (__DEV__) {
+        [allR, myR, favR, respR] = await Promise.all([
+          nativeFetchTradeBoardAllRequests(),
+          nativeFetchTradeBoardMyRequests(),
+          nativeFetchTradeBoardFavorites(),
+          nativeFetchTradeBoardMyResponses(),
+        ]);
+      } else {
+        [allR, myR] = await Promise.all([
+          nativeFetchTradeBoardAllRequests(),
+          nativeFetchTradeBoardMyRequests(),
+        ]);
+      }
+      logCrewHubAuth("native_fetch_done", {
+        context: "tradeboard",
+        phase: "first",
+        allHtmlLen: allR.htmlLength ?? 0,
+        myHtmlLen: myR.htmlLength ?? 0,
+        allState: allR.htmlState,
+        myState: myR.htmlState,
+        allRows: allR.rowCount ?? 0,
+        myRows: myR.rowCount ?? 0,
+      });
+
+      const allFb = mapTradeboardPostsWithHtmlFallback(
+        allR.nativeParse?.rows ?? [],
+        allR,
+        "all_requests",
+        allR.url,
+      );
+      const myFb = mapTradeboardPostsWithHtmlFallback(
+        myR.nativeParse?.rows ?? [],
+        myR,
+        "my_requests",
+        myR.url,
+      );
+      const mappedAllPre = allFb.posts;
+      const mappedMyPre = myFb.posts;
+
+      const fetches = [
+        buildCrewHubParseDebugFetchEntry("My Requests", myR, mappedMyPre),
+        buildCrewHubParseDebugFetchEntry("All Requests", allR, mappedAllPre),
+      ];
+      if (__DEV__ && favR && respR) {
+        const mappedFav = mapTradeboardPostsWithHtmlFallback(
+          favR.nativeParse?.rows ?? [],
+          favR,
+          "all_requests",
+          favR.url,
+        ).posts;
+        const mappedResp = mapTradeboardPostsWithHtmlFallback(
+          respR.nativeParse?.rows ?? [],
+          respR,
+          "all_requests",
+          respR.url,
+        ).posts;
+        fetches.push(
+          buildCrewHubParseDebugFetchEntry("Favorites", favR, mappedFav),
+          buildCrewHubParseDebugFetchEntry("My Responses", respR, mappedResp),
+        );
+      }
+      const pl: FlicaCrewHubParseDebugPayload = {
+        screen: "tradeboard",
+        refreshedAt: new Date().toISOString(),
+        loadReason: reason,
+        note:
+          __DEV__ && favR && respR
+            ? "__DEV__: Favorites + My Responses native fetches included (not run in production)."
+            : "Production: only My Requests + All Requests native fetches.",
+        fetches,
+        tradeboardFallback: {
+          allRequests: allFb.meta,
+          myRequests: myFb.meta,
+        },
+      };
+      commitTradeboardParseDebugSnapshot(pl);
+      if (__DEV__) {
+        console.log("[FC_TRADEBOARD_PARSE_DEBUG]", JSON.stringify(pl));
+      }
+
+      const needVerification =
+        crewHubNativeFetchNeedsVerificationSheet(allR) ||
+        crewHubNativeFetchNeedsVerificationSheet(myR);
+
+      if (needVerification) {
+        logCrewHubAuth("native_needs_verification", {
+          context: "tradeboard",
+          afterPullSession: reason === "pull",
+        });
+        if (reason === "focus") {
+          setError("Pull down to refresh to sign in to FLICA.");
+        } else {
+          setError(
+            allR.error ??
+              myR.error ??
+              "FLICA verification still required after sign-in. Try pull to refresh again.",
+          );
+        }
+        return;
+      }
+
+      const mappedAll = mappedAllPre;
+      const mappedMy = mappedMyPre;
+      logCrewHubAuth("parse_done", {
+        context: "tradeboard",
+        allMappedRows: mappedAll.length,
+        myMappedRows: mappedMy.length,
+      });
+      setAllPosts(mappedAll);
+      setMyPosts(mappedMy);
+
+      if (
+        flicaFetchNeedsWebVerification(allR.htmlState) ||
+        flicaFetchNeedsWebVerification(myR.htmlState)
+      ) {
+        setError(allR.error ?? myR.error ?? "FLICA verification still required.");
+      } else if (!allR.ok && allR.error) {
         setError(allR.error);
       } else if (!myR.ok && myR.error) {
         setError(myR.error);
+      } else if (
+        mappedAll.length === 0 &&
+        mappedMy.length === 0 &&
+        (allFb.meta.markersMissing.length > 0 || myFb.meta.markersMissing.length > 0)
+      ) {
+        setError(
+          `No Tradeboard posts parsed from FLICA HTML. All Requests missing: ${allFb.meta.markersMissing.join("; ") || "—"} · Found: ${allFb.meta.markersFound.join("; ") || "—"}. My Requests missing: ${myFb.meta.markersMissing.join("; ") || "—"} · Found: ${myFb.meta.markersFound.join("; ") || "—"}.`,
+        );
+      } else {
+        setError(null);
+      }
+
+      const refreshOk =
+        allR.ok &&
+        myR.ok &&
+        !flicaFetchNeedsWebVerification(allR.htmlState) &&
+        !flicaFetchNeedsWebVerification(myR.htmlState);
+
+      if (refreshOk && session?.user?.id) {
+        void upsertTradeboardHubCache(session.user.id, {
+          v: 1,
+          myPosts: mappedMy,
+          allPosts: mappedAll,
+          refreshedAt: new Date().toISOString(),
+        });
+        if (reason === "pull") setToast("Tradeboard refreshed");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setAllPosts([]);
-      setMyPosts([]);
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        setAllPosts([]);
+        setMyPosts([]);
+      }
     } finally {
       setLoading(false);
       void refreshFlicaMonthRow();
     }
-  }, [refreshFlicaMonthRow]);
+  }, [refreshFlicaMonthRow, session?.user?.id]);
 
   useFocusEffect(
     useCallback(() => {
-      void load();
+      void load("focus");
       return () => setCrewScheduleHeaderSubtitle(null);
     }, [load, setCrewScheduleHeaderSubtitle]),
   );
 
-  const activeCount = allPosts.length;
+  const activeCount = myPosts.length;
   const headerSubtitle = useMemo(() => {
     const b = String(profileBase ?? "")
       .trim()
@@ -168,27 +366,27 @@ export default function TradeboardTabScreen() {
   const giveDisplay = useMemo(() => {
     if (activePost) return { kind: "tb" as const, post: activePost };
     const iso = new Date().toISOString().slice(0, 10);
-    const t = monthTrips.find((x) => iso >= x.startDate && iso <= x.endDate);
+    const t = monthTrips.find((x: CrewScheduleTrip) => iso >= x.startDate && iso <= x.endDate);
     if (t) return { kind: "trip" as const, trip: t };
     return null;
   }, [activePost, monthTrips]);
 
   const bestMatch = useMemo(() => {
-    const scored = allPosts.filter((p) => p.matchScore != null);
-    if (scored.length > 0) {
-      return scored.reduce((a, b) =>
-        (a.matchScore ?? 0) >= (b.matchScore ?? 0) ? a : b,
-      );
-    }
-    return allPosts.find((p) => p.type === "swap") ?? allPosts[0] ?? null;
+    const candidates = allPosts.filter(
+      (p) => p.type === "swap" || p.type === "trade" || p.type === "trade_drop",
+    );
+    return candidates[0] ?? null;
   }, [allPosts]);
 
   const filtered = useMemo(() => {
     let list = [...allPosts];
-    if (primaryTab === "swaps") list = list.filter((p) => p.type === "swap");
+    if (primaryTab === "swaps") {
+      list = list.filter(
+        (p) => p.type === "swap" || p.type === "trade" || p.type === "trade_drop",
+      );
+    }
     if (primaryTab === "drops") list = list.filter((p) => p.type === "drop");
-    if (primaryTab === "pickups")
-      list = list.filter((p) => p.type === "pickup" || p.type === "trade");
+    if (primaryTab === "pickups") list = list.filter((p) => p.type === "pickup");
 
     const q = search.trim().toLowerCase();
     if (q) {
@@ -209,9 +407,12 @@ export default function TradeboardTabScreen() {
       } else if (chip === "3-Day") {
         list = list.filter((p) => /\b3\s*D\b/i.test(p.comments));
       } else if (chip === "Today") {
-        const t = new Date();
-        const label = t.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-        list = list.filter((p) => p.date.includes(label.split(" ")[0]!));
+        const mon = new Date().toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+        const day = String(new Date().getDate());
+        list = list.filter((p) => {
+          const blob = `${p.pairingDateLabel} ${p.date}`.toUpperCase();
+          return blob.includes(mon) && blob.includes(day);
+        });
       } else if (chip === "This Week") {
         list = list;
       }
@@ -228,11 +429,22 @@ export default function TradeboardTabScreen() {
 
   return (
     <View style={styles.screen}>
+      <FlicaCrewHubScheduleSessionRunner
+        active={pullSessionRunnerActive}
+        purposeLabel="Refreshing Tradeboard"
+        onComplete={settlePullSessionSuccess}
+        onError={settlePullSessionFailure}
+      />
+      <CrewHubRefreshToast
+        message={toast ?? ""}
+        visible={toast != null && toast.length > 0}
+        onDismiss={() => setToast(null)}
+      />
       <MonthlyStatsStrip values={stripValues} />
       <ScrollView
         style={styles.scroll}
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={() => void load()} />
+          <RefreshControl refreshing={loading} onRefresh={() => void load("pull")} />
         }
       >
         <View style={styles.primaryTabs}>
@@ -311,8 +523,8 @@ export default function TradeboardTabScreen() {
                   {activePost.pairingId || "—"} · {activePost.routeSummary.slice(0, 40)}
                 </Text>
                 <Text style={styles.activeSub} numberOfLines={2}>
-                  {activePost.date || "—"} · {tradeboardTypeLabel(activePost.type)} ·{" "}
-                  {activePost.worth || "—"} · {activePost.credit || "—"} CR
+                  {activePost.date || "—"} · {activePost.typeLabel} ·{" "}
+                  {activePost.worth ?? "—"} · {activePost.credit || "—"} CR
                 </Text>
               </View>
               {activePost.offerCount != null ? (
@@ -333,7 +545,9 @@ export default function TradeboardTabScreen() {
             <View style={styles.matchCard}>
               <View style={styles.matchBanner}>
                 <Text style={styles.matchBannerText}>
-                  TOP SWAP MATCH · {bestMatch.matchScore ?? 94}% COMPATIBILITY
+                  {bestMatch.matchScore != null
+                    ? `TOP SWAP MATCH · ${bestMatch.matchScore}% COMPATIBILITY`
+                    : "TOP SWAP MATCH"}
                 </Text>
               </View>
               <View style={styles.matchCols}>
@@ -356,7 +570,7 @@ export default function TradeboardTabScreen() {
                       : tripReportHint(giveDisplay.trip) || "—"}{" "}
                     ·{" "}
                     {giveDisplay.kind === "tb"
-                      ? giveDisplay.post.worth || "—"
+                      ? giveDisplay.post.worth ?? "—"
                       : tripWorthHint(giveDisplay.trip) || "—"}
                   </Text>
                 </View>
@@ -368,7 +582,7 @@ export default function TradeboardTabScreen() {
                     {bestMatch.date || "—"} · {bestMatch.routeSummary.slice(0, 24)}
                   </Text>
                   <Text style={styles.matchColSub}>
-                    Rpt {bestMatch.reportTime || "—"} · {bestMatch.worth || "—"}
+                    Rpt {bestMatch.reportTime || "—"} · {bestMatch.worth ?? "—"}
                   </Text>
                 </View>
               </View>
@@ -466,7 +680,7 @@ export default function TradeboardTabScreen() {
                 {p.credit || "—"}
               </Text>
               <Text style={styles.money} numberOfLines={1}>
-                {p.worth || "—"}
+                {p.worth ?? "—"}
               </Text>
             </View>
           </Pressable>
@@ -480,9 +694,27 @@ export default function TradeboardTabScreen() {
             <Text style={styles.modalTitle}>Trip detail</Text>
             {detailPost ? (
               <ScrollView style={{ maxHeight: 360 }}>
-                <Text style={styles.modalBody}>
-                  {detailPost.rawCells.join("\n")}
+                <Text style={styles.modalKv}>
+                  {detailPost.typeLabel} · {detailPost.pairingId}:{detailPost.pairingDateLabel}
                 </Text>
+                <Text style={styles.modalKv}>Base {detailPost.base || "—"} · Pos {detailPost.position || "—"}</Text>
+                <Text style={styles.modalKv}>
+                  Rpt {detailPost.reportTime || "—"} · Dep {detailPost.departTime || "—"} · Arr{" "}
+                  {detailPost.arriveTime || "—"}
+                </Text>
+                <Text style={styles.modalKv}>
+                  Block {detailPost.block || "—"} · Credit {detailPost.credit || "—"} · Worth{" "}
+                  {detailPost.worth ?? "—"}
+                </Text>
+                <Text style={styles.modalKv}>Layover {detailPost.layover || "—"}</Text>
+                <Text style={styles.modalKv}>Posted {detailPost.postedAtLabel || detailPost.postedAt || "—"}</Text>
+                <Text style={styles.modalKv}>By {detailPost.posterName || "—"}</Text>
+                {detailPost.responseMethodLabel ? (
+                  <Text style={styles.modalKv}>Responses: {detailPost.responseMethodLabel}</Text>
+                ) : null}
+                {detailPost.comments ? (
+                  <Text style={[styles.modalBody, { marginTop: 8 }]}>{detailPost.comments}</Text>
+                ) : null}
               </ScrollView>
             ) : null}
             <Pressable style={styles.modalClose} onPress={() => setDetailPost(null)}>
@@ -712,7 +944,8 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   modalTitle: { fontSize: 15, fontWeight: "800", marginBottom: 8 },
-  modalBody: { fontSize: 11, color: "#374151", fontFamily: "Menlo" },
+  modalKv: { fontSize: 12, color: "#111827", marginBottom: 4, fontWeight: "600" },
+  modalBody: { fontSize: 11, color: "#374151" },
   modalClose: {
     marginTop: 12,
     alignSelf: "flex-end",

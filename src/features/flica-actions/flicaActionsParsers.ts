@@ -11,13 +11,33 @@ function safeLower(v: unknown): string {
   return safeStr(v).toLowerCase();
 }
 
+function decodeHtmlEntities(s: string): string {
+  return (
+    safeStr(s)
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&#160;/g, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&#x([0-9a-f]{1,6});/gi, (_, h) => {
+        const n = parseInt(h, 16);
+        return Number.isFinite(n) && n > 0 ? String.fromCharCode(n) : "";
+      })
+      .replace(/&#(\d{1,6});/g, (_, d) => {
+        const n = Number(d);
+        return Number.isFinite(n) && n > 0 ? String.fromCharCode(n) : "";
+      })
+  );
+}
+
 function stripTags(s: unknown): string {
-  return safeStr(s)
+  const t = safeStr(s)
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/<[^>]*>/g, " ");
+  return decodeHtmlEntities(t).replace(/\s+/g, " ").trim();
 }
 
 function resolveUrl(raw: unknown): string {

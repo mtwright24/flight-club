@@ -1316,6 +1316,8 @@ export type FlicaActionsWebViewProps = {
   initialUri?: string;
   /** Hide dev capture controls; auto-open WebView (e.g. crew-schedule stack routes). */
   variant?: "default" | "embedded";
+  /** Embedded only: hide status row / spinner so the WebView fills the host (e.g. mini captcha sheet). */
+  hideEmbeddedChrome?: boolean;
 };
 
 function formatSnapshotSummary(p: CapturedPageSnapshot): string {
@@ -1401,9 +1403,11 @@ export default function FlicaActionsWebView({
   onSessionReady,
   initialUri,
   variant = "default",
+  hideEmbeddedChrome = false,
 }: FlicaActionsWebViewProps) {
   const loadUri = sanitizeFlicaInitialUri(initialUri);
   const embedded = variant === "embedded";
+  const compactEmbedded = embedded && hideEmbeddedChrome;
   const webViewRef = useRef<WebView>(null);
   const [state, setState] = useState<SessionState>("idle");
   const [statusText, setStatusText] = useState("Tap to authenticate FLICA session");
@@ -1746,6 +1750,22 @@ export default function FlicaActionsWebView({
           snippet: data.snippet?.slice(0, 200),
         });
 
+        if (compactEmbedded) {
+          let crewPhase = "webview_page_state";
+          if (data.hasRecaptcha) crewPhase = "captcha_detected";
+          else if (data.hasLogin) crewPhase = "login_page_detected";
+          else if (data.isReady) crewPhase = "mainmenu_session_ready_detected";
+          fcDevMirrorScheduleLogToFile("FC_CREW_HUB_AUTH", {
+            phase: crewPhase,
+            webviewUrl: data.url,
+            bodyLength: data.bodyLength,
+            htmlLength: data.htmlLength,
+            hasRecaptcha: !!data.hasRecaptcha,
+            hasLogin: !!data.hasLogin,
+            isReady: !!data.isReady,
+          });
+        }
+
         if (data.isReady && !cookiesCapturedRef.current) {
           setState("loading");
           setStatusText("Main menu detected — capturing cookies…");
@@ -1791,7 +1811,7 @@ export default function FlicaActionsWebView({
         /* ignore non-JSON messages */
       }
     },
-    [captureCookiesAndFinalize, captureMode, addCapturedSnapshot, injectDeepCaptureOnly],
+    [captureCookiesAndFinalize, captureMode, addCapturedSnapshot, injectDeepCaptureOnly, compactEmbedded],
   );
 
   const onLoadEnd = useCallback(() => {
@@ -1877,26 +1897,30 @@ export default function FlicaActionsWebView({
   if (embedded) {
     return (
       <View style={styles.embeddedRoot}>
-        <View style={styles.statusRow}>
-          <View
-            style={[
-              styles.dot,
-              state === "ready" && styles.dotReady,
-              state === "error" && styles.dotError,
-              state === "captcha" && styles.dotCaptcha,
-              state === "loading" && styles.dotLoading,
-            ]}
-          />
-          <Text style={styles.statusText} numberOfLines={2}>
-            {statusText}
-          </Text>
-        </View>
-        {state === "loading" ? (
-          <ActivityIndicator
-            size="small"
-            color={colors.accentBlue}
-            style={{ marginVertical: spacing.xs }}
-          />
+        {!compactEmbedded ? (
+          <>
+            <View style={styles.statusRow}>
+              <View
+                style={[
+                  styles.dot,
+                  state === "ready" && styles.dotReady,
+                  state === "error" && styles.dotError,
+                  state === "captcha" && styles.dotCaptcha,
+                  state === "loading" && styles.dotLoading,
+                ]}
+              />
+              <Text style={styles.statusText} numberOfLines={2}>
+                {statusText}
+              </Text>
+            </View>
+            {state === "loading" ? (
+              <ActivityIndicator
+                size="small"
+                color={colors.accentBlue}
+                style={{ marginVertical: spacing.xs }}
+              />
+            ) : null}
+          </>
         ) : null}
         <View style={styles.webViewContainerEmbedded}>{webViewEl}</View>
       </View>

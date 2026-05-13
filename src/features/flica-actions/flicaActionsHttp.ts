@@ -10,7 +10,11 @@ import type {
   FlicaSessionPrepResult,
 } from "./flicaActionsTypes";
 import { extractHtmlTitle } from "./flicaActionsParser";
-import { getFlicaActionsWebViewSession } from "./flicaActionsWebViewSession";
+import {
+  getFlicaActionsWebViewSession,
+  markFlicaActionsWebViewSessionReady,
+} from "./flicaActionsWebViewSession";
+import type { FlicaStoredCookies } from "../../dev/flicaPoCCookieStore";
 
 const FLICA_BASE = "https://jetblue.flica.net";
 
@@ -32,6 +36,15 @@ const LEFT_MENU_MARKERS = [
   "view or print pairings",
   "crewmember",
 ];
+
+/** True when native HTML indicates the user should complete FLICA in WebView before retrying fetch. */
+export function flicaFetchNeedsWebVerification(htmlState: FlicaHtmlState | undefined): boolean {
+  return (
+    htmlState === "captcha_required" ||
+    htmlState === "login_required" ||
+    htmlState === "application_error"
+  );
+}
 
 export function detectFlicaHtmlState(html: string): FlicaHtmlState {
   const h = String(html ?? "");
@@ -108,6 +121,23 @@ export function buildFlicaCookieHeader(cookies: FlicaActionsCookies): string {
   if (cookies.AWSALB) parts.push(`AWSALB=${cookies.AWSALB}`);
   if (cookies.AWSALBCORS) parts.push(`AWSALBCORS=${cookies.AWSALBCORS}`);
   return parts.join("; ");
+}
+
+/**
+ * Align the Actions WebView cookie snapshot (used by native Tradeboard/OpenTime GETs) with the
+ * same merged cookies {@link prepareFlicaActionsSession} uses — same chain as schedule sync HTTP prep.
+ */
+export async function syncWebViewSessionSnapshotFromSavedCookies(): Promise<boolean> {
+  const cookies = await getSavedFlicaActionsCookies();
+  if (!(cookies.FLiCASession || cookies.FLiCAService)) return false;
+  const snap: FlicaStoredCookies = {
+    FLiCASession: cookies.FLiCASession,
+    FLiCAService: cookies.FLiCAService,
+    AWSALB: cookies.AWSALB,
+    AWSALBCORS: cookies.AWSALBCORS,
+  };
+  await markFlicaActionsWebViewSessionReady(snap);
+  return true;
 }
 
 /**

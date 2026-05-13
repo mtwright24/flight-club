@@ -1,6 +1,6 @@
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter, type Href } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -12,13 +12,28 @@ import {
   Text,
   View,
 } from "react-native";
+import { useAuth } from "../../../hooks/useAuth";
+import {
+  crewHubNativeFetchNeedsVerificationSheet,
+  logCrewHubAuth,
+} from "../crewHubFlicaAuthGate";
+import { flicaFetchNeedsWebVerification } from "../../flica-actions/flicaActionsHttp";
 import {
   FLICA_NATIVE_URLS,
+  nativeFetchOpenTimeMyRequests,
   nativeFetchOpenTimePot,
 } from "../../flica-actions/flicaActionsNativeService";
+import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
+import { FlicaCrewHubScheduleSessionRunner } from "../components/FlicaCrewHubScheduleSessionRunner";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
+import { loadOpenTimeHubCache, upsertOpenTimeHubCache } from "../crewHubFlicaCache";
 import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
-import { mapRowsToOpenTimeTrips } from "../flicaCrewHubMappers";
+import { mapOpenTimeTripsWithHtmlFallback, openTimePageSaysNoPot } from "../flicaCrewHubHtmlFallbackParse";
+import {
+  buildCrewHubParseDebugFetchEntry,
+  commitOpenTimeParseDebugSnapshot,
+  type FlicaCrewHubParseDebugPayload,
+} from "../flicaCrewHubParseDebug";
 import type { OpenTimeTrip } from "../flicaCrewHubTypes";
 import { useCrewScheduleMonthStrip } from "../hooks/useCrewScheduleMonthStrip";
 import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
@@ -52,6 +67,7 @@ function parseWorthNumber(w: string): number {
 
 export default function OpenTimeTabScreen() {
   const router = useRouter();
+  const { session } = useAuth();
   const isFocused = useIsFocused();
   const { setCrewScheduleHeaderSubtitle } = useCrewScheduleHeaderBridge();
   const { stripValues, monthTrips, refreshFlicaMonthRow } = useCrewScheduleMonthStrip();
@@ -61,27 +77,160 @@ export default function OpenTimeTabScreen() {
   const [error, setError] = useState<string | null>(null);
   const [potTrips, setPotTrips] = useState<OpenTimeTrip[]>([]);
   const [detail, setDetail] = useState<OpenTimeTrip | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [pullSessionRunnerActive, setPullSessionRunnerActive] = useState(false);
+  const pullSessionWaitersRef = useRef<{
+    resolve: () => void;
+    reject: (e: Error) => void;
+  } | null>(null);
+  const cacheHydratedForUser = useRef<string | null>(null);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    const uid = session?.user?.id;
+    if (!uid || cacheHydratedForUser.current === uid) return;
+    cacheHydratedForUser.current = uid;
+    void loadOpenTimeHubCache(uid).then((c) => {
+      if (!c?.trips?.length) return;
+      setPotTrips((prev) => (prev.length === 0 ? c.trips : prev));
+    });
+  }, [session?.user?.id]);
+
+  const settlePullSessionSuccess = useCallback(() => {
+    pullSessionWaitersRef.current?.resolve();
+    pullSessionWaitersRef.current = null;
+    setPullSessionRunnerActive(false);
+  }, []);
+
+  const settlePullSessionFailure = useCallback((msg: string) => {
+    pullSessionWaitersRef.current?.reject(new Error(msg));
+    pullSessionWaitersRef.current = null;
+    setPullSessionRunnerActive(false);
+  }, []);
+
+  const load = useCallback(async (reason: "focus" | "pull" = "focus") => {
     setLoading(true);
     setError(null);
     try {
-      const r = await nativeFetchOpenTimePot();
-      const rows = r.nativeParse?.rows ?? [];
-      setPotTrips(mapRowsToOpenTimeTrips(rows, r.url));
-      if (!r.ok && r.error) setError(r.error);
+      if (reason === "pull") {
+        logCrewHubAuth("schedule_import_session_flow_start", { context: "opentime" });
+        await new Promise<void>((resolve, reject) => {
+          pullSessionWaitersRef.current = { resolve, reject };
+          setPullSessionRunnerActive(true);
+        });
+      }
+
+      let potR: Awaited<ReturnType<typeof nativeFetchOpenTimePot>>;
+      let myReqR: Awaited<ReturnType<typeof nativeFetchOpenTimeMyRequests>> | undefined;
+
+      if (__DEV__) {
+        [potR, myReqR] = await Promise.all([
+          nativeFetchOpenTimePot(),
+          nativeFetchOpenTimeMyRequests(),
+        ]);
+      } else {
+        potR = await nativeFetchOpenTimePot();
+      }
+      logCrewHubAuth("native_fetch_done", {
+        context: "opentime",
+        phase: "first",
+        htmlLen: potR.htmlLength ?? 0,
+        htmlState: potR.htmlState,
+        rowCount: potR.rowCount ?? 0,
+      });
+
+      const potFb = mapOpenTimeTripsWithHtmlFallback(potR.nativeParse?.rows ?? [], potR, potR.url);
+      const tripsPre = potFb.trips;
+
+      const fetches = [buildCrewHubParseDebugFetchEntry("Open Time Pot", potR, tripsPre)];
+      if (__DEV__ && myReqR) {
+        const myFb = mapOpenTimeTripsWithHtmlFallback(
+          myReqR.nativeParse?.rows ?? [],
+          myReqR,
+          myReqR.url,
+        );
+        const myTrips = myFb.trips;
+        fetches.push(
+          buildCrewHubParseDebugFetchEntry("Open Time My Requests", myReqR, myTrips),
+        );
+      }
+      const pl: FlicaCrewHubParseDebugPayload = {
+        screen: "opentime",
+        refreshedAt: new Date().toISOString(),
+        loadReason: reason,
+        note:
+          __DEV__ && myReqR
+            ? "__DEV__: Open Time My Requests native fetch included (not run in production)."
+            : "Production: only Open Time Pot native fetch.",
+        fetches,
+        openTimeFallback: potFb.meta,
+      };
+      commitOpenTimeParseDebugSnapshot(pl);
+      if (__DEV__) {
+        console.log("[FC_OPENTIME_PARSE_DEBUG]", JSON.stringify(pl));
+      }
+
+      const needVerification = crewHubNativeFetchNeedsVerificationSheet(potR);
+
+      if (needVerification) {
+        logCrewHubAuth("native_needs_verification", {
+          context: "opentime",
+          afterPullSession: reason === "pull",
+        });
+        if (reason === "focus") {
+          setError("Pull down to refresh to sign in to FLICA.");
+        } else {
+          setError(
+            potR.error ??
+              "FLICA verification still required after sign-in. Try pull to refresh again.",
+          );
+        }
+        return;
+      }
+
+      const trips = tripsPre;
+      logCrewHubAuth("parse_done", { context: "opentime", mappedRows: trips.length });
+      setPotTrips(trips);
+      if (flicaFetchNeedsWebVerification(potR.htmlState)) {
+        setError(potR.error ?? "FLICA verification still required.");
+      } else if (!potR.ok && potR.error) {
+        setError(potR.error);
+      } else if (
+        trips.length === 0 &&
+        potFb.meta.markersMissing.length > 0 &&
+        !openTimePageSaysNoPot(String(potR.pageHtml ?? ""))
+      ) {
+        setError(
+          `No Open Time trips parsed from FLICA HTML. Missing markers: ${potFb.meta.markersMissing.join(
+            "; ",
+          )}. Found: ${potFb.meta.markersFound.join("; ") || "(none)"}.`,
+        );
+      } else {
+        setError(null);
+      }
+
+      if (potR.ok && !flicaFetchNeedsWebVerification(potR.htmlState) && session?.user?.id) {
+        void upsertOpenTimeHubCache(session.user.id, {
+          v: 1,
+          trips,
+          refreshedAt: new Date().toISOString(),
+        });
+        if (reason === "pull") setToast("Open Time refreshed");
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setPotTrips([]);
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        setPotTrips([]);
+      }
     } finally {
       setLoading(false);
       void refreshFlicaMonthRow();
     }
-  }, [refreshFlicaMonthRow]);
+  }, [refreshFlicaMonthRow, session?.user?.id]);
 
   useFocusEffect(
     useCallback(() => {
-      void load();
+      void load("focus");
       return () => setCrewScheduleHeaderSubtitle(null);
     }, [load, setCrewScheduleHeaderSubtitle]),
   );
@@ -141,24 +290,13 @@ export default function OpenTimeTabScreen() {
     return list;
   }, [potTrips, chip]);
 
-  const turnsToday = useMemo(
-    () => filteredPot.filter((t) => t.days === 1),
-    [filteredPot],
-  );
-  const multiDay = useMemo(
-    () => filteredPot.filter((t) => t.days != null && t.days >= 2),
-    [filteredPot],
-  );
+  /** All trips after chip filter — no extra day-based hiding. */
+  const listedTrips = filteredPot;
 
-  const featuredTurn = useMemo(() => {
-    if (turnsToday.length !== 1) return null;
-    return turnsToday[0] ?? null;
-  }, [turnsToday]);
-
-  const bestMultiRate = useMemo(() => {
+  const bestDollarPerCreditHour = useMemo(() => {
     let best: OpenTimeTrip | null = null;
     let bestRate = -1;
-    for (const t of multiDay) {
+    for (const t of listedTrips) {
       const w = parseWorthNumber(t.worth);
       const cr = t.credit || t.block;
       const hm = cr.match(/(\d{1,2}):(\d{2})/);
@@ -173,7 +311,7 @@ export default function OpenTimeTabScreen() {
       }
     }
     return best;
-  }, [multiDay]);
+  }, [listedTrips]);
 
   const chips = ["All", "Turns", "2 Days", "3 Days", "Red-eye", "≥$1k"];
 
@@ -193,11 +331,22 @@ export default function OpenTimeTabScreen() {
 
   return (
     <View style={styles.screen}>
+      <FlicaCrewHubScheduleSessionRunner
+        active={pullSessionRunnerActive}
+        purposeLabel="Refreshing Open Time"
+        onComplete={settlePullSessionSuccess}
+        onError={settlePullSessionFailure}
+      />
+      <CrewHubRefreshToast
+        message={toast ?? ""}
+        visible={toast != null && toast.length > 0}
+        onDismiss={() => setToast(null)}
+      />
       <MonthlyStatsStrip values={stripValues} />
       <ScrollView
         style={styles.scroll}
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={() => void load()} />
+          <RefreshControl refreshing={loading} onRefresh={() => void load("pull")} />
         }
       >
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
@@ -215,6 +364,10 @@ export default function OpenTimeTabScreen() {
         </ScrollView>
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+        {!loading && potTrips.length === 0 ? (
+          <Text style={styles.emptyText}>No Open Time trips found. Pull down to refresh.</Text>
+        ) : null}
 
         {tripToday ? (
           <View style={styles.yourTripCard}>
@@ -236,69 +389,13 @@ export default function OpenTimeTabScreen() {
           </View>
         ) : null}
 
-        {featuredTurn ? (
-          <View style={styles.section}>
-            <View style={styles.sectionHead}>
-              <Text style={styles.sectionTitle}>
-                {weekdayShort} {dateShort} · Turns (1-Day)
-              </Text>
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>1</Text>
-              </View>
-            </View>
-            <View style={styles.featureCard}>
-              <View style={styles.featureBanner}>
-                <Text style={styles.featureBannerText}>⭐ ONLY TURN TODAY · BEST $/HR</Text>
-              </View>
-              <View style={styles.featureTop}>
-                <Text style={styles.pairingId}>{featuredTurn.pairingId}</Text>
-                <View style={{ flex: 1 }} />
-                <Text style={styles.bigMoney}>{featuredTurn.worth || "—"}</Text>
-              </View>
-              <Text style={styles.bigRoute} numberOfLines={2}>
-                {featuredTurn.routeSummary}
-              </Text>
-              <Text style={styles.featureMeta}>
-                {featuredTurn.date || dateShort} · Rpt {featuredTurn.reportTime || "—"} · D-End{" "}
-                {featuredTurn.arriveTime || "—"}
-              </Text>
-              <View style={styles.statGrid}>
-                <View style={styles.statCell}>
-                  <Text style={styles.statLab}>BLOCK</Text>
-                  <Text style={styles.statVal}>{featuredTurn.block || "—"}</Text>
-                </View>
-                <View style={styles.statCell}>
-                  <Text style={styles.statLab}>CREDIT</Text>
-                  <Text style={styles.statVal}>{featuredTurn.credit || "—"}</Text>
-                </View>
-                <View style={styles.statCell}>
-                  <Text style={styles.statLab}>LAYOVER</Text>
-                  <Text style={[styles.statVal, styles.statGreen]}>
-                    {featuredTurn.layover || "—"}
-                  </Text>
-                </View>
-                <View style={styles.statCell}>
-                  <Text style={styles.statLab}>D-END</Text>
-                  <Text style={styles.statVal}>{featuredTurn.arriveTime || "—"}</Text>
-                </View>
-              </View>
-              <View style={styles.featureFoot}>
-                <Text style={styles.legalText}>✓ Legal · rest available · fits schedule</Text>
-                <Pressable style={styles.addBtn} onPress={() => onAdd(featuredTurn)}>
-                  <Text style={styles.addBtnText}>Add</Text>
-                </Pressable>
-              </View>
-            </View>
-          </View>
-        ) : null}
-
         <View style={styles.section}>
           <View style={styles.sectionHead}>
             <Text style={styles.sectionTitle}>
-              {weekdayShort} {dateShort} · 2–3 Day Trips
+              {weekdayShort} {dateShort} · Open Time
             </Text>
             <View style={styles.badge}>
-              <Text style={styles.badgeText}>{multiDay.length}</Text>
+              <Text style={styles.badgeText}>{listedTrips.length}</Text>
             </View>
           </View>
           <View style={styles.tableHead}>
@@ -308,11 +405,11 @@ export default function OpenTimeTabScreen() {
             <Text style={[styles.th, { flex: 0.5 }]}>CR</Text>
             <Text style={[styles.th, { flex: 0.65 }]}>WORTH</Text>
           </View>
-          {loading && multiDay.length === 0 ? (
+          {loading && listedTrips.length === 0 ? (
             <ActivityIndicator style={{ marginTop: 16 }} color={SCHEDULE_MOCK_HEADER_RED} />
           ) : null}
-          {multiDay.map((t, idx) => {
-            const isBest = bestMultiRate?.pairingId === t.pairingId;
+          {listedTrips.map((t, idx) => {
+            const isBest = bestDollarPerCreditHour?.pairingId === t.pairingId;
             return (
               <Pressable
                 key={`${t.pairingId}-${idx}`}
@@ -363,7 +460,22 @@ export default function OpenTimeTabScreen() {
             <Text style={styles.modalTitle}>Open time detail</Text>
             {detail ? (
               <ScrollView style={{ maxHeight: 360 }}>
-                <Text style={styles.modalBody}>{detail.rawCells.join("\n")}</Text>
+                <Text style={styles.modalKv}>
+                  {detail.pairingId} · {detail.dates || detail.date || "—"}
+                </Text>
+                {detail.bidPos ? <Text style={styles.modalKv}>Bid pos {detail.bidPos}</Text> : null}
+                <Text style={styles.modalKv}>
+                  Rpt {detail.reportTime || "—"} · Dep {detail.departTime || "—"} · Arr{" "}
+                  {detail.arriveTime || "—"}
+                </Text>
+                <Text style={styles.modalKv}>
+                  Block {detail.block || "—"} · Credit {detail.credit || "—"} · Worth{" "}
+                  {detail.worth || "—"}
+                </Text>
+                {detail.premium ? (
+                  <Text style={styles.modalKv}>Premium {detail.premium}</Text>
+                ) : null}
+                <Text style={styles.modalKv}>Layover {detail.layover || "—"}</Text>
               </ScrollView>
             ) : null}
             <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
@@ -436,50 +548,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   badgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
-  featureCard: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  featureBanner: {
-    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
-    borderRadius: 8,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
-    marginBottom: 8,
-  },
-  featureBannerText: { color: "#fff", fontSize: 9, fontWeight: "800" },
-  featureTop: { flexDirection: "row", alignItems: "center" },
-  pairingId: { fontSize: 12, fontWeight: "900", color: SCHEDULE_MOCK_HEADER_RED },
-  bigMoney: { fontSize: 18, fontWeight: "900", color: "#16a34a" },
-  bigRoute: { fontSize: 15, fontWeight: "800", color: "#111", marginTop: 4 },
-  featureMeta: { fontSize: 10, color: "#6b7280", marginTop: 4 },
-  statGrid: { flexDirection: "row", marginTop: 10, gap: 4 },
-  statCell: { flex: 1, alignItems: "center" },
-  statLab: { fontSize: 8, color: "#9ca3af", fontWeight: "700" },
-  statVal: { fontSize: 10, fontWeight: "800", color: "#111", marginTop: 2 },
-  statGreen: { color: "#16a34a" },
-  featureFoot: {
-    marginTop: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#ecfdf5",
-    borderRadius: 8,
-    padding: 8,
-    gap: 8,
-  },
-  legalText: { flex: 1, fontSize: 9, color: "#15803d", fontWeight: "600" },
-  addBtn: {
-    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 10,
-  },
-  addBtnText: { color: "#fff", fontSize: 11, fontWeight: "800" },
   tableHead: {
     flexDirection: "row",
     backgroundColor: "#e5e7eb",
@@ -520,7 +588,15 @@ const styles = StyleSheet.create({
   },
   modalCard: { backgroundColor: "#fff", borderRadius: 14, padding: 16 },
   modalTitle: { fontSize: 15, fontWeight: "800", marginBottom: 8 },
-  modalBody: { fontSize: 11, color: "#374151", fontFamily: "Menlo" },
+  modalKv: { fontSize: 12, color: "#111827", marginBottom: 4, fontWeight: "600" },
+  emptyText: {
+    fontSize: 12,
+    color: "#6b7280",
+    textAlign: "center",
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+  },
   modalClose: {
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     paddingHorizontal: 14,

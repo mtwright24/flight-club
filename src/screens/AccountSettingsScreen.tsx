@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 
 import {
   ActivityIndicator,
@@ -30,6 +31,11 @@ import {
   readFcScheduleDebugLogText,
 } from "../dev/fcDevFileLogger";
 import { clearAllScheduleMonthUISnapshots } from "../features/crew-schedule/scheduleSnapshotCache";
+import { FlicaCrewHubParseDebugPanel } from "../features/crew-schedule/components/FlicaCrewHubParseDebugPanel";
+import {
+  getOpenTimeParseDebugSnapshot,
+  getTradeboardParseDebugSnapshot,
+} from "../features/crew-schedule/flicaCrewHubParseDebug";
 import {
   testFlicaSession,
   fetchFlicaLeftMenuTest,
@@ -202,6 +208,42 @@ const stateOptions = [
   "WI",
   "WY",
 ];
+
+function CrewHubParseDebugSettingsPanels() {
+  const [refreshKey, setRefreshKey] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      setRefreshKey((k) => k + 1);
+    }, []),
+  );
+  void refreshKey;
+  return (
+    <View style={{ marginTop: 12 }}>
+      <Text
+        style={{
+          fontSize: 12,
+          color: "#6b7280",
+          marginBottom: 8,
+          paddingHorizontal: 4,
+          lineHeight: 17,
+        }}
+      >
+        Tradeboard / Open Time parse inspector (temp). Pull to refresh on those crew hub tabs,
+        then return here — metrics update when this screen gains focus.
+      </Text>
+      <FlicaCrewHubParseDebugPanel
+        title="DEBUG INSPECTOR — Tradeboard parse"
+        payload={getTradeboardParseDebugSnapshot()}
+        metricsSourceName="All Requests"
+      />
+      <FlicaCrewHubParseDebugPanel
+        title="DEBUG INSPECTOR — Open Time parse"
+        payload={getOpenTimeParseDebugSnapshot()}
+        metricsSourceName="Open Time Pot"
+      />
+    </View>
+  );
+}
 
 function FlicaActionsTestCard() {
   const [loading, setLoading] = useState<string | null>(null);
@@ -1184,6 +1226,7 @@ export default function AccountSettingsScreen() {
                     View / share fc-schedule-debug.log
                   </Text>
                 </Pressable>
+                <CrewHubParseDebugSettingsPanels />
               </View>
             ),
           },

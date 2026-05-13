@@ -53,6 +53,8 @@ export type FlicaNativeTradeBoardFetchDebug = {
 
 export type FlicaActionsFetchResult = {
   ok: boolean;
+  /** URL requested for this response (before redirects); mirrors `toResult` first argument. */
+  requestedUrl?: string;
   url: string;
   status?: number;
   htmlState?: FlicaHtmlState;
@@ -62,6 +64,8 @@ export type FlicaActionsFetchResult = {
   rowCount?: number;
   error?: string;
   bodyPreview?: string;
+  /** Full HTML body from the last GET (for client-side fallback parsing when table rows are templates). */
+  pageHtml?: string;
   /** When set, UI can show structured native parse (Phase 1 Actions). */
   nativeParse?: FlicaNativePageModel;
   /** Present after native TradeBoard tab fetches that use warm-frame + session prep. */

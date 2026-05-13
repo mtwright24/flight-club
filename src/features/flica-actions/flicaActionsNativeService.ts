@@ -142,6 +142,7 @@ function toResult(
     : undefined;
   return {
     ok,
+    requestedUrl: String(url ?? ""),
     url: safeFinalUrl,
     status,
     htmlState,
@@ -150,6 +151,7 @@ function toResult(
     rowCount: rows.length,
     detectedLinks: endpoints.slice(0, 25),
     bodyPreview: preview,
+    pageHtml: safeHtml,
     nativeParse,
     error,
     nativeTradeBoardFetchDebug,
@@ -212,7 +214,7 @@ async function fetchTradeBoardTabUsingWebViewSession(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logNative({ label, ok: false, error: msg });
-    return { ok: false, url: tabUrl, error: msg, htmlLength: 0 };
+    return { ok: false, requestedUrl: tabUrl, url: tabUrl, error: msg, htmlLength: 0 };
   }
 }
 
@@ -274,6 +276,7 @@ export async function nativeFetchTradeBoardPostRequest(): Promise<FlicaActionsFe
 
   return {
     ok: true,
+    requestedUrl,
     url: requestedUrl,
     htmlLength: 0,
     htmlState: "ok",
@@ -334,7 +337,10 @@ async function openTimeFrameAndToken(): Promise<OtGate> {
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, result: { ok: false, url: frameUrl, error: msg } };
+    return {
+      ok: false,
+      result: { ok: false, requestedUrl: frameUrl, url: frameUrl, error: msg },
+    };
   }
 }
 
@@ -344,8 +350,8 @@ export async function nativeFetchOpenTimePot(): Promise<FlicaActionsFetchResult>
     logNative({ label: "ot_pot", ok: false, error: gate.result.error });
     return gate.result;
   }
+  const potUrl = FLICA_NATIVE_URLS.otPot(gate.token);
   try {
-    const potUrl = FLICA_NATIVE_URLS.otPot(gate.token);
     const pot = await fetchFlicaHtmlUsingWebViewSession(potUrl, {
       referer: gate.referer,
     });
@@ -360,7 +366,12 @@ export async function nativeFetchOpenTimePot(): Promise<FlicaActionsFetchResult>
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logNative({ label: "ot_pot", ok: false, error: msg });
-    return { ok: false, url: FLICA_NATIVE_URLS.otFrameView, error: msg };
+    return {
+      ok: false,
+      requestedUrl: potUrl,
+      url: potUrl,
+      error: msg,
+    };
   }
 }
 
@@ -370,8 +381,8 @@ export async function nativeFetchOpenTimeMyRequests(): Promise<FlicaActionsFetch
     logNative({ label: "ot_my_requests", ok: false, error: gate.result.error });
     return gate.result;
   }
+  const reqUrl = FLICA_NATIVE_URLS.otRequest(gate.token);
   try {
-    const reqUrl = FLICA_NATIVE_URLS.otRequest(gate.token);
     const req = await fetchFlicaHtmlUsingWebViewSession(reqUrl, {
       referer: gate.referer,
     });
@@ -386,7 +397,12 @@ export async function nativeFetchOpenTimeMyRequests(): Promise<FlicaActionsFetch
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logNative({ label: "ot_my_requests", ok: false, error: msg });
-    return { ok: false, url: FLICA_NATIVE_URLS.otFrameView, error: msg };
+    return {
+      ok: false,
+      requestedUrl: reqUrl,
+      url: reqUrl,
+      error: msg,
+    };
   }
 }
 
@@ -409,7 +425,7 @@ async function previewOtGet(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logNative({ label, ok: false, error: msg });
-    return { ok: false, url: targetUrl, error: msg };
+    return { ok: false, requestedUrl: targetUrl, url: targetUrl, error: msg };
   }
 }
 
