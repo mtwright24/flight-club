@@ -2,6 +2,9 @@ import type { OpenTimeTrip, TradeboardPost, TradeboardPostType } from "./flicaCr
 
 /** Pairing + report date token as shown on Tradeboard (e.g. J3717:12MAY). */
 const TRADEBOARD_PAIRING_DATE_RE = /\b(J[A-Z0-9]{3,5}):(\d{1,2}[A-Z]{3})\b/i;
+/** HTML / tag-split variants: optional entity or whitespace between id and date. */
+const TRADEBOARD_PAIRING_FLEX_LOOSE_RE =
+  /\b(J[A-Z0-9]{3,5})\s*(?::|&#58;|&#x3A;|&colon;)?\s*(\d{1,2}[A-Z]{3})\b/i;
 const TRADEBOARD_PAIRING_ONLY_RE = /\b(J[A-Z0-9]{3,5})\b/i;
 const OPENTIME_PAIRING_RE = /\b(J[A-Z0-9]{3,5})\b/i;
 const DATE_TOKEN_RE = /\b(\d{1,2}[A-Z]{3})\b/i;
@@ -47,7 +50,7 @@ const KNOWN_BASES = new Set([
   "SAN",
 ]);
 
-function djb2Hex(parts: string[]): string {
+export function djb2Hex(parts: string[]): string {
   const s = parts.join("::");
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = Math.imul(h, 33) ^ s.charCodeAt(i);
@@ -78,7 +81,7 @@ function extractOffers(text: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function detectTradeboardType(blob: string): TradeboardPostType {
+export function detectTradeboardType(blob: string): TradeboardPostType {
   const u = blob.toUpperCase();
   if (/\bTRADE\s*\/\s*DROP\b|\bTRADE-DROP\b|\bTRADE\s*DROP\b/.test(u)) return "trade_drop";
   if (/\bPICK\s*UP\b|\bPICKUP\b|\bPK\b/.test(u)) return "pickup";
@@ -88,7 +91,7 @@ function detectTradeboardType(blob: string): TradeboardPostType {
   return "unknown";
 }
 
-function tradeboardTypeLongLabel(t: TradeboardPostType): string {
+export function tradeboardTypeLongLabel(t: TradeboardPostType): string {
   switch (t) {
     case "swap":
       return "Swap";
@@ -106,6 +109,11 @@ function tradeboardTypeLongLabel(t: TradeboardPostType): string {
 }
 
 function guessDays(text: string): number | null {
+  const dm = text.match(/\bDays\s*[:\s]+\s*(\d{1,2})\b/i);
+  if (dm) {
+    const n = Number(dm[1]);
+    return Number.isFinite(n) && n >= 1 && n <= 14 ? n : null;
+  }
   const m = text.match(/\b(\d)\s*D\b/i) || text.match(/\b(\d)\s*DAY\b/i);
   if (m) {
     const n = Number(m[1]);
@@ -131,12 +139,24 @@ function parseTradeboardPairing(
   const m = line.match(TRADEBOARD_PAIRING_DATE_RE);
   if (m)
     return { pairingId: String(m[1]).toUpperCase(), pairingDateLabel: String(m[2]).toUpperCase() };
+  const flexLine = line.match(TRADEBOARD_PAIRING_FLEX_LOOSE_RE);
+  if (flexLine)
+    return {
+      pairingId: String(flexLine[1]).toUpperCase(),
+      pairingDateLabel: String(flexLine[2]).toUpperCase(),
+    };
   for (const c of cells) {
     const cm = c.match(TRADEBOARD_PAIRING_DATE_RE);
     if (cm)
       return {
         pairingId: String(cm[1]).toUpperCase(),
         pairingDateLabel: String(cm[2]).toUpperCase(),
+      };
+    const cfx = c.match(TRADEBOARD_PAIRING_FLEX_LOOSE_RE);
+    if (cfx)
+      return {
+        pairingId: String(cfx[1]).toUpperCase(),
+        pairingDateLabel: String(cfx[2]).toUpperCase(),
       };
   }
   let pairingId = "";
@@ -152,6 +172,13 @@ function parseTradeboardPairing(
 }
 
 function tradeboardRowLooksLikeJunk(line: string, cells: string[]): boolean {
+  const t = line.trim();
+  if (
+    cells.length === 1 &&
+    /^\s*J[A-Z0-9]{3,5}\s*(?::|&#58;|&#x3A;|&colon;)?\s*\d{1,2}[A-Z]{3}\s*$/i.test(t) &&
+    !/\d{1,2}:\d{2}/.test(t)
+  )
+    return true;
   const u = line.toUpperCase().replace(/\s+/g, " ").trim();
   if (!u) return true;
   if (EXACT_JUNK_TOKENS.has(u)) return true;
@@ -174,7 +201,26 @@ function pickPosterName(cells: string[], line: string): string {
     if (/^[A-Z][A-Z'\-]+,\s+[A-Z][A-Z'\-]+$/.test(c.trim())) return c.trim();
   }
   const m = line.match(/\b([A-Z][A-Z'\-]+,\s+[A-Z][A-Z'\-]+)\b/);
-  return m?.[1]?.trim() ?? "";
+  if (m?.[1]) return m[1]!.trim();
+  /** FLICA Tradeboard often shows "LAST - FIRST" without a comma. */
+  const dash = line.match(
+    /\b([A-Z][A-Za-z'\-]{1,22}\s*-\s*[A-Z][A-Za-z'\-\s]{1,36})\b/,
+  );
+  if (dash?.[1] && !/\b(J[A-Z0-9]{3,5}):/i.test(dash[1])) {
+    const bits = dash[1].split(/\s*-\s*/).map((s) => s.trim());
+    if (
+      bits.length === 2 &&
+      /^[A-Z]{3}$/.test(bits[0]!) &&
+      /^[A-Z]{3}$/.test(bits[1]!) &&
+      KNOWN_BASES.has(bits[0]!.toUpperCase()) &&
+      KNOWN_BASES.has(bits[1]!.toUpperCase())
+    ) {
+      /* skip "JFK - BOS" style fragments */
+    } else {
+      return dash[1]!.replace(/\s*-\s*/, ", ").replace(/\s+/g, " ").trim();
+    }
+  }
+  return "";
 }
 
 function pickBase(cells: string[]): string {
@@ -198,11 +244,14 @@ function extractTimes(line: string): string[] {
 }
 
 function pickPostedAtLabel(line: string): string {
-  const m =
+  const mLong =
+    line.match(
+      /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}:\d{2}\s*(?:EDT|EST|CST|CDT|PST|PDT|UTC)?\b/i,
+    ) ||
     line.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b[^A-Z]*\b\d{1,2}:\d{2}/i) ||
     line.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/) ||
     line.match(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i);
-  return m ? collapseWhitespace(m[0] ?? "") : "";
+  return mLong ? collapseWhitespace(mLong[0] ?? "") : "";
 }
 
 function responseChunk(line: string): string {
