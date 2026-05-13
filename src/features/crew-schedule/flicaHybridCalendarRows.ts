@@ -253,7 +253,7 @@ function syntheticCalendarGapDisplayForRow(
   const end = trip?.endDate.slice(0, 10) ?? "";
   const continuationDash = start && end && iso > start && iso < end ? "-" : "";
   return {
-    pairingText: iso === start ? trip.pairingCode : "",
+    pairingText: iso === start ? trip?.pairingCode ?? "" : "",
     cityText: day?.displayCityLedger ?? continuationDash,
   };
 }

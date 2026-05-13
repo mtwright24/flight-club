@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/features/flica-actions/**/*.ts",
+    "src/screens/AccountSettingsScreen.tsx",
+    "src/dev/fcDevFileLogger.ts",
+    "src/dev/flicaPoCCookieStore.ts",
+    "src/dev/flicaPoCConfig.ts"
+  ]
+}

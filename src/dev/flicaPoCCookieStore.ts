@@ -5,6 +5,8 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
+import { clearFlicaActionsWebViewSessionReady } from '../features/flica-actions/flicaActionsWebViewSession';
+
 /** Shape returned by CookieManager.get (cookie name → { name, value, ... }). */
 export type NativeCookieJar = Record<string, { value?: string; name?: string } | undefined>;
 
@@ -262,6 +264,7 @@ export async function clearFlicaCookiesFromSecureStore(): Promise<void> {
  * Keys: flica_username, flica_password, flica_session, flica_service, flica_awsalb, flica_awsalbcors, last main menu URL.
  */
 export async function removeFlicaLoginAndSessionsFromDevice(): Promise<void> {
+  await clearFlicaActionsWebViewSessionReady();
   await Promise.all([
     SecureStore.deleteItemAsync(FLICA_USERNAME_KEY).catch(() => {}),
     SecureStore.deleteItemAsync(FLICA_PASSWORD_KEY).catch(() => {}),
