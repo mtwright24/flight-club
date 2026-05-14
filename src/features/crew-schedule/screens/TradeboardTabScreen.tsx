@@ -300,20 +300,60 @@ type PrimaryTab = "all" | "trade" | "trade_drop" | "drops" | "pickups" | "post_t
 
 const TB_DIGITAL = Platform.OS === "ios" ? "Menlo" : "monospace";
 
-/** Solid type pill on row — mock “deep pure” colors, white label. */
-function tradeboardRowTypeSolidHex(t: TradeboardPost["type"]): string {
+/**
+ * TYPE / $ / › fixed (narrow $). LAY + POSTER + RPT + ARR use weighted flex so
+ * layover gets more room and the row uses the full width with even gaps.
+ */
+const TB_COL = {
+  type: 52,
+  worth: 19,
+  chev: 10,
+} as const;
+
+/** Weighted flex shares (sum drives relative column width). Layover slightly wider than RPT/ARR. */
+const TB_FLEX_LAY = { flexGrow: 16, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
+const TB_FLEX_POSTER = { flexGrow: 14, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
+const TB_FLEX_RPT = { flexGrow: 11, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
+const TB_FLEX_ARR = { flexGrow: 11, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
+
+/** One airport / em dash only — center in column; multi-segment "A · B" stays left-aligned. */
+function tradeboardLayoverIsSingleSegment(layover: string | null | undefined): boolean {
+  const s = hubLayoverDisplayWithDots(layover);
+  return !s.includes(" · ");
+}
+
+/** Same wording as the post-type filter row (Pickup, Trade, T/Drop, Drop). */
+function tradeboardTypePillLabel(t: TradeboardPost["type"]): string {
   switch (t) {
     case "pickup":
-      return "#15803d";
+      return "Pickup";
     case "drop":
-      return "#ea580c";
+      return "Drop";
     case "trade":
     case "swap":
-      return "#1d4ed8";
+      return "Trade";
     case "trade_drop":
-      return "#6d28d9";
+      return "T/Drop";
     default:
-      return "#78716c";
+      return "—";
+  }
+}
+
+/** Map post type to filter tab so row badge colors match the post-type chips. */
+function tradeboardTypeToPrimaryTab(t: TradeboardPost["type"]): PrimaryTab {
+  switch (t) {
+    case "pickup":
+      return "pickups";
+    case "drop":
+      return "drops";
+    case "trade":
+      return "trade";
+    case "trade_drop":
+      return "trade_drop";
+    case "swap":
+      return "trade";
+    default:
+      return "all";
   }
 }
 
@@ -343,7 +383,7 @@ function tradeboardFilterPillPalette(
 
 function formatTradeboardDatePillHeading(dateKey: string, anchor: Date): string {
   const ms = tradeboardReportDateMsFromLabel(dateKey, anchor);
-  if (!Number.isFinite(ms) || ms > 1e14) return dateKey;
+  if (!Number.isFinite(ms) || ms >= Number.MAX_SAFE_INTEGER - 10_000) return dateKey;
   const d = new Date(ms);
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
@@ -381,7 +421,9 @@ function TradeboardFeedRow({
   onPress: () => void;
 }) {
   const primaryUri = tradeboardFlicaUriForSwipe(p.type);
-  const typeHex = tradeboardRowTypeSolidHex(p.type);
+  const rowPal = tradeboardFilterPillPalette(tradeboardTypeToPrimaryTab(p.type), false);
+  const laySingleSeg = tradeboardLayoverIsSingleSegment(p.layover);
+  const pairingIdDisp = p.pairingId?.trim() || "—";
   const daysRaw = String(p.days ?? "").trim();
   const daysLine =
     daysRaw && /\d/.test(daysRaw)
@@ -411,52 +453,79 @@ function TradeboardFeedRow({
     <Swipeable friction={2} overshootRight={false} renderRightActions={() => right}>
       <Pressable onPress={onPress} style={styles.tbRowCard}>
         <View style={styles.tbRowInner}>
-          <View style={styles.tbTypeCol}>
-            <View style={[styles.tbTypePillRow, { backgroundColor: typeHex }]}>
-              <Text style={styles.tbTypePillRowTxt} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
-                {tradeboardTypeLabel(p.type)}
+          <View style={[styles.tbTypeCol, { width: TB_COL.type }]}>
+            <View
+              style={[
+                styles.tbTypePillRow,
+                {
+                  backgroundColor: rowPal.bg,
+                  borderColor: rowPal.border,
+                  borderWidth: StyleSheet.hairlineWidth,
+                },
+              ]}
+              accessibilityLabel={tradeboardTypeLabel(p.type)}
+            >
+              <Text
+                style={[styles.tbTypePillRowTxt, { color: rowPal.text }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.55}
+              >
+                {tradeboardTypePillLabel(p.type)}
               </Text>
             </View>
           </View>
-          <View style={styles.tbLayCol}>
-            <Text style={styles.tbLay} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82}>
+          <View style={[styles.tbLayCol, TB_FLEX_LAY, laySingleSeg && styles.tbLayColSingle]}>
+            <Text
+              style={[styles.tbLay, laySingleSeg ? styles.tbLaySingle : styles.tbLayMulti]}
+              numberOfLines={3}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+            >
               {hubLayoverDisplayWithDots(p.layover)}
             </Text>
           </View>
-          <View style={styles.tbPosterPairCol}>
-            <Text style={styles.tbPosterName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+          <View style={[styles.tbPosterPairCol, TB_FLEX_POSTER]}>
+            <Text style={styles.tbPosterName} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.68}>
               {tradeboardPosterFirstName(p.posterName)}
             </Text>
-            <Text style={styles.tbPairingMeta} numberOfLines={1}>
-              {p.pairingId?.trim() || "—"} · {daysLine}
+            <Text style={styles.tbPairingMeta} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.65}>
+              <Text style={styles.tbPairingId}>{pairingIdDisp} · </Text>
+              <Text style={styles.tbPairingDays}>{daysLine}</Text>
             </Text>
           </View>
-          <View style={styles.tbRptCreditCol}>
-            <Text style={styles.tbStackLine}>
-              <Text style={styles.tbStackLbl}>Rpt </Text>
-              <Text style={styles.tbStackNum}>{p.reportTime?.trim() || "—"}</Text>
-            </Text>
-            <Text style={styles.tbStackLine}>
-              <Text style={styles.tbStackLbl}>Credit </Text>
-              <Text style={styles.tbStackNum}>{p.credit?.trim() || "—"}</Text>
-            </Text>
+          <View style={[styles.tbRptCreditCol, TB_FLEX_RPT]}>
+            <View style={styles.tbStackPairBox}>
+              <Text style={styles.tbStackLine}>
+                <Text style={styles.tbStackLbl}>Rpt </Text>
+                <Text style={styles.tbStackNum}>{p.reportTime?.trim() || "—"}</Text>
+              </Text>
+              <View style={styles.tbStackPairRule} />
+              <Text style={styles.tbStackLine}>
+                <Text style={styles.tbStackLblCredit}>Credit </Text>
+                <Text style={styles.tbStackNumCredit}>{p.credit?.trim() || "—"}</Text>
+              </Text>
+            </View>
           </View>
-          <View style={styles.tbArrDepCol}>
-            <Text style={styles.tbStackLine}>
-              <Text style={styles.tbStackLbl}>Arr </Text>
-              <Text style={styles.tbStackNum}>{p.arriveTime?.trim() || "—"}</Text>
-            </Text>
-            <Text style={styles.tbStackLine}>
-              <Text style={styles.tbStackLbl}>Dep </Text>
-              <Text style={styles.tbStackNum}>{p.departTime?.trim() || "—"}</Text>
-            </Text>
+          <View style={[styles.tbArrDepCol, TB_FLEX_ARR]}>
+            <View style={styles.tbStackPairBox}>
+              <Text style={styles.tbStackLine}>
+                <Text style={styles.tbStackLbl}>Arr </Text>
+                <Text style={styles.tbStackNum}>{p.arriveTime?.trim() || "—"}</Text>
+              </Text>
+              <View style={styles.tbStackPairRule} />
+              <Text style={styles.tbStackLine}>
+                <Text style={styles.tbStackLbl}>Dep </Text>
+                <Text style={styles.tbStackNum}>{p.departTime?.trim() || "—"}</Text>
+              </Text>
+            </View>
           </View>
-          <View style={styles.tbWorthCol}>
-            <Text style={styles.tbWorth} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+          <View style={[styles.tbWorthCol, { width: TB_COL.worth }]}>
+            <Text style={styles.tbWorth} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.55}>
               {p.worth?.trim() ? p.worth : "—"}
             </Text>
           </View>
-          <Text style={styles.tbChev}>›</Text>
+          <Text style={[styles.tbChev, { width: TB_COL.chev }]}>›</Text>
         </View>
       </Pressable>
     </Swipeable>
@@ -776,9 +845,10 @@ export default function TradeboardTabScreen() {
       tradeFeedTab === "my" ? myPosts : tradeFeedTab === "responses" ? responsePosts : allPosts;
     let list = [...base];
     if (primaryTab === "trade") {
-      list = list.filter(
-        (p) => p.type === "swap" || p.type === "trade" || p.type === "trade_drop",
-      );
+      list = list.filter((p) => p.type === "swap" || p.type === "trade");
+    }
+    if (primaryTab === "trade_drop") {
+      list = list.filter((p) => p.type === "trade_drop");
     }
     if (primaryTab === "drops") list = list.filter((p) => p.type === "drop");
     if (primaryTab === "pickups") list = list.filter((p) => p.type === "pickup");
@@ -794,22 +864,29 @@ export default function TradeboardTabScreen() {
     }
 
     if (chip !== "All") {
-      const c = chip.toUpperCase();
-      if (["LAX", "SFO", "FLL", "JFK"].includes(c)) {
-        list = list.filter((p) =>
-          `${p.routeSummary} ${p.layover}`.toUpperCase().includes(c),
-        );
-      } else if (chip === "3-Day") {
-        list = list.filter((p) => /\b3\s*D\b/i.test(p.comments));
-      } else if (chip === "Today") {
-        const mon = new Date().toLocaleDateString("en-US", { month: "short" }).toUpperCase();
-        const day = String(new Date().getDate());
+      const anchor = new Date();
+      if (chip === "Today") {
+        const mon = anchor.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+        const day = String(anchor.getDate());
         list = list.filter((p) => {
           const blob = `${p.pairingDateLabel} ${p.date}`.toUpperCase();
           return blob.includes(mon) && blob.includes(day);
         });
       } else if (chip === "This Week") {
-        list = list;
+        const start = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate()).getTime();
+        const end = start + 7 * 24 * 60 * 60 * 1000;
+        list = list.filter((p) => {
+          const ms = tradeboardReportDateMsFromLabel(
+            p.pairingDateLabel?.trim() || p.date?.trim() || "",
+            anchor,
+          );
+          return ms >= start && ms <= end;
+        });
+      } else if (chip === "This Month") {
+        const monShort = anchor.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+        list = list.filter((p) =>
+          `${p.pairingDateLabel} ${p.date}`.toUpperCase().includes(monShort),
+        );
       }
     }
     return list;
@@ -822,7 +899,7 @@ export default function TradeboardTabScreen() {
     day: "numeric",
   });
 
-  const chips = ["All", "Today", "This Week", "LAX", "SFO", "FLL", "3-Day"];
+  const chips = ["All", "Today", "This Week", "This Month"];
 
   return (
     <View style={styles.screen}>
@@ -883,7 +960,7 @@ export default function TradeboardTabScreen() {
           <View style={styles.searchField}>
             <Text style={styles.searchIcon}>🔍</Text>
             <TextInput
-              placeholder="Search pairing, route, city..."
+              placeholder="Search pairing, layover, poster..."
               placeholderTextColor="#9ca3af"
               value={search}
               onChangeText={setSearch}
@@ -895,38 +972,29 @@ export default function TradeboardTabScreen() {
           </Pressable>
         </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-          {chips.map((c) => (
-            <Pressable
-              key={c}
-              onPress={() => setChip(c)}
-              style={[styles.chip, chip === c && styles.chipOn]}
-            >
-              <Text style={[styles.chipText, chip === c && styles.chipTextOn]} numberOfLines={1}>
-                {c}
-              </Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-
-        <View style={styles.tbFilterCard}>
-          <Text style={styles.tbFilterEyebrow}>POST TYPE</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.primaryTabsScroll}
-          >
-            {(
-              [
-                ["all", "All Requests"],
-                ["trade", "Trade"],
-                ["drops", "Drops"],
-                ["pickups", "Pickup"],
-                ["post_trade", "Post/Trade"],
-              ] as const
-            ).map(([k, label]) => (
+        <View style={styles.tbTypePillsRow}>
+          {(
+            [
+              ["all", "All"],
+              ["pickups", "Pickup"],
+              ["trade", "Trade"],
+              ["trade_drop", "T/Drop"],
+              ["drops", "Drop"],
+              ["post_trade", "Propose"],
+            ] as const
+          ).map(([k, label]) => {
+            const active = primaryTab === k;
+            const pal = tradeboardFilterPillPalette(k, active);
+            return (
               <Pressable
                 key={k}
+                accessibilityLabel={
+                  k === "post_trade"
+                    ? "Propose trade"
+                    : k === "trade_drop"
+                      ? "Trade/Drop"
+                      : label
+                }
                 onPress={() => {
                   if (k === "post_trade") {
                     pushFlicaWeb(router, FLICA_NATIVE_URLS.tradePostRequest);
@@ -934,17 +1002,44 @@ export default function TradeboardTabScreen() {
                   }
                   setPrimaryTab(k);
                 }}
-                style={[styles.primaryTab, primaryTab === k && styles.primaryTabOn]}
+                style={[
+                  styles.tbTypeFilterPill,
+                  {
+                    backgroundColor: pal.bg,
+                    borderColor: pal.border,
+                  },
+                ]}
               >
                 <Text
-                  style={[styles.primaryTabText, primaryTab === k && styles.primaryTabTextOn]}
+                  style={[styles.tbTypeFilterPillTxt, { color: pal.text }]}
                   numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.65}
                 >
                   {label}
                 </Text>
               </Pressable>
-            ))}
-          </ScrollView>
+            );
+          })}
+        </View>
+
+        <View style={styles.timePillsRow}>
+          {chips.map((c) => (
+            <Pressable
+              key={c}
+              onPress={() => setChip(c)}
+              style={[styles.timePill, chip === c && styles.timePillOn]}
+            >
+              <Text
+                style={[styles.timePillTxt, chip === c && styles.timePillTxtOn]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {c}
+              </Text>
+            </Pressable>
+          ))}
         </View>
 
         {error ? (
@@ -1085,9 +1180,9 @@ export default function TradeboardTabScreen() {
             <View key={grp.key} style={styles.tbDateSection}>
               <View style={styles.tbDateHeadRow}>
                 <View style={styles.tbDatePill}>
-                  <Text style={styles.tbDatePillIcon}>📅</Text>
+                  <Ionicons name="calendar-outline" size={11} color="#FFFFFF" style={styles.tbDatePillIon} />
                   <Text style={styles.tbDatePillText} numberOfLines={1}>
-                    {grp.key}
+                    {formatTradeboardDatePillHeading(grp.key, new Date())}
                   </Text>
                   <View style={styles.tbDateBadge}>
                     <Text style={styles.tbDateBadgeTxt}>{grp.items.length}</Text>
@@ -1097,16 +1192,43 @@ export default function TradeboardTabScreen() {
               </View>
               <View style={styles.tbCardShell}>
                 <View style={styles.tbColHead}>
-                  <Text style={[styles.tbColH, styles.tbColPoster]}>POSTER</Text>
-                  <Text style={[styles.tbColH, styles.tbColLay]}>LAYOVER</Text>
-                  <Text style={[styles.tbColH, styles.tbColId]}>PAIRING ID</Text>
-                  <Text style={[styles.tbColH, styles.tbColDays]}>DAYS</Text>
-                  <Text style={[styles.tbColH, styles.tbColTime]}>RPT</Text>
-                  <Text style={[styles.tbColH, styles.tbColTime]}>DEP</Text>
-                  <Text style={[styles.tbColH, styles.tbColTime]}>ARR</Text>
-                  <Text style={[styles.tbColH, styles.tbColCr]}>CR</Text>
-                  <Text style={[styles.tbColH, styles.tbColDollar]}>$</Text>
-                  <View style={styles.tbColChevHead} />
+                  <View style={[styles.tbColHeadSlot, { width: TB_COL.type }]}>
+                    <Text style={styles.tbColH} numberOfLines={1}>
+                      TYPE
+                    </Text>
+                  </View>
+                  <View style={[styles.tbColHeadSlot, TB_FLEX_LAY]}>
+                    <Text style={[styles.tbColH, styles.tbColHLayHead]} numberOfLines={1}>
+                      LAYOVER
+                    </Text>
+                  </View>
+                  <View style={[styles.tbColHeadPoster, TB_FLEX_POSTER]}>
+                    <Text style={[styles.tbColH, styles.tbColHLeft]} numberOfLines={2}>
+                      POSTER /{"\n"}PAIRING
+                    </Text>
+                  </View>
+                  <View style={[styles.tbColHeadStack, TB_FLEX_RPT]}>
+                    <Text style={styles.tbColHLine} numberOfLines={1}>
+                      RPT
+                    </Text>
+                    <Text style={styles.tbColHLine} numberOfLines={1}>
+                      CREDIT
+                    </Text>
+                  </View>
+                  <View style={[styles.tbColHeadStack, TB_FLEX_ARR]}>
+                    <Text style={styles.tbColHLine} numberOfLines={1}>
+                      ARR
+                    </Text>
+                    <Text style={styles.tbColHLine} numberOfLines={1}>
+                      DEP
+                    </Text>
+                  </View>
+                  <View style={[styles.tbColHeadSlot, styles.tbColHeadWorth, { width: TB_COL.worth }]}>
+                    <Text style={styles.tbColH} numberOfLines={1}>
+                      $
+                    </Text>
+                  </View>
+                  <View style={{ width: TB_COL.chev }} />
                 </View>
                 {grp.items.map((p) => (
                   <TradeboardFeedRow
@@ -1140,28 +1262,53 @@ export default function TradeboardTabScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#f1f0f0" },
   scroll: { flex: 1 },
-  primaryTabsScroll: {
+  tbTypePillsRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    justifyContent: "space-between",
+    marginHorizontal: 8,
+    marginTop: 6,
+    gap: 3,
+  },
+  tbTypeFilterPill: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 2,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+    maxHeight: 28,
+  },
+  tbTypeFilterPillTxt: { fontSize: 7, fontWeight: "800", letterSpacing: -0.35, textAlign: "center" },
+  timePillsRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 6,
-    paddingBottom: 6,
+    justifyContent: "space-between",
+    marginHorizontal: 8,
+    marginTop: 5,
+    gap: 4,
   },
-  primaryTab: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-    backgroundColor: "#f4f4f5",
-    alignItems: "center",
+  timePill: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: 5,
+    paddingHorizontal: 4,
+    borderRadius: 999,
+    backgroundColor: "#F4F4F5",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#e4e4e7",
+    borderColor: "#E4E4E7",
+    alignItems: "center",
+    justifyContent: "center",
+    maxHeight: 28,
   },
-  primaryTabOn: {
+  timePillOn: {
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     borderColor: SCHEDULE_MOCK_HEADER_RED,
   },
-  primaryTabText: { fontSize: 8, fontWeight: "800", color: "#57534e" },
-  primaryTabTextOn: { color: "#fff" },
+  timePillTxt: { fontSize: 7, fontWeight: "800", color: "#78716c", textAlign: "center" },
+  timePillTxtOn: { color: "#fff" },
   searchRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1191,22 +1338,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   gearText: { fontSize: 14 },
-  chipScroll: { marginTop: 6, paddingLeft: 10, maxHeight: 34 },
-  chip: {
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 12,
-    backgroundColor: "#fff",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#d4d4d8",
-    marginRight: 5,
-  },
-  chipOn: {
-    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
-    borderColor: SCHEDULE_MOCK_HEADER_RED,
-  },
-  chipText: { fontSize: 9, fontWeight: "600", color: "#52525b" },
-  chipTextOn: { color: "#fff" },
   tbSubnavShell: {
     marginHorizontal: 10,
     marginTop: 8,
@@ -1264,36 +1395,10 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 10,
   },
-  tbFilterCard: {
-    marginHorizontal: 10,
-    marginTop: 8,
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#e7e5e4",
-    paddingTop: 6,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#0f172a",
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: { elevation: 1 },
-      default: {},
-    }),
-  },
-  tbFilterEyebrow: {
-    fontSize: 7,
-    fontWeight: "900",
-    color: "#a1a1aa",
-    letterSpacing: 0.9,
-    paddingHorizontal: 10,
-    marginBottom: 2,
-  },
   tbDateSection: {
     marginTop: 12,
     paddingHorizontal: 10,
+    alignSelf: "stretch",
     ...Platform.select({
       ios: {
         shadowColor: "#78716c",
@@ -1309,151 +1414,297 @@ const styles = StyleSheet.create({
   tbDatePill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 5,
     backgroundColor: CREW_HUB_DATE_HEADER_BG,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
     borderRadius: 999,
-    maxWidth: "82%",
+    maxWidth: "76%",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: "rgba(255,255,255,0.12)",
     ...Platform.select({
       ios: {
         shadowColor: "#2a0a0c",
-        shadowOffset: { width: 0, height: 2 },
+        shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.14,
-        shadowRadius: 5,
+        shadowRadius: 4,
       },
       android: { elevation: 2 },
       default: {},
     }),
   },
-  tbDatePillIcon: { fontSize: 11 },
-  tbDatePillText: { fontSize: 10, fontWeight: "800", color: "#fff7f7", flexShrink: 1, letterSpacing: 0.2 },
+  tbDatePillIon: { marginRight: -1 },
+  tbDatePillText: { fontSize: 9, fontWeight: "800", color: "#fff", flexShrink: 1, letterSpacing: 0.1 },
   tbDateBadge: {
-    marginLeft: 4,
-    minWidth: 22,
-    height: 22,
-    borderRadius: 11,
+    marginLeft: 2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
     backgroundColor: SCHEDULE_MOCK_STATS_STRIP_RED,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 5,
+    paddingHorizontal: 4,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255,255,255,0.25)",
+    borderColor: "rgba(255,255,255,0.28)",
   },
-  tbDateBadgeTxt: { color: "#fff", fontSize: 10, fontWeight: "900" },
+  tbDateBadgeTxt: { color: "#fff", fontSize: 8, fontWeight: "900" },
   tbDateRule: {
     flex: 1,
-    height: 1,
-    backgroundColor: "rgba(92, 16, 24, 0.2)",
+    height: StyleSheet.hairlineWidth,
+    minHeight: 1,
+    backgroundColor: "rgba(176, 24, 26, 0.2)",
     marginLeft: 8,
   },
   tbCardShell: {
+    alignSelf: "stretch",
+    width: "100%",
     backgroundColor: "#fff",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: CREW_HUB_CARD_RIM,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(176, 24, 26, 0.14)",
     overflow: "hidden",
     ...Platform.select({
       ios: {
         shadowColor: "#2a0a0c",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.07,
-        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 6,
       },
-      android: { elevation: 2 },
+      android: { elevation: 1 },
       default: {},
     }),
   },
   tbColHead: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 6,
-    paddingHorizontal: 6,
-    backgroundColor: "rgba(176, 24, 26, 0.06)",
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(92, 16, 24, 0.12)",
+    alignSelf: "stretch",
+    width: "100%",
+    gap: 7,
+    paddingVertical: 5,
+    paddingHorizontal: 7,
+    backgroundColor: "#F4F4F5",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(176, 24, 26, 0.16)",
   },
-  tbColH: { fontSize: 7, fontWeight: "800", color: "#78716c", letterSpacing: 0.35, textAlign: "center" },
-  tbColPoster: { width: 76, textAlign: "left" },
-  tbColLay: { flex: 1, minWidth: 52, textAlign: "left" },
-  tbColId: { width: 50, textAlign: "center" },
-  tbColDays: { width: 30, textAlign: "center" },
-  tbColTime: { width: 36, textAlign: "center" },
-  tbColCr: { width: 34, textAlign: "center" },
-  tbColDollar: { width: 38, textAlign: "center" },
-  tbColChevHead: { width: 14 },
+  tbColHeadSlot: {
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 0,
+  },
+  tbColHeadSlotLeft: {
+    justifyContent: "center",
+    alignItems: "flex-start",
+    paddingHorizontal: 0,
+  },
+  tbColHeadWorth: {
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 0,
+    flexShrink: 0,
+  },
+  tbColHeadPoster: {
+    justifyContent: "center",
+    paddingHorizontal: 0,
+    alignItems: "flex-start",
+  },
+  tbColHeadStack: {
+    justifyContent: "center",
+    alignItems: "flex-start",
+    gap: 1,
+    paddingHorizontal: 0,
+  },
+  tbColH: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: "#57534E",
+    letterSpacing: 0.35,
+    textAlign: "center",
+    textTransform: "uppercase",
+    lineHeight: 10,
+  },
+  tbColHLeft: { textAlign: "left", width: "100%" },
+  /** LAYOVER column: centered above single-token / dash row values */
+  tbColHLayHead: { width: "100%", textAlign: "center" },
+  tbColHLine: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: "#57534E",
+    letterSpacing: 0.28,
+    textTransform: "uppercase",
+    lineHeight: 10,
+    textAlign: "left",
+    alignSelf: "stretch",
+  },
   tbRowCard: {
+    width: "100%",
     backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(15, 23, 42, 0.08)",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(176, 24, 26, 0.1)",
   },
   tbRowInner: {
     flexDirection: "row",
-    alignItems: "stretch",
+    alignItems: "flex-start",
+    alignSelf: "stretch",
+    width: "100%",
+    gap: 7,
     paddingVertical: 7,
+    paddingHorizontal: 7,
+    minHeight: 48,
+  },
+  tbTypeCol: { justifyContent: "flex-start", alignItems: "stretch", paddingTop: 1 },
+  tbTypePillRow: {
+    borderRadius: 999,
     paddingHorizontal: 4,
-  },
-  tbPosterCol: {
-    width: 76,
-    paddingRight: 4,
-    justifyContent: "flex-start",
-  },
-  tbPoster: { fontSize: 10, fontWeight: "800", color: "#1e293b", lineHeight: 13 },
-  tbTypePillUnder: {
-    alignSelf: "flex-start",
-    marginTop: 4,
-    paddingHorizontal: 6,
     paddingVertical: 3,
-    borderRadius: 8,
+    minHeight: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
     maxWidth: "100%",
   },
-  tbTypePillUnderTxt: { color: "#fff", fontSize: 7, fontWeight: "900", letterSpacing: 0.2 },
-  tbLayCol: { flex: 1, minWidth: 52, paddingRight: 4, justifyContent: "center" },
-  tbLay: { fontSize: 9, fontWeight: "600", color: "#292524", lineHeight: 12 },
-  tbIdCol: { width: 50, justifyContent: "center", alignItems: "center", paddingHorizontal: 1 },
-  tbDaysCol: { width: 30, justifyContent: "center", alignItems: "center" },
-  tbTimeCol: { width: 36, justifyContent: "center", alignItems: "center", paddingHorizontal: 0 },
-  tbCrCol: { width: 34, justifyContent: "center", alignItems: "center" },
-  tbDollarCol: { width: 38, justifyContent: "center", alignItems: "center" },
-  tbCellVal: {
-    fontSize: 9,
+  tbTypePillRowTxt: {
+    fontSize: 5.75,
+    fontWeight: "800",
+    letterSpacing: -0.35,
+    textAlign: "center",
+  },
+  tbLayCol: {
+    justifyContent: "flex-start",
+    paddingRight: 0,
+    alignItems: "flex-start",
+    paddingTop: 1,
+  },
+  tbLayColSingle: { alignItems: "center", alignSelf: "stretch" },
+  tbLay: {
+    fontSize: 8,
     fontWeight: "700",
     color: "#0f172a",
-    textAlign: "center",
-    width: "100%",
-    fontVariant: ["tabular-nums"],
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    lineHeight: 12,
+    writingDirection: "ltr",
   },
-  tbTimeVal: {
-    fontSize: 9,
-    fontWeight: "700",
+  tbLayMulti: {
+    textAlign: "left",
+    alignSelf: "stretch",
+    width: "100%",
+  },
+  tbLaySingle: {
+    textAlign: "center",
+    alignSelf: "center",
+  },
+  tbPosterPairCol: { justifyContent: "flex-start", paddingHorizontal: 0, paddingTop: 1 },
+  tbPosterName: {
+    fontSize: 7,
+    fontWeight: "500",
     color: "#0f172a",
-    textAlign: "center",
-    width: "100%",
-    fontVariant: ["tabular-nums"],
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    letterSpacing: 0.08,
+    textTransform: "uppercase",
+    lineHeight: 10,
   },
-  tbCr: {
-    fontSize: 9,
+  tbPairingMeta: {
+    marginTop: 2,
+    fontSize: 7,
+    color: "#475569",
+    letterSpacing: -0.05,
+    lineHeight: 10,
+  },
+  tbPairingId: { fontWeight: "500", color: "#64748b" },
+  tbPairingDays: {
+    fontSize: 8,
+    fontWeight: "900",
+    color: "#0f172a",
+    lineHeight: 12,
+  },
+  tbRptCreditCol: {
+    justifyContent: "flex-start",
+    alignItems: "stretch",
+    paddingHorizontal: 0,
+    paddingTop: 1,
+  },
+  tbArrDepCol: {
+    justifyContent: "flex-start",
+    alignItems: "stretch",
+    paddingHorizontal: 0,
+    paddingTop: 1,
+  },
+  tbStackPairBox: {
+    alignSelf: "stretch",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(15, 23, 42, 0.11)",
+    borderRadius: 5,
+    paddingVertical: 4,
+    paddingHorizontal: 5,
+    backgroundColor: "rgba(248, 250, 252, 0.45)",
+  },
+  tbStackPairRule: {
+    height: StyleSheet.hairlineWidth,
+    minHeight: 1,
+    marginVertical: 3,
+    backgroundColor: "rgba(15, 23, 42, 0.09)",
+    alignSelf: "stretch",
+  },
+  tbStackLine: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    flexWrap: "nowrap",
+    justifyContent: "flex-start",
+    alignSelf: "stretch",
+    minHeight: 11,
+  },
+  tbStackLbl: {
+    fontSize: 6,
+    fontWeight: "700",
+    color: "#64748b",
+    letterSpacing: 0.05,
+    lineHeight: 11,
+  },
+  tbStackNum: {
+    fontSize: 7,
     fontWeight: "800",
     color: "#0f172a",
-    textAlign: "center",
-    width: "100%",
+    fontFamily: TB_DIGITAL,
     fontVariant: ["tabular-nums"],
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    lineHeight: 11,
+  },
+  tbStackLblCredit: {
+    fontSize: 6.5,
+    fontWeight: "700",
+    color: "#64748b",
+    letterSpacing: 0.05,
+    lineHeight: 12,
+  },
+  tbStackNumCredit: {
+    fontSize: 8,
+    fontWeight: "900",
+    color: "#0f172a",
+    fontFamily: TB_DIGITAL,
+    fontVariant: ["tabular-nums"],
+    lineHeight: 12,
+  },
+  tbWorthCol: {
+    justifyContent: "flex-start",
+    alignItems: "center",
+    paddingHorizontal: 0,
+    paddingTop: 1,
+    flexShrink: 0,
   },
   tbWorth: {
-    fontSize: 9,
+    fontSize: 6.5,
     fontWeight: "800",
-    color: "#15803d",
+    color: "#0f172a",
     textAlign: "center",
     width: "100%",
     fontVariant: ["tabular-nums"],
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontFamily: TB_DIGITAL,
+    lineHeight: 11,
   },
-  tbChev: { width: 14, textAlign: "center", alignSelf: "center", fontSize: 12, color: "#d6d3d1" },
+  tbChev: {
+    textAlign: "center",
+    alignSelf: "flex-start",
+    marginTop: 3,
+    fontSize: 11,
+    color: "#D6D3D1",
+    fontWeight: "600",
+  },
   tbSwipeRow: { flexDirection: "row", minHeight: 56 },
   tbSwipeBtn: { justifyContent: "center", alignItems: "center", width: 88, paddingVertical: 8 },
   tbSwipePrimary: { backgroundColor: SCHEDULE_MOCK_HEADER_RED },
