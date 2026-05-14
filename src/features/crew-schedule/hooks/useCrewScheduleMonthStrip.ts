@@ -10,11 +10,13 @@ import {
 } from "../scheduleMonthWindow";
 import { loadLastMonthCursor, saveLastMonthCursor } from "../scheduleViewStorage";
 import { useScheduleTripsForMonth } from "./useScheduleTripsForMonth";
+import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
 
 /**
  * Month metrics strip (BLOCK / TAFB / …) aligned with Schedule tab — for Tradeboard / Open Time headers.
  */
 export function useCrewScheduleMonthStrip() {
+  const { crewHubSharedRefreshGeneration } = useCrewScheduleHeaderBridge();
   const seed = useMemo(() => {
     const d = new Date();
     return clampYearMonthToScheduleWindow(d.getFullYear(), d.getMonth() + 1, d);
@@ -52,7 +54,7 @@ export function useCrewScheduleMonthStrip() {
 
   useEffect(() => {
     void loadFlica();
-  }, [loadFlica]);
+  }, [loadFlica, crewHubSharedRefreshGeneration]);
 
   const { trips, monthMetrics, loading } = useScheduleTripsForMonth(year, month);
 

@@ -1,6 +1,7 @@
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter, type Href } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
 import {
   ActivityIndicator,
   Platform,
@@ -38,10 +39,7 @@ import {
 } from "../crewHubFlicaCache";
 import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
 import { mapTradeboardPostsWithHtmlFallback } from "../flicaCrewHubHtmlFallbackParse";
-import {
-  tradeboardTypeBadgeColor,
-  tradeboardTypeLabel,
-} from "../flicaCrewHubMappers";
+import { tradeboardTypeLabel } from "../flicaCrewHubMappers";
 import {
   buildCrewHubParseDebugFetchEntry,
   commitTradeboardParseDebugSnapshot,
@@ -49,7 +47,12 @@ import {
 } from "../flicaCrewHubParseDebug";
 import type { TradeboardPost } from "../flicaCrewHubTypes";
 import { useCrewScheduleMonthStrip } from "../hooks/useCrewScheduleMonthStrip";
-import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
+import {
+  CREW_HUB_CARD_RIM,
+  CREW_HUB_DATE_HEADER_BG,
+  SCHEDULE_MOCK_HEADER_RED,
+  SCHEDULE_MOCK_STATS_STRIP_RED,
+} from "../scheduleMockPalette";
 import type { CrewScheduleTrip } from "../types";
 
 function formatRoleForHeader(role: string): string {
@@ -93,7 +96,186 @@ function tradeboardDateGroupKey(p: TradeboardPost): string {
   return (p.pairingDateLabel?.trim() || p.date?.trim() || "Other") as string;
 }
 
-function groupTradeboardByDate(posts: TradeboardPost[]): { key: string; items: TradeboardPost[] }[] {
+/** FLICA-style day + month token (e.g. 01JUN, 12MAY). */
+const TRADEBOARD_DDMMM_RE = /\b(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/i;
+
+const TRADEBOARD_MONTH_INDEX: Record<string, number> = {
+  JAN: 0,
+  FEB: 1,
+  MAR: 2,
+  APR: 3,
+  MAY: 4,
+  JUN: 5,
+  JUL: 6,
+  AUG: 7,
+  SEP: 8,
+  OCT: 9,
+  NOV: 10,
+  DEC: 11,
+};
+
+/** First DDMMM in a label (handles ranges like "12MAY-14MAY"). */
+function tradeboardFirstDdMmmToken(s: string): string | null {
+  const m = String(s ?? "")
+    .trim()
+    .toUpperCase()
+    .match(TRADEBOARD_DDMMM_RE);
+  if (!m) return null;
+  return `${m[1]}${m[2]}`;
+}
+
+/**
+ * Report-date sort key: calendar order from today forward (FLICA Tradeboard order).
+ * Picks year in {y-1,y,y+1} so the trip date is on/after today when possible.
+ */
+function tradeboardReportDateMsFromLabel(labelOrDate: string, now: Date): number {
+  const compact = tradeboardFirstDdMmmToken(labelOrDate);
+  if (!compact) return Number.MAX_SAFE_INTEGER - 1024;
+  const m = compact.match(/^(\d{1,2})([A-Z]{3})$/);
+  if (!m) return Number.MAX_SAFE_INTEGER - 1024;
+  const day = Number(m[1]);
+  const mon = TRADEBOARD_MONTH_INDEX[m[2]!];
+  if (!Number.isFinite(day) || mon == null) return Number.MAX_SAFE_INTEGER - 1024;
+
+  const y0 = now.getFullYear();
+  const candidates = [y0 - 1, y0, y0 + 1].map((year) => new Date(year, mon, day, 12, 0, 0, 0).getTime());
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const onOrAfter = candidates.filter((t) => t >= startOfToday);
+  if (onOrAfter.length) return Math.min(...onOrAfter);
+  return Math.max(...candidates);
+}
+
+/** FLICA All Requests column order: Pickup → Drop → Trade variants → Swap → unknown. */
+function tradeboardFlicaTypeSortRank(t: TradeboardPost["type"]): number {
+  switch (t) {
+    case "pickup":
+      return 0;
+    case "drop":
+      return 1;
+    case "trade":
+      return 2;
+    case "trade_drop":
+      return 3;
+    case "swap":
+      return 4;
+    case "unknown":
+    default:
+      return 50;
+  }
+}
+
+const POSTED_MONTHS: Record<string, number> = {
+  JAN: 0,
+  FEB: 1,
+  MAR: 2,
+  APR: 3,
+  MAY: 4,
+  JUN: 5,
+  JUL: 6,
+  AUG: 7,
+  SEP: 8,
+  OCT: 9,
+  NOV: 10,
+  DEC: 11,
+};
+
+/**
+ * Parse FLICA “posted under name” timestamp (e.g. `May 12, 2026 15:03:05 EDT`) for sort.
+ * Oldest first within the same trip date + type bucket.
+ */
+function tradeboardPostedAtMsFromPost(p: TradeboardPost): number {
+  const raw = String(p.postedAtLabel || p.postedAt || "").trim();
+  if (raw) {
+    const fromLabel = tradeboardParsePostedAtLabelToMs(raw);
+    if (fromLabel != null) return fromLabel;
+  }
+  const line = String(p.rawText || "").trim();
+  if (line) {
+    const fromLine = tradeboardParsePostedAtLabelToMs(line);
+    if (fromLine != null) return fromLine;
+  }
+  return Number.MAX_SAFE_INTEGER - 512;
+}
+
+function tradeboardParsePostedAtLabelToMs(s: string): number | null {
+  const t = String(s).replace(/\s+/g, " ").trim();
+  if (!t) return null;
+
+  const long = t.match(
+    /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\b/i,
+  );
+  if (long) {
+    const mon = POSTED_MONTHS[String(long[1]).slice(0, 3).toUpperCase()];
+    const day = Number(long[2]);
+    const year = Number(long[3]);
+    const hh = Number(long[4]);
+    const mm = Number(long[5]);
+    const ss = Number(long[6]);
+    if (
+      mon == null ||
+      !Number.isFinite(day) ||
+      !Number.isFinite(year) ||
+      !Number.isFinite(hh) ||
+      !Number.isFinite(mm) ||
+      !Number.isFinite(ss)
+    ) {
+      return null;
+    }
+    return new Date(year, mon, day, hh, mm, ss).getTime();
+  }
+
+  const slash = t.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\D+(\d{1,2}):(\d{2})(?::(\d{2}))?\b/i);
+  if (slash) {
+    const month = Number(slash[1]) - 1;
+    const day = Number(slash[2]);
+    let year = Number(slash[3]);
+    if (year < 100) year += year >= 70 ? 1900 : 2000;
+    const hh = Number(slash[4]);
+    const mm = Number(slash[5]);
+    const ss = slash[6] != null ? Number(slash[6]) : 0;
+    if (
+      month >= 0 &&
+      month <= 11 &&
+      day >= 1 &&
+      day <= 31 &&
+      Number.isFinite(year) &&
+      Number.isFinite(hh) &&
+      Number.isFinite(mm)
+    ) {
+      return new Date(year, month, day, hh, mm, Number.isFinite(ss) ? ss : 0).getTime();
+    }
+  }
+
+  const ts = Date.parse(t);
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function compareTradeboardPostsChronological(a: TradeboardPost, b: TradeboardPost, now: Date): number {
+  const da = tradeboardReportDateMsFromLabel(
+    a.pairingDateLabel?.trim() || a.date?.trim() || "",
+    now,
+  );
+  const db = tradeboardReportDateMsFromLabel(
+    b.pairingDateLabel?.trim() || b.date?.trim() || "",
+    now,
+  );
+  if (da !== db) return da < db ? -1 : 1;
+
+  const ra = tradeboardFlicaTypeSortRank(a.type);
+  const rb = tradeboardFlicaTypeSortRank(b.type);
+  if (ra !== rb) return ra - rb;
+
+  const pa = tradeboardPostedAtMsFromPost(a);
+  const pb = tradeboardPostedAtMsFromPost(b);
+  if (pa !== pb) return pa < pb ? -1 : 1;
+
+  return a.pairingId.localeCompare(b.pairingId);
+}
+
+function groupTradeboardByDate(
+  posts: TradeboardPost[],
+  now: Date,
+): { key: string; items: TradeboardPost[] }[] {
   const m = new Map<string, TradeboardPost[]>();
   for (const p of posts) {
     const k = tradeboardDateGroupKey(p);
@@ -102,11 +284,69 @@ function groupTradeboardByDate(posts: TradeboardPost[]): { key: string; items: T
     m.set(k, arr);
   }
   return [...m.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, items]) => ({ key, items }));
+    .map(([key, items]) => ({
+      key,
+      items: [...items].sort((a, b) => compareTradeboardPostsChronological(a, b, now)),
+    }))
+    .sort((ga, gb) => {
+      const a = tradeboardReportDateMsFromLabel(ga.key, now);
+      const b = tradeboardReportDateMsFromLabel(gb.key, now);
+      if (a !== b) return a < b ? -1 : 1;
+      return ga.key.localeCompare(gb.key);
+    });
 }
 
-type PrimaryTab = "all" | "swaps" | "drops" | "pickups";
+type PrimaryTab = "all" | "trade" | "trade_drop" | "drops" | "pickups" | "post_trade";
+
+const TB_DIGITAL = Platform.OS === "ios" ? "Menlo" : "monospace";
+
+/** Solid type pill on row — mock “deep pure” colors, white label. */
+function tradeboardRowTypeSolidHex(t: TradeboardPost["type"]): string {
+  switch (t) {
+    case "pickup":
+      return "#15803d";
+    case "drop":
+      return "#ea580c";
+    case "trade":
+    case "swap":
+      return "#1d4ed8";
+    case "trade_drop":
+      return "#6d28d9";
+    default:
+      return "#78716c";
+  }
+}
+
+/** Faint filter pill (mock bar) vs active red. */
+function tradeboardFilterPillPalette(
+  k: PrimaryTab,
+  active: boolean,
+): { bg: string; text: string; border: string } {
+  if (active && k !== "post_trade") {
+    return { bg: SCHEDULE_MOCK_HEADER_RED, text: "#fff", border: SCHEDULE_MOCK_HEADER_RED };
+  }
+  switch (k) {
+    case "pickups":
+      return { bg: "#DCFCE7", text: "#166534", border: "rgba(22, 101, 52, 0.18)" };
+    case "trade":
+      return { bg: "#DBEAFE", text: "#1E40AF", border: "rgba(30, 64, 175, 0.15)" };
+    case "trade_drop":
+      return { bg: "#EDE9FE", text: "#6D28D9", border: "rgba(109, 40, 217, 0.18)" };
+    case "drops":
+      return { bg: "#FFEDD5", text: "#C2410C", border: "rgba(194, 65, 12, 0.2)" };
+    case "post_trade":
+      return { bg: "#FCE7F3", text: "#BE185D", border: "rgba(190, 24, 93, 0.2)" };
+    default:
+      return { bg: "#F4F4F5", text: "#57534E", border: "#E4E4E7" };
+  }
+}
+
+function formatTradeboardDatePillHeading(dateKey: string, anchor: Date): string {
+  const ms = tradeboardReportDateMsFromLabel(dateKey, anchor);
+  if (!Number.isFinite(ms) || ms > 1e14) return dateKey;
+  const d = new Date(ms);
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
 
 function tripReportHint(t: CrewScheduleTrip): string {
   const leg = t.legs[0];
@@ -141,6 +381,13 @@ function TradeboardFeedRow({
   onPress: () => void;
 }) {
   const primaryUri = tradeboardFlicaUriForSwipe(p.type);
+  const typeHex = tradeboardRowTypeSolidHex(p.type);
+  const daysRaw = String(p.days ?? "").trim();
+  const daysLine =
+    daysRaw && /\d/.test(daysRaw)
+      ? `${daysRaw} ${Number(daysRaw) === 1 ? "Day" : "Days"}`
+      : daysRaw || "—";
+
   const right = (
     <View style={styles.tbSwipeRow}>
       <Pressable
@@ -164,33 +411,52 @@ function TradeboardFeedRow({
     <Swipeable friction={2} overshootRight={false} renderRightActions={() => right}>
       <Pressable onPress={onPress} style={styles.tbRowCard}>
         <View style={styles.tbRowInner}>
-          <View style={styles.tbTypeAnchor}>
-            <View style={[styles.tbTypePill, { backgroundColor: tradeboardTypeBadgeColor(p.type) }]}>
-              <Text style={styles.tbTypePillTxt}>{tradeboardTypeLabel(p.type)}</Text>
+          <View style={styles.tbTypeCol}>
+            <View style={[styles.tbTypePillRow, { backgroundColor: typeHex }]}>
+              <Text style={styles.tbTypePillRowTxt} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
+                {tradeboardTypeLabel(p.type)}
+              </Text>
             </View>
           </View>
-          <View style={styles.tbMid}>
-            <Text style={styles.tbPoster}>{tradeboardPosterFirstName(p.posterName)}</Text>
-            <Text style={styles.tbPairMeta} numberOfLines={1}>
-              {p.pairingId} · {p.days?.trim() || "—"}
-            </Text>
-            <Text style={styles.tbLay} numberOfLines={2}>
+          <View style={styles.tbLayCol}>
+            <Text style={styles.tbLay} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82}>
               {hubLayoverDisplayWithDots(p.layover)}
             </Text>
           </View>
-          <View style={styles.tbTimes}>
-            <Text style={styles.tbTlab}>RPT</Text>
-            <Text style={styles.tbTval}>{p.reportTime || "—"}</Text>
-            <Text style={styles.tbTlab}>DEP</Text>
-            <Text style={styles.tbTval}>{p.departTime || "—"}</Text>
-            <Text style={styles.tbTlab}>ARR</Text>
-            <Text style={styles.tbTval}>{p.arriveTime || "—"}</Text>
+          <View style={styles.tbPosterPairCol}>
+            <Text style={styles.tbPosterName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+              {tradeboardPosterFirstName(p.posterName)}
+            </Text>
+            <Text style={styles.tbPairingMeta} numberOfLines={1}>
+              {p.pairingId?.trim() || "—"} · {daysLine}
+            </Text>
           </View>
-          <View style={styles.tbRight}>
-            <Text style={styles.tbCr}>{p.credit || "—"}</Text>
-            <Text style={styles.tbWorth}>{p.worth ?? "—"}</Text>
-            <Text style={styles.tbChev}>›</Text>
+          <View style={styles.tbRptCreditCol}>
+            <Text style={styles.tbStackLine}>
+              <Text style={styles.tbStackLbl}>Rpt </Text>
+              <Text style={styles.tbStackNum}>{p.reportTime?.trim() || "—"}</Text>
+            </Text>
+            <Text style={styles.tbStackLine}>
+              <Text style={styles.tbStackLbl}>Credit </Text>
+              <Text style={styles.tbStackNum}>{p.credit?.trim() || "—"}</Text>
+            </Text>
           </View>
+          <View style={styles.tbArrDepCol}>
+            <Text style={styles.tbStackLine}>
+              <Text style={styles.tbStackLbl}>Arr </Text>
+              <Text style={styles.tbStackNum}>{p.arriveTime?.trim() || "—"}</Text>
+            </Text>
+            <Text style={styles.tbStackLine}>
+              <Text style={styles.tbStackLbl}>Dep </Text>
+              <Text style={styles.tbStackNum}>{p.departTime?.trim() || "—"}</Text>
+            </Text>
+          </View>
+          <View style={styles.tbWorthCol}>
+            <Text style={styles.tbWorth} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+              {p.worth?.trim() ? p.worth : "—"}
+            </Text>
+          </View>
+          <Text style={styles.tbChev}>›</Text>
         </View>
       </Pressable>
     </Swipeable>
@@ -201,8 +467,8 @@ export default function TradeboardTabScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const isFocused = useIsFocused();
-  const { setCrewScheduleHeaderSubtitle } = useCrewScheduleHeaderBridge();
-  const { stripValues, refreshFlicaMonthRow, monthTrips } = useCrewScheduleMonthStrip();
+  const { setCrewScheduleHeaderSubtitle, bumpCrewHubSharedDataRefresh } = useCrewScheduleHeaderBridge();
+  const { stripValues, monthTrips } = useCrewScheduleMonthStrip();
 
   const [profileBase, setProfileBase] = useState<string | null>(null);
   const [profileRole, setProfileRole] = useState<string | null>(null);
@@ -462,9 +728,9 @@ export default function TradeboardTabScreen() {
       }
     } finally {
       setLoading(false);
-      void refreshFlicaMonthRow();
+      bumpCrewHubSharedDataRefresh();
     }
-  }, [refreshFlicaMonthRow, session?.user?.id, profileBase, profileRole]);
+  }, [bumpCrewHubSharedDataRefresh, session?.user?.id, profileBase, profileRole]);
 
   useFocusEffect(
     useCallback(() => {
@@ -509,7 +775,7 @@ export default function TradeboardTabScreen() {
     const base =
       tradeFeedTab === "my" ? myPosts : tradeFeedTab === "responses" ? responsePosts : allPosts;
     let list = [...base];
-    if (primaryTab === "swaps") {
+    if (primaryTab === "trade") {
       list = list.filter(
         (p) => p.type === "swap" || p.type === "trade" || p.type === "trade_drop",
       );
@@ -549,7 +815,7 @@ export default function TradeboardTabScreen() {
     return list;
   }, [allPosts, myPosts, responsePosts, tradeFeedTab, primaryTab, search, chip]);
 
-  const tbDateGroups = useMemo(() => groupTradeboardByDate(filtered), [filtered]);
+  const tbDateGroups = useMemo(() => groupTradeboardByDate(filtered, new Date()), [filtered]);
 
   const listHeadingDate = new Date().toLocaleDateString("en-US", {
     month: "short",
@@ -578,34 +844,39 @@ export default function TradeboardTabScreen() {
           <RefreshControl refreshing={loading} onRefresh={() => void load("pull")} />
         }
       >
-        <View style={styles.primaryTabs}>
-          {(
-            [
-              ["all", "All Posts"],
-              ["swaps", "Swaps"],
-              ["drops", "Drops"],
-              ["pickups", "Pickups"],
-            ] as const
-          ).map(([k, label]) => (
+        <View style={styles.tbSubnavShell}>
+          <View style={styles.tbSubnavRow}>
+            {(
+              [
+                ["my", "My Requests", "person-outline" as const],
+                ["all", "All Requests", "list-outline" as const],
+                ["responses", "My Responses", "chatbubbles-outline" as const],
+              ] as const
+            ).map(([k, label, icon]) => {
+              const on = tradeFeedTab === k;
+              return (
+                <Pressable
+                  key={k}
+                  onPress={() => setTradeFeedTab(k)}
+                  style={[styles.tbSeg, on && styles.tbSegOn]}
+                >
+                  <Ionicons name={icon} size={14} color={on ? SCHEDULE_MOCK_HEADER_RED : "#64748b"} />
+                  <Text style={[styles.tbSegTxt, on && styles.tbSegTxtOn]} numberOfLines={2}>
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            })}
             <Pressable
-              key={k}
-              onPress={() => setPrimaryTab(k)}
-              style={[
-                styles.primaryTab,
-                primaryTab === k && styles.primaryTabOn,
-              ]}
+              style={[styles.tbSeg, styles.tbSegPost]}
+              onPress={() => pushFlicaWeb(router, FLICA_NATIVE_URLS.tradePostRequest)}
             >
-              <Text
-                style={[
-                  styles.primaryTabText,
-                  primaryTab === k && styles.primaryTabTextOn,
-                ]}
-                numberOfLines={1}
-              >
-                {label}
+              <Ionicons name="add-circle-outline" size={14} color={SCHEDULE_MOCK_HEADER_RED} />
+              <Text style={styles.tbSegPostTxt} numberOfLines={2}>
+                Post a Request
               </Text>
             </Pressable>
-          ))}
+          </View>
         </View>
 
         <View style={styles.searchRow}>
@@ -638,41 +909,43 @@ export default function TradeboardTabScreen() {
           ))}
         </ScrollView>
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.tbFeedRailScroll}
-          contentContainerStyle={styles.tbFeedRail}
-        >
-          {(
-            [
-              ["my", "My Requests"],
-              ["all", "All Requests"],
-              ["responses", "My Responses"],
-            ] as const
-          ).map(([k, label]) => (
-            <Pressable
-              key={k}
-              onPress={() => setTradeFeedTab(k)}
-              style={[styles.tbFeedPill, tradeFeedTab === k && styles.tbFeedPillOn]}
-            >
-              <Text
-                style={[styles.tbFeedPillTxt, tradeFeedTab === k && styles.tbFeedPillTxtOn]}
-                numberOfLines={1}
-              >
-                {label}
-              </Text>
-            </Pressable>
-          ))}
-          <Pressable
-            style={[styles.tbFeedPill, styles.tbPostPill]}
-            onPress={() => pushFlicaWeb(router, FLICA_NATIVE_URLS.tradePostRequest)}
+        <View style={styles.tbFilterCard}>
+          <Text style={styles.tbFilterEyebrow}>POST TYPE</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.primaryTabsScroll}
           >
-            <Text style={styles.tbPostPillTxt} numberOfLines={1}>
-              Post a Request
-            </Text>
-          </Pressable>
-        </ScrollView>
+            {(
+              [
+                ["all", "All Requests"],
+                ["trade", "Trade"],
+                ["drops", "Drops"],
+                ["pickups", "Pickup"],
+                ["post_trade", "Post/Trade"],
+              ] as const
+            ).map(([k, label]) => (
+              <Pressable
+                key={k}
+                onPress={() => {
+                  if (k === "post_trade") {
+                    pushFlicaWeb(router, FLICA_NATIVE_URLS.tradePostRequest);
+                    return;
+                  }
+                  setPrimaryTab(k);
+                }}
+                style={[styles.primaryTab, primaryTab === k && styles.primaryTabOn]}
+              >
+                <Text
+                  style={[styles.primaryTabText, primaryTab === k && styles.primaryTabTextOn]}
+                  numberOfLines={1}
+                >
+                  {label}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
 
         {error ? (
           <Text style={styles.errorText}>{error}</Text>
@@ -824,10 +1097,16 @@ export default function TradeboardTabScreen() {
               </View>
               <View style={styles.tbCardShell}>
                 <View style={styles.tbColHead}>
-                  <Text style={[styles.tbColH, { width: 56 }]}>TYPE</Text>
-                  <Text style={[styles.tbColH, { flex: 1 }]}>POSTER / LAYOVER</Text>
-                  <Text style={[styles.tbColH, { width: 88 }]}>RPT · DEP · ARR</Text>
-                  <Text style={[styles.tbColH, { width: 52, textAlign: "right" }]}>CR / $</Text>
+                  <Text style={[styles.tbColH, styles.tbColPoster]}>POSTER</Text>
+                  <Text style={[styles.tbColH, styles.tbColLay]}>LAYOVER</Text>
+                  <Text style={[styles.tbColH, styles.tbColId]}>PAIRING ID</Text>
+                  <Text style={[styles.tbColH, styles.tbColDays]}>DAYS</Text>
+                  <Text style={[styles.tbColH, styles.tbColTime]}>RPT</Text>
+                  <Text style={[styles.tbColH, styles.tbColTime]}>DEP</Text>
+                  <Text style={[styles.tbColH, styles.tbColTime]}>ARR</Text>
+                  <Text style={[styles.tbColH, styles.tbColCr]}>CR</Text>
+                  <Text style={[styles.tbColH, styles.tbColDollar]}>$</Text>
+                  <View style={styles.tbColChevHead} />
                 </View>
                 {grp.items.map((p) => (
                   <TradeboardFeedRow
@@ -859,28 +1138,29 @@ export default function TradeboardTabScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#f3f4f6" },
+  screen: { flex: 1, backgroundColor: "#f1f0f0" },
   scroll: { flex: 1 },
-  primaryTabs: {
+  primaryTabsScroll: {
     flexDirection: "row",
-    paddingHorizontal: 10,
-    paddingTop: 8,
-    gap: 6,
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 6,
+    paddingBottom: 6,
   },
   primaryTab: {
-    flex: 1,
+    paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 10,
-    backgroundColor: "#fff",
+    backgroundColor: "#f4f4f5",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e4e4e7",
   },
   primaryTabOn: {
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     borderColor: SCHEDULE_MOCK_HEADER_RED,
   },
-  primaryTabText: { fontSize: 9, fontWeight: "700", color: "#6b7280" },
+  primaryTabText: { fontSize: 8, fontWeight: "800", color: "#57534e" },
   primaryTabTextOn: { color: "#fff" },
   searchRow: {
     flexDirection: "row",
@@ -911,90 +1191,176 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   gearText: { fontSize: 14 },
-  chipScroll: { marginTop: 8, paddingLeft: 10, maxHeight: 36 },
+  chipScroll: { marginTop: 6, paddingLeft: 10, maxHeight: 34 },
   chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 12,
     backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-    marginRight: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#d4d4d8",
+    marginRight: 5,
   },
   chipOn: {
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     borderColor: SCHEDULE_MOCK_HEADER_RED,
   },
-  chipText: { fontSize: 10, fontWeight: "600", color: "#4b5563" },
+  chipText: { fontSize: 9, fontWeight: "600", color: "#52525b" },
   chipTextOn: { color: "#fff" },
-  tbFeedRailScroll: { marginTop: 8, paddingLeft: 10, maxHeight: 38 },
-  tbFeedRail: { flexDirection: "row", alignItems: "center", gap: 6, paddingRight: 10 },
-  tbFeedPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+  tbSubnavShell: {
+    marginHorizontal: 10,
+    marginTop: 8,
     backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#d1d5db",
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e7e5e4",
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#57534e",
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.06,
+        shadowRadius: 4,
+      },
+      android: { elevation: 2 },
+      default: {},
+    }),
   },
-  tbFeedPillOn: { backgroundColor: SCHEDULE_MOCK_HEADER_RED, borderColor: SCHEDULE_MOCK_HEADER_RED },
-  tbFeedPillTxt: { fontSize: 9, fontWeight: "700", color: "#4b5563" },
-  tbFeedPillTxtOn: { color: "#fff" },
-  tbPostPill: { backgroundColor: "#f1f5f9", borderColor: "#94a3b8" },
-  tbPostPillTxt: { fontSize: 9, fontWeight: "800", color: "#334155" },
-  tbDateSection: { marginTop: 12, paddingHorizontal: 10 },
+  tbSubnavRow: { flexDirection: "row", alignItems: "stretch" },
+  tbSeg: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 6,
+    gap: 3,
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  tbSegOn: { borderBottomColor: SCHEDULE_MOCK_HEADER_RED },
+  tbSegTxt: {
+    fontSize: 8,
+    fontWeight: "700",
+    color: "#64748b",
+    textAlign: "center",
+    lineHeight: 10,
+  },
+  tbSegTxtOn: { color: SCHEDULE_MOCK_HEADER_RED, fontWeight: "800" },
+  tbSegPost: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 6,
+    gap: 3,
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  tbSegPostTxt: {
+    fontSize: 8,
+    fontWeight: "900",
+    color: SCHEDULE_MOCK_HEADER_RED,
+    textAlign: "center",
+    lineHeight: 10,
+  },
+  tbFilterCard: {
+    marginHorizontal: 10,
+    marginTop: 8,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e7e5e4",
+    paddingTop: 6,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#0f172a",
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: { elevation: 1 },
+      default: {},
+    }),
+  },
+  tbFilterEyebrow: {
+    fontSize: 7,
+    fontWeight: "900",
+    color: "#a1a1aa",
+    letterSpacing: 0.9,
+    paddingHorizontal: 10,
+    marginBottom: 2,
+  },
+  tbDateSection: {
+    marginTop: 12,
+    paddingHorizontal: 10,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#78716c",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 6,
+      },
+      android: { elevation: 1 },
+      default: {},
+    }),
+  },
   tbDateHeadRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
   tbDatePill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#27272a",
-    paddingVertical: 7,
-    paddingHorizontal: 12,
+    backgroundColor: CREW_HUB_DATE_HEADER_BG,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
     borderRadius: 999,
-    maxWidth: "78%",
+    maxWidth: "82%",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.14)",
     ...Platform.select({
       ios: {
-        shadowColor: "#000",
+        shadowColor: "#2a0a0c",
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
+        shadowOpacity: 0.14,
+        shadowRadius: 5,
       },
-      android: { elevation: 3 },
+      android: { elevation: 2 },
       default: {},
     }),
   },
-  tbDatePillIcon: { fontSize: 12 },
-  tbDatePillText: { fontSize: 11, fontWeight: "800", color: "#fafafa", flexShrink: 1 },
+  tbDatePillIcon: { fontSize: 11 },
+  tbDatePillText: { fontSize: 10, fontWeight: "800", color: "#fff7f7", flexShrink: 1, letterSpacing: 0.2 },
   tbDateBadge: {
     marginLeft: 4,
     minWidth: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
+    backgroundColor: SCHEDULE_MOCK_STATS_STRIP_RED,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.25)",
   },
   tbDateBadgeTxt: { color: "#fff", fontSize: 10, fontWeight: "900" },
   tbDateRule: {
     flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(15,23,42,0.12)",
+    height: 1,
+    backgroundColor: "rgba(92, 16, 24, 0.2)",
     marginLeft: 8,
   },
   tbCardShell: {
     backgroundColor: "#fff",
     borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(15,23,42,0.08)",
+    borderWidth: 1,
+    borderColor: CREW_HUB_CARD_RIM,
     overflow: "hidden",
     ...Platform.select({
       ios: {
-        shadowColor: "#0f172a",
+        shadowColor: "#2a0a0c",
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06,
-        shadowRadius: 6,
+        shadowOpacity: 0.07,
+        shadowRadius: 8,
       },
       android: { elevation: 2 },
       default: {},
@@ -1003,33 +1369,91 @@ const styles = StyleSheet.create({
   tbColHead: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 5,
+    paddingVertical: 6,
     paddingHorizontal: 6,
-    backgroundColor: "#eef0f3",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(15,23,42,0.1)",
+    backgroundColor: "rgba(176, 24, 26, 0.06)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(92, 16, 24, 0.12)",
   },
-  tbColH: { fontSize: 6, fontWeight: "800", color: "#94a3b8", letterSpacing: 0.2 },
+  tbColH: { fontSize: 7, fontWeight: "800", color: "#78716c", letterSpacing: 0.35, textAlign: "center" },
+  tbColPoster: { width: 76, textAlign: "left" },
+  tbColLay: { flex: 1, minWidth: 52, textAlign: "left" },
+  tbColId: { width: 50, textAlign: "center" },
+  tbColDays: { width: 30, textAlign: "center" },
+  tbColTime: { width: 36, textAlign: "center" },
+  tbColCr: { width: 34, textAlign: "center" },
+  tbColDollar: { width: 38, textAlign: "center" },
+  tbColChevHead: { width: 14 },
   tbRowCard: {
     backgroundColor: "#fff",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(15,23,42,0.06)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(15, 23, 42, 0.08)",
   },
-  tbRowInner: { flexDirection: "row", alignItems: "stretch", paddingVertical: 7, paddingHorizontal: 6 },
-  tbTypeAnchor: { width: 56, alignItems: "center", justifyContent: "flex-start", paddingTop: 2 },
-  tbTypePill: { paddingHorizontal: 6, paddingVertical: 4, borderRadius: 8, minWidth: 48, alignItems: "center" },
-  tbTypePillTxt: { color: "#fff", fontSize: 8, fontWeight: "900" },
-  tbMid: { flex: 1, minWidth: 0, paddingRight: 6 },
-  tbPoster: { fontSize: 11, fontWeight: "800", color: "#1e293b" },
-  tbPairMeta: { marginTop: 2, fontSize: 8, fontWeight: "600", color: "#64748b" },
-  tbLay: { marginTop: 3, fontSize: 10, fontWeight: "700", color: "#0f172a", lineHeight: 13 },
-  tbTimes: { width: 88, alignItems: "flex-start" },
-  tbTlab: { fontSize: 5, fontWeight: "800", color: "#94a3b8" },
-  tbTval: { fontSize: 9, fontWeight: "600", color: "#0f172a", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
-  tbRight: { width: 52, alignItems: "flex-end", justifyContent: "center" },
-  tbCr: { fontSize: 10, fontWeight: "800", color: "#15803d" },
-  tbWorth: { fontSize: 9, fontWeight: "700", color: "#0f172a", marginTop: 2 },
-  tbChev: { marginTop: 4, fontSize: 12, color: "#cbd5e1" },
+  tbRowInner: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    paddingVertical: 7,
+    paddingHorizontal: 4,
+  },
+  tbPosterCol: {
+    width: 76,
+    paddingRight: 4,
+    justifyContent: "flex-start",
+  },
+  tbPoster: { fontSize: 10, fontWeight: "800", color: "#1e293b", lineHeight: 13 },
+  tbTypePillUnder: {
+    alignSelf: "flex-start",
+    marginTop: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
+    maxWidth: "100%",
+  },
+  tbTypePillUnderTxt: { color: "#fff", fontSize: 7, fontWeight: "900", letterSpacing: 0.2 },
+  tbLayCol: { flex: 1, minWidth: 52, paddingRight: 4, justifyContent: "center" },
+  tbLay: { fontSize: 9, fontWeight: "600", color: "#292524", lineHeight: 12 },
+  tbIdCol: { width: 50, justifyContent: "center", alignItems: "center", paddingHorizontal: 1 },
+  tbDaysCol: { width: 30, justifyContent: "center", alignItems: "center" },
+  tbTimeCol: { width: 36, justifyContent: "center", alignItems: "center", paddingHorizontal: 0 },
+  tbCrCol: { width: 34, justifyContent: "center", alignItems: "center" },
+  tbDollarCol: { width: 38, justifyContent: "center", alignItems: "center" },
+  tbCellVal: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: "#0f172a",
+    textAlign: "center",
+    width: "100%",
+    fontVariant: ["tabular-nums"],
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  tbTimeVal: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: "#0f172a",
+    textAlign: "center",
+    width: "100%",
+    fontVariant: ["tabular-nums"],
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  tbCr: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#0f172a",
+    textAlign: "center",
+    width: "100%",
+    fontVariant: ["tabular-nums"],
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  tbWorth: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#15803d",
+    textAlign: "center",
+    width: "100%",
+    fontVariant: ["tabular-nums"],
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  tbChev: { width: 14, textAlign: "center", alignSelf: "center", fontSize: 12, color: "#d6d3d1" },
   tbSwipeRow: { flexDirection: "row", minHeight: 56 },
   tbSwipeBtn: { justifyContent: "center", alignItems: "center", width: 88, paddingVertical: 8 },
   tbSwipePrimary: { backgroundColor: SCHEDULE_MOCK_HEADER_RED },
@@ -1069,22 +1493,28 @@ const styles = StyleSheet.create({
   matchCard: {
     backgroundColor: "#fff",
     borderRadius: 14,
-    borderWidth: 2,
-    borderColor: "#93c5fd",
+    borderWidth: 1,
+    borderColor: CREW_HUB_CARD_RIM,
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
+    ...Platform.select({
+      ios: {
+        shadowColor: "#2a0a0c",
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.1,
+        shadowRadius: 10,
+      },
+      android: { elevation: 4 },
+      default: {},
+    }),
   },
-  matchBanner: { backgroundColor: "#3b82f6", paddingVertical: 6, paddingHorizontal: 10 },
+  matchBanner: { backgroundColor: SCHEDULE_MOCK_STATS_STRIP_RED, paddingVertical: 6, paddingHorizontal: 10 },
   matchBannerText: { color: "#fff", fontSize: 9, fontWeight: "800" },
   matchCols: { flexDirection: "row", alignItems: "center", padding: 10, gap: 4 },
   matchCol: { flex: 1, minWidth: 0 },
-  matchColLabel: { fontSize: 8, color: "#6b7280", fontWeight: "700", marginBottom: 4 },
-  matchColMain: { fontSize: 12, fontWeight: "800", color: "#111" },
-  matchColSub: { fontSize: 9, color: "#6b7280", marginTop: 2 },
-  matchArrow: { fontSize: 16, color: "#3b82f6", paddingHorizontal: 2 },
+  matchColLabel: { fontSize: 8, color: "#78716c", fontWeight: "700", marginBottom: 4 },
+  matchColMain: { fontSize: 12, fontWeight: "800", color: "#1c1917" },
+  matchColSub: { fontSize: 9, color: "#78716c", marginTop: 2 },
+  matchArrow: { fontSize: 16, color: SCHEDULE_MOCK_HEADER_RED, paddingHorizontal: 2 },
   deltaRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1092,17 +1522,18 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     gap: 8,
     borderTopWidth: 1,
-    borderTopColor: "#e5e7eb",
+    borderTopColor: "rgba(92, 16, 24, 0.1)",
     paddingTop: 8,
+    backgroundColor: "rgba(250, 250, 249, 0.9)",
   },
   deltaItem: { fontSize: 9 },
-  deltaLabel: { color: "#6b7280", fontWeight: "700" },
-  deltaNeg: { color: "#dc2626", fontWeight: "800" },
-  deltaPos: { color: "#16a34a", fontWeight: "800" },
+  deltaLabel: { color: "#78716c", fontWeight: "700" },
+  deltaNeg: { color: "#b91c1c", fontWeight: "800" },
+  deltaPos: { color: "#15803d", fontWeight: "800" },
   matchActions: { flexDirection: "row", gap: 8, paddingHorizontal: 10, paddingBottom: 10 },
   btnRequest: {
     flex: 1,
-    backgroundColor: "#2563eb",
+    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     borderRadius: 12,
     paddingVertical: 8,
     alignItems: "center",
@@ -1115,9 +1546,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#d1d5db",
+    borderColor: CREW_HUB_CARD_RIM,
   },
-  btnViewText: { color: "#111", fontSize: 11, fontWeight: "700" },
+  btnViewText: { color: SCHEDULE_MOCK_HEADER_RED, fontSize: 11, fontWeight: "800" },
   posterFoot: { textAlign: "right", fontSize: 9, color: "#9ca3af", paddingHorizontal: 10, paddingBottom: 8 },
   listHead: {
     flexDirection: "row",

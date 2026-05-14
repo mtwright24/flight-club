@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import CrewScheduleHeader from '../../../src/features/crew-schedule/components/CrewScheduleHeader';
-import { CrewScheduleHeaderBridgeProvider } from '../../../src/features/crew-schedule/crewScheduleHeaderBridge';
 import { SCHEDULE_MOCK_HEADER_RED } from '../../../src/features/crew-schedule/scheduleMockPalette';
 
 const ACTIVE = SCHEDULE_MOCK_HEADER_RED;
@@ -17,10 +16,9 @@ const TAB_BAR_EDGE_INSET = 10;
 
 export default function CrewScheduleTabsLayout() {
   return (
-    <CrewScheduleHeaderBridgeProvider>
-      <Tabs
-        initialRouteName="index"
-        screenOptions={{
+    <Tabs
+      initialRouteName="index"
+      screenOptions={{
           headerShown: true,
           header: () => <CrewScheduleHeader scheduleTabsVariant />,
           tabBarActiveTintColor: ACTIVE,
@@ -113,7 +111,6 @@ export default function CrewScheduleTabsLayout() {
           }}
         />
       </Tabs>
-    </CrewScheduleHeaderBridgeProvider>
   );
 }
 

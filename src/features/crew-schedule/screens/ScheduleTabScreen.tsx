@@ -124,7 +124,7 @@ function crewScheduleHeaderSubtitleTail(
 export default function ScheduleTabScreen() {
   const router = useRouter();
   const { session } = useAuth();
-  const { setCrewScheduleHeaderSubtitle } = useCrewScheduleHeaderBridge();
+  const { setCrewScheduleHeaderSubtitle, crewHubSharedRefreshGeneration } = useCrewScheduleHeaderBridge();
   const [profileBase, setProfileBase] = useState<string | null>(null);
   const [profileRole, setProfileRole] = useState<string | null>(null);
 
@@ -318,7 +318,12 @@ export default function ScheduleTabScreen() {
 
   useEffect(() => {
     void loadFlicaRow();
-  }, [loadFlicaRow]);
+  }, [loadFlicaRow, crewHubSharedRefreshGeneration]);
+
+  useEffect(() => {
+    if (!crewHubSharedRefreshGeneration) return;
+    void refreshSilentRef.current();
+  }, [crewHubSharedRefreshGeneration]);
 
   useEffect(() => {
     loadFlicaDirectFlag();

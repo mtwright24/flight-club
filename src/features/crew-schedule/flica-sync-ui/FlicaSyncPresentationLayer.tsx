@@ -290,6 +290,11 @@ type Props = {
   fuseBottomToWebChrome?: boolean;
   /** When true, keep “Waiting for verification…” until engine `postCaptchaFinalizedRef` is committed (mirrored in parent). */
   webVerificationActive?: boolean;
+  /**
+   * `window`: full-screen import (status bar inset on hero) — `import-flica-direct`.
+   * `underCrewTabs`: overlay inside Crew Schedule tabs below `CrewScheduleHeader` (no double top inset).
+   */
+  presentationLayoutOrigin?: 'window' | 'underCrewTabs';
   onOpenSchedule: () => void;
   onViewImported: () => void;
   onRetryError: () => void;
@@ -309,6 +314,7 @@ export default function FlicaSyncPresentationLayer({
   omitBrandedStripe: _omitBrandedStripe = true,
   fuseBottomToWebChrome = false,
   webVerificationActive = false,
+  presentationLayoutOrigin = 'window',
   onOpenSchedule: _onOpenSchedule,
   onViewImported,
   onRetryError,
@@ -321,6 +327,8 @@ export default function FlicaSyncPresentationLayer({
   void _omitBrandedStripe;
   void _onOpenSchedule;
   void _importMilestones;
+  const heroTopInsetOverride =
+    presentationLayoutOrigin === 'underCrewTabs' ? 10 : undefined;
   const opacity = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     opacity.setValue(0.97);
@@ -542,7 +550,7 @@ export default function FlicaSyncPresentationLayer({
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
-            <FlicaSyncBrandedHero compact />
+            <FlicaSyncBrandedHero compact topInsetOverride={heroTopInsetOverride} />
             {stackBody}
           </ScrollView>
         ) : (
@@ -551,6 +559,7 @@ export default function FlicaSyncPresentationLayer({
               compact={fuseBottomToWebChrome}
               syncTight={fuseBottomToWebChrome}
               premiumSync
+              topInsetOverride={heroTopInsetOverride}
             />
             <View style={styles.noScrollBody}>
               {panel === 'import' || panel === 'authenticating' ? (

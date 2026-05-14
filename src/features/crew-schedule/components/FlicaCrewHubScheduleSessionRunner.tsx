@@ -511,7 +511,9 @@ export function FlicaCrewHubScheduleSessionRunner({
 
   const fuseBottomToWebChrome = splitForCaptchaPanel && presentationPanel === "verify";
 
-  const flicaWvTopInset = insets.top + 48;
+  /** Tab content already sits below `CrewScheduleHeader` safe area — match full-screen import spacing. */
+  const underTabsPresentationTop = 10;
+  const flicaWvTopInset = underTabsPresentationTop + 48;
 
   const webViewOpacity = captchaWebVisible && !hideWebForSync && !postCaptchaFired ? 1 : 0;
   const webPointerEvents =
@@ -576,7 +578,7 @@ export function FlicaCrewHubScheduleSessionRunner({
         <ImportWrapperOverlay
           visible
           fullScreenCover={importFullScreenCover}
-          topInset={insets.top}
+          topInset={underTabsPresentationTop}
           splitPresentationMaxHeight={splitForCaptchaPanel ? splitPresentationMaxHeight : undefined}
           onClosePress={() => {
             stopSession();
@@ -595,6 +597,7 @@ export function FlicaCrewHubScheduleSessionRunner({
               success={null}
               fuseBottomToWebChrome={fuseBottomToWebChrome}
               webVerificationActive={webVerificationActive}
+              presentationLayoutOrigin="underCrewTabs"
               onOpenSchedule={() => {}}
               onViewImported={() => {}}
               onRetryError={() => {}}

@@ -588,32 +588,36 @@ export function mapRowsToOpenTimeTrips(rows: string[][], sourceUrl: string): Ope
   return out;
 }
 
+/** Four hub categories: Trade (includes FLICA swap), Drop, Trade/Drop, Pickup. */
 export function tradeboardTypeLabel(t: TradeboardPostType): string {
   switch (t) {
     case "swap":
-      return "SW";
-    case "drop":
-      return "DR";
-    case "pickup":
-      return "PK";
     case "trade":
-      return "TR";
+      return "Trade";
+    case "drop":
+      return "Drop";
+    case "pickup":
+      return "Pickup";
     case "trade_drop":
-      return "TD";
+      return "Trade/Drop";
     default:
-      return "??";
+      return "—";
   }
 }
 
+/** Punchy premium accents: red trade, orange drop, yellow trade/drop, green pickup. */
 export function tradeboardTypeBadgeColor(t: TradeboardPostType): string {
   switch (t) {
     case "swap":
-      return "#2563eb";
+    case "trade":
+      return "#dc2626";
     case "drop":
       return "#ea580c";
+    case "trade_drop":
+      return "#ca8a04";
     case "pickup":
-      return "#16a34a";
+      return "#15803d";
     default:
-      return "#6b7280";
+      return "#78716c";
   }
 }

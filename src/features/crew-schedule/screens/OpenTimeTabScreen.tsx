@@ -40,7 +40,12 @@ import {
 } from "../flicaCrewHubParseDebug";
 import type { OpenTimeTrip } from "../flicaCrewHubTypes";
 import { useCrewScheduleMonthStrip } from "../hooks/useCrewScheduleMonthStrip";
-import { SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
+import {
+  CREW_HUB_CARD_RIM,
+  CREW_HUB_DATE_HEADER_BG,
+  SCHEDULE_MOCK_HEADER_RED,
+  SCHEDULE_MOCK_STATS_STRIP_RED,
+} from "../scheduleMockPalette";
 import type { CrewScheduleTrip } from "../types";
 
 function pushFlicaWeb(router: ReturnType<typeof useRouter>, uri: string) {
@@ -148,16 +153,23 @@ function openTimePairingDateLine(t: OpenTimeTrip): string {
   return (t.dateLabel?.trim() || t.date?.trim() || t.dates?.trim() || "—") as string;
 }
 
-/** Bid · pairing date · N D — under Layover line (FLICA fields only). */
-function openTimeBidDateDaysSubline(t: OpenTimeTrip): string {
+/** Row subline: omit pairing date when it matches the section bucket (reduces clutter). */
+function openTimeRowSubline(t: OpenTimeTrip, dateGroupKey: string): string {
   const bid = t.bidPos?.trim();
-  const pd = openTimePairingDateLine(t);
-  const d = t.days;
+  const pd = openTimePairingDateLine(t).trim();
+  const g = dateGroupKey.trim();
   const parts: string[] = [];
   if (bid) parts.push(`Bid ${bid}`);
-  parts.push(pd);
+  const pdU = pd.replace(/\s+/g, " ").toUpperCase();
+  const gU = g.replace(/\s+/g, " ").toUpperCase();
+  const redundant =
+    pdU.length > 0 &&
+    gU.length > 0 &&
+    (pdU === gU || pdU.includes(gU) || gU.includes(pdU));
+  if (!redundant && pd && pd !== "—") parts.push(pd);
+  const d = t.days;
   if (d != null && Number.isFinite(d) && d > 0) parts.push(`${d}D`);
-  return parts.join(META_DOT);
+  return parts.join(META_DOT) || "—";
 }
 
 function dollarPerHourLabel(t: OpenTimeTrip): string {
@@ -319,20 +331,20 @@ const tc = StyleSheet.create({
   },
   heroRouteWrap: { flex: 1, minWidth: 0, alignItems: "center", paddingHorizontal: 4 },
   heroRoute: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: "600",
     color: "#0f172a",
     textAlign: "center",
-    lineHeight: 18,
+    lineHeight: 16,
     letterSpacing: -0.2,
   },
   heroMeta: {
-    marginTop: 5,
-    fontSize: 8,
+    marginTop: 4,
+    fontSize: 7,
     fontWeight: "600",
     color: "#64748b",
     textAlign: "center",
-    lineHeight: 11,
+    lineHeight: 10,
   },
   heroWorthCol: {
     flexShrink: 0,
@@ -397,6 +409,7 @@ function OpenTimeHubRow({
   t,
   isLast,
   showBestTag,
+  dateGroupKey,
   router,
   onAdd,
   onOpenDetail,
@@ -404,6 +417,7 @@ function OpenTimeHubRow({
   t: OpenTimeTrip;
   isLast: boolean;
   showBestTag: boolean;
+  dateGroupKey: string;
   router: ReturnType<typeof useRouter>;
   onAdd: (x: OpenTimeTrip) => void;
   onOpenDetail: (x: OpenTimeTrip) => void;
@@ -433,7 +447,7 @@ function OpenTimeHubRow({
         style={[styles.hubRowCard, isLast && styles.hubRowLast]}
       >
         <View style={styles.hubRowInner}>
-          <View style={styles.hubLeft}>
+          <View style={styles.hubColPair}>
             <View style={styles.hubIdRow}>
               <Text style={styles.hubPid}>{t.pairingId}</Text>
               {showBestTag ? (
@@ -442,11 +456,14 @@ function OpenTimeHubRow({
                 </View>
               ) : null}
             </View>
+            <Text style={styles.hubSubMeta} numberOfLines={2}>
+              {openTimeRowSubline(t, dateGroupKey)}
+            </Text>
+          </View>
+          <View style={styles.hubColLay}>
+            <Text style={styles.hubFieldCap}>Layover</Text>
             <Text style={styles.hubLayover} numberOfLines={2}>
               {hubLayoverDisplayWithDots(t.layover)}
-            </Text>
-            <Text style={styles.hubSubMeta} numberOfLines={1}>
-              {openTimeBidDateDaysSubline(t)}
             </Text>
           </View>
           <View style={styles.hubMetrics}>
@@ -454,7 +471,8 @@ function OpenTimeHubRow({
             <HubOtNumCell lab="RPT" val={t.reportTime?.trim() || "—"} />
             <HubOtNumCell lab="DEP" val={t.departTime?.trim() || "—"} />
             <HubOtNumCell lab="ARR" val={t.arriveTime?.trim() || "—"} />
-            <HubOtNumCell lab="CR" val={t.credit?.trim() || "—"} />
+            <HubOtNumCell lab="BLK" val={t.block?.trim() || "—"} narrow />
+            <HubOtNumCell lab="CR" val={t.credit?.trim() || "—"} narrow />
             <View style={styles.hubCellWorth}>
               <Text style={styles.hubWorthLab}>WORTH</Text>
               <Text style={[styles.hubWorthVal, OPEN_TIME_STATS_VALUE_FONT]} numberOfLines={1}>
@@ -478,8 +496,8 @@ export default function OpenTimeTabScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const isFocused = useIsFocused();
-  const { setCrewScheduleHeaderSubtitle } = useCrewScheduleHeaderBridge();
-  const { stripValues, monthTrips, refreshFlicaMonthRow } = useCrewScheduleMonthStrip();
+  const { setCrewScheduleHeaderSubtitle, bumpCrewHubSharedDataRefresh } = useCrewScheduleHeaderBridge();
+  const { stripValues, monthTrips } = useCrewScheduleMonthStrip();
 
   const [chip, setChip] = useState("All");
   const [loading, setLoading] = useState(false);
@@ -630,9 +648,9 @@ export default function OpenTimeTabScreen() {
       }
     } finally {
       setLoading(false);
-      void refreshFlicaMonthRow();
+      bumpCrewHubSharedDataRefresh();
     }
-  }, [refreshFlicaMonthRow, session?.user?.id]);
+  }, [bumpCrewHubSharedDataRefresh, session?.user?.id]);
 
   useFocusEffect(
     useCallback(() => {
@@ -802,19 +820,22 @@ export default function OpenTimeTabScreen() {
           <RefreshControl refreshing={loading} onRefresh={() => void load("pull")} />
         }
       >
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-          {chips.map((c) => (
-            <Pressable
-              key={c}
-              onPress={() => setChip(c)}
-              style={[styles.chip, chip === c && styles.chipOn]}
-            >
-              <Text style={[styles.chipText, chip === c && styles.chipTextOn]} numberOfLines={1}>
-                {c}
-              </Text>
-            </Pressable>
-          ))}
-        </ScrollView>
+        <View style={styles.otFilterShell}>
+          <Text style={styles.otFilterEyebrow}>QUICK FILTERS</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+            {chips.map((c) => (
+              <Pressable
+                key={c}
+                onPress={() => setChip(c)}
+                style={[styles.chip, chip === c && styles.chipOn]}
+              >
+                <Text style={[styles.chipText, chip === c && styles.chipTextOn]} numberOfLines={1}>
+                  {c}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
@@ -897,19 +918,22 @@ export default function OpenTimeTabScreen() {
               </View>
               <View style={styles.otCardShell}>
                 <View style={styles.otColHead}>
-                  <Text style={[styles.otColH, { flex: 1.35 }]}>PAIRING / LAYOVER</Text>
-                  <Text style={[styles.otColH, { width: 22 }]}>DAYS</Text>
-                  <Text style={[styles.otColH, { width: 34 }]}>RPT</Text>
-                  <Text style={[styles.otColH, { width: 34 }]}>DEP</Text>
-                  <Text style={[styles.otColH, { width: 34 }]}>ARR</Text>
-                  <Text style={[styles.otColH, { width: 30 }]}>CR</Text>
-                  <Text style={[styles.otColH, { width: 44, textAlign: "right" }]}>WORTH</Text>
+                  <Text style={[styles.otColH, { flex: 1.12 }]}>PAIRING</Text>
+                  <Text style={[styles.otColH, { flex: 0.95 }]}>LAYOVER</Text>
+                  <Text style={[styles.otColH, { width: 24 }]}>DAYS</Text>
+                  <Text style={[styles.otColH, { width: 30 }]}>RPT</Text>
+                  <Text style={[styles.otColH, { width: 30 }]}>DEP</Text>
+                  <Text style={[styles.otColH, { width: 30 }]}>ARR</Text>
+                  <Text style={[styles.otColH, { width: 26 }]}>BLK</Text>
+                  <Text style={[styles.otColH, { width: 28 }]}>CR</Text>
+                  <Text style={[styles.otColH, { width: 40, textAlign: "right" }]}>$</Text>
                 </View>
                 {grp.items.map((t, idx) => (
                   <OpenTimeHubRow
                     key={`${grp.key}-${tripDedupeKey(t)}-${idx}`}
                     t={t}
                     isLast={idx === grp.items.length - 1}
+                    dateGroupKey={grp.key}
                     showBestTag={
                       best234Trip != null && tripDedupeKey(t) === tripDedupeKey(best234Trip)
                     }
@@ -940,9 +964,27 @@ export default function OpenTimeTabScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#f3f4f6" },
+  screen: { flex: 1, backgroundColor: "#f1f0f0" },
   scroll: { flex: 1 },
-  chipScroll: { maxHeight: 28, paddingLeft: 10, marginTop: 4 },
+  otFilterShell: {
+    marginHorizontal: 10,
+    marginTop: 6,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CREW_HUB_CARD_RIM,
+    paddingTop: 6,
+    paddingBottom: 4,
+  },
+  otFilterEyebrow: {
+    fontSize: 7,
+    fontWeight: "900",
+    color: "#a8a29e",
+    letterSpacing: 0.9,
+    paddingHorizontal: 10,
+    marginBottom: 2,
+  },
+  chipScroll: { maxHeight: 28, paddingLeft: 8, paddingRight: 8 },
   chip: {
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -993,53 +1035,57 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#27272a",
-    paddingVertical: 7,
+    backgroundColor: CREW_HUB_DATE_HEADER_BG,
+    paddingVertical: 6,
     paddingHorizontal: 12,
-    borderRadius: 999,
+    borderRadius: 10,
     maxWidth: "78%",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.12)",
     ...Platform.select({
       ios: {
-        shadowColor: "#000",
+        shadowColor: "#2a0a0c",
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
+        shadowOpacity: 0.18,
+        shadowRadius: 5,
       },
       android: { elevation: 3 },
       default: {},
     }),
   },
-  otDatePillIcon: { fontSize: 12 },
-  otDatePillText: { fontSize: 11, fontWeight: "800", color: "#fafafa", flexShrink: 1 },
+  otDatePillIcon: { fontSize: 11 },
+  otDatePillText: { fontSize: 10, fontWeight: "800", color: "#fff7f7", flexShrink: 1, letterSpacing: 0.2 },
   otDateBadge: {
     marginLeft: 4,
     minWidth: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
+    backgroundColor: SCHEDULE_MOCK_STATS_STRIP_RED,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.25)",
   },
   otDateBadgeTxt: { color: "#fff", fontSize: 10, fontWeight: "900" },
   otDateRule: {
     flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(15,23,42,0.12)",
+    height: 1,
+    backgroundColor: "rgba(92, 16, 24, 0.2)",
     marginLeft: 8,
   },
   otCardShell: {
     backgroundColor: "#fff",
     borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(15,23,42,0.08)",
+    borderWidth: 1,
+    borderColor: CREW_HUB_CARD_RIM,
     overflow: "hidden",
     ...Platform.select({
       ios: {
-        shadowColor: "#0f172a",
+        shadowColor: "#2a0a0c",
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06,
-        shadowRadius: 6,
+        shadowOpacity: 0.07,
+        shadowRadius: 8,
       },
       android: { elevation: 2 },
       default: {},
@@ -1048,35 +1094,43 @@ const styles = StyleSheet.create({
   otColHead: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 5,
-    paddingHorizontal: 6,
-    backgroundColor: "#eef0f3",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(15,23,42,0.1)",
+    paddingVertical: 6,
+    paddingHorizontal: 5,
+    backgroundColor: "rgba(176, 24, 26, 0.06)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(92, 16, 24, 0.12)",
   },
-  otColH: { fontSize: 6, fontWeight: "800", color: "#94a3b8", letterSpacing: 0.2 },
+  otColH: { fontSize: 6, fontWeight: "800", color: "#78716c", letterSpacing: 0.25 },
   hubRowCard: {
     backgroundColor: "#fff",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(15,23,42,0.06)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(15, 23, 42, 0.08)",
   },
   hubRowLast: { borderBottomWidth: 0 },
-  hubRowInner: { flexDirection: "row", alignItems: "stretch", paddingVertical: 6, paddingHorizontal: 6 },
-  hubLeft: { flex: 1.35, minWidth: 0, paddingRight: 4 },
+  hubRowInner: { flexDirection: "row", alignItems: "stretch", paddingVertical: 5, paddingHorizontal: 4 },
+  hubColPair: { flex: 1.12, minWidth: 0, paddingRight: 3 },
+  hubColLay: { flex: 0.95, minWidth: 0, paddingRight: 2, justifyContent: "flex-start" },
+  hubFieldCap: {
+    fontSize: 6,
+    fontWeight: "900",
+    color: "#a8a29e",
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
   hubIdRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 },
-  hubPid: { fontSize: 10, fontWeight: "600", color: SCHEDULE_MOCK_HEADER_RED },
-  hubLayover: { marginTop: 2, fontSize: 11, fontWeight: "700", color: "#0f172a", lineHeight: 14 },
-  hubSubMeta: { marginTop: 3, fontSize: 7, fontWeight: "500", color: "#64748b" },
+  hubPid: { fontSize: 10, fontWeight: "800", color: SCHEDULE_MOCK_HEADER_RED },
+  hubLayover: { fontSize: 9, fontWeight: "600", color: "#44403c", lineHeight: 12 },
+  hubSubMeta: { marginTop: 3, fontSize: 7, fontWeight: "600", color: "#78716c", lineHeight: 10 },
   hubMetrics: { flexDirection: "row", alignItems: "flex-end", flexShrink: 0, paddingBottom: 1 },
   hubCell: { width: 30, alignItems: "center" },
   hubCellNarrow: { width: 22 },
-  hubCellLab: { fontSize: 5, fontWeight: "800", color: "#94a3b8", marginBottom: 2 },
-  hubCellVal: { fontSize: 9, fontWeight: "600", color: "#0f172a" },
-  hubCellWorth: { width: 46, alignItems: "flex-end", marginLeft: 2 },
-  hubWorthLab: { fontSize: 5, fontWeight: "800", color: "#94a3b8", marginBottom: 2 },
-  hubWorthVal: { fontSize: 9, fontWeight: "700", color: "#15803d" },
-  hubWorthPer: { fontSize: 6, fontWeight: "500", color: "#64748b", marginTop: 1 },
-  hubChev: { alignSelf: "center", fontSize: 14, color: "#cbd5e1", paddingLeft: 2, fontWeight: "300" },
+  hubCellLab: { fontSize: 6, fontWeight: "800", color: "#78716c", marginBottom: 2 },
+  hubCellVal: { fontSize: 8, fontWeight: "700", color: "#1c1917" },
+  hubCellWorth: { width: 40, alignItems: "flex-end", marginLeft: 1 },
+  hubWorthLab: { fontSize: 6, fontWeight: "800", color: "#78716c", marginBottom: 2 },
+  hubWorthVal: { fontSize: 8, fontWeight: "700", color: "#15803d" },
+  hubWorthPer: { fontSize: 6, fontWeight: "500", color: "#78716c", marginTop: 1 },
+  hubChev: { alignSelf: "center", fontSize: 12, color: "#d6d3d1", paddingLeft: 1, fontWeight: "300" },
   swipeRow: { flexDirection: "row", minHeight: 56 },
   swipeAct: { justifyContent: "center", alignItems: "center", width: 72, paddingVertical: 8 },
   swipeAdd: { backgroundColor: SCHEDULE_MOCK_HEADER_RED },

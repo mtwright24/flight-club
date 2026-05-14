@@ -12,14 +12,27 @@ type Props = {
   syncTight?: boolean;
   /** Richer wordmark + gradient for full-screen sync overlay. */
   premiumSync?: boolean;
+  /**
+   * When set, used as gradient `paddingTop` instead of safe-area–aware padding.
+   * Use under Crew Schedule tabs where the navigator header already consumed the top inset.
+   */
+  topInsetOverride?: number;
 };
 
 /**
  * Flight Club wordmark PNG — same asset as Home / auth.
  */
-export default function FlicaSyncBrandedHero({ compact = false, syncTight = false, premiumSync = false }: Props) {
+export default function FlicaSyncBrandedHero({
+  compact = false,
+  syncTight = false,
+  premiumSync = false,
+  topInsetOverride,
+}: Props) {
   const insets = useSafeAreaInsets();
-  const pt = Math.max(insets.top, premiumSync ? (syncTight ? 6 : 10) : syncTight ? 4 : compact ? 6 : 10);
+  const pt =
+    typeof topInsetOverride === 'number'
+      ? topInsetOverride
+      : Math.max(insets.top, premiumSync ? (syncTight ? 6 : 10) : syncTight ? 4 : compact ? 6 : 10);
   return (
     <LinearGradient
       colors={[COLORS.red, COLORS.redDark, 'rgba(247,246,244,0.01)']}

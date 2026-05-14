@@ -43,6 +43,7 @@ import { supabase } from '../../src/lib/supabaseClient';
 import { persistFlicaDirectImport } from '../../src/features/crew-schedule/persistFlicaDirectImport';
 import { scheduleTheme as T } from '../../src/features/crew-schedule/scheduleTheme';
 import CrewScheduleHeader from '../../src/features/crew-schedule/components/CrewScheduleHeader';
+import { useCrewScheduleHeaderBridge } from '../../src/features/crew-schedule/crewScheduleHeaderBridge';
 import FlicaSyncPresentationLayer, {
   type FlicaSyncPresentationPanel,
 } from '../../src/features/crew-schedule/flica-sync-ui/FlicaSyncPresentationLayer';
@@ -65,6 +66,7 @@ import {
 export default function ImportFlicaDirectScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { bumpCrewHubSharedDataRefresh } = useCrewScheduleHeaderBridge();
   const webViewRef = useRef<InstanceType<typeof WebView> | null>(null);
   const flowNavRef = useRef<FlowNav>({ loadScheduleInjected: false });
   const completingRef = useRef(false);
@@ -439,6 +441,7 @@ export default function ImportFlicaDirectScreen() {
         } else {
           Alert.alert('', `Schedule synced (${rangeLabel})`);
         }
+        bumpCrewHubSharedDataRefresh();
         router.replace('/crew-schedule' as Href);
         stopSync();
       } catch (e) {

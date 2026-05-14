@@ -9,6 +9,12 @@ import React, {
 type CrewScheduleHeaderBridgeValue = {
   subtitle: string | null;
   setCrewScheduleHeaderSubtitle: (s: string | null) => void;
+  /**
+   * Incremented when hub data should reload across Schedule / Tradeboard / Open Time
+   * (pull refresh, FLICA session, or successful schedule import). Tabs listen via hooks.
+   */
+  crewHubSharedRefreshGeneration: number;
+  bumpCrewHubSharedDataRefresh: () => void;
 };
 
 const CrewScheduleHeaderBridgeContext =
@@ -20,14 +26,24 @@ export function CrewScheduleHeaderBridgeProvider({
   children: React.ReactNode;
 }) {
   const [subtitle, setSubtitle] = useState<string | null>(null);
+  const [crewHubSharedRefreshGeneration, setCrewHubSharedRefreshGeneration] = useState(0);
 
   const setCrewScheduleHeaderSubtitle = useCallback((s: string | null) => {
     setSubtitle(s);
   }, []);
 
+  const bumpCrewHubSharedDataRefresh = useCallback(() => {
+    setCrewHubSharedRefreshGeneration((g) => g + 1);
+  }, []);
+
   const value = useMemo(
-    () => ({ subtitle, setCrewScheduleHeaderSubtitle }),
-    [subtitle, setCrewScheduleHeaderSubtitle],
+    () => ({
+      subtitle,
+      setCrewScheduleHeaderSubtitle,
+      crewHubSharedRefreshGeneration,
+      bumpCrewHubSharedDataRefresh,
+    }),
+    [subtitle, setCrewScheduleHeaderSubtitle, crewHubSharedRefreshGeneration, bumpCrewHubSharedDataRefresh],
   );
 
   return (
@@ -44,6 +60,8 @@ export function useCrewScheduleHeaderBridge(): CrewScheduleHeaderBridgeValue {
     ctx ?? {
       subtitle: null,
       setCrewScheduleHeaderSubtitle: () => {},
+      crewHubSharedRefreshGeneration: 0,
+      bumpCrewHubSharedDataRefresh: () => {},
     }
   );
 }
