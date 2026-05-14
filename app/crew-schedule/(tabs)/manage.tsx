@@ -12,7 +12,6 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useCrewScheduleSixTabBarLayout } from '../../../src/features/crew-schedule/crewScheduleTabBarConfig';
 import { scheduleTheme as T } from '../../../src/features/crew-schedule/scheduleTheme';
 import type { ScheduleViewMode } from '../../../src/features/crew-schedule/types';
 import {
@@ -52,7 +51,6 @@ const VIEW_OPTIONS: {
 export default function ManageTabScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const sixTabs = useCrewScheduleSixTabBarLayout();
   const { tripId } = useLocalSearchParams<{ tripId?: string }>();
   const tripContext =
     typeof tripId === 'string' ? tripId : Array.isArray(tripId) ? tripId[0] : undefined;
@@ -193,18 +191,17 @@ export default function ManageTabScreen() {
         <Text style={styles.subline}>Schedule tools and view controls</Text>
       </View>
 
-      {!sixTabs ? (
-        <View style={styles.alertsPromoWrap}>
-          <View style={styles.insetGroup}>
-            <ActionRow
-              icon="notifications-outline"
-              title="Alerts & Notifications"
-              subtitle="Crew schedule alerts, trip activity, and app notifications"
-              onPress={() => router.push('/crew-schedule/alerts' as Href)}
-            />
-          </View>
+      <Text style={[styles.sectionLabel, styles.sectionLabelFirst]}>Alerts</Text>
+      <View style={styles.alertsPromoWrap}>
+        <View style={styles.insetGroup}>
+          <ActionRow
+            icon="notifications-outline"
+            title="Alerts & Notifications"
+            subtitle="Crew schedule alerts, trip activity, and app notifications"
+            onPress={() => router.push('/crew-schedule/alerts' as Href)}
+          />
         </View>
-      ) : null}
+      </View>
 
       {tripContext ? (
         <View style={styles.contextPill}>
@@ -215,7 +212,7 @@ export default function ManageTabScreen() {
         </View>
       ) : null}
 
-      <Text style={[styles.sectionLabel, styles.sectionLabelFirst]}>Import & data</Text>
+      <Text style={styles.sectionLabel}>Import & data</Text>
       <View style={styles.insetGroup}>
         <ActionRow
           icon="cloud-upload-outline"

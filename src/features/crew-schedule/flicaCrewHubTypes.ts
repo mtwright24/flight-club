@@ -5,8 +5,11 @@ export type OpenTimeTrip = {
   date: string;
   /** Same as `date` when a range is shown; optional duplicate for clarity in payloads. */
   dates?: string;
+  /** FLICA-style report date token (e.g. 01JUN) when present in pairing column. */
+  dateLabel?: string;
   days: number | null;
   bidPos?: string;
+  /** Layover / overnight line from FLICA Layover column only — not a computed leg chain. */
   routeSummary: string;
   reportTime: string;
   departTime: string;

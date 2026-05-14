@@ -62,7 +62,7 @@ function firstMatch(re: RegExp, text: string): string {
   return m?.[1] ? String(m[1]).trim() : "";
 }
 
-function extractMoney(text: string): string {
+export function extractMoney(text: string): string {
   const m = text.match(/\$\s*[\d,]+(?:\.\d{2})?/);
   return m ? m[0]!.replace(/\s/g, "") : "";
 }
@@ -403,6 +403,108 @@ function openTimeRowLooksLikeJunk(line: string, cells: string[]): boolean {
   return false;
 }
 
+/**
+ * FLICA Open Time Blk Hrs / Credit: keep HH:MM; map 3–4 digit HHMM (e.g. 1037 → 10:37).
+ * Leaves values that are not valid clock-style times unchanged (e.g. cumulative hours).
+ */
+export function formatOpenTimeBlkCr(raw: string): string {
+  const s = collapseWhitespace(String(raw ?? ""));
+  if (!s) return "";
+  if (/^\d{1,2}:\d{2}$/.test(s)) return s;
+  const hm = s.match(/^(\d{1,2}):(\d{2}):\d{2}$/);
+  if (hm) return `${Number(hm[1])}:${String(hm[2]).padStart(2, "0")}`;
+  if (/^\d{4}$/.test(s)) {
+    const hh = parseInt(s.slice(0, 2), 10);
+    const mm = parseInt(s.slice(2), 10);
+    if (mm >= 60 || hh > 23) return s;
+    return `${hh}:${String(mm).padStart(2, "0")}`;
+  }
+  if (/^\d{3}$/.test(s)) {
+    const hh = parseInt(s.slice(0, 1), 10);
+    const mm = parseInt(s.slice(1), 10);
+    if (mm >= 60 || hh > 9) return s;
+    return `${hh}:${String(mm).padStart(2, "0")}`;
+  }
+  return s;
+}
+
+function parseOpenTimePairingColumn(cell: string): { pairingId: string; dateLabel: string } {
+  const colon = cell.match(/\b(J[A-Z0-9]{3,5})\s*:\s*(\d{1,2}[A-Z]{3})\b/i);
+  if (colon) return { pairingId: colon[1]!.toUpperCase(), dateLabel: colon[2]!.toUpperCase() };
+  const j = cell.match(/\b(J[A-Z0-9]{3,5})\b/i);
+  return { pairingId: j?.[1]?.toUpperCase() ?? "", dateLabel: "" };
+}
+
+function guessLayoverFromLooseCells(rawCells: string[], pairingId: string): string {
+  for (let i = rawCells.length - 1; i >= 0; i--) {
+    const c = rawCells[i]!.trim();
+    if (!c || c.toUpperCase() === pairingId) continue;
+    if (/^\d{1,2}:\d{2}/.test(c)) continue;
+    if (/^\$/.test(c)) continue;
+    if (/^\d{3,4}$/.test(c)) continue;
+    if (/^\d{1,2}$/.test(c) && Number(c) <= 14) continue;
+    if (/^\d$/.test(c)) continue;
+    if (/^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/i.test(c)) continue;
+    if (/\bJ[A-Z0-9]{3,5}\s*:/i.test(c)) continue;
+    if (/\b[A-Z]{3}\b/.test(c) && !/^\d{1,2}[A-Z]{3}$/i.test(c)) return collapseWhitespace(c);
+  }
+  return "";
+}
+
+/** FLICA pot row: Pairing | Dates | Bid Pos | Days | Report | Depart | Arrive | Blk Hrs | Credit | Layover | Prem */
+function tryMapOpenTimeStructuredColumns(rawCells: string[], sourceUrl: string): OpenTimeTrip | null {
+  if (rawCells.length < 10) return null;
+  const { pairingId, dateLabel } = parseOpenTimePairingColumn(rawCells[0] ?? "");
+  if (!pairingId.startsWith("J")) return null;
+  const blk = collapseWhitespace(rawCells[7] ?? "");
+  const cr = collapseWhitespace(rawCells[8] ?? "");
+  if (!blk && !cr) return null;
+  if (!/^\d/.test(blk) && !/^\d{1,2}:\d{2}/.test(blk)) return null;
+
+  const datesCol = collapseWhitespace(rawCells[1] ?? "");
+  const bidPos = collapseWhitespace(rawCells[2] ?? "");
+  const daysStr = collapseWhitespace(rawCells[3] ?? "");
+  const daysN = parseInt(daysStr.replace(/\D/g, ""), 10);
+  const daysGuess = guessDays(rawCells.join(" "));
+  const days =
+    Number.isFinite(daysN) && daysN >= 1 && daysN <= 14 ? daysN : daysGuess;
+
+  const reportTime = collapseWhitespace(rawCells[4] ?? "");
+  const departTime = collapseWhitespace(rawCells[5] ?? "");
+  const arriveTime = collapseWhitespace(rawCells[6] ?? "");
+  const block = formatOpenTimeBlkCr(blk);
+  const credit = formatOpenTimeBlkCr(cr);
+  const layover = collapseWhitespace(rawCells[9] ?? "");
+  const premium = rawCells.length > 10 ? collapseWhitespace(rawCells[10] ?? "") : "";
+
+  const line = rawCells.join(" ");
+  const worth = extractMoney(line);
+  const dateDisplay = datesCol || dateLabel;
+  const dollarM = line.match(/\$(\d+)\s*\/\s*(?:CR\s*)?HR/i);
+
+  return {
+    pairingId,
+    date: dateDisplay,
+    dates: dateDisplay,
+    dateLabel: dateLabel || undefined,
+    days,
+    bidPos: bidPos || undefined,
+    routeSummary: layover,
+    reportTime,
+    departTime,
+    arriveTime,
+    block,
+    credit,
+    layover,
+    worth,
+    premium: premium || undefined,
+    dollarPerCreditHour: dollarM?.[1] ? `$${dollarM[1]}/hr` : "",
+    legalityStatus: "",
+    sourceUrl,
+    rawCells: rawCells.map((c) => collapseWhitespace(String(c ?? ""))),
+  };
+}
+
 /** Map FLICA Open Time pot rows (filters nav / junk; requires J-prefixed pairing id). */
 export function mapRowsToOpenTimeTrips(rows: string[][], sourceUrl: string): OpenTimeTrip[] {
   const out: OpenTimeTrip[] = [];
@@ -412,9 +514,18 @@ export function mapRowsToOpenTimeTrips(rows: string[][], sourceUrl: string): Ope
     if (!line) continue;
     if (openTimeRowLooksLikeJunk(line, rawCells)) continue;
 
+    const structured = tryMapOpenTimeStructuredColumns(rawCells, sourceUrl);
+    if (structured) {
+      out.push(structured);
+      continue;
+    }
+
     const pm = line.match(OPENTIME_PAIRING_RE);
     if (!pm) continue;
     const pairingId = String(pm[1]).toUpperCase();
+    const dateTok =
+      parseOpenTimePairingColumn(rawCells[0] ?? "").dateLabel ||
+      (firstMatch(DATE_TOKEN_RE, line) || "").toUpperCase();
 
     const worth = extractMoney(line);
     const times = line.match(/\b\d{1,2}:\d{2}\b/g) ?? [];
@@ -423,12 +534,7 @@ export function mapRowsToOpenTimeTrips(rows: string[][], sourceUrl: string): Ope
     const arriveTime = times[2] ?? "";
 
     const days = guessDays(line);
-    const layoverMatch = line.match(/\b([A-Z]{3})\b/g);
-    const layover =
-      layoverMatch && layoverMatch.length > 1
-        ? layoverMatch.find((x) => !["JFK", "BOS", "LAX", "FLL"].includes(x)) ?? ""
-        : "";
-    const layoverClean = layover === pairingId ? "" : layover;
+    const layover = guessLayoverFromLooseCells(rawCells, pairingId);
 
     const dateHuman = firstMatch(
       /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}(?:\s*-\s*\d{1,2})?\b/i,
@@ -442,21 +548,32 @@ export function mapRowsToOpenTimeTrips(rows: string[][], sourceUrl: string): Ope
 
     const bidPos = firstMatch(/\b(?:BID|POS)\s*[:\s]+([A-Z]{2,4})\b/i, line) || "";
 
+    const blockRaw =
+      firstMatch(/\bBLK\s*HRS?\D*(\d{1,2}:\d{2}|\d{3,4})\b/i, line) ||
+      firstMatch(/\b(\d{1,2}:\d{2}|\d{3,4})\s*BLK/i, line) ||
+      times[3] ||
+      "";
+    const creditRaw =
+      firstMatch(/\bCR(?:EDIT)?\D*(\d{1,2}:\d{2}|\d{3,4})\b/i, line) ||
+      times[4] ||
+      "";
+
+    const dateDisplay = dateRange || dateHuman || dateTok;
+
     out.push({
       pairingId,
-      date: dateRange || dateHuman || "",
-      dates: dateRange || dateHuman || "",
+      date: dateDisplay,
+      dates: dateDisplay,
+      dateLabel: dateTok || undefined,
       days,
       bidPos: bidPos || undefined,
-      routeSummary: line.includes("→")
-        ? firstMatch(/([A-Z]{3}\s*(?:→\s*[A-Z]{3})+)/, line) || line.slice(0, 80)
-        : rawCells.filter((c) => c.toUpperCase() !== pairingId).slice(0, 6).join(" · "),
+      routeSummary: layover,
       reportTime,
       departTime,
       arriveTime,
-      block: firstMatch(/\b(\d{1,2}:\d{2})\s*BLK/i, line) || times[3] || "",
-      credit: firstMatch(/\bCR\D*(\d{1,2}:\d{2})/i, line) || times[4] || "",
-      layover: layoverClean || "",
+      block: formatOpenTimeBlkCr(blockRaw),
+      credit: formatOpenTimeBlkCr(creditRaw),
+      layover,
       worth,
       premium: firstMatch(/\b(?:PREM|PREMIUM)\D*(\$?\s*[\d,]+)/i, line) || "",
       dollarPerCreditHour: (() => {

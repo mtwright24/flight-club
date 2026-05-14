@@ -4,14 +4,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Alert,
-  Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   View,
+  type TextStyle,
 } from "react-native";
+import { Swipeable } from "react-native-gesture-handler";
 import { useAuth } from "../../../hooks/useAuth";
 import {
   crewHubNativeFetchNeedsVerificationSheet,
@@ -23,8 +25,10 @@ import {
   nativeFetchOpenTimeMyRequests,
   nativeFetchOpenTimePot,
 } from "../../flica-actions/flicaActionsNativeService";
+import CrewHubOpenTimePairingSheet from "../components/CrewHubOpenTimePairingSheet";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
 import { FlicaCrewHubScheduleSessionRunner } from "../components/FlicaCrewHubScheduleSessionRunner";
+import { hubLayoverDisplayWithDots } from "../crewHubLayoverDisplay";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
 import { loadOpenTimeHubCache, upsertOpenTimeHubCache } from "../crewHubFlicaCache";
 import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
@@ -63,6 +67,411 @@ function parseWorthNumber(w: string): number {
   const m = w.replace(/,/g, "").match(/\$?\s*(\d+(?:\.\d+)?)/);
   if (!m) return NaN;
   return Number(m[1]);
+}
+
+const META_DOT = " · ";
+
+/** Same stack as pairing detail stats card values (`TripDetailScreen` STATS_VALUE_FONT). */
+const OPEN_TIME_STATS_VALUE_FONT: TextStyle = Platform.select<TextStyle>({
+  ios: { fontFamily: "Menlo" },
+  android: { fontFamily: "monospace" },
+  default: { fontFamily: "monospace" },
+});
+
+function creditMinutesFromDisplay(s: string): number {
+  const m = String(s ?? "").trim().match(/^(\d+):(\d{2})$/);
+  if (!m) return 0;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function openTimeTripLooksLikeToday(t: OpenTimeTrip, monthShort: string, dayNum: number): boolean {
+  const blob = `${t.date ?? ""} ${t.dates ?? ""} ${t.dateLabel ?? ""}`.toUpperCase();
+  const ms = monthShort.toUpperCase();
+  if (blob.includes(`${ms} ${dayNum}`)) return true;
+  if (blob.includes(`${ms} ${dayNum},`)) return true;
+  return false;
+}
+
+function tripDedupeKey(t: OpenTimeTrip): string {
+  return `${t.pairingId}|${t.date ?? ""}|${t.reportTime ?? ""}`;
+}
+
+function pickFeaturedOpenTimeTrip(
+  trips: OpenTimeTrip[],
+  monthShort: string,
+  dayNum: number,
+): { trip: OpenTimeTrip | null; reason: string } {
+  if (!trips.length) return { trip: null, reason: "none" };
+  const todayT = trips.filter((t) => openTimeTripLooksLikeToday(t, monthShort, dayNum));
+  const pool = todayT.length ? todayT : trips;
+  const sorted = [...pool].sort((a, b) => {
+    const wA = parseWorthNumber(a.worth);
+    const wB = parseWorthNumber(b.worth);
+    const hasA = Number.isFinite(wA) && wA > 0;
+    const hasB = Number.isFinite(wB) && wB > 0;
+    if (hasB !== hasA) return Number(hasB) - Number(hasA);
+    if (hasB && hasA && wB !== wA) return wB - wA;
+    const cB = creditMinutesFromDisplay(b.credit);
+    const cA = creditMinutesFromDisplay(a.credit);
+    if (cB !== cA) return cB - cA;
+    return creditMinutesFromDisplay(b.block) - creditMinutesFromDisplay(a.block);
+  });
+  const best = sorted[0]!;
+  const reason = todayT.some((x) => tripDedupeKey(x) === tripDedupeKey(best))
+    ? "today"
+    : Number.isFinite(parseWorthNumber(best.worth)) && parseWorthNumber(best.worth) > 0
+      ? "worth"
+      : creditMinutesFromDisplay(best.credit) > 0
+        ? "credit"
+        : "block";
+  return { trip: best, reason };
+}
+
+function openTimeBucketKey(t: OpenTimeTrip): string {
+  return (t.dateLabel?.trim() || t.date?.trim() || t.dates?.trim() || "Other") as string;
+}
+
+function groupOpenTimeByBucket(trips: OpenTimeTrip[]): { key: string; items: OpenTimeTrip[] }[] {
+  const m = new Map<string, OpenTimeTrip[]>();
+  for (const t of trips) {
+    const k = openTimeBucketKey(t);
+    const arr = m.get(k) ?? [];
+    arr.push(t);
+    m.set(k, arr);
+  }
+  return [...m.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, items]) => ({ key, items }));
+}
+
+function openTimePairingDateLine(t: OpenTimeTrip): string {
+  return (t.dateLabel?.trim() || t.date?.trim() || t.dates?.trim() || "—") as string;
+}
+
+/** Bid · pairing date · N D — under Layover line (FLICA fields only). */
+function openTimeBidDateDaysSubline(t: OpenTimeTrip): string {
+  const bid = t.bidPos?.trim();
+  const pd = openTimePairingDateLine(t);
+  const d = t.days;
+  const parts: string[] = [];
+  if (bid) parts.push(`Bid ${bid}`);
+  parts.push(pd);
+  if (d != null && Number.isFinite(d) && d > 0) parts.push(`${d}D`);
+  return parts.join(META_DOT);
+}
+
+function dollarPerHourLabel(t: OpenTimeTrip): string {
+  const d = t.dollarPerCreditHour?.trim();
+  if (d) return d;
+  const w = parseWorthNumber(t.worth);
+  const crMin = creditMinutesFromDisplay(t.credit);
+  if (!Number.isFinite(w) || w <= 0 || crMin <= 0) return "";
+  const hr = crMin / 60;
+  const n = Math.round(w / hr);
+  return `$${n}/hr`;
+}
+
+type FeaturedPlacardVariant = "turns_section" | "pot_global";
+
+type TurnFeaturedCardProps = {
+  trip: OpenTimeTrip;
+  onAdd: (t: OpenTimeTrip) => void;
+  variant: FeaturedPlacardVariant;
+  isOnlyTurnInSection?: boolean;
+};
+
+function OpenTimeFeaturedPlacard({ trip, onAdd, variant, isOnlyTurnInSection }: TurnFeaturedCardProps) {
+  const worthLine = trip.worth?.trim() ? trip.worth : "—";
+  const perHr = dollarPerHourLabel(trip);
+  const layDots = hubLayoverDisplayWithDots(trip.layover);
+  const legal = trip.legalityStatus?.trim();
+  const legalLine = legal ? `✓ ${legal}` : "✓ Legal 10h rest available · Fits schedule";
+  const bannerLabel =
+    variant === "pot_global"
+      ? "FEATURED PICK · BEST $/HR"
+      : isOnlyTurnInSection
+        ? "ONLY TURN TODAY · BEST $/HR"
+        : "BEST TURN · BEST $/HR";
+
+  return (
+    <View style={tc.cardShadowWrap}>
+      <View style={tc.cardOuter}>
+        <View style={tc.banner}>
+          <Text style={tc.bannerStar}>★</Text>
+          <Text style={tc.bannerText}>{bannerLabel}</Text>
+        </View>
+        <View style={tc.body}>
+          <View style={tc.heroRow}>
+            <View style={tc.heroLeft}>
+              <Text style={tc.heroPairing} numberOfLines={1}>
+                {trip.pairingId}
+              </Text>
+            </View>
+            <View style={tc.heroRouteWrap}>
+              <Text style={tc.heroRoute} numberOfLines={2}>
+                {layDots}
+              </Text>
+              <Text style={tc.heroMeta} numberOfLines={1}>
+                {[
+                  trip.date || trip.dates || trip.dateLabel,
+                  trip.bidPos?.trim() ? `Bid ${trip.bidPos.trim()}` : "",
+                  trip.days != null && Number.isFinite(trip.days) && trip.days > 0 ? `${trip.days} days` : "",
+                ]
+                  .filter(Boolean)
+                  .join(META_DOT)}
+              </Text>
+            </View>
+            <View style={tc.heroWorthCol}>
+              <Text style={tc.heroWorth}>{worthLine}</Text>
+              {perHr ? <Text style={tc.heroPerHr}>{perHr}</Text> : null}
+            </View>
+          </View>
+          <View style={tc.statGrid}>
+            <View style={tc.statCell}>
+              <Text style={tc.statLab}>DAYS</Text>
+              <Text style={tc.statVal}>
+                {trip.days != null && Number.isFinite(trip.days) && trip.days > 0 ? String(trip.days) : "—"}
+              </Text>
+            </View>
+            <View style={tc.statCell}>
+              <Text style={tc.statLab}>CREDIT</Text>
+              <Text style={tc.statVal}>{trip.credit || "—"}</Text>
+            </View>
+            <View style={tc.statCell}>
+              <Text style={tc.statLab}>ARR</Text>
+              <Text style={tc.statVal}>{trip.arriveTime?.trim() || "—"}</Text>
+            </View>
+            <View style={tc.statCell}>
+              <Text style={tc.statLab}>WORTH</Text>
+              <Text style={[tc.statVal, tc.statWorthMono]}>{worthLine}</Text>
+            </View>
+          </View>
+          <View style={[tc.footerRow, tc.footerTint]}>
+            <Text style={tc.legalOk} numberOfLines={2}>
+              {legalLine}
+            </Text>
+            <Pressable style={tc.addBtn} onPress={() => onAdd(trip)}>
+              <Text style={tc.addBtnText}>Add</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const tc = StyleSheet.create({
+  cardShadowWrap: {
+    marginBottom: 10,
+    marginTop: 6,
+    borderRadius: 10,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 5,
+      },
+      android: { elevation: 3 },
+      default: {},
+    }),
+  },
+  cardOuter: {
+    borderRadius: 10,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: SCHEDULE_MOCK_HEADER_RED,
+    backgroundColor: "#fff",
+  },
+  banner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    gap: 6,
+  },
+  bannerStar: { color: "#d4af37", fontSize: 10, fontWeight: "900" },
+  bannerText: {
+    flex: 1,
+    color: "#fff",
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 0.35,
+  },
+  body: {
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  heroRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 10,
+    gap: 10,
+  },
+  heroLeft: { flexShrink: 0, width: 72, paddingRight: 2 },
+  heroPairing: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: SCHEDULE_MOCK_HEADER_RED,
+  },
+  heroRouteWrap: { flex: 1, minWidth: 0, alignItems: "center", paddingHorizontal: 4 },
+  heroRoute: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#0f172a",
+    textAlign: "center",
+    lineHeight: 18,
+    letterSpacing: -0.2,
+  },
+  heroMeta: {
+    marginTop: 5,
+    fontSize: 8,
+    fontWeight: "600",
+    color: "#64748b",
+    textAlign: "center",
+    lineHeight: 11,
+  },
+  heroWorthCol: {
+    flexShrink: 0,
+    width: 76,
+    alignItems: "flex-end",
+    paddingLeft: 2,
+  },
+  heroWorth: { fontSize: 15, fontWeight: "900", color: "#15803d", fontVariant: ["tabular-nums"] },
+  heroPerHr: { fontSize: 8, fontWeight: "600", color: "#64748b", marginTop: 3, fontVariant: ["tabular-nums"] },
+  statGrid: {
+    flexDirection: "row",
+    backgroundColor: "#eef0f3",
+    borderRadius: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    marginBottom: 0,
+  },
+  statCell: { flex: 1, alignItems: "center", paddingHorizontal: 2 },
+  statLab: { fontSize: 7, fontWeight: "800", color: "#64748b", marginBottom: 4 },
+  statVal: {
+    fontSize: 11,
+    fontWeight: "900",
+    color: "#0f172a",
+    fontVariant: ["tabular-nums"],
+  },
+  statLay: { color: "#15803d" },
+  statWorthMono: { color: "#15803d", fontVariant: ["tabular-nums"] },
+  footerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginTop: 0,
+    marginHorizontal: -12,
+    paddingHorizontal: 12,
+    paddingTop: 9,
+    paddingBottom: 9,
+  },
+  footerTint: { backgroundColor: "rgba(45, 138, 91, 0.1)" },
+  legalOk: { flex: 1, fontSize: 8, fontWeight: "700", color: "#2d8654", lineHeight: 11 },
+  addBtn: {
+    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  addBtnText: { color: "#fff", fontSize: 10, fontWeight: "900" },
+});
+
+function HubOtNumCell({ lab, val, narrow }: { lab: string; val: string; narrow?: boolean }) {
+  return (
+    <View style={[styles.hubCell, narrow ? styles.hubCellNarrow : null]}>
+      <Text style={styles.hubCellLab}>{lab}</Text>
+      <Text style={[styles.hubCellVal, OPEN_TIME_STATS_VALUE_FONT]} numberOfLines={1}>
+        {val}
+      </Text>
+    </View>
+  );
+}
+
+function OpenTimeHubRow({
+  t,
+  isLast,
+  showBestTag,
+  router,
+  onAdd,
+  onOpenDetail,
+}: {
+  t: OpenTimeTrip;
+  isLast: boolean;
+  showBestTag: boolean;
+  router: ReturnType<typeof useRouter>;
+  onAdd: (x: OpenTimeTrip) => void;
+  onOpenDetail: (x: OpenTimeTrip) => void;
+}) {
+  const per = dollarPerHourLabel(t);
+  const daysVal =
+    t.days != null && Number.isFinite(t.days) && t.days > 0 ? String(t.days) : "—";
+
+  const right = (
+    <View style={styles.swipeRow}>
+      <Pressable style={[styles.swipeAct, styles.swipeAdd]} onPress={() => onAdd(t)}>
+        <Text style={styles.swipeActTxt}>Add</Text>
+      </Pressable>
+      <Pressable
+        style={[styles.swipeAct, styles.swipeSwap]}
+        onPress={() => pushFlicaWeb(router, FLICA_NATIVE_URLS.otSwapPreview)}
+      >
+        <Text style={styles.swipeActTxt}>Swap</Text>
+      </Pressable>
+    </View>
+  );
+
+  return (
+    <Swipeable friction={2} overshootRight={false} renderRightActions={() => right}>
+      <Pressable
+        onPress={() => onOpenDetail(t)}
+        style={[styles.hubRowCard, isLast && styles.hubRowLast]}
+      >
+        <View style={styles.hubRowInner}>
+          <View style={styles.hubLeft}>
+            <View style={styles.hubIdRow}>
+              <Text style={styles.hubPid}>{t.pairingId}</Text>
+              {showBestTag ? (
+                <View style={styles.bestTag}>
+                  <Text style={styles.bestTagText}>BEST</Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={styles.hubLayover} numberOfLines={2}>
+              {hubLayoverDisplayWithDots(t.layover)}
+            </Text>
+            <Text style={styles.hubSubMeta} numberOfLines={1}>
+              {openTimeBidDateDaysSubline(t)}
+            </Text>
+          </View>
+          <View style={styles.hubMetrics}>
+            <HubOtNumCell lab="DAYS" val={daysVal} narrow />
+            <HubOtNumCell lab="RPT" val={t.reportTime?.trim() || "—"} />
+            <HubOtNumCell lab="DEP" val={t.departTime?.trim() || "—"} />
+            <HubOtNumCell lab="ARR" val={t.arriveTime?.trim() || "—"} />
+            <HubOtNumCell lab="CR" val={t.credit?.trim() || "—"} />
+            <View style={styles.hubCellWorth}>
+              <Text style={styles.hubWorthLab}>WORTH</Text>
+              <Text style={[styles.hubWorthVal, OPEN_TIME_STATS_VALUE_FONT]} numberOfLines={1}>
+                {t.worth?.trim() ? t.worth : "—"}
+              </Text>
+              {per ? (
+                <Text style={[styles.hubWorthPer, OPEN_TIME_STATS_VALUE_FONT]} numberOfLines={1}>
+                  {per}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+          <Text style={styles.hubChev}>›</Text>
+        </View>
+      </Pressable>
+    </Swipeable>
+  );
 }
 
 export default function OpenTimeTabScreen() {
@@ -177,12 +586,9 @@ export default function OpenTimeTabScreen() {
           afterPullSession: reason === "pull",
         });
         if (reason === "focus") {
-          setError("Pull down to refresh to sign in to FLICA.");
+          setError(null);
         } else {
-          setError(
-            potR.error ??
-              "FLICA verification still required after sign-in. Try pull to refresh again.",
-          );
+          setError(potR.error ?? "FLICA verification still required.");
         }
         return;
       }
@@ -251,6 +657,11 @@ export default function OpenTimeTabScreen() {
       }),
     [],
   );
+  const todayMonthShort = useMemo(
+    () => new Date().toLocaleDateString("en-US", { month: "short" }),
+    [],
+  );
+  const todayDayNum = useMemo(() => new Date().getDate(), []);
 
   const tripToday = useMemo(() => {
     return (
@@ -293,25 +704,67 @@ export default function OpenTimeTabScreen() {
   /** All trips after chip filter — no extra day-based hiding. */
   const listedTrips = filteredPot;
 
-  const bestDollarPerCreditHour = useMemo(() => {
-    let best: OpenTimeTrip | null = null;
-    let bestRate = -1;
-    for (const t of listedTrips) {
-      const w = parseWorthNumber(t.worth);
-      const cr = t.credit || t.block;
-      const hm = cr.match(/(\d{1,2}):(\d{2})/);
-      let hrs = NaN;
-      if (hm) hrs = Number(hm[1]) + Number(hm[2]) / 60;
-      if (Number.isFinite(w) && Number.isFinite(hrs) && hrs > 0) {
-        const r = w / hrs;
-        if (r > bestRate) {
-          bestRate = r;
-          best = t;
-        }
-      }
+  const featuredPick = useMemo(
+    () => pickFeaturedOpenTimeTrip(listedTrips, todayMonthShort, todayDayNum),
+    [listedTrips, todayMonthShort, todayDayNum],
+  );
+
+  const turnList = useMemo(() => listedTrips.filter((t) => t.days === 1), [listedTrips]);
+
+  const bestTurnTrip = useMemo(
+    () => pickFeaturedOpenTimeTrip(turnList, todayMonthShort, todayDayNum).trip,
+    [turnList, todayMonthShort, todayDayNum],
+  );
+
+  const best234Trip = useMemo(
+    () =>
+      pickFeaturedOpenTimeTrip(
+        listedTrips.filter((t) => t.days === 2 || t.days === 3),
+        todayMonthShort,
+        todayDayNum,
+      ).trip,
+    [listedTrips, todayMonthShort, todayDayNum],
+  );
+
+  const excludedRowKeys = useMemo(() => {
+    const s = new Set<string>();
+    if (bestTurnTrip && turnList.length > 0) s.add(tripDedupeKey(bestTurnTrip));
+    if (featuredPick.trip && turnList.length === 0) s.add(tripDedupeKey(featuredPick.trip));
+    return s;
+  }, [bestTurnTrip, turnList.length, featuredPick.trip]);
+
+  const dateGroups = useMemo(() => {
+    const rows = listedTrips.filter((t) => !excludedRowKeys.has(tripDedupeKey(t)));
+    return groupOpenTimeByBucket(rows);
+  }, [listedTrips, excludedRowKeys]);
+
+  useEffect(() => {
+    if (typeof __DEV__ === "undefined" || !__DEV__) return;
+    for (const t of potTrips.slice(0, 50)) {
+      console.log("[FLICA_OPENTIME_ROW_FIELDS]", {
+        pairingId: t.pairingId,
+        dateLabel: t.dateLabel ?? t.date,
+        bidPosition: t.bidPos ?? "",
+        days: t.days,
+        reportTime: t.reportTime,
+        departTime: t.departTime,
+        arriveTime: t.arriveTime,
+        block: t.block,
+        credit: t.credit,
+        layover: t.layover,
+        worth: t.worth,
+      });
     }
-    return best;
-  }, [listedTrips]);
+    if (featuredPick.trip) {
+      console.log("[FLICA_OPENTIME_FEATURED_PICK]", {
+        pairingId: featuredPick.trip.pairingId,
+        reason: featuredPick.reason,
+        credit: featuredPick.trip.credit,
+        block: featuredPick.trip.block,
+        worth: featuredPick.trip.worth,
+      });
+    }
+  }, [potTrips, featuredPick]);
 
   const chips = ["All", "Turns", "2 Days", "3 Days", "Red-eye", "≥$1k"];
 
@@ -366,7 +819,7 @@ export default function OpenTimeTabScreen() {
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         {!loading && potTrips.length === 0 ? (
-          <Text style={styles.emptyText}>No Open Time trips found. Pull down to refresh.</Text>
+          <Text style={styles.emptyText}>No Open Time trips found.</Text>
         ) : null}
 
         {tripToday ? (
@@ -374,132 +827,114 @@ export default function OpenTimeTabScreen() {
             <Text style={styles.yourTripLabel}>YOUR TRIP TODAY</Text>
             <View style={styles.yourTripRow}>
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.yourTripMain} numberOfLines={2}>
-                  {tripToday.pairingCode} · {tripToday.routeSummary} ·{" "}
+                <Text style={styles.yourTripMain} numberOfLines={3}>
+                  {tripToday.pairingCode}
+                  {META_DOT}
+                  {tripToday.routeSummary?.trim() || "—"}
+                  {META_DOT}
                   {tripReportHint(tripToday) || "—"}
                 </Text>
               </View>
-              <View style={{ alignItems: "flex-end" }}>
+              <View style={{ alignItems: "flex-end", marginLeft: 8 }}>
                 <Text style={styles.yourTripMeta}>WORTH —</Text>
                 <Text style={styles.yourTripMeta}>
-                  CR {formatCreditHours(tripToday.pairingCreditHours ?? null) || "—"}
+                  CR{" "}
+                  {formatCreditHours(
+                    tripToday.pairingCreditHours ?? tripToday.creditHours ?? null,
+                  ) || "—"}
                 </Text>
               </View>
             </View>
           </View>
         ) : null}
 
-        <View style={styles.section}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>
-              {weekdayShort} {dateShort} · Open Time
-            </Text>
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{listedTrips.length}</Text>
-            </View>
+        {featuredPick.trip && listedTrips.length > 0 && turnList.length === 0 ? (
+          <View style={styles.placardWrap}>
+            <OpenTimeFeaturedPlacard trip={featuredPick.trip} variant="pot_global" onAdd={onAdd} />
           </View>
-          <View style={styles.potListSheet}>
-            <View style={styles.tableHead}>
-              <Text style={[styles.th, { flex: 0.85 }]}>PAIRING</Text>
-              <Text style={[styles.th, { flex: 1.2 }]}>ROUTE</Text>
-              <Text style={[styles.th, { flex: 0.55 }]}>BLOCK</Text>
-              <Text style={[styles.th, { flex: 0.5 }]}>CR</Text>
-              <Text style={[styles.th, { flex: 0.65 }]}>WORTH</Text>
-            </View>
-            {loading && listedTrips.length === 0 ? (
-              <ActivityIndicator style={{ marginTop: 16 }} color={SCHEDULE_MOCK_HEADER_RED} />
-            ) : null}
-            {listedTrips.map((t, idx) => {
-              const isBest = bestDollarPerCreditHour?.pairingId === t.pairingId;
-              const isLast = idx === listedTrips.length - 1;
-              return (
-                <Pressable
-                  key={`${t.pairingId}-${idx}`}
-                  style={[styles.row, isLast && styles.rowLast]}
-                  onPress={() => setDetail(t)}
-                >
-                <View style={{ flex: 0.85, minWidth: 0 }}>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                    <Text style={styles.rowPairing}>{t.pairingId}</Text>
-                    {isBest ? (
-                      <View style={styles.bestTag}>
-                        <Text style={styles.bestTagText}>BEST</Text>
-                      </View>
-                    ) : null}
+        ) : null}
+
+        {bestTurnTrip && turnList.length > 0 ? (
+          <View style={styles.placardWrap}>
+            <OpenTimeFeaturedPlacard
+              trip={bestTurnTrip}
+              variant="turns_section"
+              isOnlyTurnInSection={turnList.length <= 1}
+              onAdd={onAdd}
+            />
+          </View>
+        ) : null}
+
+        {chip !== "All" && potTrips.length > 0 ? (
+          <Text style={styles.filterHint}>
+            Showing {listedTrips.length} of {potTrips.length}
+          </Text>
+        ) : null}
+
+        {listedTrips.length === 0 && !loading && potTrips.length > 0 ? (
+          <Text style={styles.filterEmpty}>No trips match this filter.</Text>
+        ) : null}
+
+        {loading && listedTrips.length === 0 && potTrips.length === 0 ? (
+          <ActivityIndicator style={{ marginTop: 14 }} color={SCHEDULE_MOCK_HEADER_RED} />
+        ) : null}
+
+        {dateGroups.map((grp) => {
+          if (grp.items.length === 0) return null;
+          return (
+            <View key={grp.key} style={styles.otDateSection}>
+              <View style={styles.otDateHeadRow}>
+                <View style={styles.otDatePill}>
+                  <Text style={styles.otDatePillIcon}>📅</Text>
+                  <Text style={styles.otDatePillText} numberOfLines={1}>
+                    {grp.key}
+                  </Text>
+                  <View style={styles.otDateBadge}>
+                    <Text style={styles.otDateBadgeTxt}>{grp.items.length}</Text>
                   </View>
-                  <Text style={styles.rowSub} numberOfLines={1}>
-                    ● {t.days ?? "?"}D · {t.layover || "—"}
-                  </Text>
                 </View>
-                <View style={{ flex: 1.2, minWidth: 0 }}>
-                  <Text style={styles.rowRoute} numberOfLines={2}>
-                    {t.routeSummary}
-                  </Text>
-                  <Text style={styles.rowSub} numberOfLines={1}>
-                    Rpt {t.reportTime || "—"} · {t.date || "—"}
-                  </Text>
+                <View style={styles.otDateRule} />
+              </View>
+              <View style={styles.otCardShell}>
+                <View style={styles.otColHead}>
+                  <Text style={[styles.otColH, { flex: 1.35 }]}>PAIRING / LAYOVER</Text>
+                  <Text style={[styles.otColH, { width: 22 }]}>DAYS</Text>
+                  <Text style={[styles.otColH, { width: 34 }]}>RPT</Text>
+                  <Text style={[styles.otColH, { width: 34 }]}>DEP</Text>
+                  <Text style={[styles.otColH, { width: 34 }]}>ARR</Text>
+                  <Text style={[styles.otColH, { width: 30 }]}>CR</Text>
+                  <Text style={[styles.otColH, { width: 44, textAlign: "right" }]}>WORTH</Text>
                 </View>
-                <Text style={[styles.rowCell, { flex: 0.55 }]}>{t.block || "—"}</Text>
-                <Text style={[styles.rowCell, { flex: 0.5 }]}>{t.credit || "—"}</Text>
-                <View style={{ flex: 0.65, minWidth: 0 }}>
-                  <Text style={styles.rowMoney} numberOfLines={1}>
-                    {t.worth || "—"}
-                  </Text>
-                  <Text style={styles.rowPer} numberOfLines={1}>
-                    {t.dollarPerCreditHour || ""}
-                  </Text>
-                </View>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
+                {grp.items.map((t, idx) => (
+                  <OpenTimeHubRow
+                    key={`${grp.key}-${tripDedupeKey(t)}-${idx}`}
+                    t={t}
+                    isLast={idx === grp.items.length - 1}
+                    showBestTag={
+                      best234Trip != null && tripDedupeKey(t) === tripDedupeKey(best234Trip)
+                    }
+                    router={router}
+                    onAdd={onAdd}
+                    onOpenDetail={setDetail}
+                  />
+                ))}
+              </View>
+            </View>
+          );
+        })}
+
         <View style={{ height: 28 }} />
       </ScrollView>
 
-      <Modal visible={detail != null} transparent animationType="fade">
-        <Pressable style={styles.modalBackdrop} onPress={() => setDetail(null)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Open time detail</Text>
-            {detail ? (
-              <ScrollView style={{ maxHeight: 360 }}>
-                <Text style={styles.modalKv}>
-                  {detail.pairingId} · {detail.dates || detail.date || "—"}
-                </Text>
-                {detail.bidPos ? <Text style={styles.modalKv}>Bid pos {detail.bidPos}</Text> : null}
-                <Text style={styles.modalKv}>
-                  Rpt {detail.reportTime || "—"} · Dep {detail.departTime || "—"} · Arr{" "}
-                  {detail.arriveTime || "—"}
-                </Text>
-                <Text style={styles.modalKv}>
-                  Block {detail.block || "—"} · Credit {detail.credit || "—"} · Worth{" "}
-                  {detail.worth || "—"}
-                </Text>
-                {detail.premium ? (
-                  <Text style={styles.modalKv}>Premium {detail.premium}</Text>
-                ) : null}
-                <Text style={styles.modalKv}>Layover {detail.layover || "—"}</Text>
-              </ScrollView>
-            ) : null}
-            <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-              <Pressable style={styles.modalClose} onPress={() => setDetail(null)}>
-                <Text style={styles.modalCloseText}>Close</Text>
-              </Pressable>
-              {detail ? (
-                <Pressable
-                  style={[styles.modalClose, { backgroundColor: "#2563eb" }]}
-                  onPress={() => {
-                    setDetail(null);
-                    onAdd(detail);
-                  }}
-                >
-                  <Text style={styles.modalCloseText}>Add</Text>
-                </Pressable>
-              ) : null}
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <CrewHubOpenTimePairingSheet
+        visible={detail != null}
+        trip={detail}
+        onClose={() => setDetail(null)}
+        onOpenFlica={(uri) => {
+          setDetail(null);
+          pushFlicaWeb(router, uri);
+        }}
+      />
     </View>
   );
 }
@@ -507,115 +942,189 @@ export default function OpenTimeTabScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#f3f4f6" },
   scroll: { flex: 1 },
-  chipScroll: { maxHeight: 34, paddingLeft: 10, marginTop: 8 },
+  chipScroll: { maxHeight: 28, paddingLeft: 10, marginTop: 4 },
   chip: {
     paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
+    paddingVertical: 4,
+    borderRadius: 12,
     backgroundColor: "#fff",
     borderWidth: 1,
     borderColor: "#d1d5db",
-    marginRight: 6,
+    marginRight: 5,
   },
   chipOn: { backgroundColor: SCHEDULE_MOCK_HEADER_RED, borderColor: SCHEDULE_MOCK_HEADER_RED },
-  chipText: { fontSize: 10, fontWeight: "600", color: "#4b5563" },
+  chipText: { fontSize: 8, fontWeight: "700", color: "#374151" },
   chipTextOn: { color: "#fff" },
-  errorText: { color: "#b91c1c", fontSize: 11, marginHorizontal: 12, marginTop: 8 },
+  errorText: { color: "#b91c1c", fontSize: 10, marginHorizontal: 12, marginTop: 6 },
+  filterHint: {
+    fontSize: 9,
+    color: "#6b7280",
+    marginHorizontal: 12,
+    marginTop: 4,
+    fontWeight: "600",
+  },
+  filterEmpty: {
+    fontSize: 10,
+    color: "#6b7280",
+    textAlign: "center",
+    marginTop: 8,
+  },
   yourTripCard: {
     marginHorizontal: 10,
-    marginTop: 10,
-    borderRadius: 14,
+    marginTop: 6,
+    borderRadius: 10,
     backgroundColor: "#7f1d1d",
-    padding: 10,
+    padding: 8,
   },
   yourTripLabel: {
-    color: "rgba(255,255,255,0.85)",
-    fontSize: 9,
+    color: "rgba(255,255,255,0.9)",
+    fontSize: 7,
     fontWeight: "800",
     letterSpacing: 0.5,
-    marginBottom: 6,
+    marginBottom: 4,
   },
-  yourTripRow: { flexDirection: "row", alignItems: "center" },
-  yourTripMain: { color: "#fff", fontSize: 12, fontWeight: "800" },
-  yourTripMeta: { color: "#fff", fontSize: 10, fontWeight: "600" },
-  section: { marginTop: 12, paddingHorizontal: 10 },
-  sectionHead: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
-  sectionTitle: { flex: 1, fontSize: 12, fontWeight: "800", color: "#111" },
-  badge: {
-    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
+  yourTripRow: { flexDirection: "row", alignItems: "flex-start" },
+  yourTripMain: { color: "#fff", fontSize: 10, fontWeight: "600", lineHeight: 13 },
+  yourTripMeta: { color: "#fff", fontSize: 8, fontWeight: "700" },
+  placardWrap: { marginHorizontal: 10, marginTop: 6 },
+  otDateSection: { marginTop: 10, paddingHorizontal: 10 },
+  otDateHeadRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  otDatePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#27272a",
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    maxWidth: "78%",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+      },
+      android: { elevation: 3 },
+      default: {},
+    }),
+  },
+  otDatePillIcon: { fontSize: 12 },
+  otDatePillText: { fontSize: 11, fontWeight: "800", color: "#fafafa", flexShrink: 1 },
+  otDateBadge: {
+    marginLeft: 4,
     minWidth: 22,
     height: 22,
     borderRadius: 11,
+    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 6,
+    paddingHorizontal: 5,
   },
-  badgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
-  potListSheet: {
+  otDateBadgeTxt: { color: "#fff", fontSize: 10, fontWeight: "900" },
+  otDateRule: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(15,23,42,0.12)",
+    marginLeft: 8,
+  },
+  otCardShell: {
     backgroundColor: "#fff",
-    borderRadius: 10,
+    borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#c8ced6",
+    borderColor: "rgba(15,23,42,0.08)",
     overflow: "hidden",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#0f172a",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 6,
+      },
+      android: { elevation: 2 },
+      default: {},
+    }),
   },
-  tableHead: {
+  otColHead: {
     flexDirection: "row",
-    backgroundColor: "#eef0f3",
+    alignItems: "center",
     paddingVertical: 5,
-    paddingHorizontal: 8,
-    gap: 2,
+    paddingHorizontal: 6,
+    backgroundColor: "#eef0f3",
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(15, 23, 42, 0.18)",
+    borderBottomColor: "rgba(15,23,42,0.1)",
   },
-  th: { fontSize: 7, fontWeight: "800", color: "#6b7280" },
-  row: {
-    flexDirection: "row",
-    alignItems: "flex-start",
+  otColH: { fontSize: 6, fontWeight: "800", color: "#94a3b8", letterSpacing: 0.2 },
+  hubRowCard: {
     backgroundColor: "#fff",
-    paddingVertical: 9,
-    paddingHorizontal: 8,
-    gap: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(15, 23, 42, 0.14)",
+    borderBottomColor: "rgba(15,23,42,0.06)",
   },
-  rowLast: {
-    borderBottomWidth: 0,
-  },
-  rowPairing: { fontSize: 11, fontWeight: "900", color: SCHEDULE_MOCK_HEADER_RED },
+  hubRowLast: { borderBottomWidth: 0 },
+  hubRowInner: { flexDirection: "row", alignItems: "stretch", paddingVertical: 6, paddingHorizontal: 6 },
+  hubLeft: { flex: 1.35, minWidth: 0, paddingRight: 4 },
+  hubIdRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 },
+  hubPid: { fontSize: 10, fontWeight: "600", color: SCHEDULE_MOCK_HEADER_RED },
+  hubLayover: { marginTop: 2, fontSize: 11, fontWeight: "700", color: "#0f172a", lineHeight: 14 },
+  hubSubMeta: { marginTop: 3, fontSize: 7, fontWeight: "500", color: "#64748b" },
+  hubMetrics: { flexDirection: "row", alignItems: "flex-end", flexShrink: 0, paddingBottom: 1 },
+  hubCell: { width: 30, alignItems: "center" },
+  hubCellNarrow: { width: 22 },
+  hubCellLab: { fontSize: 5, fontWeight: "800", color: "#94a3b8", marginBottom: 2 },
+  hubCellVal: { fontSize: 9, fontWeight: "600", color: "#0f172a" },
+  hubCellWorth: { width: 46, alignItems: "flex-end", marginLeft: 2 },
+  hubWorthLab: { fontSize: 5, fontWeight: "800", color: "#94a3b8", marginBottom: 2 },
+  hubWorthVal: { fontSize: 9, fontWeight: "700", color: "#15803d" },
+  hubWorthPer: { fontSize: 6, fontWeight: "500", color: "#64748b", marginTop: 1 },
+  hubChev: { alignSelf: "center", fontSize: 14, color: "#cbd5e1", paddingLeft: 2, fontWeight: "300" },
+  swipeRow: { flexDirection: "row", minHeight: 56 },
+  swipeAct: { justifyContent: "center", alignItems: "center", width: 72, paddingVertical: 8 },
+  swipeAdd: { backgroundColor: SCHEDULE_MOCK_HEADER_RED },
+  swipeSwap: { backgroundColor: "#334155" },
+  swipeActTxt: { color: "#fff", fontSize: 11, fontWeight: "800" },
   bestTag: {
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     paddingHorizontal: 4,
     paddingVertical: 1,
-    borderRadius: 4,
+    borderRadius: 3,
   },
-  bestTagText: { color: "#fff", fontSize: 7, fontWeight: "900" },
-  rowSub: { fontSize: 9, color: "#6b7280", marginTop: 2 },
-  rowRoute: { fontSize: 10, fontWeight: "700", color: "#111" },
-  rowCell: { fontSize: 10, color: "#374151", fontWeight: "600" },
-  rowMoney: { fontSize: 11, fontWeight: "900", color: "#16a34a" },
-  rowPer: { fontSize: 8, color: "#6b7280", marginTop: 2 },
+  bestTagText: { color: "#fff", fontSize: 6, fontWeight: "900" },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.4)",
     justifyContent: "center",
-    padding: 20,
+    padding: 18,
   },
-  modalCard: { backgroundColor: "#fff", borderRadius: 14, padding: 16 },
-  modalTitle: { fontSize: 15, fontWeight: "800", marginBottom: 8 },
-  modalKv: { fontSize: 12, color: "#111827", marginBottom: 4, fontWeight: "600" },
+  modalCard: { backgroundColor: "#fff", borderRadius: 12, padding: 12 },
+  modalTitle: { fontSize: 13, fontWeight: "800", marginBottom: 6, color: "#111827" },
+  modalPairing: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: SCHEDULE_MOCK_HEADER_RED,
+    marginBottom: 4,
+  },
+  modalKv: { fontSize: 10, color: "#1f2937", marginBottom: 3, fontWeight: "600", lineHeight: 14 },
+  modalKvSmall: { fontSize: 9, color: "#64748b", marginBottom: 3 },
   emptyText: {
-    fontSize: 12,
+    fontSize: 11,
     color: "#6b7280",
     textAlign: "center",
     marginHorizontal: 16,
-    marginTop: 12,
+    marginTop: 10,
     marginBottom: 4,
   },
-  modalClose: {
+  modalGhost: {
+    backgroundColor: "#e5e7eb",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  modalGhostText: { color: "#374151", fontWeight: "700", fontSize: 11 },
+  modalPrimary: {
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
   },
-  modalCloseText: { color: "#fff", fontWeight: "700", fontSize: 12 },
+  modalPrimaryText: { color: "#fff", fontWeight: "800", fontSize: 11 },
 });

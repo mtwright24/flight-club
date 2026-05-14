@@ -7,6 +7,8 @@ import type { OpenTimeTrip, TradeboardPost, TradeboardPostType } from "./flicaCr
 import {
   djb2Hex,
   detectTradeboardType,
+  extractMoney,
+  formatOpenTimeBlkCr,
   mapRowsToOpenTimeTrips,
   mapTradeboardRowsToPosts,
   tradeboardTypeLongLabel,
@@ -409,8 +411,6 @@ function openTimeTripFromTaskArgs(
   const reportTime = times[0] ?? "";
   const departTime = times[1] ?? "";
   const arriveTime = times[2] ?? "";
-  const block = times[3] ?? "";
-  const credit = times[4] ?? "";
 
   let days: number | null = null;
   for (const a of args) {
@@ -430,28 +430,34 @@ function openTimeTripFromTaskArgs(
     }
   }
 
-  const bidPos =
+  const bidPosRaw =
     args.find((a) => /^[A-Z]{2}$/i.test(a) && !/^(JFK|LAX|BOS|FLL|MCO|MIA|ATL|SEA|SLC)$/i.test(a)) ??
     args.find((a) => /^[A-Z]{2,4}$/i.test(a) && a.length <= 4) ??
     "";
 
-  const airports = blob.match(/\b([A-Z]{3})\b/g) ?? [];
-  const layTokens = airports.filter((x) => !["JFK", "BOS", "LAX", "FLL", "MCO", "MIA"].includes(x));
-  const layover = layTokens.length ? layTokens.slice(-4).join(" ") : "";
+  const layFromArgs =
+    args.find((a) => {
+      const t = normalizeTaskArg(a).trim();
+      return /^[A-Z]{3}(\s+[A-Z]{3})+$/.test(t);
+    }) ?? "";
 
-  const worth = (() => {
-    const wm = blob.match(/\$\s*[\d,]+(?:\.\d{2})?/);
-    return wm ? wm[0]!.replace(/\s+/g, "") : "";
-  })();
+  const blockRaw = times[3] ?? "";
+  const creditRaw = times[4] ?? "";
 
-  const routeSummary =
-    layover ||
-    args.filter((a) => /\b[A-Z]{3}\b/.test(a)).slice(0, 6).join(" ") ||
-    `${pairingId} ${dateTok}`.trim();
-
-  const dateLabel = dateTok;
-  const syntheticLine = [pairingId, dateLabel, bidPos, days ?? "", ...times, layover].filter(Boolean).join(" ");
-  const mapped = mapRowsToOpenTimeTrips([[syntheticLine]], sourceUrl);
+  const pairingCol = dateTok ? `${pairingId}:${dateTok}` : pairingId;
+  const syntheticCells = [
+    pairingCol,
+    dateTok || "",
+    typeof bidPosRaw === "string" ? bidPosRaw : "",
+    days != null ? String(days) : "",
+    reportTime,
+    departTime,
+    arriveTime,
+    formatOpenTimeBlkCr(blockRaw),
+    formatOpenTimeBlkCr(creditRaw),
+    layFromArgs,
+  ];
+  const mapped = mapRowsToOpenTimeTrips([syntheticCells], sourceUrl);
   if (mapped.length === 1) {
     return { trip: mapped[0]! };
   }
@@ -459,18 +465,23 @@ function openTimeTripFromTaskArgs(
   return {
     trip: {
       pairingId,
-      date: dateLabel,
-      dates: dateLabel,
+      date: dateTok,
+      dates: dateTok,
+      dateLabel: dateTok || undefined,
       days,
-      bidPos: bidPos || undefined,
-      routeSummary,
+      bidPos: (typeof bidPosRaw === "string" ? bidPosRaw : "") || undefined,
+      routeSummary: layFromArgs,
       reportTime,
       departTime,
       arriveTime,
-      block,
-      credit,
-      layover,
-      worth,
+      block: formatOpenTimeBlkCr(blockRaw),
+      credit: formatOpenTimeBlkCr(creditRaw),
+      layover: layFromArgs,
+      worth: (() => {
+        const wm = blob.match(/\$\s*[\d,]+(?:\.\d{2})?/);
+        return wm ? wm[0]!.replace(/\s+/g, "") : "";
+      })(),
+      premium: undefined,
       dollarPerCreditHour: "",
       legalityStatus: "",
       sourceUrl,
@@ -930,39 +941,40 @@ function openTimeTripFromPotObjectBody(body: string, sourceUrl: string): OpenTim
   const dpttime = otFieldString(body, "dpttime") || otFieldString(body, "dptTime");
   const endtime = otFieldString(body, "endtime") || otFieldString(body, "endTime");
   const hrs = otFieldString(body, "hrs") || otFieldString(body, "block");
-  const pay = otFieldString(body, "pay") || otFieldString(body, "credit");
+  const payRaw = otFieldString(body, "pay") || otFieldString(body, "credit");
   const lay = otFieldString(body, "lay") || otFieldString(body, "layover");
   const premium = otFieldString(body, "premium") || otFieldString(body, "prem");
   const dateAlt = otFieldString(body, "date") || otFieldString(body, "dates") || otFieldString(body, "dispdate");
 
-  const routeSummary =
-    lay ||
-    otFieldString(body, "route") ||
-    otFieldString(body, "pairingText") ||
-    disppair;
+  const creditOnly = otFieldString(body, "credit");
+  const payForCredit =
+    creditOnly || payRaw.replace(/\$\s*[\d,]+(?:\.\d{2})?/g, "").replace(/\/\s*HR.*/i, "").trim();
 
-  const rawCells = [disppair, bidPos, daysStr, rpttime, dpttime, endtime, hrs, pay, lay].filter(Boolean);
+  const worth = extractMoney(payRaw);
+
+  const rawCells = [disppair, bidPos, daysStr, rpttime, dpttime, endtime, hrs, payForCredit, lay].filter(Boolean);
 
   const dateLabel = dateTok || dateAlt;
-  const worth = /\$/.test(pay) ? pay : "";
+  const dateDisplay = dateAlt || dateTok;
 
   return {
     pairingId,
-    date: dateLabel,
-    dates: dateLabel,
+    date: dateDisplay,
+    dates: dateDisplay,
+    dateLabel: dateTok || undefined,
     days,
     bidPos: bidPos || undefined,
-    routeSummary,
+    routeSummary: lay,
     reportTime: rpttime,
     departTime: dpttime,
     arriveTime: endtime,
-    block: hrs,
-    credit: pay,
+    block: formatOpenTimeBlkCr(hrs),
+    credit: formatOpenTimeBlkCr(payForCredit),
     layover: lay,
     worth,
     premium: premium || undefined,
     dollarPerCreditHour: (() => {
-      const mm = pay.match(/\$(\d+)\s*\/\s*(?:CR\s*)?HR/i);
+      const mm = payRaw.match(/\$(\d+)\s*\/\s*(?:CR\s*)?HR/i);
       return mm?.[1] ? `$${mm[1]}/hr` : "";
     })(),
     legalityStatus: otFieldString(body, "legal") || otFieldString(body, "legality") || "",

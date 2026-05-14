@@ -3,7 +3,7 @@ import { useRouter, type Href } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -12,6 +12,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Swipeable } from "react-native-gesture-handler";
 import { useAuth } from "../../../hooks/useAuth";
 import { supabase } from "../../../lib/supabaseClient";
 import {
@@ -26,7 +27,9 @@ import {
   nativeFetchTradeBoardMyRequests,
   nativeFetchTradeBoardMyResponses,
 } from "../../flica-actions/flicaActionsNativeService";
+import CrewHubTradeboardPairingSheet from "../components/CrewHubTradeboardPairingSheet";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
+import { hubLayoverDisplayWithDots } from "../crewHubLayoverDisplay";
 import { FlicaCrewHubScheduleSessionRunner } from "../components/FlicaCrewHubScheduleSessionRunner";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
 import {
@@ -72,6 +75,37 @@ function pushFlicaWeb(router: ReturnType<typeof useRouter>, uri: string) {
   } as unknown as Href);
 }
 
+/** Display-only: first given name from FLICA poster cell (e.g. "SMITH, JOHN" → "JOHN"). */
+function tradeboardPosterFirstName(posterName: string | null | undefined): string {
+  const s = String(posterName ?? "").trim();
+  if (!s) return "—";
+  const comma = s.indexOf(",");
+  if (comma >= 0) {
+    const after = s.slice(comma + 1).trim();
+    if (!after) return s.slice(0, comma).trim() || "—";
+    return after.split(/\s+/)[0] ?? after;
+  }
+  const parts = s.split(/\s+/).filter(Boolean);
+  return parts[0] ?? s;
+}
+
+function tradeboardDateGroupKey(p: TradeboardPost): string {
+  return (p.pairingDateLabel?.trim() || p.date?.trim() || "Other") as string;
+}
+
+function groupTradeboardByDate(posts: TradeboardPost[]): { key: string; items: TradeboardPost[] }[] {
+  const m = new Map<string, TradeboardPost[]>();
+  for (const p of posts) {
+    const k = tradeboardDateGroupKey(p);
+    const arr = m.get(k) ?? [];
+    arr.push(p);
+    m.set(k, arr);
+  }
+  return [...m.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, items]) => ({ key, items }));
+}
+
 type PrimaryTab = "all" | "swaps" | "drops" | "pickups";
 
 function tripReportHint(t: CrewScheduleTrip): string {
@@ -81,6 +115,86 @@ function tripReportHint(t: CrewScheduleTrip): string {
 
 function tripWorthHint(_t: CrewScheduleTrip): string {
   return "";
+}
+
+function tradeboardFlicaUriForSwipe(type: TradeboardPost["type"]): string {
+  if (type === "swap" || type === "trade" || type === "trade_drop") {
+    return FLICA_NATIVE_URLS.tradeMyResponses;
+  }
+  return FLICA_NATIVE_URLS.tradeFrame;
+}
+
+function tradeboardSwipePrimaryLabel(type: TradeboardPost["type"]): string {
+  if (type === "drop") return "Pickup";
+  if (type === "pickup") return "Respond";
+  if (type === "swap" || type === "trade" || type === "trade_drop") return "Propose trade";
+  return "Open";
+}
+
+function TradeboardFeedRow({
+  p,
+  router,
+  onPress,
+}: {
+  p: TradeboardPost;
+  router: ReturnType<typeof useRouter>;
+  onPress: () => void;
+}) {
+  const primaryUri = tradeboardFlicaUriForSwipe(p.type);
+  const right = (
+    <View style={styles.tbSwipeRow}>
+      <Pressable
+        style={[styles.tbSwipeBtn, styles.tbSwipePrimary]}
+        onPress={() => pushFlicaWeb(router, primaryUri)}
+      >
+        <Text style={styles.tbSwipeTxt}>{tradeboardSwipePrimaryLabel(p.type)}</Text>
+      </Pressable>
+      {p.type === "trade_drop" ? (
+        <Pressable
+          style={[styles.tbSwipeBtn, styles.tbSwipeAlt]}
+          onPress={() => pushFlicaWeb(router, FLICA_NATIVE_URLS.tradeFrame)}
+        >
+          <Text style={styles.tbSwipeTxt}>Pickup</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+
+  return (
+    <Swipeable friction={2} overshootRight={false} renderRightActions={() => right}>
+      <Pressable onPress={onPress} style={styles.tbRowCard}>
+        <View style={styles.tbRowInner}>
+          <View style={styles.tbTypeAnchor}>
+            <View style={[styles.tbTypePill, { backgroundColor: tradeboardTypeBadgeColor(p.type) }]}>
+              <Text style={styles.tbTypePillTxt}>{tradeboardTypeLabel(p.type)}</Text>
+            </View>
+          </View>
+          <View style={styles.tbMid}>
+            <Text style={styles.tbPoster}>{tradeboardPosterFirstName(p.posterName)}</Text>
+            <Text style={styles.tbPairMeta} numberOfLines={1}>
+              {p.pairingId} · {p.days?.trim() || "—"}
+            </Text>
+            <Text style={styles.tbLay} numberOfLines={2}>
+              {hubLayoverDisplayWithDots(p.layover)}
+            </Text>
+          </View>
+          <View style={styles.tbTimes}>
+            <Text style={styles.tbTlab}>RPT</Text>
+            <Text style={styles.tbTval}>{p.reportTime || "—"}</Text>
+            <Text style={styles.tbTlab}>DEP</Text>
+            <Text style={styles.tbTval}>{p.departTime || "—"}</Text>
+            <Text style={styles.tbTlab}>ARR</Text>
+            <Text style={styles.tbTval}>{p.arriveTime || "—"}</Text>
+          </View>
+          <View style={styles.tbRight}>
+            <Text style={styles.tbCr}>{p.credit || "—"}</Text>
+            <Text style={styles.tbWorth}>{p.worth ?? "—"}</Text>
+            <Text style={styles.tbChev}>›</Text>
+          </View>
+        </View>
+      </Pressable>
+    </Swipeable>
+  );
 }
 
 export default function TradeboardTabScreen() {
@@ -99,6 +213,8 @@ export default function TradeboardTabScreen() {
   const [error, setError] = useState<string | null>(null);
   const [allPosts, setAllPosts] = useState<TradeboardPost[]>([]);
   const [myPosts, setMyPosts] = useState<TradeboardPost[]>([]);
+  const [responsePosts, setResponsePosts] = useState<TradeboardPost[]>([]);
+  const [tradeFeedTab, setTradeFeedTab] = useState<"all" | "my" | "responses">("all");
   const [detailPost, setDetailPost] = useState<TradeboardPost | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [pullSessionRunnerActive, setPullSessionRunnerActive] = useState(false);
@@ -177,7 +293,7 @@ export default function TradeboardTabScreen() {
       let allR: Awaited<ReturnType<typeof nativeFetchTradeBoardAllRequests>>;
       let myR: Awaited<ReturnType<typeof nativeFetchTradeBoardMyRequests>>;
       let favR: Awaited<ReturnType<typeof nativeFetchTradeBoardFavorites>> | undefined;
-      let respR: Awaited<ReturnType<typeof nativeFetchTradeBoardMyResponses>> | undefined;
+      let respR: Awaited<ReturnType<typeof nativeFetchTradeBoardMyResponses>>;
 
       const fetchOpts = {
         base: profileBase,
@@ -191,9 +307,11 @@ export default function TradeboardTabScreen() {
           nativeFetchTradeBoardMyResponses(),
         ]);
       } else {
-        [allR, myR] = await Promise.all([
+        favR = undefined;
+        [allR, myR, respR] = await Promise.all([
           nativeFetchTradeBoardAllRequests(fetchOpts),
           nativeFetchTradeBoardMyRequests(),
+          nativeFetchTradeBoardMyResponses(),
         ]);
       }
       logCrewHubAuth("native_fetch_done", {
@@ -222,36 +340,36 @@ export default function TradeboardTabScreen() {
       const mappedAllPre = allFb.posts;
       const mappedMyPre = myFb.posts;
 
+      const respFb = mapTradeboardPostsWithHtmlFallback(
+        respR.nativeParse?.rows ?? [],
+        respR,
+        "all_requests",
+        respR.url,
+      );
+      const mappedRespPre = respFb.posts;
+
       const fetches = [
         buildCrewHubParseDebugFetchEntry("My Requests", myR, mappedMyPre),
         buildCrewHubParseDebugFetchEntry("All Requests", allR, mappedAllPre),
+        buildCrewHubParseDebugFetchEntry("My Responses", respR, mappedRespPre),
       ];
-      if (__DEV__ && favR && respR) {
+      if (__DEV__ && favR) {
         const mappedFav = mapTradeboardPostsWithHtmlFallback(
           favR.nativeParse?.rows ?? [],
           favR,
           "all_requests",
           favR.url,
         ).posts;
-        const mappedResp = mapTradeboardPostsWithHtmlFallback(
-          respR.nativeParse?.rows ?? [],
-          respR,
-          "all_requests",
-          respR.url,
-        ).posts;
-        fetches.push(
-          buildCrewHubParseDebugFetchEntry("Favorites", favR, mappedFav),
-          buildCrewHubParseDebugFetchEntry("My Responses", respR, mappedResp),
-        );
+        fetches.push(buildCrewHubParseDebugFetchEntry("Favorites", favR, mappedFav));
       }
       const pl: FlicaCrewHubParseDebugPayload = {
         screen: "tradeboard",
         refreshedAt: new Date().toISOString(),
         loadReason: reason,
         note:
-          __DEV__ && favR && respR
-            ? "__DEV__: Favorites + My Responses native fetches included (not run in production)."
-            : "Production: only My Requests + All Requests native fetches.",
+          __DEV__ && favR
+            ? "__DEV__: Favorites native fetch included (not run in production)."
+            : "Production: My Requests + All Requests + My Responses native fetches.",
         fetches,
         tradeboardFallback: {
           allRequests: allFb.meta,
@@ -265,7 +383,8 @@ export default function TradeboardTabScreen() {
 
       const needVerification =
         crewHubNativeFetchNeedsVerificationSheet(allR) ||
-        crewHubNativeFetchNeedsVerificationSheet(myR);
+        crewHubNativeFetchNeedsVerificationSheet(myR) ||
+        crewHubNativeFetchNeedsVerificationSheet(respR);
 
       if (needVerification) {
         logCrewHubAuth("native_needs_verification", {
@@ -273,14 +392,11 @@ export default function TradeboardTabScreen() {
           afterPullSession: reason === "pull",
         });
         if (reason === "focus") {
-          setError("Pull down to refresh to sign in to FLICA.");
+          setError(null);
         } else {
-          setError(
-            allR.error ??
-              myR.error ??
-              "FLICA verification still required after sign-in. Try pull to refresh again.",
-          );
+          setError(allR.error ?? myR.error ?? "FLICA verification still required.");
         }
+        setResponsePosts([]);
         return;
       }
 
@@ -293,16 +409,20 @@ export default function TradeboardTabScreen() {
       });
       setAllPosts(mappedAll);
       setMyPosts(mappedMy);
+      setResponsePosts(mappedRespPre);
 
       if (
         flicaFetchNeedsWebVerification(allR.htmlState) ||
-        flicaFetchNeedsWebVerification(myR.htmlState)
+        flicaFetchNeedsWebVerification(myR.htmlState) ||
+        flicaFetchNeedsWebVerification(respR.htmlState)
       ) {
-        setError(allR.error ?? myR.error ?? "FLICA verification still required.");
+        setError(allR.error ?? myR.error ?? respR.error ?? "FLICA verification still required.");
       } else if (!allR.ok && allR.error) {
         setError(allR.error);
       } else if (!myR.ok && myR.error) {
         setError(myR.error);
+      } else if (!respR.ok && respR.error) {
+        setError(respR.error);
       } else if (
         mappedAll.length === 0 &&
         mappedMy.length === 0 &&
@@ -318,8 +438,10 @@ export default function TradeboardTabScreen() {
       const refreshOk =
         allR.ok &&
         myR.ok &&
+        respR.ok &&
         !flicaFetchNeedsWebVerification(allR.htmlState) &&
-        !flicaFetchNeedsWebVerification(myR.htmlState);
+        !flicaFetchNeedsWebVerification(myR.htmlState) &&
+        !flicaFetchNeedsWebVerification(respR.htmlState);
 
       if (refreshOk && session?.user?.id) {
         void upsertTradeboardHubCache(session.user.id, {
@@ -336,6 +458,7 @@ export default function TradeboardTabScreen() {
       if (!msg.toLowerCase().includes("cancelled")) {
         setAllPosts([]);
         setMyPosts([]);
+        setResponsePosts([]);
       }
     } finally {
       setLoading(false);
@@ -383,7 +506,9 @@ export default function TradeboardTabScreen() {
   }, [allPosts]);
 
   const filtered = useMemo(() => {
-    let list = [...allPosts];
+    const base =
+      tradeFeedTab === "my" ? myPosts : tradeFeedTab === "responses" ? responsePosts : allPosts;
+    let list = [...base];
     if (primaryTab === "swaps") {
       list = list.filter(
         (p) => p.type === "swap" || p.type === "trade" || p.type === "trade_drop",
@@ -395,7 +520,7 @@ export default function TradeboardTabScreen() {
     const q = search.trim().toLowerCase();
     if (q) {
       list = list.filter((p) =>
-        [p.pairingId, p.routeSummary, p.posterName, p.comments]
+        [p.pairingId, p.routeSummary, p.posterName, p.comments, p.layover]
           .join(" ")
           .toLowerCase()
           .includes(q),
@@ -406,7 +531,7 @@ export default function TradeboardTabScreen() {
       const c = chip.toUpperCase();
       if (["LAX", "SFO", "FLL", "JFK"].includes(c)) {
         list = list.filter((p) =>
-          p.routeSummary.toUpperCase().includes(c),
+          `${p.routeSummary} ${p.layover}`.toUpperCase().includes(c),
         );
       } else if (chip === "3-Day") {
         list = list.filter((p) => /\b3\s*D\b/i.test(p.comments));
@@ -422,7 +547,9 @@ export default function TradeboardTabScreen() {
       }
     }
     return list;
-  }, [allPosts, primaryTab, search, chip]);
+  }, [allPosts, myPosts, responsePosts, tradeFeedTab, primaryTab, search, chip]);
+
+  const tbDateGroups = useMemo(() => groupTradeboardByDate(filtered), [filtered]);
 
   const listHeadingDate = new Date().toLocaleDateString("en-US", {
     month: "short",
@@ -509,6 +636,42 @@ export default function TradeboardTabScreen() {
               </Text>
             </Pressable>
           ))}
+        </ScrollView>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.tbFeedRailScroll}
+          contentContainerStyle={styles.tbFeedRail}
+        >
+          {(
+            [
+              ["my", "My Requests"],
+              ["all", "All Requests"],
+              ["responses", "My Responses"],
+            ] as const
+          ).map(([k, label]) => (
+            <Pressable
+              key={k}
+              onPress={() => setTradeFeedTab(k)}
+              style={[styles.tbFeedPill, tradeFeedTab === k && styles.tbFeedPillOn]}
+            >
+              <Text
+                style={[styles.tbFeedPillTxt, tradeFeedTab === k && styles.tbFeedPillTxtOn]}
+                numberOfLines={1}
+              >
+                {label}
+              </Text>
+            </Pressable>
+          ))}
+          <Pressable
+            style={[styles.tbFeedPill, styles.tbPostPill]}
+            onPress={() => pushFlicaWeb(router, FLICA_NATIVE_URLS.tradePostRequest)}
+          >
+            <Text style={styles.tbPostPillTxt} numberOfLines={1}>
+              Post a Request
+            </Text>
+          </Pressable>
         </ScrollView>
 
         {error ? (
@@ -627,106 +790,70 @@ export default function TradeboardTabScreen() {
                 </Pressable>
               </View>
               {bestMatch.posterName ? (
-                <Text style={styles.posterFoot}>Posted by {bestMatch.posterName}</Text>
+                <Text style={styles.posterFoot}>
+                  Posted by {tradeboardPosterFirstName(bestMatch.posterName)}
+                </Text>
               ) : null}
             </View>
           </View>
         ) : null}
 
         <View style={styles.listHead}>
-          <Text style={styles.listHeadTitle}>All Posts · {listHeadingDate}</Text>
+          <Text style={styles.listHeadTitle}>Tradeboard · {listHeadingDate}</Text>
           <Text style={styles.listHeadCount}>{filtered.length} total</Text>
-        </View>
-        <View style={styles.tableHead}>
-          <Text style={[styles.th, { flex: 1.1 }]}>POSTER</Text>
-          <Text style={[styles.th, { flex: 1.3 }]}>TRIP / ROUTE</Text>
-          <Text style={[styles.th, { flex: 0.7 }]}>DATE</Text>
-          <Text style={[styles.th, { flex: 0.7 }]}>CR / $</Text>
         </View>
 
         {loading && filtered.length === 0 ? (
           <ActivityIndicator style={{ marginTop: 24 }} color={SCHEDULE_MOCK_HEADER_RED} />
         ) : null}
 
-        {filtered.map((p) => (
-          <Pressable key={p.id} style={styles.rowCard} onPress={() => setDetailPost(p)}>
-            <View
-              style={[
-                styles.typeBadge,
-                { backgroundColor: tradeboardTypeBadgeColor(p.type) },
-              ]}
-            >
-              <Text style={styles.typeBadgeText}>{tradeboardTypeLabel(p.type)}</Text>
+        {tbDateGroups.map((grp) =>
+          grp.items.length === 0 ? null : (
+            <View key={grp.key} style={styles.tbDateSection}>
+              <View style={styles.tbDateHeadRow}>
+                <View style={styles.tbDatePill}>
+                  <Text style={styles.tbDatePillIcon}>📅</Text>
+                  <Text style={styles.tbDatePillText} numberOfLines={1}>
+                    {grp.key}
+                  </Text>
+                  <View style={styles.tbDateBadge}>
+                    <Text style={styles.tbDateBadgeTxt}>{grp.items.length}</Text>
+                  </View>
+                </View>
+                <View style={styles.tbDateRule} />
+              </View>
+              <View style={styles.tbCardShell}>
+                <View style={styles.tbColHead}>
+                  <Text style={[styles.tbColH, { width: 56 }]}>TYPE</Text>
+                  <Text style={[styles.tbColH, { flex: 1 }]}>POSTER / LAYOVER</Text>
+                  <Text style={[styles.tbColH, { width: 88 }]}>RPT · DEP · ARR</Text>
+                  <Text style={[styles.tbColH, { width: 52, textAlign: "right" }]}>CR / $</Text>
+                </View>
+                {grp.items.map((p) => (
+                  <TradeboardFeedRow
+                    key={p.id}
+                    p={p}
+                    router={router}
+                    onPress={() => setDetailPost(p)}
+                  />
+                ))}
+              </View>
             </View>
-            <View style={{ flex: 1.1, minWidth: 0 }}>
-              <Text style={styles.posterName} numberOfLines={1}>
-                {p.posterName || "—"}
-              </Text>
-              {p.matchScore != null ? (
-                <Text style={styles.matchPill}>{p.matchScore}% match</Text>
-              ) : null}
-            </View>
-            <View style={{ flex: 1.3, minWidth: 0 }}>
-              <Text style={styles.pairingLine} numberOfLines={1}>
-                {p.pairingId} · {p.routeSummary.slice(0, 18)}
-              </Text>
-              <Text style={styles.routeSmall} numberOfLines={2}>
-                {p.routeSummary}
-              </Text>
-            </View>
-            <View style={{ flex: 0.7, minWidth: 0 }}>
-              <Text style={styles.cellMuted} numberOfLines={2}>
-                {p.date || "—"}
-              </Text>
-            </View>
-            <View style={{ flex: 0.7, minWidth: 0 }}>
-              <Text style={styles.money} numberOfLines={1}>
-                {p.credit || "—"}
-              </Text>
-              <Text style={styles.money} numberOfLines={1}>
-                {p.worth ?? "—"}
-              </Text>
-            </View>
-          </Pressable>
-        ))}
+          ),
+        )}
         <View style={{ height: 24 }} />
       </ScrollView>
 
-      <Modal visible={detailPost != null} transparent animationType="fade">
-        <Pressable style={styles.modalBackdrop} onPress={() => setDetailPost(null)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Trip detail</Text>
-            {detailPost ? (
-              <ScrollView style={{ maxHeight: 360 }}>
-                <Text style={styles.modalKv}>
-                  {detailPost.typeLabel} · {detailPost.pairingId}:{detailPost.pairingDateLabel}
-                </Text>
-                <Text style={styles.modalKv}>Base {detailPost.base || "—"} · Pos {detailPost.position || "—"}</Text>
-                <Text style={styles.modalKv}>
-                  Rpt {detailPost.reportTime || "—"} · Dep {detailPost.departTime || "—"} · Arr{" "}
-                  {detailPost.arriveTime || "—"}
-                </Text>
-                <Text style={styles.modalKv}>
-                  Block {detailPost.block || "—"} · Credit {detailPost.credit || "—"} · Worth{" "}
-                  {detailPost.worth ?? "—"}
-                </Text>
-                <Text style={styles.modalKv}>Layover {detailPost.layover || "—"}</Text>
-                <Text style={styles.modalKv}>Posted {detailPost.postedAtLabel || detailPost.postedAt || "—"}</Text>
-                <Text style={styles.modalKv}>By {detailPost.posterName || "—"}</Text>
-                {detailPost.responseMethodLabel ? (
-                  <Text style={styles.modalKv}>Responses: {detailPost.responseMethodLabel}</Text>
-                ) : null}
-                {detailPost.comments ? (
-                  <Text style={[styles.modalBody, { marginTop: 8 }]}>{detailPost.comments}</Text>
-                ) : null}
-              </ScrollView>
-            ) : null}
-            <Pressable style={styles.modalClose} onPress={() => setDetailPost(null)}>
-              <Text style={styles.modalCloseText}>Close</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <CrewHubTradeboardPairingSheet
+        visible={detailPost != null}
+        post={detailPost}
+        posterFirstName={tradeboardPosterFirstName(detailPost?.posterName)}
+        onClose={() => setDetailPost(null)}
+        onOpenFlica={(uri) => {
+          setDetailPost(null);
+          pushFlicaWeb(router, uri);
+        }}
+      />
     </View>
   );
 }
@@ -800,6 +927,114 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 10, fontWeight: "600", color: "#4b5563" },
   chipTextOn: { color: "#fff" },
+  tbFeedRailScroll: { marginTop: 8, paddingLeft: 10, maxHeight: 38 },
+  tbFeedRail: { flexDirection: "row", alignItems: "center", gap: 6, paddingRight: 10 },
+  tbFeedPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#d1d5db",
+  },
+  tbFeedPillOn: { backgroundColor: SCHEDULE_MOCK_HEADER_RED, borderColor: SCHEDULE_MOCK_HEADER_RED },
+  tbFeedPillTxt: { fontSize: 9, fontWeight: "700", color: "#4b5563" },
+  tbFeedPillTxtOn: { color: "#fff" },
+  tbPostPill: { backgroundColor: "#f1f5f9", borderColor: "#94a3b8" },
+  tbPostPillTxt: { fontSize: 9, fontWeight: "800", color: "#334155" },
+  tbDateSection: { marginTop: 12, paddingHorizontal: 10 },
+  tbDateHeadRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  tbDatePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#27272a",
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    maxWidth: "78%",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+      },
+      android: { elevation: 3 },
+      default: {},
+    }),
+  },
+  tbDatePillIcon: { fontSize: 12 },
+  tbDatePillText: { fontSize: 11, fontWeight: "800", color: "#fafafa", flexShrink: 1 },
+  tbDateBadge: {
+    marginLeft: 4,
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: SCHEDULE_MOCK_HEADER_RED,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 5,
+  },
+  tbDateBadgeTxt: { color: "#fff", fontSize: 10, fontWeight: "900" },
+  tbDateRule: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(15,23,42,0.12)",
+    marginLeft: 8,
+  },
+  tbCardShell: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(15,23,42,0.08)",
+    overflow: "hidden",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#0f172a",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 6,
+      },
+      android: { elevation: 2 },
+      default: {},
+    }),
+  },
+  tbColHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+    backgroundColor: "#eef0f3",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(15,23,42,0.1)",
+  },
+  tbColH: { fontSize: 6, fontWeight: "800", color: "#94a3b8", letterSpacing: 0.2 },
+  tbRowCard: {
+    backgroundColor: "#fff",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(15,23,42,0.06)",
+  },
+  tbRowInner: { flexDirection: "row", alignItems: "stretch", paddingVertical: 7, paddingHorizontal: 6 },
+  tbTypeAnchor: { width: 56, alignItems: "center", justifyContent: "flex-start", paddingTop: 2 },
+  tbTypePill: { paddingHorizontal: 6, paddingVertical: 4, borderRadius: 8, minWidth: 48, alignItems: "center" },
+  tbTypePillTxt: { color: "#fff", fontSize: 8, fontWeight: "900" },
+  tbMid: { flex: 1, minWidth: 0, paddingRight: 6 },
+  tbPoster: { fontSize: 11, fontWeight: "800", color: "#1e293b" },
+  tbPairMeta: { marginTop: 2, fontSize: 8, fontWeight: "600", color: "#64748b" },
+  tbLay: { marginTop: 3, fontSize: 10, fontWeight: "700", color: "#0f172a", lineHeight: 13 },
+  tbTimes: { width: 88, alignItems: "flex-start" },
+  tbTlab: { fontSize: 5, fontWeight: "800", color: "#94a3b8" },
+  tbTval: { fontSize: 9, fontWeight: "600", color: "#0f172a", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  tbRight: { width: 52, alignItems: "flex-end", justifyContent: "center" },
+  tbCr: { fontSize: 10, fontWeight: "800", color: "#15803d" },
+  tbWorth: { fontSize: 9, fontWeight: "700", color: "#0f172a", marginTop: 2 },
+  tbChev: { marginTop: 4, fontSize: 12, color: "#cbd5e1" },
+  tbSwipeRow: { flexDirection: "row", minHeight: 56 },
+  tbSwipeBtn: { justifyContent: "center", alignItems: "center", width: 88, paddingVertical: 8 },
+  tbSwipePrimary: { backgroundColor: SCHEDULE_MOCK_HEADER_RED },
+  tbSwipeAlt: { backgroundColor: "#334155" },
+  tbSwipeTxt: { color: "#fff", fontSize: 11, fontWeight: "800" },
   errorText: { color: "#b91c1c", fontSize: 11, marginHorizontal: 12, marginTop: 8 },
   activeCard: {
     marginHorizontal: 10,
