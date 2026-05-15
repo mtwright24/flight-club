@@ -26,6 +26,7 @@ import {
   nativeFetchOpenTimePot,
 } from "../../flica-actions/flicaActionsNativeService";
 import CrewHubOpenTimePairingSheet from "../components/CrewHubOpenTimePairingSheet";
+import { CrewHubSwipeActionRail, type CrewHubSwipeRailAction } from "../components/CrewHubSwipeActionRail";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
 import { FlicaCrewHubScheduleSessionRunner } from "../components/FlicaCrewHubScheduleSessionRunner";
 import { hubLayoverDisplayWithDots } from "../crewHubLayoverDisplay";
@@ -426,22 +427,28 @@ function OpenTimeHubRow({
   const daysVal =
     t.days != null && Number.isFinite(t.days) && t.days > 0 ? String(t.days) : "—";
 
-  const right = (
-    <View style={styles.swipeRow}>
-      <Pressable style={[styles.swipeAct, styles.swipeAdd]} onPress={() => onAdd(t)}>
-        <Text style={styles.swipeActTxt}>Add</Text>
-      </Pressable>
-      <Pressable
-        style={[styles.swipeAct, styles.swipeSwap]}
-        onPress={() => pushFlicaWeb(router, FLICA_NATIVE_URLS.otSwapPreview)}
-      >
-        <Text style={styles.swipeActTxt}>Swap</Text>
-      </Pressable>
-    </View>
-  );
+  const swipeActions: CrewHubSwipeRailAction[] = [
+    {
+      key: "add",
+      label: "Add",
+      onPress: () => onAdd(t),
+      variant: "primary",
+    },
+    {
+      key: "swap",
+      label: "Swap",
+      onPress: () => pushFlicaWeb(router, FLICA_NATIVE_URLS.otSwapPreview),
+      variant: "secondary",
+    },
+  ];
 
   return (
-    <Swipeable friction={2} overshootRight={false} renderRightActions={() => right}>
+    <Swipeable
+      friction={1}
+      overshootRight={false}
+      rightThreshold={48}
+      renderRightActions={(progress) => <CrewHubSwipeActionRail progress={progress} actions={swipeActions} />}
+    >
       <Pressable
         onPress={() => onOpenDetail(t)}
         style={[styles.hubRowCard, isLast && styles.hubRowLast]}
@@ -1131,11 +1138,6 @@ const styles = StyleSheet.create({
   hubWorthVal: { fontSize: 8, fontWeight: "700", color: "#15803d" },
   hubWorthPer: { fontSize: 6, fontWeight: "500", color: "#78716c", marginTop: 1 },
   hubChev: { alignSelf: "center", fontSize: 12, color: "#d6d3d1", paddingLeft: 1, fontWeight: "300" },
-  swipeRow: { flexDirection: "row", minHeight: 56 },
-  swipeAct: { justifyContent: "center", alignItems: "center", width: 72, paddingVertical: 8 },
-  swipeAdd: { backgroundColor: SCHEDULE_MOCK_HEADER_RED },
-  swipeSwap: { backgroundColor: "#334155" },
-  swipeActTxt: { color: "#fff", fontSize: 11, fontWeight: "800" },
   bestTag: {
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     paddingHorizontal: 4,

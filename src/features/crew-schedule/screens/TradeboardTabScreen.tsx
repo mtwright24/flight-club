@@ -1,6 +1,6 @@
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter, type Href } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import {
   ActivityIndicator,
@@ -29,6 +29,7 @@ import {
   nativeFetchTradeBoardMyResponses,
 } from "../../flica-actions/flicaActionsNativeService";
 import CrewHubTradeboardPairingSheet from "../components/CrewHubTradeboardPairingSheet";
+import { CrewHubSwipeActionRail, type CrewHubSwipeRailAction } from "../components/CrewHubSwipeActionRail";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
 import { hubLayoverDisplayWithDots } from "../crewHubLayoverDisplay";
 import { FlicaCrewHubScheduleSessionRunner } from "../components/FlicaCrewHubScheduleSessionRunner";
@@ -39,7 +40,7 @@ import {
 } from "../crewHubFlicaCache";
 import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
 import { mapTradeboardPostsWithHtmlFallback } from "../flicaCrewHubHtmlFallbackParse";
-import { tradeboardTypeLabel } from "../flicaCrewHubMappers";
+import { tradeboardDisplayScheduleFields, tradeboardTypeLabel } from "../flicaCrewHubMappers";
 import {
   buildCrewHubParseDebugFetchEntry,
   commitTradeboardParseDebugSnapshot,
@@ -250,79 +251,147 @@ function tradeboardParsePostedAtLabelToMs(s: string): number | null {
   return Number.isFinite(ts) ? ts : null;
 }
 
-function compareTradeboardPostsChronological(a: TradeboardPost, b: TradeboardPost, now: Date): number {
-  const da = tradeboardReportDateMsFromLabel(
-    a.pairingDateLabel?.trim() || a.date?.trim() || "",
-    now,
-  );
-  const db = tradeboardReportDateMsFromLabel(
-    b.pairingDateLabel?.trim() || b.date?.trim() || "",
-    now,
-  );
-  if (da !== db) return da < db ? -1 : 1;
-
-  const ra = tradeboardFlicaTypeSortRank(a.type);
-  const rb = tradeboardFlicaTypeSortRank(b.type);
-  if (ra !== rb) return ra - rb;
-
-  const pa = tradeboardPostedAtMsFromPost(a);
-  const pb = tradeboardPostedAtMsFromPost(b);
-  if (pa !== pb) return pa < pb ? -1 : 1;
-
-  return a.pairingId.localeCompare(b.pairingId);
-}
-
 function groupTradeboardByDate(
   posts: TradeboardPost[],
   now: Date,
 ): { key: string; items: TradeboardPost[] }[] {
-  const m = new Map<string, TradeboardPost[]>();
+  const labelMsCache = new Map<string, number>();
+  const labelMs = (label: string) => {
+    const hit = labelMsCache.get(label);
+    if (hit !== undefined) return hit;
+    const v = tradeboardReportDateMsFromLabel(label, now);
+    labelMsCache.set(label, v);
+    return v;
+  };
+
+  type Row = {
+    post: TradeboardPost;
+    dateMs: number;
+    tr: number;
+    posted: number;
+    id: string;
+  };
+
+  const m = new Map<string, Row[]>();
   for (const p of posts) {
     const k = tradeboardDateGroupKey(p);
+    const dateLabel = p.pairingDateLabel?.trim() || p.date?.trim() || "";
+    const row: Row = {
+      post: p,
+      dateMs: labelMs(dateLabel),
+      tr: tradeboardFlicaTypeSortRank(p.type),
+      posted: tradeboardPostedAtMsFromPost(p),
+      id: p.pairingId,
+    };
     const arr = m.get(k) ?? [];
-    arr.push(p);
+    arr.push(row);
     m.set(k, arr);
   }
-  return [...m.entries()]
-    .map(([key, items]) => ({
-      key,
-      items: [...items].sort((a, b) => compareTradeboardPostsChronological(a, b, now)),
-    }))
-    .sort((ga, gb) => {
-      const a = tradeboardReportDateMsFromLabel(ga.key, now);
-      const b = tradeboardReportDateMsFromLabel(gb.key, now);
-      if (a !== b) return a < b ? -1 : 1;
-      return ga.key.localeCompare(gb.key);
+
+  const groups = [...m.entries()].map(([key, rows]) => {
+    rows.sort((a, b) => {
+      if (a.dateMs !== b.dateMs) return a.dateMs < b.dateMs ? -1 : 1;
+      if (a.tr !== b.tr) return a.tr - b.tr;
+      if (a.posted !== b.posted) return a.posted < b.posted ? -1 : 1;
+      return a.id.localeCompare(b.id);
     });
+    return { key, items: rows.map((r) => r.post) };
+  });
+
+  groups.sort((ga, gb) => {
+    const a = labelMs(ga.key);
+    const b = labelMs(gb.key);
+    if (a !== b) return a < b ? -1 : 1;
+    return ga.key.localeCompare(gb.key);
+  });
+
+  return groups;
 }
 
 type PrimaryTab = "all" | "trade" | "trade_drop" | "drops" | "pickups" | "post_trade";
 
+type TradeFeedTab = "all" | "my" | "responses";
+
+function buildTradeboardFilteredList(
+  allPosts: TradeboardPost[],
+  myPosts: TradeboardPost[],
+  responsePosts: TradeboardPost[],
+  tradeFeedTab: TradeFeedTab,
+  primaryTab: PrimaryTab,
+  search: string,
+  chip: string,
+): TradeboardPost[] {
+  const base =
+    tradeFeedTab === "my" ? myPosts : tradeFeedTab === "responses" ? responsePosts : allPosts;
+  let list = [...base];
+  if (primaryTab === "trade") {
+    list = list.filter((p) => p.type === "swap" || p.type === "trade");
+  }
+  if (primaryTab === "trade_drop") {
+    list = list.filter((p) => p.type === "trade_drop");
+  }
+  if (primaryTab === "drops") list = list.filter((p) => p.type === "drop");
+  if (primaryTab === "pickups") list = list.filter((p) => p.type === "pickup");
+
+  const q = search.trim().toLowerCase();
+  if (q) {
+    list = list.filter((p) =>
+      [p.pairingId, p.routeSummary, p.posterName, p.comments, p.layover]
+        .join(" ")
+        .toLowerCase()
+        .includes(q),
+    );
+  }
+
+  if (chip !== "All") {
+    const anchor = new Date();
+    if (chip === "Today") {
+      const mon = anchor.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+      const day = String(anchor.getDate());
+      list = list.filter((p) => {
+        const blob = `${p.pairingDateLabel} ${p.date}`.toUpperCase();
+        return blob.includes(mon) && blob.includes(day);
+      });
+    } else if (chip === "This Week") {
+      const start = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate()).getTime();
+      const end = start + 7 * 24 * 60 * 60 * 1000;
+      const tripMsCache = new Map<string, number>();
+      const tripMs = (p: TradeboardPost) => {
+        const label = p.pairingDateLabel?.trim() || p.date?.trim() || "";
+        let v = tripMsCache.get(label);
+        if (v === undefined) {
+          v = tradeboardReportDateMsFromLabel(label, anchor);
+          tripMsCache.set(label, v);
+        }
+        return v;
+      };
+      list = list.filter((p) => {
+        const ms = tripMs(p);
+        return ms >= start && ms <= end;
+      });
+    } else if (chip === "This Month") {
+      const monShort = anchor.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+      list = list.filter((p) => `${p.pairingDateLabel} ${p.date}`.toUpperCase().includes(monShort));
+    }
+  }
+  return list;
+}
+
 const TB_DIGITAL = Platform.OS === "ios" ? "Menlo" : "monospace";
 
 /**
- * TYPE / $ / › fixed (narrow $). LAY + POSTER + RPT + ARR use weighted flex so
- * layover gets more room and the row uses the full width with even gaps.
+ * TYPE / $ fixed. LAY + POSTER + RPT + ARR flex; no trailing chevron column.
  */
 const TB_COL = {
   type: 52,
   worth: 19,
-  chev: 10,
 } as const;
 
-/** Weighted flex shares (sum drives relative column width). Layover slightly wider than RPT/ARR. */
-const TB_FLEX_LAY = { flexGrow: 16, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
-const TB_FLEX_POSTER = { flexGrow: 14, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
-const TB_FLEX_RPT = { flexGrow: 11, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
-const TB_FLEX_ARR = { flexGrow: 11, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
+/** Weighted flex shares — merged schedule column (R·C | D·A stacks). */
+const TB_FLEX_LAY = { flexGrow: 15, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
+const TB_FLEX_POSTER = { flexGrow: 13, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
+const TB_FLEX_SCHED = { flexGrow: 22, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
 
-/** One airport / em dash only — center in column; multi-segment "A · B" stays left-aligned. */
-function tradeboardLayoverIsSingleSegment(layover: string | null | undefined): boolean {
-  const s = hubLayoverDisplayWithDots(layover);
-  return !s.includes(" · ");
-}
-
-/** Same wording as the post-type filter row (Pickup, Trade, T/Drop, Drop). */
 function tradeboardTypePillLabel(t: TradeboardPost["type"]): string {
   switch (t) {
     case "pickup":
@@ -411,126 +480,296 @@ function tradeboardSwipePrimaryLabel(type: TradeboardPost["type"]): string {
   return "Open";
 }
 
-function TradeboardFeedRow({
+function TradeboardFeedRowInner({
   p,
   router,
-  onPress,
+  onOpen,
 }: {
   p: TradeboardPost;
   router: ReturnType<typeof useRouter>;
-  onPress: () => void;
+  onOpen: (post: TradeboardPost) => void;
 }) {
+  const handlePress = useCallback(() => {
+    onOpen(p);
+  }, [onOpen, p]);
   const primaryUri = tradeboardFlicaUriForSwipe(p.type);
   const rowPal = tradeboardFilterPillPalette(tradeboardTypeToPrimaryTab(p.type), false);
-  const laySingleSeg = tradeboardLayoverIsSingleSegment(p.layover);
   const pairingIdDisp = p.pairingId?.trim() || "—";
   const daysRaw = String(p.days ?? "").trim();
   const daysLine =
-    daysRaw && /\d/.test(daysRaw)
-      ? `${daysRaw} ${Number(daysRaw) === 1 ? "Day" : "Days"}`
-      : daysRaw || "—";
+    daysRaw && /\d/.test(daysRaw) ? `${daysRaw} Day` : daysRaw || "—";
+  const { reportTime: rpt, departTime: dep, arriveTime: arr, credit: cr } = tradeboardDisplayScheduleFields(p);
 
-  const right = (
-    <View style={styles.tbSwipeRow}>
-      <Pressable
-        style={[styles.tbSwipeBtn, styles.tbSwipePrimary]}
-        onPress={() => pushFlicaWeb(router, primaryUri)}
-      >
-        <Text style={styles.tbSwipeTxt}>{tradeboardSwipePrimaryLabel(p.type)}</Text>
-      </Pressable>
-      {p.type === "trade_drop" ? (
-        <Pressable
-          style={[styles.tbSwipeBtn, styles.tbSwipeAlt]}
-          onPress={() => pushFlicaWeb(router, FLICA_NATIVE_URLS.tradeFrame)}
-        >
-          <Text style={styles.tbSwipeTxt}>Pickup</Text>
-        </Pressable>
-      ) : null}
-    </View>
-  );
+  const swipeActions: CrewHubSwipeRailAction[] = [
+    {
+      key: "primary",
+      label: tradeboardSwipePrimaryLabel(p.type),
+      onPress: () => pushFlicaWeb(router, primaryUri),
+      variant: "primary",
+    },
+    ...(p.type === "trade_drop"
+      ? [
+          {
+            key: "pickup",
+            label: "Pickup",
+            onPress: () => pushFlicaWeb(router, FLICA_NATIVE_URLS.tradeFrame),
+            variant: "secondary",
+          } satisfies CrewHubSwipeRailAction,
+        ]
+      : []),
+  ];
 
   return (
-    <Swipeable friction={2} overshootRight={false} renderRightActions={() => right}>
-      <Pressable onPress={onPress} style={styles.tbRowCard}>
+    <Swipeable
+      friction={1}
+      overshootRight={false}
+      rightThreshold={48}
+      renderRightActions={(progress) => <CrewHubSwipeActionRail progress={progress} actions={swipeActions} />}
+    >
+      <Pressable onPress={handlePress} style={styles.tbRowCard}>
         <View style={styles.tbRowInner}>
-          <View style={[styles.tbTypeCol, { width: TB_COL.type }]}>
-            <View
-              style={[
-                styles.tbTypePillRow,
-                {
-                  backgroundColor: rowPal.bg,
-                  borderColor: rowPal.border,
-                  borderWidth: StyleSheet.hairlineWidth,
-                },
-              ]}
-              accessibilityLabel={tradeboardTypeLabel(p.type)}
-            >
-              <Text
-                style={[styles.tbTypePillRowTxt, { color: rowPal.text }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.55}
+          <View style={[styles.tbRowCell, { width: TB_COL.type }]}>
+            <View style={styles.tbTypeCol}>
+              <View
+                style={[
+                  styles.tbTypePillRow,
+                  {
+                    backgroundColor: rowPal.bg,
+                    borderColor: rowPal.border,
+                    borderWidth: StyleSheet.hairlineWidth,
+                  },
+                ]}
+                accessibilityLabel={tradeboardTypeLabel(p.type)}
               >
-                {tradeboardTypePillLabel(p.type)}
+                <Text
+                  style={[styles.tbTypePillRowTxt, { color: rowPal.text }]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.55}
+                >
+                  {tradeboardTypePillLabel(p.type)}
+                </Text>
+              </View>
+            </View>
+          </View>
+          <View style={[styles.tbRowCell, TB_FLEX_LAY]}>
+            <View style={styles.tbLayCol}>
+              <Text
+                style={styles.tbLay}
+                numberOfLines={3}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+              >
+                {hubLayoverDisplayWithDots(p.layover)}
               </Text>
             </View>
           </View>
-          <View style={[styles.tbLayCol, TB_FLEX_LAY, laySingleSeg && styles.tbLayColSingle]}>
-            <Text
-              style={[styles.tbLay, laySingleSeg ? styles.tbLaySingle : styles.tbLayMulti]}
-              numberOfLines={3}
-              adjustsFontSizeToFit
-              minimumFontScale={0.72}
-            >
-              {hubLayoverDisplayWithDots(p.layover)}
-            </Text>
-          </View>
-          <View style={[styles.tbPosterPairCol, TB_FLEX_POSTER]}>
-            <Text style={styles.tbPosterName} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.68}>
-              {tradeboardPosterFirstName(p.posterName)}
-            </Text>
-            <Text style={styles.tbPairingMeta} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.65}>
-              <Text style={styles.tbPairingId}>{pairingIdDisp} · </Text>
-              <Text style={styles.tbPairingDays}>{daysLine}</Text>
-            </Text>
-          </View>
-          <View style={[styles.tbRptCreditCol, TB_FLEX_RPT]}>
-            <View style={styles.tbStackPairBox}>
-              <Text style={styles.tbStackLine}>
-                <Text style={styles.tbStackLbl}>Rpt </Text>
-                <Text style={styles.tbStackNum}>{p.reportTime?.trim() || "—"}</Text>
+          <View style={[styles.tbRowCell, TB_FLEX_POSTER]}>
+            <View style={styles.tbPosterPairCol}>
+              <Text style={styles.tbPairingDaysTop} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.65}>
+                {daysLine}
               </Text>
-              <View style={styles.tbStackPairRule} />
-              <Text style={styles.tbStackLine}>
-                <Text style={styles.tbStackLblCredit}>Credit </Text>
-                <Text style={styles.tbStackNumCredit}>{p.credit?.trim() || "—"}</Text>
+              <Text style={styles.tbPairingIdOnly} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                {pairingIdDisp}
+              </Text>
+              <Text style={styles.tbPosterName} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.68}>
+                {tradeboardPosterFirstName(p.posterName)}
               </Text>
             </View>
           </View>
-          <View style={[styles.tbArrDepCol, TB_FLEX_ARR]}>
-            <View style={styles.tbStackPairBox}>
-              <Text style={styles.tbStackLine}>
-                <Text style={styles.tbStackLbl}>Arr </Text>
-                <Text style={styles.tbStackNum}>{p.arriveTime?.trim() || "—"}</Text>
-              </Text>
-              <View style={styles.tbStackPairRule} />
-              <Text style={styles.tbStackLine}>
-                <Text style={styles.tbStackLbl}>Dep </Text>
-                <Text style={styles.tbStackNum}>{p.departTime?.trim() || "—"}</Text>
+          <View style={[styles.tbRowCell, TB_FLEX_SCHED]}>
+            <View style={styles.tbSchedCol}>
+              <View style={styles.tbStackPairBox}>
+                <View style={styles.tbSchedRow}>
+                  <View style={styles.tbPairTim} accessibilityLabel={`Report ${rpt} credit ${cr}`}>
+                    <View style={styles.tbTimPairLine}>
+                      <Text style={styles.tbTimIni}>R</Text>
+                      <Text style={styles.tbTimVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                        {rpt}
+                      </Text>
+                    </View>
+                    <View style={styles.tbHeadStackDividerH} />
+                    <View style={styles.tbTimPairLine}>
+                      <Text style={styles.tbTimIni}>C</Text>
+                      <Text style={styles.tbTimVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                        {cr}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.tbSchedStackDivider} />
+                  <View style={styles.tbPairTim} accessibilityLabel={`Depart ${dep} arrive ${arr}`}>
+                    <View style={styles.tbTimPairLine}>
+                      <Text style={styles.tbTimIni}>D</Text>
+                      <Text style={styles.tbTimVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                        {dep}
+                      </Text>
+                    </View>
+                    <View style={styles.tbHeadStackDividerH} />
+                    <View style={styles.tbTimPairLine}>
+                      <Text style={styles.tbTimIni}>A</Text>
+                      <Text style={styles.tbTimVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                        {arr}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            </View>
+          </View>
+          <View style={[styles.tbRowCell, styles.tbRowCellLast, { width: TB_COL.worth }]}>
+            <View style={styles.tbWorthCol}>
+              <Text style={styles.tbWorth} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.55}>
+                {p.worth?.trim() ? p.worth : "—"}
               </Text>
             </View>
           </View>
-          <View style={[styles.tbWorthCol, { width: TB_COL.worth }]}>
-            <Text style={styles.tbWorth} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.55}>
-              {p.worth?.trim() ? p.worth : "—"}
-            </Text>
-          </View>
-          <Text style={[styles.tbChev, { width: TB_COL.chev }]}>›</Text>
         </View>
       </Pressable>
     </Swipeable>
   );
 }
+
+const TradeboardFeedRow = React.memo(TradeboardFeedRowInner);
+
+type TradeboardDeferredGroupedListProps = {
+  allPosts: TradeboardPost[];
+  myPosts: TradeboardPost[];
+  responsePosts: TradeboardPost[];
+  tradeFeedTab: TradeFeedTab;
+  primaryTab: PrimaryTab;
+  chip: string;
+  search: string;
+  loading: boolean;
+  listHeadingDate: string;
+  openTradeboardDetail: (p: TradeboardPost) => void;
+};
+
+/**
+ * Filter + group work runs off deferred copies of tab/chip/search so type and
+ * time pills can paint before reconciling every Swipeable row.
+ */
+const TradeboardDeferredGroupedList = React.memo(function TradeboardDeferredGroupedList({
+  allPosts,
+  myPosts,
+  responsePosts,
+  tradeFeedTab,
+  primaryTab,
+  chip,
+  search,
+  loading,
+  listHeadingDate,
+  openTradeboardDetail,
+}: TradeboardDeferredGroupedListProps) {
+  const router = useRouter();
+
+  const deferredPrimaryTab = useDeferredValue(primaryTab);
+  const deferredChip = useDeferredValue(chip);
+
+  const filtered = useMemo(
+    () =>
+      buildTradeboardFilteredList(
+        allPosts,
+        myPosts,
+        responsePosts,
+        tradeFeedTab,
+        deferredPrimaryTab,
+        search,
+        deferredChip,
+      ),
+    [allPosts, myPosts, responsePosts, tradeFeedTab, deferredPrimaryTab, search, deferredChip],
+  );
+
+  const tbDateGroups = useMemo(() => groupTradeboardByDate(filtered, new Date()), [filtered]);
+
+  return (
+    <>
+      <View style={styles.listHead}>
+        <Text style={styles.listHeadTitle}>Tradeboard · {listHeadingDate}</Text>
+        <Text style={styles.listHeadCount}>{filtered.length} total</Text>
+      </View>
+
+      {loading && filtered.length === 0 ? (
+        <ActivityIndicator style={{ marginTop: 24 }} color={SCHEDULE_MOCK_HEADER_RED} />
+      ) : null}
+
+      {tbDateGroups.map((grp) =>
+        grp.items.length === 0 ? null : (
+          <View key={grp.key} style={styles.tbDateSection}>
+            <View style={styles.tbDateHeadRow}>
+              <View style={styles.tbDatePill}>
+                <Ionicons name="calendar-outline" size={11} color="#FFFFFF" style={styles.tbDatePillIon} />
+                <Text style={styles.tbDatePillText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+                  {formatTradeboardDatePillHeading(grp.key, new Date())}
+                </Text>
+                <View style={styles.tbDateBadge}>
+                  <Text style={styles.tbDateBadgeTxt}>{grp.items.length}</Text>
+                </View>
+              </View>
+              <View style={styles.tbDateRule} />
+            </View>
+            <View style={styles.tbCardShell}>
+              <View style={styles.tbColHead}>
+                <View style={[styles.tbColHeadCell, { width: TB_COL.type }]}>
+                  <Text style={styles.tbBarColTitle} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.78}>
+                    TYPE
+                  </Text>
+                </View>
+                <View style={[styles.tbColHeadCell, TB_FLEX_LAY]}>
+                  <Text style={styles.tbBarColTitle} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.78}>
+                    LAYOVER
+                  </Text>
+                </View>
+                <View style={[styles.tbColHeadCell, styles.tbColHeadPoster, TB_FLEX_POSTER]}>
+                  <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                    PAIRING
+                  </Text>
+                  <View style={styles.tbHeadStackDividerH} />
+                  <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                    POSTER
+                  </Text>
+                </View>
+                <View style={[styles.tbColHeadCell, TB_FLEX_SCHED]}>
+                  <View style={styles.tbSchedHeadInset}>
+                    <View style={styles.tbSchedHeadRow}>
+                      <View style={styles.tbSchedHeadCell}>
+                        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                          Report
+                        </Text>
+                        <View style={styles.tbHeadStackDividerH} />
+                        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                          Credit
+                        </Text>
+                      </View>
+                      <View style={styles.tbSchedHeadColDivider} />
+                      <View style={styles.tbSchedHeadCell}>
+                        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                          Depart
+                        </Text>
+                        <View style={styles.tbHeadStackDividerH} />
+                        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                          Arrival
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+                <View style={[styles.tbColHeadCell, styles.tbColHeadCellLast, styles.tbColHeadWorth, { width: TB_COL.worth }]}>
+                  <Text style={styles.tbBarColTitle} numberOfLines={1}>
+                    $
+                  </Text>
+                </View>
+              </View>
+              {grp.items.map((p) => (
+                <TradeboardFeedRow key={p.id} p={p} router={router} onOpen={openTradeboardDetail} />
+              ))}
+            </View>
+          </View>
+        ),
+      )}
+      <View style={{ height: 24 }} />
+    </>
+  );
+});
 
 export default function TradeboardTabScreen() {
   const router = useRouter();
@@ -549,8 +788,11 @@ export default function TradeboardTabScreen() {
   const [allPosts, setAllPosts] = useState<TradeboardPost[]>([]);
   const [myPosts, setMyPosts] = useState<TradeboardPost[]>([]);
   const [responsePosts, setResponsePosts] = useState<TradeboardPost[]>([]);
-  const [tradeFeedTab, setTradeFeedTab] = useState<"all" | "my" | "responses">("all");
+  const [tradeFeedTab, setTradeFeedTab] = useState<TradeFeedTab>("all");
   const [detailPost, setDetailPost] = useState<TradeboardPost | null>(null);
+  const openTradeboardDetail = useCallback((p: TradeboardPost) => {
+    setDetailPost(p);
+  }, []);
   const [toast, setToast] = useState<string | null>(null);
   const [pullSessionRunnerActive, setPullSessionRunnerActive] = useState(false);
   const pullSessionWaitersRef = useRef<{
@@ -840,60 +1082,6 @@ export default function TradeboardTabScreen() {
     return candidates[0] ?? null;
   }, [allPosts]);
 
-  const filtered = useMemo(() => {
-    const base =
-      tradeFeedTab === "my" ? myPosts : tradeFeedTab === "responses" ? responsePosts : allPosts;
-    let list = [...base];
-    if (primaryTab === "trade") {
-      list = list.filter((p) => p.type === "swap" || p.type === "trade");
-    }
-    if (primaryTab === "trade_drop") {
-      list = list.filter((p) => p.type === "trade_drop");
-    }
-    if (primaryTab === "drops") list = list.filter((p) => p.type === "drop");
-    if (primaryTab === "pickups") list = list.filter((p) => p.type === "pickup");
-
-    const q = search.trim().toLowerCase();
-    if (q) {
-      list = list.filter((p) =>
-        [p.pairingId, p.routeSummary, p.posterName, p.comments, p.layover]
-          .join(" ")
-          .toLowerCase()
-          .includes(q),
-      );
-    }
-
-    if (chip !== "All") {
-      const anchor = new Date();
-      if (chip === "Today") {
-        const mon = anchor.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
-        const day = String(anchor.getDate());
-        list = list.filter((p) => {
-          const blob = `${p.pairingDateLabel} ${p.date}`.toUpperCase();
-          return blob.includes(mon) && blob.includes(day);
-        });
-      } else if (chip === "This Week") {
-        const start = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate()).getTime();
-        const end = start + 7 * 24 * 60 * 60 * 1000;
-        list = list.filter((p) => {
-          const ms = tradeboardReportDateMsFromLabel(
-            p.pairingDateLabel?.trim() || p.date?.trim() || "",
-            anchor,
-          );
-          return ms >= start && ms <= end;
-        });
-      } else if (chip === "This Month") {
-        const monShort = anchor.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
-        list = list.filter((p) =>
-          `${p.pairingDateLabel} ${p.date}`.toUpperCase().includes(monShort),
-        );
-      }
-    }
-    return list;
-  }, [allPosts, myPosts, responsePosts, tradeFeedTab, primaryTab, search, chip]);
-
-  const tbDateGroups = useMemo(() => groupTradeboardByDate(filtered, new Date()), [filtered]);
-
   const listHeadingDate = new Date().toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -917,6 +1105,7 @@ export default function TradeboardTabScreen() {
       <MonthlyStatsStrip values={stripValues} />
       <ScrollView
         style={styles.scroll}
+        removeClippedSubviews={Platform.OS === "android"}
         refreshControl={
           <RefreshControl refreshing={loading} onRefresh={() => void load("pull")} />
         }
@@ -954,22 +1143,6 @@ export default function TradeboardTabScreen() {
               </Text>
             </Pressable>
           </View>
-        </View>
-
-        <View style={styles.searchRow}>
-          <View style={styles.searchField}>
-            <Text style={styles.searchIcon}>🔍</Text>
-            <TextInput
-              placeholder="Search pairing, layover, poster..."
-              placeholderTextColor="#9ca3af"
-              value={search}
-              onChangeText={setSearch}
-              style={styles.searchInput}
-            />
-          </View>
-          <Pressable style={styles.gearBtn} accessibilityLabel="Filter settings">
-            <Text style={styles.gearText}>⚙</Text>
-          </Pressable>
         </View>
 
         <View style={styles.tbTypePillsRow}>
@@ -1021,6 +1194,22 @@ export default function TradeboardTabScreen() {
               </Pressable>
             );
           })}
+        </View>
+
+        <View style={styles.searchRow}>
+          <View style={styles.searchField}>
+            <Text style={styles.searchIcon}>🔍</Text>
+            <TextInput
+              placeholder="Search pairing, layover, poster..."
+              placeholderTextColor="#9ca3af"
+              value={search}
+              onChangeText={setSearch}
+              style={styles.searchInput}
+            />
+          </View>
+          <Pressable style={styles.gearBtn} accessibilityLabel="Filter settings">
+            <Text style={styles.gearText}>⚙</Text>
+          </Pressable>
         </View>
 
         <View style={styles.timePillsRow}>
@@ -1152,7 +1341,7 @@ export default function TradeboardTabScreen() {
                 </Pressable>
                 <Pressable
                   style={styles.btnView}
-                  onPress={() => setDetailPost(bestMatch)}
+                  onPress={() => openTradeboardDetail(bestMatch)}
                 >
                   <Text style={styles.btnViewText}>View Trip</Text>
                 </Pressable>
@@ -1166,83 +1355,18 @@ export default function TradeboardTabScreen() {
           </View>
         ) : null}
 
-        <View style={styles.listHead}>
-          <Text style={styles.listHeadTitle}>Tradeboard · {listHeadingDate}</Text>
-          <Text style={styles.listHeadCount}>{filtered.length} total</Text>
-        </View>
-
-        {loading && filtered.length === 0 ? (
-          <ActivityIndicator style={{ marginTop: 24 }} color={SCHEDULE_MOCK_HEADER_RED} />
-        ) : null}
-
-        {tbDateGroups.map((grp) =>
-          grp.items.length === 0 ? null : (
-            <View key={grp.key} style={styles.tbDateSection}>
-              <View style={styles.tbDateHeadRow}>
-                <View style={styles.tbDatePill}>
-                  <Ionicons name="calendar-outline" size={11} color="#FFFFFF" style={styles.tbDatePillIon} />
-                  <Text style={styles.tbDatePillText} numberOfLines={1}>
-                    {formatTradeboardDatePillHeading(grp.key, new Date())}
-                  </Text>
-                  <View style={styles.tbDateBadge}>
-                    <Text style={styles.tbDateBadgeTxt}>{grp.items.length}</Text>
-                  </View>
-                </View>
-                <View style={styles.tbDateRule} />
-              </View>
-              <View style={styles.tbCardShell}>
-                <View style={styles.tbColHead}>
-                  <View style={[styles.tbColHeadSlot, { width: TB_COL.type }]}>
-                    <Text style={styles.tbColH} numberOfLines={1}>
-                      TYPE
-                    </Text>
-                  </View>
-                  <View style={[styles.tbColHeadSlot, TB_FLEX_LAY]}>
-                    <Text style={[styles.tbColH, styles.tbColHLayHead]} numberOfLines={1}>
-                      LAYOVER
-                    </Text>
-                  </View>
-                  <View style={[styles.tbColHeadPoster, TB_FLEX_POSTER]}>
-                    <Text style={[styles.tbColH, styles.tbColHLeft]} numberOfLines={2}>
-                      POSTER /{"\n"}PAIRING
-                    </Text>
-                  </View>
-                  <View style={[styles.tbColHeadStack, TB_FLEX_RPT]}>
-                    <Text style={styles.tbColHLine} numberOfLines={1}>
-                      RPT
-                    </Text>
-                    <Text style={styles.tbColHLine} numberOfLines={1}>
-                      CREDIT
-                    </Text>
-                  </View>
-                  <View style={[styles.tbColHeadStack, TB_FLEX_ARR]}>
-                    <Text style={styles.tbColHLine} numberOfLines={1}>
-                      ARR
-                    </Text>
-                    <Text style={styles.tbColHLine} numberOfLines={1}>
-                      DEP
-                    </Text>
-                  </View>
-                  <View style={[styles.tbColHeadSlot, styles.tbColHeadWorth, { width: TB_COL.worth }]}>
-                    <Text style={styles.tbColH} numberOfLines={1}>
-                      $
-                    </Text>
-                  </View>
-                  <View style={{ width: TB_COL.chev }} />
-                </View>
-                {grp.items.map((p) => (
-                  <TradeboardFeedRow
-                    key={p.id}
-                    p={p}
-                    router={router}
-                    onPress={() => setDetailPost(p)}
-                  />
-                ))}
-              </View>
-            </View>
-          ),
-        )}
-        <View style={{ height: 24 }} />
+        <TradeboardDeferredGroupedList
+          allPosts={allPosts}
+          myPosts={myPosts}
+          responsePosts={responsePosts}
+          tradeFeedTab={tradeFeedTab}
+          primaryTab={primaryTab}
+          chip={chip}
+          search={search}
+          loading={loading}
+          listHeadingDate={listHeadingDate}
+          openTradeboardDetail={openTradeboardDetail}
+        />
       </ScrollView>
 
       <CrewHubTradeboardPairingSheet
@@ -1250,10 +1374,6 @@ export default function TradeboardTabScreen() {
         post={detailPost}
         posterFirstName={tradeboardPosterFirstName(detailPost?.posterName)}
         onClose={() => setDetailPost(null)}
-        onOpenFlica={(uri) => {
-          setDetailPost(null);
-          pushFlicaWeb(router, uri);
-        }}
       />
     </View>
   );
@@ -1267,7 +1387,7 @@ const styles = StyleSheet.create({
     alignItems: "stretch",
     justifyContent: "space-between",
     marginHorizontal: 8,
-    marginTop: 6,
+    marginTop: 8,
     gap: 3,
   },
   tbTypeFilterPill: {
@@ -1313,7 +1433,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 10,
-    marginTop: 8,
+    marginTop: 6,
     gap: 6,
   },
   searchField: {
@@ -1434,7 +1554,17 @@ const styles = StyleSheet.create({
     }),
   },
   tbDatePillIon: { marginRight: -1 },
-  tbDatePillText: { fontSize: 9, fontWeight: "800", color: "#fff", flexShrink: 1, letterSpacing: 0.1 },
+  /** Same size/weight as column titles (`tbBarColTitle`); color only differs on pill. */
+  tbDatePillText: {
+    color: "#fff",
+    fontSize: 8,
+    fontWeight: "800",
+    flexShrink: 1,
+    letterSpacing: 0.2,
+    lineHeight: 11,
+    textAlign: "center",
+    textTransform: "uppercase",
+  },
   tbDateBadge: {
     marginLeft: 2,
     minWidth: 18,
@@ -1447,7 +1577,14 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255,255,255,0.28)",
   },
-  tbDateBadgeTxt: { color: "#fff", fontSize: 8, fontWeight: "900" },
+  tbDateBadgeTxt: {
+    color: "#fff",
+    fontSize: 8,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+    lineHeight: 11,
+    textAlign: "center",
+  },
   tbDateRule: {
     flex: 1,
     height: StyleSheet.hairlineWidth,
@@ -1476,25 +1613,26 @@ const styles = StyleSheet.create({
   },
   tbColHead: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "stretch",
     alignSelf: "stretch",
     width: "100%",
-    gap: 7,
-    paddingVertical: 5,
-    paddingHorizontal: 7,
+    gap: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
     backgroundColor: "#F4F4F5",
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "rgba(176, 24, 26, 0.16)",
   },
-  tbColHeadSlot: {
+  tbColHeadCell: {
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 0,
+    paddingHorizontal: 3,
+    minWidth: 0,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: "rgba(120, 113, 108, 0.32)",
   },
-  tbColHeadSlotLeft: {
-    justifyContent: "center",
-    alignItems: "flex-start",
-    paddingHorizontal: 0,
+  tbColHeadCellLast: {
+    borderRightWidth: 0,
   },
   tbColHeadWorth: {
     justifyContent: "center",
@@ -1504,36 +1642,59 @@ const styles = StyleSheet.create({
   },
   tbColHeadPoster: {
     justifyContent: "center",
-    paddingHorizontal: 0,
-    alignItems: "flex-start",
+    alignItems: "center",
+    gap: 2,
+    minWidth: 0,
   },
-  tbColHeadStack: {
-    justifyContent: "center",
-    alignItems: "flex-start",
-    gap: 1,
-    paddingHorizontal: 0,
-  },
-  tbColH: {
+  /** One typographic style for every label in the grey column title bar. */
+  tbBarColTitle: {
+    width: "100%",
     fontSize: 8,
     fontWeight: "800",
     color: "#57534E",
-    letterSpacing: 0.35,
+    letterSpacing: 0.2,
     textAlign: "center",
     textTransform: "uppercase",
-    lineHeight: 10,
+    lineHeight: 11,
   },
-  tbColHLeft: { textAlign: "left", width: "100%" },
-  /** LAYOVER column: centered above single-token / dash row values */
-  tbColHLayHead: { width: "100%", textAlign: "center" },
-  tbColHLine: {
-    fontSize: 8,
-    fontWeight: "800",
-    color: "#57534E",
-    letterSpacing: 0.28,
-    textTransform: "uppercase",
-    lineHeight: 10,
-    textAlign: "left",
+  tbHeadStackDividerH: {
+    height: StyleSheet.hairlineWidth,
+    minHeight: 1,
+    width: "88%",
+    maxWidth: 56,
+    backgroundColor: "rgba(120, 113, 108, 0.32)",
+    marginVertical: 2,
+    alignSelf: "center",
+  },
+  tbSchedHeadRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    width: "100%",
+    minWidth: 0,
+    gap: 0,
+  },
+  /** Matches `tbStackPairBox` padding so schedule header vertical rule lines up with rows. */
+  tbSchedHeadInset: {
+    width: "100%",
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+  },
+  tbSchedHeadCell: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 0,
+    paddingHorizontal: 0,
+  },
+  tbSchedHeadColDivider: {
+    width: StyleSheet.hairlineWidth,
+    minWidth: 1,
     alignSelf: "stretch",
+    backgroundColor: "rgba(120, 113, 108, 0.32)",
+    marginVertical: 3,
   },
   tbRowCard: {
     width: "100%",
@@ -1546,12 +1707,29 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     alignSelf: "stretch",
     width: "100%",
-    gap: 7,
-    paddingVertical: 7,
-    paddingHorizontal: 7,
-    minHeight: 48,
+    gap: 0,
+    paddingVertical: 5,
+    paddingHorizontal: 4,
+    minHeight: 50,
   },
-  tbTypeCol: { justifyContent: "flex-start", alignItems: "stretch", paddingTop: 1 },
+  tbRowCell: {
+    justifyContent: "flex-start",
+    alignItems: "stretch",
+    paddingHorizontal: 3,
+    minWidth: 0,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: "rgba(120, 113, 108, 0.32)",
+  },
+  tbRowCellLast: {
+    borderRightWidth: 0,
+  },
+  tbTypeCol: {
+    justifyContent: "flex-start",
+    alignItems: "stretch",
+    paddingTop: 1,
+    width: "100%",
+    alignSelf: "stretch",
+  },
   tbTypePillRow: {
     borderRadius: 999,
     paddingHorizontal: 4,
@@ -1571,114 +1749,123 @@ const styles = StyleSheet.create({
   tbLayCol: {
     justifyContent: "flex-start",
     paddingRight: 0,
-    alignItems: "flex-start",
+    alignItems: "center",
+    alignSelf: "stretch",
     paddingTop: 1,
+    width: "100%",
   },
-  tbLayColSingle: { alignItems: "center", alignSelf: "stretch" },
   tbLay: {
     fontSize: 8,
     fontWeight: "700",
     color: "#0f172a",
     lineHeight: 12,
     writingDirection: "ltr",
-  },
-  tbLayMulti: {
-    textAlign: "left",
+    textAlign: "center",
     alignSelf: "stretch",
     width: "100%",
   },
-  tbLaySingle: {
-    textAlign: "center",
-    alignSelf: "center",
+  tbPosterPairCol: {
+    justifyContent: "flex-start",
+    alignItems: "center",
+    paddingHorizontal: 0,
+    paddingTop: 1,
+    alignSelf: "stretch",
+    width: "100%",
   },
-  tbPosterPairCol: { justifyContent: "flex-start", paddingHorizontal: 0, paddingTop: 1 },
+  tbPairingDaysTop: {
+    fontSize: 8,
+    fontWeight: "900",
+    color: "#0f172a",
+    lineHeight: 12,
+    textAlign: "center",
+    width: "100%",
+  },
   tbPosterName: {
+    marginTop: 2,
     fontSize: 7,
     fontWeight: "500",
     color: "#0f172a",
     letterSpacing: 0.08,
     textTransform: "uppercase",
     lineHeight: 10,
+    textAlign: "center",
+    width: "100%",
   },
-  tbPairingMeta: {
+  tbPairingIdOnly: {
     marginTop: 2,
     fontSize: 7,
-    color: "#475569",
+    fontWeight: "500",
+    color: "#64748b",
     letterSpacing: -0.05,
     lineHeight: 10,
+    textAlign: "center",
+    width: "100%",
   },
-  tbPairingId: { fontWeight: "500", color: "#64748b" },
-  tbPairingDays: {
-    fontSize: 8,
-    fontWeight: "900",
-    color: "#0f172a",
-    lineHeight: 12,
-  },
-  tbRptCreditCol: {
+  tbSchedCol: {
     justifyContent: "flex-start",
     alignItems: "stretch",
     paddingHorizontal: 0,
     paddingTop: 1,
-  },
-  tbArrDepCol: {
-    justifyContent: "flex-start",
-    alignItems: "stretch",
-    paddingHorizontal: 0,
-    paddingTop: 1,
+    width: "100%",
+    alignSelf: "stretch",
+    flex: 1,
+    minWidth: 0,
   },
   tbStackPairBox: {
     alignSelf: "stretch",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(15, 23, 42, 0.11)",
-    borderRadius: 5,
+    borderColor: "rgba(28, 25, 23, 0.12)",
+    borderRadius: 4,
     paddingVertical: 4,
-    paddingHorizontal: 5,
-    backgroundColor: "rgba(248, 250, 252, 0.45)",
+    paddingHorizontal: 4,
+    backgroundColor: "#fafaf9",
   },
-  tbStackPairRule: {
-    height: StyleSheet.hairlineWidth,
-    minHeight: 1,
-    marginVertical: 3,
-    backgroundColor: "rgba(15, 23, 42, 0.09)",
-    alignSelf: "stretch",
-  },
-  tbStackLine: {
+  tbSchedRow: {
     flexDirection: "row",
-    alignItems: "baseline",
-    flexWrap: "nowrap",
-    justifyContent: "flex-start",
+    alignItems: "stretch",
+    gap: 0,
+  },
+  tbSchedStackDivider: {
+    width: StyleSheet.hairlineWidth,
+    minWidth: 1,
     alignSelf: "stretch",
-    minHeight: 11,
+    backgroundColor: "rgba(120, 113, 108, 0.32)",
+    marginHorizontal: 0,
+    marginVertical: 1,
   },
-  tbStackLbl: {
-    fontSize: 6,
-    fontWeight: "700",
-    color: "#64748b",
-    letterSpacing: 0.05,
-    lineHeight: 11,
+  tbPairTim: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: "center",
+    paddingVertical: 1,
+    alignItems: "center",
   },
-  tbStackNum: {
+  tbTimPairLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 14,
+    gap: 3,
+    alignSelf: "stretch",
+    width: "100%",
+  },
+  tbTimIni: {
+    width: 9,
     fontSize: 7,
     fontWeight: "800",
-    color: "#0f172a",
-    fontFamily: TB_DIGITAL,
-    fontVariant: ["tabular-nums"],
-    lineHeight: 11,
-  },
-  tbStackLblCredit: {
-    fontSize: 6.5,
-    fontWeight: "700",
     color: "#64748b",
-    letterSpacing: 0.05,
-    lineHeight: 12,
-  },
-  tbStackNumCredit: {
-    fontSize: 8,
-    fontWeight: "900",
-    color: "#0f172a",
+    textAlign: "center",
     fontFamily: TB_DIGITAL,
     fontVariant: ["tabular-nums"],
-    lineHeight: 12,
+  },
+  tbTimVal: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#0f172a",
+    letterSpacing: -0.15,
+    fontFamily: TB_DIGITAL,
+    fontVariant: ["tabular-nums"],
   },
   tbWorthCol: {
     justifyContent: "flex-start",
@@ -1686,6 +1873,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     paddingTop: 1,
     flexShrink: 0,
+    width: "100%",
+    alignSelf: "stretch",
   },
   tbWorth: {
     fontSize: 6.5,
@@ -1697,19 +1886,6 @@ const styles = StyleSheet.create({
     fontFamily: TB_DIGITAL,
     lineHeight: 11,
   },
-  tbChev: {
-    textAlign: "center",
-    alignSelf: "flex-start",
-    marginTop: 3,
-    fontSize: 11,
-    color: "#D6D3D1",
-    fontWeight: "600",
-  },
-  tbSwipeRow: { flexDirection: "row", minHeight: 56 },
-  tbSwipeBtn: { justifyContent: "center", alignItems: "center", width: 88, paddingVertical: 8 },
-  tbSwipePrimary: { backgroundColor: SCHEDULE_MOCK_HEADER_RED },
-  tbSwipeAlt: { backgroundColor: "#334155" },
-  tbSwipeTxt: { color: "#fff", fontSize: 11, fontWeight: "800" },
   errorText: { color: "#b91c1c", fontSize: 11, marginHorizontal: 12, marginTop: 8 },
   activeCard: {
     marginHorizontal: 10,

@@ -11,6 +11,7 @@ import {
   formatOpenTimeBlkCr,
   mapRowsToOpenTimeTrips,
   mapTradeboardRowsToPosts,
+  tradeboardSanitizeDisplayComment,
   tradeboardTypeLongLabel,
   type TradeboardSourcePageType,
 } from "./flicaCrewHubMappers";
@@ -1126,6 +1127,32 @@ function dedupePosts(posts: TradeboardPost[]): TradeboardPost[] {
   return out;
 }
 
+function tradeboardScheduleDedupeKey(p: TradeboardPost): string {
+  return `${p.pairingId}:${p.pairingDateLabel}:${p.type}`;
+}
+
+/** When HTML fallback posts lack RPT/DEP/ARR/CR/BLK, fill from native table parse (same pairing key). */
+function mergePrimaryScheduleIntoPosts(primary: TradeboardPost[], posts: TradeboardPost[]): TradeboardPost[] {
+  if (!primary.length || !posts.length) return posts;
+  const srcBy = new Map<string, TradeboardPost>();
+  for (const pr of primary) {
+    srcBy.set(tradeboardScheduleDedupeKey(pr), pr);
+  }
+  return posts.map((p) => {
+    const src = srcBy.get(tradeboardScheduleDedupeKey(p));
+    if (!src) return p;
+    return {
+      ...p,
+      reportTime: p.reportTime?.trim() || src.reportTime?.trim() || "",
+      departTime: p.departTime?.trim() || src.departTime?.trim() || "",
+      arriveTime: p.arriveTime?.trim() || src.arriveTime?.trim() || "",
+      block: p.block?.trim() || src.block?.trim() || "",
+      credit: p.credit?.trim() || src.credit?.trim() || "",
+      comments: p.comments?.trim() || src.comments?.trim() || "",
+    };
+  });
+}
+
 function dedupeTrips(trips: OpenTimeTrip[]): OpenTimeTrip[] {
   const seen = new Set<string>();
   const out: OpenTimeTrip[] = [];
@@ -1699,6 +1726,41 @@ function tradeboardLineIsPairingTokenOnly(line: string): boolean {
   return false;
 }
 
+/**
+ * After the base/position/seat/days prefix, FLICA rows may interleave airport tokens
+ * before the first clock time. Consume successive `HH:MM` tokens, skipping other tokens.
+ */
+function extractCompactRowScheduleTimes(rest: string): { times: string[]; remainder: string } {
+  const times: string[] = [];
+  let scan = rest.trim();
+  let guard = 0;
+  while (guard++ < 80 && scan.length > 0 && times.length < 8) {
+    const tm = scan.match(/^(\d{1,2}:\d{2})\b/);
+    if (tm) {
+      times.push(tm[1]!);
+      scan = scan.slice(tm[0]!.length).trim();
+      continue;
+    }
+    const skip = scan.match(/^(\S+)/);
+    if (!skip) break;
+    scan = scan.slice(skip[0]!.length).trim();
+  }
+  return { times, remainder: scan };
+}
+
+function mergeCompactPostWithMapperRow(compact: TradeboardPost, m: TradeboardPost): TradeboardPost {
+  const pick = (a: string, b: string) => (a?.trim() ? a.trim() : b?.trim() ? b.trim() : "");
+  return {
+    ...compact,
+    reportTime: pick(compact.reportTime, m.reportTime),
+    departTime: pick(compact.departTime, m.departTime),
+    arriveTime: pick(compact.arriveTime, m.arriveTime),
+    block: pick(compact.block, m.block),
+    credit: pick(compact.credit, m.credit),
+    comments: pick(compact.comments, m.comments),
+  };
+}
+
 function parseCompactTradeboardRowBlock(
   block: string,
   sourcePageType: TradeboardSourcePageType,
@@ -1729,12 +1791,8 @@ function parseCompactTradeboardRowBlock(
   const days = bp[4]!;
   rest = rest.slice(bp[0].length).trim();
 
-  const times: string[] = [];
-  while (/^\d{1,2}:\d{2}\b/.test(rest)) {
-    const tm = rest.match(/^(\d{1,2}:\d{2})\b/)!;
-    times.push(tm[1]!);
-    rest = rest.slice(tm[0]!.length).trim();
-  }
+  const { times, remainder } = extractCompactRowScheduleTimes(rest);
+  rest = remainder;
   if (times.length < 3) return null;
   const reportTime = times[0] ?? "";
   const departTime = times[1] ?? "";
@@ -1758,7 +1816,8 @@ function parseCompactTradeboardRowBlock(
   if (posterMatch && typeof posterMatch.index === "number") {
     prePoster = rest.slice(0, posterMatch.index).trim();
   }
-  const { layover, comments } = splitLayoverAndComments(prePoster);
+  const { layover, comments: splitComments } = splitLayoverAndComments(prePoster);
+  const comments = tradeboardSanitizeDisplayComment(splitComments);
 
   const type = detectTradeboardType(`${lead[1]} ${line}`);
   const routeSummary = layover ? `${base} · ${layover}` : `${pairingId}:${pairingDateLabel} · ${base}`;
@@ -2292,14 +2351,20 @@ function extractTradeboardPostsFromPageHtml(
     requestRowCandidateCount++;
     let mapped: TradeboardPost[] = [];
     let compact: TradeboardPost | null = null;
-    if (sourceLabel === "all_requests_table_td_pipe") {
-      const cells = line.split(/\s*\|\s*/).map((c) => c.trim()).filter(Boolean);
-      const spaceLine = cells.join(" ");
-      compact = parseCompactTradeboardRowBlock(spaceLine, sourcePageType, sourceUrl);
-      mapped = compact ? [compact] : mapTradeboardRowsToPosts([cells], sourcePageType, sourceUrl);
+    const cells =
+      sourceLabel === "all_requests_table_td_pipe"
+        ? line.split(/\s*\|\s*/).map((c) => c.trim()).filter(Boolean)
+        : null;
+    const mapperRows: string[][] = cells ? [cells] : [[line]];
+    const spaceLine = cells ? cells.join(" ") : line;
+    compact = parseCompactTradeboardRowBlock(spaceLine, sourcePageType, sourceUrl);
+    const fromMapper = mapTradeboardRowsToPosts(mapperRows, sourcePageType, sourceUrl);
+    if (compact && fromMapper.length > 0) {
+      mapped = [mergeCompactPostWithMapperRow(compact, fromMapper[0]!)];
+    } else if (compact) {
+      mapped = [compact];
     } else {
-      compact = parseCompactTradeboardRowBlock(line, sourcePageType, sourceUrl);
-      mapped = compact ? [compact] : mapTradeboardRowsToPosts([[line]], sourcePageType, sourceUrl);
+      mapped = fromMapper;
     }
     if (mapped.length === 0) {
       rejectedRowCount++;
@@ -2336,7 +2401,12 @@ function extractTradeboardPostsFromPageHtml(
       if (typeof __DEV__ !== "undefined" && __DEV__) {
         console.log("[FLICA_TRADEBOARD_CANDIDATE]", {
           accepted: true,
-          reason: compact ? "compact_row" : "mapper_row",
+          reason:
+            compact && fromMapper.length > 0
+              ? "compact_plus_mapper_schedule"
+              : compact
+                ? "compact_row"
+                : "mapper_row",
           source: sourceLabel,
           rawPreview: rawPreviewForDev.slice(0, 400),
         });
@@ -2438,6 +2508,33 @@ function extractTradeboardPostsFromPageHtml(
   };
 }
 
+function emptyTradeboardExtractDebug(
+  htmlLen: number,
+  r: Pick<FlicaActionsFetchResult, "title">,
+  primary: TradeboardPost[],
+): TradeboardExtractDebug {
+  return {
+    htmlLength: htmlLen,
+    pageTitle: r.title ?? null,
+    markerList: [],
+    allRequestsDetected: false,
+    tradeboardOccurrenceContexts: [],
+    requestRowCandidateCount: 0,
+    acceptedRowCount: primary.length,
+    rejectedRowCount: 0,
+    first10CandidateRows: [],
+    firstAcceptedRawBlock: primary[0]?.rawText?.slice(0, 400) ?? "",
+    detectedExtractionMode: "native_parse_rows",
+    fullHtmlContainsPairingPattern: false,
+    flexPairingMatchCountOnPreparedHtml: 0,
+    normalizedTextContainsPairingPattern: false,
+    pairingMatchCount: 0,
+    normalizedScriptStrippedPreferred: false,
+    first20PairingPatternContexts: [],
+    knownTokenProbes: [],
+  };
+}
+
 export function mapTradeboardPostsWithHtmlFallback(
   rows: string[][],
   r: Pick<FlicaActionsFetchResult, "htmlLength" | "bodyPreview" | "nativeParse" | "pageHtml" | "title">,
@@ -2454,9 +2551,6 @@ export function mapTradeboardPostsWithHtmlFallback(
   const templatey = rowsContainJsTemplateTokens(rows);
   const hasPairing = rowsContainTradeboardPairing(rows);
 
-  const tbExtract = extractTradeboardPostsFromPageHtml(html, r, sourcePageType, sourceUrl);
-  const tradeboardExtractDebug = tbExtract.debug;
-
   if (primary.length > 0 && !templatey && hasPairing) {
     return {
       posts: primary,
@@ -2465,20 +2559,16 @@ export function mapTradeboardPostsWithHtmlFallback(
         markersFound: ["nativeParse.rows"],
         extractedPostCount: primary.length,
         firstExtractedRawBlock: primary[0]?.rawText?.slice(0, 400) ?? "",
-        tradeboardExtractDebug: {
-          ...tradeboardExtractDebug,
-          acceptedRowCount: primary.length,
-          rejectedRowCount: 0,
-          requestRowCandidateCount: 0,
-          first10CandidateRows: [],
-          firstAcceptedRawBlock: primary[0]?.rawText?.slice(0, 400) ?? "",
-          detectedExtractionMode: "native_parse_rows",
-        },
+        tradeboardExtractDebug: emptyTradeboardExtractDebug(htmlLen, r, primary),
       },
     };
   }
 
+  const tbExtract = extractTradeboardPostsFromPageHtml(html, r, sourcePageType, sourceUrl);
+  const tradeboardExtractDebug = tbExtract.debug;
+
   let posts = dedupePosts([...tbExtract.posts]);
+  posts = mergePrimaryScheduleIntoPosts(primary, posts);
   if (posts.length) markersFound.push(`html_fallback_posts:${posts.length}`);
 
   const fallbackUsed =

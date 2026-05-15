@@ -243,6 +243,54 @@ function extractTimes(line: string): string[] {
   return (line.match(/\b\d{1,2}:\d{2}\b/g) ?? []).slice(0, 8);
 }
 
+/** Prefer parsed fields; if missing, recover times from `rawText` (tradeboard list + detail UI). */
+export function tradeboardDisplayScheduleFields(p: TradeboardPost): {
+  reportTime: string;
+  departTime: string;
+  arriveTime: string;
+  block: string;
+  credit: string;
+} {
+  const z = (s: string | undefined | null) => String(s ?? "").trim();
+  let reportTime = z(p.reportTime);
+  let departTime = z(p.departTime);
+  let arriveTime = z(p.arriveTime);
+  let block = z(p.block);
+  let credit = z(p.credit);
+  const raw = String(p.rawText ?? "").replace(/\s+/g, " ");
+  if (!raw) {
+    return {
+      reportTime: reportTime || "—",
+      departTime: departTime || "—",
+      arriveTime: arriveTime || "—",
+      block: block || "—",
+      credit: credit || "—",
+    };
+  }
+  const times = (raw.match(/\b\d{1,2}:\d{2}\b/g) ?? []).slice(0, 8);
+  if (!reportTime) {
+    reportTime = firstMatch(/\bRPT\s*[:.]?\s*(\d{1,2}:\d{2})\b/i, raw) || times[0] || "";
+  }
+  if (!departTime) departTime = times[1] || "";
+  if (!arriveTime) arriveTime = times[2] || "";
+  if (!block) {
+    block = firstMatch(/\b(\d{1,2}:\d{2})\s*BLK/i, raw) || times[3] || "";
+  }
+  if (!credit) {
+    credit =
+      firstMatch(/\bCR\D*(\d{1,2}:\d{2})/i, raw) ||
+      (times.length > 4 ? times[times.length - 1]! : times[4] || "") ||
+      "";
+  }
+  return {
+    reportTime: reportTime || "—",
+    departTime: departTime || "—",
+    arriveTime: arriveTime || "—",
+    block: block || "—",
+    credit: credit || "—",
+  };
+}
+
 function pickPostedAtLabel(line: string): string {
   const mLong =
     line.match(
@@ -252,6 +300,25 @@ function pickPostedAtLabel(line: string): string {
     line.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/) ||
     line.match(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i);
   return mLong ? collapseWhitespace(mLong[0] ?? "") : "";
+}
+
+/**
+ * Keep text that looks like a real crew comment; reject dense schedule/time tokens (table dumps).
+ * Exported for HTML compact-row parsing to share the same rules.
+ */
+export function tradeboardSanitizeDisplayComment(raw: string): string {
+  let t = collapseWhitespace(String(raw ?? "")).trim();
+  if (!t || /^[\s_\-]+$/i.test(t)) return "";
+  if (t.length > 520) t = `${t.slice(0, 517)}...`;
+  const timeHits = (t.match(/\b\d{1,2}:\d{2}\b/g) ?? []).length;
+  if (timeHits >= 4) return "";
+  if (/^\d{1,2}:\d{2}(\b|\s)/.test(t) && timeHits >= 2 && t.length < 52) return "";
+  const mostlySchedule =
+    /^[\d\s:./A-Z$|·,\-–—]+$/i.test(t) && !/\b(and|with|the|need|please|for|any|swap|trade)\b/i.test(t);
+  if (mostlySchedule && t.length < 88) return "";
+  if (/[a-z]{2,}/.test(t)) return t;
+  if (t.length >= 16 && /[A-Za-z]{4,}/.test(t) && timeHits <= 1) return t;
+  return "";
 }
 
 function responseChunk(line: string): string {
@@ -314,7 +381,10 @@ export function mapTradeboardRowsToPosts(
           .slice(0, 5)
           .join(" · ");
 
-    const comments = rawCells.length > 6 ? rawCells.slice(-4, -1).join(" · ") : line;
+    let comments = "";
+    if (rawCells.length > 6) {
+      comments = tradeboardSanitizeDisplayComment(rawCells.slice(-4, -1).join(" · "));
+    }
     const responseMethodLabel = responseChunk(line);
     const postedAtLabel = pickPostedAtLabel(line);
     const canProposeTrade = /\bpropose\s+trade\b/i.test(line) || /\bpropose\b/i.test(line);

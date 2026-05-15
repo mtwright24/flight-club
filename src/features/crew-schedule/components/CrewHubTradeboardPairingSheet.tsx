@@ -1,17 +1,7 @@
 import React from "react";
-import {
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  type TextStyle,
-} from "react-native";
-import { FLICA_NATIVE_URLS } from "../../flica-actions/flicaActionsNativeService";
+import { Modal, Platform, Pressable, StyleSheet, Text, View, type TextStyle } from "react-native";
 import type { TradeboardPost } from "../flicaCrewHubTypes";
-import { tradeboardTypeLabel } from "../flicaCrewHubMappers";
+import { tradeboardDisplayScheduleFields, tradeboardTypeLabel } from "../flicaCrewHubMappers";
 import { CREW_HUB_CARD_RIM, CREW_HUB_SHEET_SURFACE, SCHEDULE_MOCK_HEADER_RED } from "../scheduleMockPalette";
 import { hubLayoverDisplayWithDots } from "../crewHubLayoverDisplay";
 
@@ -28,7 +18,6 @@ type Props = {
   post: TradeboardPost | null;
   posterFirstName: string;
   onClose: () => void;
-  onOpenFlica: (uri: string) => void;
 };
 
 function firstIataFromText(s: string): string {
@@ -36,38 +25,11 @@ function firstIataFromText(s: string): string {
   return m?.[1] ?? "";
 }
 
-function StatPill({
-  label,
-  value,
-  valueRed,
-}: {
-  label: string;
-  value: string;
-  valueRed?: boolean;
-}) {
-  return (
-    <View style={styles.statPill}>
-      <Text style={styles.statPillLab} numberOfLines={1}>
-        {label}
-      </Text>
-      <Text
-        style={[styles.statPillVal, MONO, valueRed && styles.statPillValRed]}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.75}
-      >
-        {value}
-      </Text>
-    </View>
-  );
-}
-
 export default function CrewHubTradeboardPairingSheet({
   visible,
   post,
   posterFirstName,
   onClose,
-  onOpenFlica,
 }: Props) {
   if (!post) return null;
   const typeLine = tradeboardTypeLabel(post.type);
@@ -83,13 +45,22 @@ export default function CrewHubTradeboardPairingSheet({
     "—";
   const legRoute = routeSummary || routeDots || "—";
   const commentsTrim = post.comments?.trim() ?? "";
-  const rpt = post.reportTime?.trim() || "—";
-  const dep = post.departTime?.trim() || "—";
-  const arr = post.arriveTime?.trim() || "—";
-  const blk = post.block?.trim() || "—";
-  const cr = post.credit?.trim() || "—";
+  const tm = tradeboardDisplayScheduleFields(post);
+  const rpt = tm.reportTime;
+  const dep = tm.departTime;
+  const arr = tm.arriveTime;
+  const blk = tm.block;
+  const cr = tm.credit;
   const worth = post.worth?.trim() || "—";
-  const dutyFdp = `${dep} / ${arr}`;
+
+  const statPairs: [string, string][] = [
+    ["R", rpt],
+    ["D", dep],
+    ["A", arr],
+    ["B", blk],
+    ["C", cr],
+    ["$", worth],
+  ];
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -106,13 +77,13 @@ export default function CrewHubTradeboardPairingSheet({
                 <Text style={styles.sourcePillTxt}>Tradeboard</Text>
               </View>
             </View>
-            <Text style={styles.heroDateLine} numberOfLines={2}>
+            <Text style={styles.heroDateLine} numberOfLines={1}>
               {[dateLine, daysPart].filter(Boolean).join(META)}
             </Text>
             <Text style={styles.heroDest} numberOfLines={1}>
               {destLarge}
             </Text>
-            <Text style={styles.heroRouteSmall} numberOfLines={2}>
+            <Text style={styles.heroRouteSmall} numberOfLines={1}>
               {routeDots || routeSummary || "—"}
             </Text>
             <Text style={styles.heroPosterLine} numberOfLines={1}>
@@ -122,34 +93,44 @@ export default function CrewHubTradeboardPairingSheet({
             </Text>
           </View>
 
-          <ScrollView style={styles.body} contentContainerStyle={styles.bodyPad} showsVerticalScrollIndicator={false}>
-            <View style={styles.statPillRow}>
-              <StatPill label="RPT" value={rpt} />
-              <StatPill label="T-CREDIT" value={cr} />
-              <StatPill label="TAFB" value="—" />
-              <StatPill label="DUTY/FDP" value={dutyFdp} />
-              <StatPill label="D-END" value={arr} valueRed />
+          <View style={styles.body}>
+            <Text style={styles.sectionEyebrow}>STATS</Text>
+            <View style={styles.statRow}>
+              {statPairs.map(([lab, val]) => (
+                <View key={lab} style={styles.statTile}>
+                  <Text style={styles.statLab}>{lab}</Text>
+                  <Text
+                    style={[
+                      styles.statVal,
+                      MONO,
+                      (lab === "$" || lab === "C") && styles.statAccent,
+                      lab === "A" && styles.statValRed,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {val}
+                  </Text>
+                </View>
+              ))}
             </View>
-
-            <View style={styles.dividerFaint} />
 
             <View style={styles.sectionCard}>
               <View style={styles.dayHead}>
                 <Text style={styles.dayHeadLeft} numberOfLines={1}>
                   {dateLine.toUpperCase()}
                 </Text>
-                <Text style={styles.dayHeadRight} numberOfLines={1}>
-                  Rpt {rpt}
+                <Text style={[styles.dayHeadRight, MONO]} numberOfLines={1}>
+                  {rpt}
                 </Text>
               </View>
               <View style={styles.legGridHead}>
-                <Text style={styles.legHR}>ROUTE</Text>
-                <Text style={styles.legHC}>DEP</Text>
-                <Text style={styles.legHC}>ARR</Text>
-                <Text style={styles.legHC}>BLK</Text>
+                <Text style={styles.legHR}>RT</Text>
+                <Text style={styles.legHC}>D</Text>
+                <Text style={styles.legHC}>A</Text>
+                <Text style={styles.legHC}>B</Text>
               </View>
               <View style={styles.legGridRow}>
-                <Text style={styles.legR} numberOfLines={2}>
+                <Text style={styles.legR} numberOfLines={1}>
                   {legRoute}
                 </Text>
                 <Text style={[styles.legC, MONO]} numberOfLines={1}>
@@ -167,8 +148,8 @@ export default function CrewHubTradeboardPairingSheet({
             <View style={styles.layCard}>
               <Text style={styles.layIcon}>🛏</Text>
               <View style={styles.layTextCol}>
-                <Text style={styles.layTag}>LAYOVER</Text>
-                <Text style={styles.layBody} numberOfLines={4}>
+                <Text style={styles.layTag}>LAY</Text>
+                <Text style={styles.layBody} numberOfLines={1}>
                   {routeDots || post.layover?.trim() || "—"}
                 </Text>
               </View>
@@ -177,59 +158,35 @@ export default function CrewHubTradeboardPairingSheet({
             <View style={styles.sectionCard}>
               <View style={styles.crewHead}>
                 <Text style={styles.crewHeadTitle}>CREW</Text>
-                <Text style={styles.crewHeadCount}>1 crew</Text>
+                <Text style={styles.crewHeadCount}>1</Text>
               </View>
               <View style={styles.crewRow}>
                 <Text style={styles.crewPos}>{post.position?.trim() || "—"}</Text>
-                <Text style={styles.crewName} numberOfLines={2}>
+                <Text style={styles.crewName} numberOfLines={1}>
                   {post.posterName?.trim() || posterFirstName}
                 </Text>
               </View>
               {post.base?.trim() ? (
                 <Text style={styles.crewBase} numberOfLines={1}>
-                  Base {post.base.trim()}
+                  {post.base.trim()}
                 </Text>
               ) : null}
-            </View>
-
-            <View style={styles.panel}>
-              <Text style={styles.panelTitle}>Post details</Text>
-              <Text style={styles.panelLine}>
-                <Text style={styles.kvK}>Posted </Text>
-                {post.postedAtLabel || post.postedAt || "—"}
-              </Text>
-              {post.responseMethodLabel?.trim() ? (
-                <Text style={styles.panelLine}>
-                  <Text style={styles.kvK}>Responses </Text>
-                  {post.responseMethodLabel.trim()}
-                </Text>
-              ) : null}
-              {post.responseMethods?.trim() ? (
-                <Text style={styles.panelLine}>
-                  <Text style={styles.kvK}>Methods </Text>
-                  {post.responseMethods.trim()}
-                </Text>
-              ) : null}
-              <Text style={styles.panelLine}>
-                <Text style={styles.kvK}>Worth </Text>
-                <Text style={styles.worthInline}>{worth}</Text>
-              </Text>
             </View>
 
             <View style={styles.comments}>
-              <Text style={styles.commentsTitle}>Comments</Text>
-              <Text style={[styles.commentsBody, commentsTrim ? null : styles.commentsEmpty, MONO]}>
-                {commentsTrim || "No comments on this post."}
+              <Text style={styles.commentsTitle}>Notes</Text>
+              <Text
+                style={[styles.commentsBody, commentsTrim ? null : styles.commentsEmpty, MONO]}
+                numberOfLines={3}
+              >
+                {commentsTrim || "—"}
               </Text>
             </View>
-          </ScrollView>
+          </View>
 
           <View style={styles.footer}>
-            <Pressable style={styles.btnPrimary} onPress={() => onOpenFlica(FLICA_NATIVE_URLS.tradeFrame)}>
-              <Text style={styles.btnPrimaryText}>Open in FLICA</Text>
-            </Pressable>
-            <Pressable style={styles.btnGhost} onPress={onClose}>
-              <Text style={styles.btnGhostText}>Close</Text>
+            <Pressable style={styles.btnPrimary} onPress={onClose}>
+              <Text style={styles.btnPrimaryText}>Close</Text>
             </Pressable>
           </View>
         </Pressable>
@@ -245,10 +202,11 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   sheet: {
+    width: "100%",
     backgroundColor: "#fff",
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
-    maxHeight: "94%",
+    maxHeight: "82%",
     overflow: "hidden",
     ...Platform.select({
       ios: {
@@ -263,17 +221,17 @@ const styles = StyleSheet.create({
   },
   grab: {
     alignSelf: "center",
-    width: 32,
-    height: 3,
+    width: 28,
+    height: 2,
     borderRadius: 2,
     backgroundColor: "rgba(0,0,0,0.12)",
-    marginTop: 6,
-    marginBottom: 4,
+    marginTop: 4,
+    marginBottom: 2,
   },
   heroWhite: {
-    paddingHorizontal: 14,
-    paddingTop: 2,
-    paddingBottom: 8,
+    paddingHorizontal: 10,
+    paddingTop: 0,
+    paddingBottom: 5,
     backgroundColor: "#fff",
   },
   heroTopRow: {
@@ -284,90 +242,85 @@ const styles = StyleSheet.create({
   },
   heroPairingId: {
     flex: 1,
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: "800",
     color: SCHEDULE_MOCK_HEADER_RED,
-    letterSpacing: -0.6,
+    letterSpacing: -0.5,
   },
   sourcePill: {
-    marginTop: 2,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
+    marginTop: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
     borderRadius: 999,
     backgroundColor: "#fce7f3",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(176, 24, 26, 0.22)",
   },
-  sourcePillTxt: { fontSize: 9, fontWeight: "800", color: SCHEDULE_MOCK_HEADER_RED },
+  sourcePillTxt: { fontSize: 8, fontWeight: "800", color: SCHEDULE_MOCK_HEADER_RED },
   heroDateLine: {
-    marginTop: 4,
-    fontSize: 11,
+    marginTop: 2,
+    fontSize: 10,
     fontWeight: "600",
     color: "#57534e",
-    lineHeight: 15,
+    lineHeight: 13,
   },
   heroDest: {
-    marginTop: 4,
-    fontSize: 28,
+    marginTop: 2,
+    fontSize: 19,
     fontWeight: "800",
     color: "#0c0a09",
-    letterSpacing: -0.8,
+    letterSpacing: -0.5,
   },
   heroRouteSmall: {
-    marginTop: 2,
-    fontSize: 12,
+    marginTop: 1,
+    fontSize: 10,
     fontWeight: "700",
     color: "#292524",
-    lineHeight: 16,
+    lineHeight: 13,
   },
   heroPosterLine: {
-    marginTop: 4,
-    fontSize: 10,
+    marginTop: 2,
+    fontSize: 9,
     fontWeight: "600",
     color: "#78716c",
   },
-  body: { maxHeight: 400, backgroundColor: CREW_HUB_SHEET_SURFACE },
-  bodyPad: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 },
-  statPillRow: {
-    flexDirection: "row",
-    flexWrap: "nowrap",
-    gap: 5,
+  body: {
+    backgroundColor: CREW_HUB_SHEET_SURFACE,
+    paddingHorizontal: 10,
+    paddingTop: 5,
+    paddingBottom: 6,
   },
-  statPill: {
-    flex: 1,
-    minWidth: 0,
-    backgroundColor: "#f5f5f4",
-    borderRadius: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#e7e5e4",
-  },
-  statPillLab: {
+  sectionEyebrow: {
     fontSize: 7,
-    fontWeight: "800",
-    color: "#78716c",
-    letterSpacing: 0.25,
-    textAlign: "center",
+    fontWeight: "900",
+    color: "#a8a29e",
+    letterSpacing: 0.8,
+    marginBottom: 4,
   },
-  statPillVal: {
-    marginTop: 3,
-    fontSize: 10,
-    fontWeight: "800",
-    color: "#0c0a09",
-    textAlign: "center",
+  statRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 4,
   },
-  statPillValRed: { color: SCHEDULE_MOCK_HEADER_RED },
-  dividerFaint: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(120, 113, 108, 0.18)",
-    marginVertical: 8,
+  statTile: {
+    flexGrow: 1,
+    minWidth: "30%",
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CREW_HUB_CARD_RIM,
   },
+  statLab: { fontSize: 7, fontWeight: "800", color: "#78716c", letterSpacing: 0.2 },
+  statVal: { marginTop: 2, fontSize: 10, fontWeight: "800", color: "#0c0a09" },
+  statAccent: { color: "#15803d" },
+  statValRed: { color: SCHEDULE_MOCK_HEADER_RED },
   sectionCard: {
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 8,
-    marginBottom: 6,
+    borderRadius: 8,
+    padding: 6,
+    marginBottom: 4,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: CREW_HUB_CARD_RIM,
   },
@@ -375,13 +328,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 6,
-    paddingBottom: 4,
+    marginBottom: 4,
+    paddingBottom: 3,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "rgba(120, 113, 108, 0.15)",
   },
-  dayHeadLeft: { fontSize: 10, fontWeight: "800", color: "#0c0a09", flex: 1, paddingRight: 6 },
-  dayHeadRight: { fontSize: 9, fontWeight: "600", color: "#78716c" },
+  dayHeadLeft: { fontSize: 9, fontWeight: "800", color: "#0c0a09", flex: 1, paddingRight: 4 },
+  dayHeadRight: { fontSize: 9, fontWeight: "700", color: "#0f172a" },
   legGridHead: {
     flexDirection: "row",
     paddingBottom: 3,
@@ -390,99 +343,87 @@ const styles = StyleSheet.create({
   },
   legHR: {
     flex: 2.2,
-    fontSize: 7,
+    fontSize: 6,
     fontWeight: "800",
     color: "#78716c",
-    letterSpacing: 0.3,
-    paddingLeft: 2,
+    letterSpacing: 0.2,
+    paddingLeft: 1,
   },
   legHC: {
     flex: 1,
-    fontSize: 7,
+    fontSize: 6,
     fontWeight: "800",
     color: "#78716c",
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
     textAlign: "center",
   },
-  legGridRow: { flexDirection: "row", alignItems: "flex-start", paddingTop: 5 },
+  legGridRow: { flexDirection: "row", alignItems: "flex-start", paddingTop: 3 },
   legR: {
     flex: 2.2,
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "700",
     color: "#0c0a09",
-    lineHeight: 14,
-    paddingRight: 4,
+    lineHeight: 12,
+    paddingRight: 3,
   },
   legC: {
     flex: 1,
-    fontSize: 10,
+    minWidth: 34,
+    fontSize: 9,
     fontWeight: "700",
     color: "#0c0a09",
     textAlign: "center",
   },
   layCard: {
     flexDirection: "row",
-    gap: 8,
+    gap: 6,
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 8,
-    marginBottom: 6,
+    borderRadius: 8,
+    padding: 5,
+    marginBottom: 4,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: CREW_HUB_CARD_RIM,
   },
-  layIcon: { fontSize: 14, marginTop: 2 },
+  layIcon: { fontSize: 11, marginTop: 1 },
   layTextCol: { flex: 1, minWidth: 0 },
-  layTag: { fontSize: 8, fontWeight: "800", color: "#78716c", letterSpacing: 0.4, marginBottom: 2 },
-  layBody: { fontSize: 11, fontWeight: "600", color: "#292524", lineHeight: 15 },
+  layTag: { fontSize: 7, fontWeight: "800", color: "#78716c", letterSpacing: 0.3, marginBottom: 1 },
+  layBody: { fontSize: 10, fontWeight: "600", color: "#292524", lineHeight: 13 },
   crewHead: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 6,
-    paddingBottom: 4,
+    marginBottom: 4,
+    paddingBottom: 3,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "rgba(120, 113, 108, 0.12)",
   },
-  crewHeadTitle: { fontSize: 9, fontWeight: "900", color: "#78716c", letterSpacing: 0.5 },
-  crewHeadCount: { fontSize: 9, fontWeight: "800", color: "#78716c" },
-  crewRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  crewHeadTitle: { fontSize: 8, fontWeight: "900", color: "#78716c", letterSpacing: 0.4 },
+  crewHeadCount: { fontSize: 8, fontWeight: "800", color: "#78716c" },
+  crewRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   crewPos: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "800",
     color: SCHEDULE_MOCK_HEADER_RED,
-    minWidth: 28,
+    minWidth: 24,
   },
-  crewName: { flex: 1, fontSize: 11, fontWeight: "700", color: "#0c0a09", lineHeight: 15 },
-  crewBase: { marginTop: 4, fontSize: 9, fontWeight: "600", color: "#78716c" },
-  panel: {
-    backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 8,
-    marginBottom: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CREW_HUB_CARD_RIM,
-    gap: 4,
-  },
-  panelTitle: { fontSize: 9, fontWeight: "900", color: "#78716c", letterSpacing: 0.5, marginBottom: 2 },
-  panelLine: { fontSize: 10, fontWeight: "600", color: "#292524", lineHeight: 14 },
-  kvK: { fontWeight: "600", color: "#a8a29e" },
-  worthInline: { fontWeight: "800", color: "#15803d" },
+  crewName: { flex: 1, fontSize: 10, fontWeight: "700", color: "#0c0a09", lineHeight: 13 },
+  crewBase: { marginTop: 2, fontSize: 8, fontWeight: "600", color: "#78716c" },
   comments: {
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 8,
+    borderRadius: 8,
+    padding: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: CREW_HUB_CARD_RIM,
   },
-  commentsTitle: { fontSize: 9, fontWeight: "900", color: "#78716c", letterSpacing: 0.45, marginBottom: 6 },
-  commentsBody: { fontSize: 10, fontWeight: "500", color: "#1c1917", lineHeight: 15 },
+  commentsTitle: { fontSize: 8, fontWeight: "900", color: "#78716c", letterSpacing: 0.35, marginBottom: 3 },
+  commentsBody: { fontSize: 9, fontWeight: "500", color: "#1c1917", lineHeight: 12 },
   commentsEmpty: { color: "#a8a29e", fontStyle: "italic" },
   footer: {
     flexDirection: "row",
     gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 16,
+    paddingHorizontal: 10,
+    paddingTop: 6,
+    paddingBottom: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#e7e5e4",
     backgroundColor: "#fafaf9",
@@ -490,19 +431,9 @@ const styles = StyleSheet.create({
   btnPrimary: {
     flex: 1,
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
-    paddingVertical: 10,
-    borderRadius: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
     alignItems: "center",
   },
-  btnPrimaryText: { color: "#fff", fontSize: 12, fontWeight: "900" },
-  btnGhost: {
-    flex: 1,
-    backgroundColor: "#f5f5f4",
-    paddingVertical: 10,
-    borderRadius: 12,
-    alignItems: "center",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CREW_HUB_CARD_RIM,
-  },
-  btnGhostText: { color: SCHEDULE_MOCK_HEADER_RED, fontSize: 12, fontWeight: "800" },
+  btnPrimaryText: { color: "#fff", fontSize: 11, fontWeight: "900" },
 });
