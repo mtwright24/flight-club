@@ -66,7 +66,6 @@ import {
   CREW_HUB_CARD_RIM,
   CREW_HUB_DATE_HEADER_BG,
   SCHEDULE_MOCK_HEADER_RED,
-  SCHEDULE_MOCK_STATS_STRIP_RED,
 } from "../scheduleMockPalette";
 import { scheduleTheme as scheduleT } from "../scheduleTheme";
 import type { CrewScheduleTrip } from "../types";
@@ -183,26 +182,78 @@ function groupOpenTimeByBucketPreserveOrder(trips: OpenTimeTrip[]): { key: strin
   return keyOrder.map((key) => ({ key, items: m.get(key)! }));
 }
 
-function openTimePairingDateLine(t: OpenTimeTrip): string {
-  return (t.dateLabel?.trim() || t.date?.trim() || t.dates?.trim() || "—") as string;
+const OT_HUB_AIRPORT_RE =
+  /^(JFK|LAX|BOS|FLL|MCO|MIA|ATL|SEA|SLC|DEN|ORD|DFW|PHX|LAS|SAN|PDX|BUR|PBI|STT|SJU)$/i;
+
+function openTimeRowBidPosLooksValid(s: string): boolean {
+  const x = String(s ?? "").trim().toUpperCase();
+  if (!x || x.length > 6) return false;
+  if (/^\d{1,2}[A-Z]{3}$/.test(x)) return false;
+  if (/^J[A-Z0-9]{3,5}/.test(x)) return false;
+  if (OT_HUB_AIRPORT_RE.test(x)) return false;
+  if (/^\d{1,2}:\d{2}$/.test(x)) return false;
+  if (/^\d{3,4}$/.test(x)) return false;
+  if (/^\$/.test(x)) return false;
+  if (/^[1-9]$/.test(x)) return false;
+  return /^[A-Z0-9]{2,6}$/.test(x);
 }
 
-/** Row subline: omit pairing date when it matches the section bucket (reduces clutter). */
-function openTimeRowSubline(t: OpenTimeTrip, dateGroupKey: string): string {
-  const bid = t.bidPos?.trim();
-  const pd = openTimePairingDateLine(t).trim();
-  const g = dateGroupKey.trim();
+function openTimeRowBidPos(t: OpenTimeTrip): string {
+  const direct = t.bidPos?.trim();
+  if (direct && openTimeRowBidPosLooksValid(direct)) return direct.toUpperCase();
+  const cells = t.rawCells ?? [];
+  if (cells.length >= 3) {
+    const c2 = cells[2]?.trim() ?? "";
+    if (openTimeRowBidPosLooksValid(c2)) return c2.toUpperCase();
+  }
+  const line = cells.join(" ");
+  const m = line.match(/\b(?:BID|POS)\s*[:\s]+([A-Z0-9]{2,6})\b/i);
+  if (m?.[1] && openTimeRowBidPosLooksValid(m[1])) return m[1].toUpperCase();
+  for (const c of cells) {
+    const x = c.trim();
+    if (openTimeRowBidPosLooksValid(x)) return x.toUpperCase();
+  }
+  return "";
+}
+
+function openTimeRowTripDays(t: OpenTimeTrip): number | null {
+  if (t.days != null && Number.isFinite(t.days) && t.days > 0) return t.days;
+  const cells = t.rawCells ?? [];
+  if (cells.length >= 4) {
+    const c3 = cells[3]?.trim() ?? "";
+    const n = parseInt(c3.replace(/\D/g, ""), 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 14) return n;
+  }
+  for (const c of cells) {
+    const x = c.trim();
+    if (/^[1-9]$/.test(x)) return parseInt(x, 10);
+    const dm = x.match(/^(\d{1,2})\s*D(?:AY)?S?$/i);
+    if (dm) {
+      const n = parseInt(dm[1]!, 10);
+      if (n >= 1 && n <= 14) return n;
+    }
+  }
+  const line = cells.join(" ");
+  const dm = line.match(/\bDays\s*[:\s]+\s*(\d{1,2})\b/i);
+  if (dm) {
+    const n = Number(dm[1]);
+    if (n >= 1 && n <= 14) return n;
+  }
+  const m = line.match(/\b(\d)\s*D\b/i);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= 9) return n;
+  }
+  return null;
+}
+
+/** Row subline under pairing id: bid position + trip length only (date lives in section header). */
+function openTimeRowSubline(t: OpenTimeTrip): string {
   const parts: string[] = [];
+  const bid = openTimeRowBidPos(t);
   if (bid) parts.push(`Bid ${bid}`);
-  const pdU = pd.replace(/\s+/g, " ").toUpperCase();
-  const gU = g.replace(/\s+/g, " ").toUpperCase();
-  const redundant =
-    pdU.length > 0 &&
-    gU.length > 0 &&
-    (pdU === gU || pdU.includes(gU) || gU.includes(pdU));
-  if (!redundant && pd && pd !== "—") parts.push(pd);
-  const d = t.days;
-  if (d != null && Number.isFinite(d) && d > 0) parts.push(`${d}D`);
+  const d = openTimeRowTripDays(t);
+  if (d != null) parts.push(`${d}D`);
   return parts.join(META_DOT) || "—";
 }
 
@@ -443,7 +494,6 @@ function OpenTimeHubRow({
   t,
   isLast,
   showBestTag,
-  dateGroupKey,
   onAdd,
   onOpenDetail,
   onMutateSwap,
@@ -451,14 +501,13 @@ function OpenTimeHubRow({
   t: OpenTimeTrip;
   isLast: boolean;
   showBestTag: boolean;
-  dateGroupKey: string;
   onAdd: (x: OpenTimeTrip) => void;
   onOpenDetail: (x: OpenTimeTrip) => void;
   onMutateSwap: (x: OpenTimeTrip) => void;
 }) {
   const per = dollarPerHourLabel(t);
-  const daysVal =
-    t.days != null && Number.isFinite(t.days) && t.days > 0 ? String(t.days) : "—";
+  const tripDays = openTimeRowTripDays(t);
+  const daysVal = tripDays != null ? String(tripDays) : "—";
 
   const swipeActions: CrewHubSwipeRailAction[] = [
     {
@@ -497,7 +546,7 @@ function OpenTimeHubRow({
               ) : null}
             </View>
             <Text style={styles.hubSubMeta} numberOfLines={2}>
-              {openTimeRowSubline(t, dateGroupKey)}
+              {openTimeRowSubline(t)}
             </Text>
           </View>
           <View style={styles.hubColLay}>
@@ -1259,11 +1308,13 @@ export default function OpenTimeTabScreen() {
                   <Text style={styles.otDatePillText} numberOfLines={1}>
                     {grp.key}
                   </Text>
-                  <View style={styles.otDateBadge}>
-                    <Text style={styles.otDateBadgeTxt}>{grp.items.length}</Text>
-                  </View>
                 </View>
-                <View style={styles.otDateRule} />
+                <View style={styles.otDateHeadTrail}>
+                  <View style={styles.otDateRule} />
+                  <Text style={styles.otDateSectionCount}>
+                    {grp.items.length} trip{grp.items.length === 1 ? "" : "s"}
+                  </Text>
+                </View>
               </View>
               <View style={styles.otCardShell}>
                 <View style={styles.otColHead}>
@@ -1281,7 +1332,6 @@ export default function OpenTimeTabScreen() {
                     key={`${grp.key}-${tripDedupeKey(t)}-${idx}`}
                     t={t}
                     isLast={idx === grp.items.length - 1}
-                    dateGroupKey={grp.key}
                     showBestTag={
                       best234Trip != null && tripDedupeKey(t) === tripDedupeKey(best234Trip)
                     }
@@ -1412,17 +1462,18 @@ const styles = StyleSheet.create({
   yourTripMain: { color: "#fff", fontSize: 10, fontWeight: "600", lineHeight: 13 },
   yourTripMeta: { color: "#fff", fontSize: 8, fontWeight: "700" },
   placardWrap: { marginHorizontal: 10, marginTop: 6 },
-  otDateSection: { marginTop: 10, paddingHorizontal: 10 },
-  otDateHeadRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  otDateSection: { marginTop: 18, paddingHorizontal: 10 },
+  otDateHeadRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
   otDatePill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    flexShrink: 0,
     backgroundColor: CREW_HUB_DATE_HEADER_BG,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 10,
-    maxWidth: "78%",
+    maxWidth: "72%",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255,255,255,0.12)",
     ...Platform.select({
@@ -1436,26 +1487,29 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
-  otDatePillIcon: { fontSize: 11 },
-  otDatePillText: { fontSize: 10, fontWeight: "800", color: "#fff7f7", flexShrink: 1, letterSpacing: 0.2 },
-  otDateBadge: {
-    marginLeft: 4,
-    minWidth: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: SCHEDULE_MOCK_STATS_STRIP_RED,
+  otDatePillIcon: { fontSize: 12 },
+  otDatePillText: { fontSize: 12, fontWeight: "800", color: "#fff7f7", flexShrink: 1, letterSpacing: 0.2 },
+  otDateHeadTrail: {
+    flex: 1,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 5,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255,255,255,0.25)",
+    marginLeft: 12,
+    minWidth: 0,
   },
-  otDateBadgeTxt: { color: "#fff", fontSize: 10, fontWeight: "900" },
   otDateRule: {
     flex: 1,
-    height: 1,
+    height: StyleSheet.hairlineWidth,
+    minHeight: 1,
     backgroundColor: "rgba(92, 16, 24, 0.2)",
-    marginLeft: 8,
+  },
+  otDateSectionCount: {
+    marginLeft: 10,
+    fontSize: 12,
+    fontWeight: "400",
+    letterSpacing: 0,
+    color: "#94a3b8",
+    textAlign: "right",
+    flexShrink: 0,
   },
   otCardShell: {
     backgroundColor: "#fff",

@@ -7,7 +7,6 @@ import { useNotificationsBadge } from '../../../hooks/useNotificationsBadge';
 import { useDmUnreadBadge } from '../../../hooks/useDmUnreadBadge';
 import { colors, radius, spacing } from '../../../styles/theme';
 import { useCrewScheduleHeaderBridge } from '../crewScheduleHeaderBridge';
-import { FLICA_NATIVE_URLS } from '../../flica-actions/flicaActionsNativeService';
 import { SCHEDULE_MOCK_HEADER_RED } from '../scheduleMockPalette';
 
 const TABS_HEADER_ICON = 18;
@@ -31,7 +30,7 @@ type Props = {
   relaxedBottomInset?: boolean;
   /**
    * Crew schedule **bottom tabs** only: mock reference red, title + subtitle row, search · notifications
-   * (Tradeboard: post shortcut icon) · menu (no back). Stack screens keep default Flight Club chrome + back.
+   * · menu (no back). Stack screens keep default Flight Club chrome + back.
    */
   scheduleTabsVariant?: boolean;
 };
@@ -56,9 +55,6 @@ export default function CrewScheduleHeader({
     scheduleTabsVariant && !titleProp
       ? crewScheduleTabTitleFromPath(pathname ?? '')
       : titleProp ?? 'Crew Schedule';
-  const isTradeboardTab =
-    scheduleTabsVariant && (pathname ?? '').replace(/\/$/, '').includes('tradeboard');
-
   const goBack = () => {
     if (router.canGoBack()) {
       router.back();
@@ -115,21 +111,6 @@ export default function CrewScheduleHeader({
                 </View>
               ) : null}
             </Pressable>
-            {isTradeboardTab ? (
-              <Pressable
-                onPress={() =>
-                  router.push({
-                    pathname: '/crew-schedule/flica-web',
-                    params: { uri: encodeURIComponent(FLICA_NATIVE_URLS.tradePostRequest) },
-                  } as unknown as Href)
-                }
-                style={({ pressed }) => [styles.tabsIconButton, pressed && styles.tabsIconButtonPressed]}
-                accessibilityLabel="Post trade request"
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="add-circle-outline" size={TABS_HEADER_ICON} color={colors.cardBg} />
-              </Pressable>
-            ) : null}
             <Pressable
               onPress={() => router.push('/menu')}
               style={({ pressed }) => [styles.tabsIconButton, pressed && styles.tabsIconButtonPressed]}

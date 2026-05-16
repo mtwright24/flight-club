@@ -709,11 +709,13 @@ const TradeboardDeferredGroupedList = React.memo(function TradeboardDeferredGrou
                 <Text style={styles.tbDatePillText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
                   {formatTradeboardDatePillHeading(grp.key, new Date())}
                 </Text>
-                <View style={styles.tbDateBadge}>
-                  <Text style={styles.tbDateBadgeTxt}>{grp.items.length}</Text>
-                </View>
               </View>
-              <View style={styles.tbDateRule} />
+              <View style={styles.tbDateHeadTrail}>
+                <View style={styles.tbDateRule} />
+                <Text style={styles.tbDateSectionCount}>
+                  {grp.items.length} trip{grp.items.length === 1 ? "" : "s"}
+                </Text>
+              </View>
             </View>
             <View style={styles.tbCardShell}>
               <View style={styles.tbColHead}>
@@ -1226,11 +1228,11 @@ export default function TradeboardTabScreen() {
               );
             })}
             <Pressable
-              style={[styles.tbSeg, styles.tbSegPost]}
+              style={styles.tbSeg}
               onPress={() => runTradeboardMutatingWeb(FLICA_NATIVE_URLS.tradePostRequest)}
             >
-              <Ionicons name="add-circle-outline" size={14} color={SCHEDULE_MOCK_HEADER_RED} />
-              <Text style={styles.tbSegPostTxt} numberOfLines={2}>
+              <Ionicons name="add-circle-outline" size={14} color="#64748b" />
+              <Text style={styles.tbSegTxt} numberOfLines={2}>
                 Post a Request
               </Text>
             </Pressable>
@@ -1603,25 +1605,8 @@ const styles = StyleSheet.create({
     lineHeight: 10,
   },
   tbSegTxtOn: { color: SCHEDULE_MOCK_HEADER_RED, fontWeight: "800" },
-  tbSegPost: {
-    flex: 1,
-    minWidth: 0,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 6,
-    gap: 3,
-    borderBottomWidth: 2,
-    borderBottomColor: "transparent",
-  },
-  tbSegPostTxt: {
-    fontSize: 8,
-    fontWeight: "900",
-    color: SCHEDULE_MOCK_HEADER_RED,
-    textAlign: "center",
-    lineHeight: 10,
-  },
   tbDateSection: {
-    marginTop: 12,
+    marginTop: 18,
     paddingHorizontal: 10,
     alignSelf: "stretch",
     ...Platform.select({
@@ -1635,16 +1620,17 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
-  tbDateHeadRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  tbDateHeadRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
   tbDatePill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 6,
+    flexShrink: 0,
     backgroundColor: CREW_HUB_DATE_HEADER_BG,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 999,
-    maxWidth: "76%",
+    maxWidth: "70%",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255,255,255,0.12)",
     ...Platform.select({
@@ -1662,57 +1648,52 @@ const styles = StyleSheet.create({
   /** Same size/weight as column titles (`tbBarColTitle`); color only differs on pill. */
   tbDatePillText: {
     color: "#fff",
-    fontSize: 8,
+    fontSize: 11,
     fontWeight: "800",
     flexShrink: 1,
     letterSpacing: 0.2,
-    lineHeight: 11,
+    lineHeight: 14,
     textAlign: "center",
     textTransform: "uppercase",
   },
-  tbDateBadge: {
-    marginLeft: 2,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: SCHEDULE_MOCK_STATS_STRIP_RED,
+  tbDateHeadTrail: {
+    flex: 1,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255,255,255,0.28)",
-  },
-  tbDateBadgeTxt: {
-    color: "#fff",
-    fontSize: 8,
-    fontWeight: "800",
-    letterSpacing: 0.2,
-    lineHeight: 11,
-    textAlign: "center",
+    marginLeft: 12,
+    minWidth: 0,
   },
   tbDateRule: {
     flex: 1,
     height: StyleSheet.hairlineWidth,
     minHeight: 1,
     backgroundColor: "rgba(176, 24, 26, 0.2)",
-    marginLeft: 8,
+  },
+  tbDateSectionCount: {
+    marginLeft: 10,
+    fontSize: 12,
+    fontWeight: "400",
+    letterSpacing: 0,
+    color: "#94a3b8",
+    textAlign: "right",
+    flexShrink: 0,
   },
   tbCardShell: {
     alignSelf: "stretch",
     width: "100%",
     backgroundColor: "#fff",
     borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(176, 24, 26, 0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(15, 23, 42, 0.16)",
     overflow: "hidden",
     ...Platform.select({
       ios: {
-        shadowColor: "#2a0a0c",
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 6,
+        shadowColor: "#000000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
       },
-      android: { elevation: 1 },
+      android: { elevation: 3 },
       default: {},
     }),
   },
@@ -1725,8 +1706,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 4,
     backgroundColor: "#F4F4F5",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(176, 24, 26, 0.16)",
   },
   tbColHeadCell: {
     justifyContent: "center",
