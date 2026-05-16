@@ -1,9 +1,11 @@
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter, type Href } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
 import {
   ActivityIndicator,
   Alert,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -23,17 +25,34 @@ import { flicaFetchNeedsWebVerification } from "../../flica-actions/flicaActions
 import {
   FLICA_NATIVE_URLS,
   nativeFetchOpenTimeMyRequests,
-  nativeFetchOpenTimePot,
 } from "../../flica-actions/flicaActionsNativeService";
-import CrewHubOpenTimePairingSheet from "../components/CrewHubOpenTimePairingSheet";
+import type { FlicaActionsFetchResult } from "../../flica-actions/flicaActionsTypes";
+import FlicaMarketplacePairingDetailSheet from "../components/FlicaMarketplacePairingDetailSheet";
 import { CrewHubSwipeActionRail, type CrewHubSwipeRailAction } from "../components/CrewHubSwipeActionRail";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
 import { FlicaCrewHubScheduleSessionRunner } from "../components/FlicaCrewHubScheduleSessionRunner";
-import { hubLayoverDisplayWithDots } from "../crewHubLayoverDisplay";
+import {
+  hubLayoverDisplayForHubListRow,
+  hubLayoverDisplayWithDots,
+} from "../crewHubLayoverDisplay";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
 import { loadOpenTimeHubCache, upsertOpenTimeHubCache } from "../crewHubFlicaCache";
+import {
+  openTimeTripHasLiveHubActionContext,
+} from "../crewHubFlicaLiveGate";
+import {
+  fetchAllOpenTimePotContextsMerged,
+  flattenOpenTimeMonthBuckets,
+  groupOpenTimeTripsIntoMonthBuckets,
+  sortOpenTimeMonthBucketsChronologically,
+  type OpenTimeMonthBucket,
+} from "../flicaOpenTimeLiveRefresh";
 import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
-import { mapOpenTimeTripsWithHtmlFallback, openTimePageSaysNoPot } from "../flicaCrewHubHtmlFallbackParse";
+import {
+  mapOpenTimeTripsWithHtmlFallback,
+  openTimePageSaysNoPot,
+  type FlicaCrewHubFallbackParseMeta,
+} from "../flicaCrewHubHtmlFallbackParse";
 import {
   buildCrewHubParseDebugFetchEntry,
   commitOpenTimeParseDebugSnapshot,
@@ -41,12 +60,15 @@ import {
 } from "../flicaCrewHubParseDebug";
 import type { OpenTimeTrip } from "../flicaCrewHubTypes";
 import { useCrewScheduleMonthStrip } from "../hooks/useCrewScheduleMonthStrip";
+import type { FlicaMarketplacePairingDetail } from "../flicaMarketplacePairingDetailTypes";
+import { fetchFlicaMarketplacePairingDetail } from "../openFlicaMarketplacePairingDetail";
 import {
   CREW_HUB_CARD_RIM,
   CREW_HUB_DATE_HEADER_BG,
   SCHEDULE_MOCK_HEADER_RED,
   SCHEDULE_MOCK_STATS_STRIP_RED,
 } from "../scheduleMockPalette";
+import { scheduleTheme as scheduleT } from "../scheduleTheme";
 import type { CrewScheduleTrip } from "../types";
 
 function pushFlicaWeb(router: ReturnType<typeof useRouter>, uri: string) {
@@ -77,6 +99,16 @@ function parseWorthNumber(w: string): number {
 
 const META_DOT = " · ";
 
+/** Same label as modern schedule month navigator (`ScheduleTabScreen` / `ModernScheduleChrome`). */
+function openTimeBucketMonthNavLabel(sourceMonthKey: string): string {
+  const [ys, ms] = sourceMonthKey.split("-").map((x) => x.trim());
+  const y = Number(ys);
+  const m = Number(ms);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return "Open Time";
+  const mon = new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long" });
+  return `${mon} ${y}`;
+}
+
 /** Same stack as pairing detail stats card values (`TripDetailScreen` STATS_VALUE_FONT). */
 const OPEN_TIME_STATS_VALUE_FONT: TextStyle = Platform.select<TextStyle>({
   ios: { fontFamily: "Menlo" },
@@ -99,7 +131,7 @@ function openTimeTripLooksLikeToday(t: OpenTimeTrip, monthShort: string, dayNum:
 }
 
 function tripDedupeKey(t: OpenTimeTrip): string {
-  return `${t.pairingId}|${t.date ?? ""}|${t.reportTime ?? ""}`;
+  return `${t.sourceBcid ?? ""}|${t.pairingId}|${t.date ?? ""}|${t.reportTime ?? ""}`;
 }
 
 function pickFeaturedOpenTimeTrip(
@@ -137,17 +169,18 @@ function openTimeBucketKey(t: OpenTimeTrip): string {
   return (t.dateLabel?.trim() || t.date?.trim() || t.dates?.trim() || "Other") as string;
 }
 
-function groupOpenTimeByBucket(trips: OpenTimeTrip[]): { key: string; items: OpenTimeTrip[] }[] {
+/** Preserve FLICA list order: first-seen date section keys, rows appended in trip order (no alphabetical resort). */
+function groupOpenTimeByBucketPreserveOrder(trips: OpenTimeTrip[]): { key: string; items: OpenTimeTrip[] }[] {
   const m = new Map<string, OpenTimeTrip[]>();
+  const keyOrder: string[] = [];
   for (const t of trips) {
     const k = openTimeBucketKey(t);
+    if (!m.has(k)) keyOrder.push(k);
     const arr = m.get(k) ?? [];
     arr.push(t);
     m.set(k, arr);
   }
-  return [...m.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, items]) => ({ key, items }));
+  return keyOrder.map((key) => ({ key, items: m.get(key)! }));
 }
 
 function openTimePairingDateLine(t: OpenTimeTrip): string {
@@ -411,17 +444,17 @@ function OpenTimeHubRow({
   isLast,
   showBestTag,
   dateGroupKey,
-  router,
   onAdd,
   onOpenDetail,
+  onMutateSwap,
 }: {
   t: OpenTimeTrip;
   isLast: boolean;
   showBestTag: boolean;
   dateGroupKey: string;
-  router: ReturnType<typeof useRouter>;
   onAdd: (x: OpenTimeTrip) => void;
   onOpenDetail: (x: OpenTimeTrip) => void;
+  onMutateSwap: (x: OpenTimeTrip) => void;
 }) {
   const per = dollarPerHourLabel(t);
   const daysVal =
@@ -437,7 +470,7 @@ function OpenTimeHubRow({
     {
       key: "swap",
       label: "Swap",
-      onPress: () => pushFlicaWeb(router, FLICA_NATIVE_URLS.otSwapPreview),
+      onPress: () => onMutateSwap(t),
       variant: "secondary",
     },
   ];
@@ -470,7 +503,7 @@ function OpenTimeHubRow({
           <View style={styles.hubColLay}>
             <Text style={styles.hubFieldCap}>Layover</Text>
             <Text style={styles.hubLayover} numberOfLines={2}>
-              {hubLayoverDisplayWithDots(t.layover)}
+              {hubLayoverDisplayForHubListRow(t.layover)}
             </Text>
           </View>
           <View style={styles.hubMetrics}>
@@ -478,7 +511,6 @@ function OpenTimeHubRow({
             <HubOtNumCell lab="RPT" val={t.reportTime?.trim() || "—"} />
             <HubOtNumCell lab="DEP" val={t.departTime?.trim() || "—"} />
             <HubOtNumCell lab="ARR" val={t.arriveTime?.trim() || "—"} />
-            <HubOtNumCell lab="BLK" val={t.block?.trim() || "—"} narrow />
             <HubOtNumCell lab="CR" val={t.credit?.trim() || "—"} narrow />
             <View style={styles.hubCellWorth}>
               <Text style={styles.hubWorthLab}>WORTH</Text>
@@ -504,13 +536,17 @@ export default function OpenTimeTabScreen() {
   const { session } = useAuth();
   const isFocused = useIsFocused();
   const { setCrewScheduleHeaderSubtitle, bumpCrewHubSharedDataRefresh } = useCrewScheduleHeaderBridge();
-  const { stripValues, monthTrips } = useCrewScheduleMonthStrip();
+  const { stripValues, monthTrips, year, month } = useCrewScheduleMonthStrip();
 
   const [chip, setChip] = useState("All");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [potTrips, setPotTrips] = useState<OpenTimeTrip[]>([]);
-  const [detail, setDetail] = useState<OpenTimeTrip | null>(null);
+  const [openTimeBuckets, setOpenTimeBuckets] = useState<OpenTimeMonthBucket[]>([]);
+  const [openTimePotIndex, setOpenTimePotIndex] = useState(0);
+  const [marketplaceDetail, setMarketplaceDetail] = useState<FlicaMarketplacePairingDetail | null>(null);
+  const [hubMarketplaceLoading, setHubMarketplaceLoading] = useState(false);
+  /** ISO time of last successful native Open Time hub refresh (used for mutating FLICA actions). */
+  const [hubLiveMarketplaceSyncAt, setHubLiveMarketplaceSyncAt] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [pullSessionRunnerActive, setPullSessionRunnerActive] = useState(false);
   const pullSessionWaitersRef = useRef<{
@@ -518,6 +554,34 @@ export default function OpenTimeTabScreen() {
     reject: (e: Error) => void;
   } | null>(null);
   const cacheHydratedForUser = useRef<string | null>(null);
+  const selectedOtMonthKeyRef = useRef<string | null>(null);
+  /** `${sourceMonthKey}|${sourceBcid}|${sourceOpenTimePotUrl}` — preserves exact pot after refresh when possible. */
+  const selectedOpenTimeBucketKeyRef = useRef<string | null>(null);
+  const openTimePotIndexRef = useRef(0);
+
+  const monthFallback = useMemo(() => `${year}-${String(month).padStart(2, "0")}`, [year, month]);
+
+  const potTrips = useMemo(
+    () => openTimeBuckets[openTimePotIndex]?.trips ?? [],
+    [openTimeBuckets, openTimePotIndex],
+  );
+
+  const totalOpenTimeRows = useMemo(
+    () => openTimeBuckets.reduce((n, b) => n + b.trips.length, 0),
+    [openTimeBuckets],
+  );
+
+  useEffect(() => {
+    openTimePotIndexRef.current = openTimePotIndex;
+  }, [openTimePotIndex]);
+
+  useEffect(() => {
+    const b = openTimeBuckets[openTimePotIndex];
+    if (b) {
+      selectedOtMonthKeyRef.current = b.sourceMonthKey;
+      selectedOpenTimeBucketKeyRef.current = `${b.sourceMonthKey}|${b.sourceBcid}|${b.sourceOpenTimePotUrl}`;
+    }
+  }, [openTimeBuckets, openTimePotIndex]);
 
   useEffect(() => {
     const uid = session?.user?.id;
@@ -525,9 +589,16 @@ export default function OpenTimeTabScreen() {
     cacheHydratedForUser.current = uid;
     void loadOpenTimeHubCache(uid).then((c) => {
       if (!c?.trips?.length) return;
-      setPotTrips((prev) => (prev.length === 0 ? c.trips : prev));
+      setOpenTimeBuckets((prev) => {
+        if (prev.length > 0) return prev;
+        return groupOpenTimeTripsIntoMonthBuckets(c.trips, monthFallback);
+      });
+      setHubLiveMarketplaceSyncAt((was) => {
+        if (was) return was;
+        return c.trips.some((t) => openTimeTripHasLiveHubActionContext(t)) ? c.refreshedAt : null;
+      });
     });
-  }, [session?.user?.id]);
+  }, [session?.user?.id, monthFallback]);
 
   const settlePullSessionSuccess = useCallback(() => {
     pullSessionWaitersRef.current?.resolve();
@@ -553,27 +624,56 @@ export default function OpenTimeTabScreen() {
         });
       }
 
-      let potR: Awaited<ReturnType<typeof nativeFetchOpenTimePot>>;
       let myReqR: Awaited<ReturnType<typeof nativeFetchOpenTimeMyRequests>> | undefined;
-
+      let agg: Awaited<ReturnType<typeof fetchAllOpenTimePotContextsMerged>>;
       if (__DEV__) {
-        [potR, myReqR] = await Promise.all([
-          nativeFetchOpenTimePot(),
+        [agg, myReqR] = await Promise.all([
+          fetchAllOpenTimePotContextsMerged(monthFallback),
           nativeFetchOpenTimeMyRequests(),
         ]);
       } else {
-        potR = await nativeFetchOpenTimePot();
+        agg = await fetchAllOpenTimePotContextsMerged(monthFallback);
       }
+
+      const potR: FlicaActionsFetchResult =
+        agg.primaryPotResult ?? {
+          ok: false,
+          url: FLICA_NATIVE_URLS.otFrameView,
+          requestedUrl: FLICA_NATIVE_URLS.otFrameView,
+          error: agg.diag.errors.join("; ") || "Open Time pot unavailable",
+          htmlLength: agg.diag.seedFrameHtmlLen,
+        };
+
       logCrewHubAuth("native_fetch_done", {
         context: "opentime",
         phase: "first",
-        htmlLen: potR.htmlLength ?? 0,
+        htmlLen: potR.htmlLength ?? agg.diag.seedFrameHtmlLen,
         htmlState: potR.htmlState,
-        rowCount: potR.rowCount ?? 0,
+        rowCount: agg.diag.rowsTotal,
+        multiBcid: Object.keys(agg.diag.rowsCountPerBcid).length,
       });
 
-      const potFb = mapOpenTimeTripsWithHtmlFallback(potR.nativeParse?.rows ?? [], potR, potR.url);
-      const tripsPre = potFb.trips;
+      const tripsPre = agg.trips;
+      const potFb: { trips: OpenTimeTrip[]; meta: FlicaCrewHubFallbackParseMeta } =
+        agg.primaryPotResult
+          ? mapOpenTimeTripsWithHtmlFallback(
+              agg.primaryPotResult.nativeParse?.rows ?? [],
+              agg.primaryPotResult,
+              agg.primaryPotResult.url,
+            )
+          : {
+              trips: tripsPre,
+              meta: {
+                htmlLength: agg.diag.seedFrameHtmlLen,
+                rawRowsCount: 0,
+                fallbackTextParserUsed: false,
+                extractedPostCount: 0,
+                extractedTripCount: tripsPre.length,
+                firstExtractedRawBlock: JSON.stringify(agg.diag.sampleRows).slice(0, 400),
+                markersFound: ["open_time_multi_bcid_refresh"],
+                markersMissing: agg.diag.errors.length ? agg.diag.errors : [],
+              },
+            };
 
       const fetches = [buildCrewHubParseDebugFetchEntry("Open Time Pot", potR, tripsPre)];
       if (__DEV__ && myReqR) {
@@ -610,6 +710,9 @@ export default function OpenTimeTabScreen() {
           context: "opentime",
           afterPullSession: reason === "pull",
         });
+        setHubLiveMarketplaceSyncAt(null);
+        setOpenTimeBuckets([]);
+        setOpenTimePotIndex(0);
         if (reason === "focus") {
           setError(null);
         } else {
@@ -619,11 +722,32 @@ export default function OpenTimeTabScreen() {
       }
 
       const trips = tripsPre;
+      setHubLiveMarketplaceSyncAt(agg.diag.refreshedAt);
+
+      const bucketsSorted = sortOpenTimeMonthBucketsChronologically(agg.monthBuckets);
+      const bucketKey = selectedOpenTimeBucketKeyRef.current;
+      const preservedKey = selectedOtMonthKeyRef.current;
+      let nextIdx = -1;
+      if (bucketKey) {
+        const i = bucketsSorted.findIndex(
+          (b) => `${b.sourceMonthKey}|${b.sourceBcid}|${b.sourceOpenTimePotUrl}` === bucketKey,
+        );
+        if (i >= 0) nextIdx = i;
+      }
+      if (nextIdx < 0 && preservedKey) {
+        const i = bucketsSorted.findIndex((b) => b.sourceMonthKey === preservedKey);
+        if (i >= 0) nextIdx = i;
+      }
+      if (nextIdx < 0) {
+        nextIdx = Math.min(openTimePotIndexRef.current, Math.max(0, bucketsSorted.length - 1));
+      }
+      setOpenTimeBuckets(bucketsSorted);
+      setOpenTimePotIndex(nextIdx);
+
       logCrewHubAuth("parse_done", { context: "opentime", mappedRows: trips.length });
-      setPotTrips(trips);
       if (flicaFetchNeedsWebVerification(potR.htmlState)) {
         setError(potR.error ?? "FLICA verification still required.");
-      } else if (!potR.ok && potR.error) {
+      } else if (!potR.ok && potR.error && trips.length === 0) {
         setError(potR.error);
       } else if (
         trips.length === 0 &&
@@ -639,7 +763,11 @@ export default function OpenTimeTabScreen() {
         setError(null);
       }
 
-      if (potR.ok && !flicaFetchNeedsWebVerification(potR.htmlState) && session?.user?.id) {
+      if (
+        !flicaFetchNeedsWebVerification(potR.htmlState) &&
+        session?.user?.id &&
+        trips.length > 0
+      ) {
         void upsertOpenTimeHubCache(session.user.id, {
           v: 1,
           trips,
@@ -651,13 +779,186 @@ export default function OpenTimeTabScreen() {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
       if (!msg.toLowerCase().includes("cancelled")) {
-        setPotTrips([]);
+        setOpenTimeBuckets([]);
+        setOpenTimePotIndex(0);
+        setHubLiveMarketplaceSyncAt(null);
       }
     } finally {
       setLoading(false);
       bumpCrewHubSharedDataRefresh();
     }
-  }, [bumpCrewHubSharedDataRefresh, session?.user?.id]);
+  }, [bumpCrewHubSharedDataRefresh, session?.user?.id, monthFallback]);
+
+  const openOpenTimeMarketplace = useCallback(
+    async (trip: OpenTimeTrip) => {
+      const fetchUrl = trip.pairingDetailUrl?.trim();
+      if (!fetchUrl) {
+        Alert.alert(
+          "Cannot open pairing detail",
+          "This row does not have a FLICA pairing detail URL. Pull to refresh Open Time and try again.",
+        );
+        return;
+      }
+      const refererExact = trip.sourceOpenTimePotUrl?.trim() || undefined;
+      const debugRow = {
+        pairingId: trip.pairingId,
+        date: [trip.date, trip.dates, trip.dateLabel].filter(Boolean).join(" · ") || undefined,
+        pairingDetailUrl: trip.pairingDetailUrl,
+        dateYmd: trip.dateYmd,
+        sourceBcid: trip.sourceBcid,
+        sourceOpenTimePotUrl: trip.sourceOpenTimePotUrl,
+        sourceOtFrameUrl: trip.sourceOtFrameUrl,
+        pairingDetailUrlFromLiveHtml: trip.pairingDetailUrlFromLiveHtml,
+        urlIsSyntheticFallback: !trip.pairingDetailUrl?.trim(),
+      };
+
+      console.log(
+        "[FC_OPENTIME_ROW_TAP_DETAIL]",
+        JSON.stringify({
+          selectedRowPairingId: trip.pairingId,
+          selectedRowDateYmd: trip.dateYmd,
+          selectedRowSourceBcid: trip.sourceBcid,
+          selectedRowSourceOpenTimePotUrl: trip.sourceOpenTimePotUrl,
+          selectedRowPairingDetailUrl: trip.pairingDetailUrl,
+          pairingDetailUrlFromLiveHtml: trip.pairingDetailUrlFromLiveHtml,
+          finalFetchUrl: fetchUrl,
+        }),
+      );
+
+      setHubMarketplaceLoading(true);
+      let didRetry = false;
+      try {
+        const runFetch = async (): Promise<FlicaMarketplacePairingDetail> => {
+          try {
+            return await fetchFlicaMarketplacePairingDetail(fetchUrl, "opentime", {
+              referer: refererExact,
+              monthFallback,
+              debugRow,
+            });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            const retryable =
+              Boolean(trip.sourceBcid?.trim()) &&
+              !didRetry &&
+              /FLICA_APPLICATION_OR_SESSION_ERROR|InitializeSessionData|Application\s+Error/i.test(msg);
+            if (!retryable) throw e;
+            didRetry = true;
+            const agg2 = await fetchAllOpenTimePotContextsMerged(monthFallback);
+            const buckets2 = sortOpenTimeMonthBucketsChronologically(agg2.monthBuckets);
+            setOpenTimeBuckets(buckets2);
+            setHubLiveMarketplaceSyncAt(agg2.diag.refreshedAt);
+            const flat2 = flattenOpenTimeMonthBuckets(buckets2);
+            const fresh =
+              flat2.find(
+                (x) =>
+                  x.pairingId === trip.pairingId &&
+                  x.dateYmd === trip.dateYmd &&
+                  x.sourceBcid === trip.sourceBcid,
+              ) ??
+              flat2.find((x) => x.pairingId === trip.pairingId && x.dateYmd === trip.dateYmd) ??
+              null;
+            const mergedTrip = fresh ? ({ ...trip, ...fresh } as OpenTimeTrip) : trip;
+            const u2 = mergedTrip.pairingDetailUrl?.trim();
+            if (!u2) throw e;
+            const ref2 = mergedTrip.sourceOpenTimePotUrl?.trim() || undefined;
+            console.log("[FC_OPENTIME_ROW_TAP_DETAIL_RETRY]", JSON.stringify({ finalFetchUrl: u2 }));
+            return await fetchFlicaMarketplacePairingDetail(u2, "opentime", {
+              referer: ref2,
+              monthFallback,
+              debugRow: {
+                ...debugRow,
+                pairingDetailUrl: mergedTrip.pairingDetailUrl,
+                dateYmd: mergedTrip.dateYmd,
+                sourceBcid: mergedTrip.sourceBcid,
+                sourceOpenTimePotUrl: mergedTrip.sourceOpenTimePotUrl,
+                sourceOtFrameUrl: mergedTrip.sourceOtFrameUrl,
+              },
+            });
+          }
+        };
+        setMarketplaceDetail(await runFetch());
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        Alert.alert("Pairing detail failed", msg);
+      } finally {
+        setHubMarketplaceLoading(false);
+      }
+    },
+    [monthFallback],
+  );
+
+  const goPrevOpenTimeMonth = useCallback(() => {
+    setOpenTimePotIndex((i) => Math.max(0, i - 1));
+  }, []);
+
+  const goNextOpenTimeMonth = useCallback(() => {
+    setOpenTimePotIndex((i) => {
+      const max = Math.max(0, openTimeBuckets.length - 1);
+      return Math.min(max, i + 1);
+    });
+  }, [openTimeBuckets.length]);
+
+  const canPrevOpenTimeMonth = openTimeBuckets.length > 0 && openTimePotIndex > 0;
+  const canNextOpenTimeMonth =
+    openTimeBuckets.length > 0 && openTimePotIndex < openTimeBuckets.length - 1;
+
+  const activeOpenTimeMonthTitle = useMemo(() => {
+    const smk = openTimeBuckets[openTimePotIndex]?.sourceMonthKey;
+    return smk ? openTimeBucketMonthNavLabel(smk) : "Open Time";
+  }, [openTimeBuckets, openTimePotIndex]);
+
+  const openTimeMonthSwipePan = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
+        onMoveShouldSetPanResponder: (_, g) =>
+          Math.abs(g.dx) > 28 && Math.abs(g.dx) > Math.abs(g.dy) + 12,
+        /** Steal clearly horizontal drags from nested touchables (chevrons / stats) so month swipe works like Schedule. */
+        onMoveShouldSetPanResponderCapture: (_, g) =>
+          Math.abs(g.dx) > 22 && Math.abs(g.dx) > Math.abs(g.dy) + 10,
+        onPanResponderTerminationRequest: () => true,
+        onPanResponderRelease: (_, g) => {
+          const minDist = 56;
+          const minVel = 0.4;
+          if (g.dx < -minDist || g.vx < -minVel) {
+            if (canNextOpenTimeMonth) goNextOpenTimeMonth();
+          } else if (g.dx > minDist || g.vx > minVel) {
+            if (canPrevOpenTimeMonth) goPrevOpenTimeMonth();
+          }
+        },
+      }),
+    [canNextOpenTimeMonth, canPrevOpenTimeMonth, goNextOpenTimeMonth, goPrevOpenTimeMonth],
+  );
+
+  const canMutateOpenTimeRow = useCallback(
+    (t: OpenTimeTrip): boolean => {
+      if (!hubLiveMarketplaceSyncAt) {
+        Alert.alert(
+          "Sync live FLICA first",
+          "Pull to refresh Open Time so FLICA actions use a current session.",
+        );
+        return false;
+      }
+      if (!openTimeTripHasLiveHubActionContext(t)) {
+        Alert.alert(
+          "Sync live FLICA first",
+          "This row does not have a current live FLICA action context. Pull to refresh Open Time and try again.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [hubLiveMarketplaceSyncAt],
+  );
+
+  const onMutateSwap = useCallback(
+    (t: OpenTimeTrip) => {
+      if (!canMutateOpenTimeRow(t)) return;
+      pushFlicaWeb(router, FLICA_NATIVE_URLS.otSwapPreview);
+    },
+    [canMutateOpenTimeRow, router],
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -695,8 +996,8 @@ export default function OpenTimeTabScreen() {
   }, [monthTrips, todayIso]);
 
   const headerSubtitle = useMemo(() => {
-    return `${dateShort} · ${potTrips.length} available · ${weekdayShort}`;
-  }, [dateShort, potTrips.length, weekdayShort]);
+    return `${dateShort} · ${totalOpenTimeRows} available · ${weekdayShort}`;
+  }, [dateShort, totalOpenTimeRows, weekdayShort]);
 
   useEffect(() => {
     if (!isFocused) return;
@@ -760,7 +1061,7 @@ export default function OpenTimeTabScreen() {
 
   const dateGroups = useMemo(() => {
     const rows = listedTrips.filter((t) => !excludedRowKeys.has(tripDedupeKey(t)));
-    return groupOpenTimeByBucket(rows);
+    return groupOpenTimeByBucketPreserveOrder(rows);
   }, [listedTrips, excludedRowKeys]);
 
   useEffect(() => {
@@ -794,6 +1095,7 @@ export default function OpenTimeTabScreen() {
   const chips = ["All", "Turns", "2 Days", "3 Days", "Red-eye", "≥$1k"];
 
   const onAdd = (t: OpenTimeTrip) => {
+    if (!canMutateOpenTimeRow(t)) return;
     Alert.alert(
       "Add open time trip?",
       `You will complete this in FLICA. Pairing ${t.pairingId}.`,
@@ -820,9 +1122,49 @@ export default function OpenTimeTabScreen() {
         visible={toast != null && toast.length > 0}
         onDismiss={() => setToast(null)}
       />
-      <MonthlyStatsStrip values={stripValues} />
+      <View {...openTimeMonthSwipePan.panHandlers} collapsable={false} style={styles.otMonthSwipeChrome}>
+        <MonthlyStatsStrip values={stripValues} />
+        {openTimeBuckets.length > 0 || loading ? (
+          <View
+            style={styles.otMonthRow}
+            accessibilityLabel="Open Time month — swipe left or right to change month"
+          >
+            <Pressable
+              onPress={goPrevOpenTimeMonth}
+              disabled={!canPrevOpenTimeMonth}
+              style={[styles.otMonthCircleNav, !canPrevOpenTimeMonth && styles.otMonthCircleNavOff]}
+              accessibilityLabel="Previous Open Time month"
+              accessibilityState={{ disabled: !canPrevOpenTimeMonth }}
+            >
+              <Ionicons
+                name="chevron-back"
+                size={16}
+                color={canPrevOpenTimeMonth ? scheduleT.text : scheduleT.line}
+              />
+            </Pressable>
+            <Text style={styles.otMonthNavTitle} numberOfLines={1}>
+              {activeOpenTimeMonthTitle}
+            </Text>
+            <Pressable
+              onPress={goNextOpenTimeMonth}
+              disabled={!canNextOpenTimeMonth}
+              style={[styles.otMonthCircleNav, !canNextOpenTimeMonth && styles.otMonthCircleNavOff]}
+              accessibilityLabel="Next Open Time month"
+              accessibilityState={{ disabled: !canNextOpenTimeMonth }}
+            >
+              <Ionicons
+                name="chevron-forward"
+                size={16}
+                color={canNextOpenTimeMonth ? scheduleT.text : scheduleT.line}
+              />
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
       <ScrollView
         style={styles.scroll}
+        directionalLockEnabled
+        keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl refreshing={loading} onRefresh={() => void load("pull")} />
         }
@@ -846,7 +1188,7 @@ export default function OpenTimeTabScreen() {
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-        {!loading && potTrips.length === 0 ? (
+        {!loading && totalOpenTimeRows === 0 ? (
           <Text style={styles.emptyText}>No Open Time trips found.</Text>
         ) : null}
 
@@ -931,7 +1273,6 @@ export default function OpenTimeTabScreen() {
                   <Text style={[styles.otColH, { width: 30 }]}>RPT</Text>
                   <Text style={[styles.otColH, { width: 30 }]}>DEP</Text>
                   <Text style={[styles.otColH, { width: 30 }]}>ARR</Text>
-                  <Text style={[styles.otColH, { width: 26 }]}>BLK</Text>
                   <Text style={[styles.otColH, { width: 28 }]}>CR</Text>
                   <Text style={[styles.otColH, { width: 40, textAlign: "right" }]}>$</Text>
                 </View>
@@ -944,9 +1285,9 @@ export default function OpenTimeTabScreen() {
                     showBestTag={
                       best234Trip != null && tripDedupeKey(t) === tripDedupeKey(best234Trip)
                     }
-                    router={router}
                     onAdd={onAdd}
-                    onOpenDetail={setDetail}
+                    onOpenDetail={openOpenTimeMarketplace}
+                    onMutateSwap={onMutateSwap}
                   />
                 ))}
               </View>
@@ -957,14 +1298,16 @@ export default function OpenTimeTabScreen() {
         <View style={{ height: 28 }} />
       </ScrollView>
 
-      <CrewHubOpenTimePairingSheet
-        visible={detail != null}
-        trip={detail}
-        onClose={() => setDetail(null)}
-        onOpenFlica={(uri) => {
-          setDetail(null);
-          pushFlicaWeb(router, uri);
-        }}
+      {hubMarketplaceLoading ? (
+        <View style={styles.hubMarketplaceLoading} pointerEvents="auto">
+          <ActivityIndicator size="large" color={SCHEDULE_MOCK_HEADER_RED} />
+        </View>
+      ) : null}
+
+      <FlicaMarketplacePairingDetailSheet
+        visible={marketplaceDetail != null}
+        detail={marketplaceDetail}
+        onClose={() => setMarketplaceDetail(null)}
       />
     </View>
   );
@@ -972,7 +1315,40 @@ export default function OpenTimeTabScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#f1f0f0" },
+  /** Month swipe PanResponder lives here (above ScrollView) so it is not blocked by the list scroll view or row Swipeables. */
+  otMonthSwipeChrome: {
+    marginBottom: 0,
+  },
+  hubMarketplaceLoading: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 50,
+  },
   scroll: { flex: 1 },
+  /** Matches `ModernScheduleChrome` month navigator (no card background). */
+  otMonthRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 8,
+    gap: 14,
+  },
+  otMonthCircleNav: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#E2E8F0",
+  },
+  otMonthCircleNavOff: { opacity: 0.45 },
+  otMonthNavTitle: { fontSize: 14, fontWeight: "500", color: scheduleT.text },
   otFilterShell: {
     marginHorizontal: 10,
     marginTop: 6,

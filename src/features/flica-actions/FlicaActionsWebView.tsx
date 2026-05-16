@@ -20,10 +20,49 @@ import {
 import { FLICA_WEBVIEW_USER_AGENT } from "../../dev/flicaPoCConfig";
 import { FLICA_POC_INJECT_BEFORE_CONTENT } from "../../dev/flicaPoCWebFontShim";
 import { fcDevMirrorScheduleLogToFile } from "../../dev/fcDevFileLogger";
+import { fetchFlicaHtmlUsingWebViewSession } from "./flicaActionsHttp";
 import { markFlicaActionsWebViewSessionReady } from "./flicaActionsWebViewSession";
+import { INJECT_FLICA_POPUP_INTERCEPT } from "./flicaPopupInterceptInject";
+import {
+  formatPairingDetailParseProbe,
+  parseReplayHtmlAsPairingDetail,
+  type FlicaParsedReplayPairingResult,
+} from "./flicaPairingDetailDetect";
+import {
+  applyReplayTargetFields,
+  classifyPopupNavigationSafety,
+} from "./flicaReplayTarget";
+import {
+  FLICA_TRADEBOARD_FRAME_URL,
+  findLatestOpenTimeFrameUrl,
+  isFlicaJetblueUrl,
+} from "./flicaWrapperNav";
+import {
+  buildRecorderExtraFromFrames,
+  formatFullActionLog,
+  formatFlicaActionEventDebugReport,
+  formatReplayDryRunText,
+  type FlicaActionRecorderEvent,
+} from "./flicaActionRecorderFormat";
+import { extractPairingLinksFromFrames } from "./flicaActionRecorderExtract";
+import {
+  buildReplayDryRunPayload,
+  replayCapturedGet,
+  replayCapturedPostDryRun,
+} from "./flicaActionRecorderReplay";
+import {
+  buildReplayInspectSnapshot,
+  formatReplayParseProbe,
+  type FlicaReplayInspectSnapshot,
+} from "./flicaActionRecorderReplayInspect";
+import type { CapturedFlicaPairingLink, FlicaNavigationLogEntry } from "./flicaActionRecorderTypes";
 import { colors, radius, spacing } from "../../styles/theme";
 
+export type { CapturedFlicaPairingLink } from "./flicaActionRecorderTypes";
+
 const FLICA_ORIGIN = "https://jetblue.flica.net";
+
+const FLICA_ACTIONS_BEFORE_CONTENT = `${FLICA_POC_INJECT_BEFORE_CONTENT}\n${INJECT_FLICA_POPUP_INTERCEPT}`;
 
 type SessionState =
   | "idle"
@@ -974,6 +1013,20 @@ const INJECT_LINK_CAPTURE_BRIDGE = `
     try {
       if (act.tagName && act.tagName.toUpperCase() === 'A') dest = act.href || dest;
     } catch (eD) {}
+    var nearestForm = null;
+    try {
+      var nf = act.closest ? act.closest('form') : null;
+      if (nf) {
+        nearestForm = {
+          action: nf.action || '',
+          method: (nf.method || 'get').toUpperCase(),
+          target: nf.target || '',
+          enctype: nf.enctype || '',
+          name: nf.name || '',
+          id: nf.id || ''
+        };
+      }
+    } catch (eNF) {}
     try {
       window.ReactNativeWebView.postMessage(
         JSON.stringify({
@@ -993,7 +1046,8 @@ const INJECT_LINK_CAPTURE_BRIDGE = `
           frameUrlBefore: fh,
           topUrlBefore: topHref(),
           pageTitleBefore: topTitle(),
-          beforeFrames: beforeFrames
+          beforeFrames: beforeFrames,
+          nearestForm: nearestForm
         })
       );
     } catch (eE) {}
@@ -1085,6 +1139,83 @@ const INJECT_LINK_CAPTURE_BRIDGE = `
         scheduleDeepCapture('post_click', li);
       }, true);
 
+      doc.addEventListener('change', function(ev) {
+        try {
+          var t = ev.target;
+          if (!t || !t.tagName) return;
+          var tag = (t.tagName || '').toUpperCase();
+          if (tag !== 'SELECT' && tag !== 'INPUT' && tag !== 'TEXTAREA') return;
+          var eventId = makeClickEventId();
+          var beforeFull = [];
+          try {
+            walkFrames(topWin, 0, beforeFull, { name: '(top)', index: -1, src: '' });
+          } catch (eCh0) { beforeFull = []; }
+          var typ = (t.type || '').toLowerCase();
+          var val = '';
+          var selIdx = -1;
+          var selLabel = '';
+          try {
+            if (tag === 'SELECT') {
+              selIdx = t.selectedIndex;
+              selLabel = t.options && t.options[selIdx] ? trimStr(t.options[selIdx].text, 120) : '';
+              val = t.value != null ? String(t.value) : '';
+            } else {
+              val = t.value != null ? String(t.value).substring(0, 160) : '';
+              if (typ === 'password') val = '[REDACTED]';
+            }
+          } catch (eCh1) {}
+          var nearestForm = null;
+          try {
+            var nf = t.closest ? t.closest('form') : (t.form || null);
+            if (nf) {
+              nearestForm = {
+                action: nf.action || '',
+                method: (nf.method || 'get').toUpperCase(),
+                target: nf.target || '',
+                enctype: nf.enctype || '',
+                name: nf.name || '',
+                id: nf.id || ''
+              };
+            }
+          } catch (eCh2) {}
+          var fh = '';
+          try { fh = w.location.href; } catch (eCh3) { fh = ''; }
+          var fn = '';
+          try {
+            if (w !== topWin && w.frameElement) fn = w.frameElement.name || w.frameElement.id || '';
+            else fn = '(top)';
+          } catch (eCh4) { fn = '(top)'; }
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'flica_actions_change',
+            eventId: eventId,
+            changedTag: tag,
+            changedType: typ,
+            changedName: t.name || '',
+            changedId: t.id || '',
+            changedValue: val,
+            selectedIndex: selIdx,
+            selectedLabel: selLabel,
+            frameName: fn,
+            frameUrlBefore: fh,
+            topUrlBefore: topHref(),
+            pageTitleBefore: topTitle(),
+            beforeFrames: truncateFramesLite(beforeFull),
+            nearestForm: nearestForm
+          }));
+          setTimeout(function() {
+            scheduleDeepCapture('post_change', {
+              kind: 'change',
+              topUrlAtEvent: topHref(),
+              frameLocationHref: fh,
+              tag: tag,
+              text: selLabel || val,
+              inputName: t.name || '',
+              inputValue: val
+            });
+          }, 400);
+        } catch (eChZ) {}
+      }, true);
+
       doc.addEventListener('submit', function(ev) {
         var targ = ev.target;
         var form = targ;
@@ -1105,6 +1236,27 @@ const INJECT_LINK_CAPTURE_BRIDGE = `
         } catch (e4) {}
         var fh = '';
         try { fh = w.location.href; } catch (e5) { fh = ''; }
+        var nearestForm = {
+          action: fa,
+          method: fm,
+          target: form.target || '',
+          enctype: form.enctype || '',
+          name: form.name || '',
+          id: form.id || ''
+        };
+        try {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'flica_actions_submit',
+            eventId: makeClickEventId(),
+            formAction: fa,
+            formMethod: fm,
+            frameUrlBefore: fh,
+            topUrlBefore: topHref(),
+            pageTitleBefore: topTitle(),
+            nearestForm: nearestForm,
+            fields: fields
+          }));
+        } catch (eSubMsg) {}
         var li = {
           kind: 'submit',
           topUrlAtEvent: topHref(),
@@ -1415,19 +1567,132 @@ export default function FlicaActionsWebView({
   const [currentUrl, setCurrentUrl] = useState("");
   const cookiesCapturedRef = useRef(false);
 
-  const [captureMode, setCaptureMode] = useState(false);
+  const [recorderActive, setRecorderActive] = useState(false);
   const [capturedPages, setCapturedPages] = useState<CapturedPageSnapshot[]>([]);
   const [lastCapture, setLastCapture] = useState<{ title: string; url: string } | null>(null);
-  const [capturedActionEvents, setCapturedActionEvents] = useState<CapturedFlicaActionEvent[]>([]);
+  const [capturedActionEvents, setCapturedActionEvents] = useState<FlicaActionRecorderEvent[]>([]);
   const [lastActionLabel, setLastActionLabel] = useState<string | null>(null);
+  const [navigationLog, setNavigationLog] = useState<FlicaNavigationLogEntry[]>([]);
+  const [catalogPairingLinks, setCatalogPairingLinks] = useState<CapturedFlicaPairingLink[]>([]);
+  const [replayStatus, setReplayStatus] = useState<string | null>(null);
+  const [replayInspect, setReplayInspect] = useState<FlicaReplayInspectSnapshot | null>(null);
+  const [capturedPopupUrl, setCapturedPopupUrl] = useState<string | null>(null);
+  const [parsedReplayPairing, setParsedReplayPairing] =
+    useState<FlicaParsedReplayPairingResult | null>(null);
+
+  const wrapperHistoryRef = useRef<string[]>([]);
+  const currentUrlRef = useRef("");
+
+  const captureMode = recorderActive;
+  const setCaptureMode = setRecorderActive;
 
   const injectCaptureBridge = useCallback(() => {
     webViewRef.current?.injectJavaScript(INJECT_LINK_CAPTURE_BRIDGE);
   }, []);
 
-  const injectDeepCaptureOnly = useCallback(() => {
-    webViewRef.current?.injectJavaScript(INJECT_RUN_DEEP_CAPTURE_ONLY);
+  const injectDeepCaptureOnly = useCallback((reason?: string) => {
+    if (reason) {
+      webViewRef.current?.injectJavaScript(
+        INJECT_RUN_DEEP_CAPTURE_ONLY.replace(
+          "captureReason: 'injected_rescan'",
+          `captureReason: ${JSON.stringify(reason)}`,
+        ),
+      );
+    } else {
+      webViewRef.current?.injectJavaScript(INJECT_RUN_DEEP_CAPTURE_ONLY);
+    }
   }, []);
+
+  const appendNavigationLog = useCallback(
+    (entry: Omit<FlicaNavigationLogEntry, "timestamp">) => {
+      const row: FlicaNavigationLogEntry = {
+        ...entry,
+        timestamp: new Date().toISOString(),
+      };
+      setNavigationLog((prev) => [...prev, row].slice(-120));
+      fcDevMirrorScheduleLogToFile("FC_FLICA_ACTIONS_WEBVIEW_NAV", row);
+    },
+    [],
+  );
+
+  const mergePairingCatalog = useCallback((links: CapturedFlicaPairingLink[]) => {
+    if (!links.length) return;
+    setCatalogPairingLinks((prev) => {
+      const map = new Map(prev.map((p) => [`${p.pairingId}|${p.absoluteUrl}`, p]));
+      for (const p of links) map.set(`${p.pairingId}|${p.absoluteUrl}`, p);
+      return [...map.values()];
+    });
+  }, []);
+
+  const recordManualDomSnapshot = useCallback(() => {
+    injectDeepCaptureOnly("manual_dom_snapshot");
+    setLastActionLabel("manual: DOM snapshot requested");
+  }, [injectDeepCaptureOnly]);
+
+  const recordFramesFormsSnapshot = useCallback(() => {
+    injectDeepCaptureOnly("manual_frames_forms_snapshot");
+    setLastActionLabel("manual: frames/forms snapshot requested");
+  }, [injectDeepCaptureOnly]);
+
+  const latestEvent = capturedActionEvents[capturedActionEvents.length - 1] ?? null;
+
+  const navigateWebViewTo = useCallback((url: string, options?: { pushHistory?: boolean }) => {
+    if (!url || !isFlicaJetblueUrl(url)) return;
+    if (options?.pushHistory !== false) {
+      const cur = currentUrlRef.current;
+      if (cur && cur !== url) {
+        const stack = wrapperHistoryRef.current;
+        if (stack[stack.length - 1] !== cur) stack.push(cur);
+        if (stack.length > 30) wrapperHistoryRef.current = stack.slice(-30);
+      }
+    }
+    webViewRef.current?.injectJavaScript(
+      `(function(){ try { window.location.href = ${JSON.stringify(url)}; } catch(e) {} })(); true;`,
+    );
+  }, []);
+
+  const patchLatestEventWithPopup = useCallback((popupUrl: string) => {
+    setCapturedActionEvents((prev) => {
+      if (!prev.length) return prev;
+      const last = prev[prev.length - 1];
+      const fields = applyReplayTargetFields({
+        popupAbsoluteUrl: popupUrl,
+        pairingLinks: last.pairingLinks,
+        clickedText: last.clickedText,
+        onclick: last.onclick,
+        href: last.href,
+        destinationUrl: last.destinationUrl,
+        currentUrl: last.topUrlBefore,
+      });
+      return [...prev.slice(0, -1), { ...last, ...fields }];
+    });
+  }, []);
+
+  const handleFlicaWindowOpen = useCallback(
+    (data: Record<string, unknown>) => {
+      const absoluteUrl = String(data.absoluteUrl ?? "").trim();
+      if (!absoluteUrl) return;
+      setCapturedPopupUrl(absoluteUrl);
+      patchLatestEventWithPopup(absoluteUrl);
+      const safety = classifyPopupNavigationSafety(absoluteUrl);
+      fcDevMirrorScheduleLogToFile("FC_FLICA_WINDOW_OPEN", {
+        absoluteUrl,
+        rawUrl: data.rawUrl,
+        target: data.target,
+        safety,
+        sourcePageUrl: data.sourcePageUrl,
+      });
+      if (safety === "SAFE_READ" && isFlicaJetblueUrl(absoluteUrl)) {
+        navigateWebViewTo(absoluteUrl);
+        setLastActionLabel(`popup loaded: ${absoluteUrl.split("/").pop() ?? "page"}`);
+      } else {
+        setLastActionLabel(
+          `popup captured (${safety}) — use Open Captured Popup if needed`,
+        );
+      }
+    },
+    [navigateWebViewTo, patchLatestEventWithPopup],
+  );
 
   useEffect(() => {
     if (captureMode && showWebView && !embedded) {
@@ -1585,6 +1850,18 @@ export default function FlicaActionsWebView({
     (nav: WebViewNavigation) => {
       const url = nav.url ?? "";
       setCurrentUrl(url);
+      currentUrlRef.current = url;
+
+      if (recorderActive) {
+        appendNavigationLog({
+          phase: nav.loading ? "load_start" : "navigation",
+          url,
+          title: nav.title,
+          loading: nav.loading,
+          canGoBack: nav.canGoBack,
+          canGoForward: nav.canGoForward,
+        });
+      }
 
       if (nav.loading) return;
 
@@ -1600,13 +1877,169 @@ export default function FlicaActionsWebView({
         webViewRef.current?.injectJavaScript(INJECT_CHECK_STATE);
       }
     },
-    [],
+    [appendNavigationLog, recorderActive],
   );
+
+  const onLoadStart = useCallback(() => {
+    if (!recorderActive) return;
+    appendNavigationLog({
+      phase: "load_start",
+      url: currentUrl,
+      loading: true,
+    });
+  }, [appendNavigationLog, currentUrl, recorderActive]);
 
   const onMessage = useCallback(
     (event: { nativeEvent: { data: string } }) => {
       try {
         const data = JSON.parse(event.nativeEvent.data);
+
+        if (data.type === "flica_window_open") {
+          handleFlicaWindowOpen(data as Record<string, unknown>);
+          return;
+        }
+
+        if (data.type === "flica_actions_change" && captureMode) {
+          const beforeFrames = Array.isArray(data.beforeFrames)
+            ? (data.beforeFrames as CapturedFrame[])
+            : [];
+          const topUrlBefore = String(data.topUrlBefore ?? "");
+          const changedText =
+            String(data.selectedLabel ?? "") || String(data.changedValue ?? "");
+          const nearestForm = data.nearestForm as
+            | {
+                action?: string;
+                method?: string;
+                target?: string;
+                enctype?: string;
+                name?: string;
+                id?: string;
+              }
+            | undefined;
+          const now = new Date().toISOString();
+          const kind = classifyFlicaClickAction({
+            clickedText: changedText,
+            onclick: "",
+            href: "",
+            destinationUrl: "",
+            clickedName: String(data.changedName ?? ""),
+            clickedTag: String(data.changedTag ?? ""),
+            clickedType: String(data.changedType ?? ""),
+            clickedRole: "",
+          });
+          const detected = detectPageTypeFromSnapshot(topUrlBefore, beforeFrames);
+          const extra = buildRecorderExtraFromFrames({
+            frames: beforeFrames,
+            topUrl: topUrlBefore,
+            detectedPageType: detected,
+            actionKind: kind,
+            clickedText: changedText,
+            href: "",
+            onclick: "",
+            formMethod: nearestForm?.method,
+            eventType: "change",
+            nearestForm,
+            capturedAt: now,
+          });
+          const ev: FlicaActionRecorderEvent = {
+            eventId: String(data.eventId ?? `chg-${Date.now()}`),
+            timestamp: now,
+            actionLabel: buildActionLabel(kind, `change: ${changedText}`),
+            actionKind: kind,
+            clickedText: changedText,
+            clickedTag: String(data.changedTag ?? ""),
+            clickedType: String(data.changedType ?? ""),
+            clickedName: String(data.changedName ?? ""),
+            clickedValue: String(data.changedValue ?? ""),
+            clickedRole: "",
+            onclick: "",
+            href: "",
+            destinationUrl: "",
+            frameName: String(data.frameName ?? ""),
+            frameUrlBefore: String(data.frameUrlBefore ?? ""),
+            topUrlBefore,
+            pageTitleBefore: String(data.pageTitleBefore ?? ""),
+            detectedPageTypeBefore: detected,
+            formsBefore: aggregateFormsLines(beforeFrames),
+            buttonsBefore: aggregateButtonsLines(beforeFrames),
+            linksBefore: aggregateLinksLines(beforeFrames),
+            frameUrlsAfter500ms: null,
+            frameUrlsAfter1500ms: null,
+            frameUrlsAfter3000ms: null,
+            formsAfter3000ms: "",
+            buttonsAfter3000ms: "",
+            linksAfter3000ms: "",
+            previewsAfter3000ms: "",
+            ...extra,
+          };
+          setCapturedActionEvents((p) => [...p, ev]);
+          mergePairingCatalog(extra.pairingLinks);
+          setLastActionLabel(ev.actionLabel);
+          return;
+        }
+
+        if (data.type === "flica_actions_submit" && captureMode) {
+          const nearestForm = data.nearestForm as
+            | {
+                action?: string;
+                method?: string;
+                target?: string;
+                enctype?: string;
+                name?: string;
+                id?: string;
+              }
+            | undefined;
+          const topUrlBefore = String(data.topUrlBefore ?? "");
+          const now = new Date().toISOString();
+          const extra = buildRecorderExtraFromFrames({
+            frames: [],
+            topUrl: topUrlBefore,
+            detectedPageType: "unknown",
+            actionKind: "tradeboard_post_request",
+            clickedText: "form submit",
+            href: nearestForm?.action ?? "",
+            onclick: "",
+            formMethod: nearestForm?.method ?? "POST",
+            eventType: "submit",
+            isSubmit: true,
+            nearestForm,
+            capturedAt: now,
+          });
+          const ev: FlicaActionRecorderEvent = {
+            eventId: String(data.eventId ?? `sub-${Date.now()}`),
+            timestamp: now,
+            actionLabel: "submit: form",
+            actionKind: "tradeboard_post_request",
+            clickedText: "form submit",
+            clickedTag: "FORM",
+            clickedType: "submit",
+            clickedName: nearestForm?.name ?? "",
+            clickedValue: "",
+            clickedRole: "",
+            onclick: "",
+            href: nearestForm?.action ?? "",
+            destinationUrl: nearestForm?.action ?? "",
+            frameName: "",
+            frameUrlBefore: String(data.frameUrlBefore ?? ""),
+            topUrlBefore,
+            pageTitleBefore: String(data.pageTitleBefore ?? ""),
+            detectedPageTypeBefore: "unknown",
+            formsBefore: "",
+            buttonsBefore: "",
+            linksBefore: "",
+            frameUrlsAfter500ms: null,
+            frameUrlsAfter1500ms: null,
+            frameUrlsAfter3000ms: null,
+            formsAfter3000ms: "",
+            buttonsAfter3000ms: "",
+            linksAfter3000ms: "",
+            previewsAfter3000ms: "",
+            ...extra,
+          };
+          setCapturedActionEvents((p) => [...p, ev]);
+          setLastActionLabel(ev.actionLabel);
+          return;
+        }
 
         if (data.type === "flica_actions_click_action" && captureMode) {
           const phase = String(data.phase ?? "");
@@ -1617,6 +2050,16 @@ export default function FlicaActionsWebView({
               : [];
             const topUrlBefore = String(data.topUrlBefore ?? "");
             const clickedText = String(data.clickedText ?? "");
+            const nearestForm = data.nearestForm as
+              | {
+                  action?: string;
+                  method?: string;
+                  target?: string;
+                  enctype?: string;
+                  name?: string;
+                  id?: string;
+                }
+              | undefined;
             const kind = classifyFlicaClickAction({
               clickedText,
               onclick: String(data.onclick ?? ""),
@@ -1629,9 +2072,24 @@ export default function FlicaActionsWebView({
             });
             const label = buildActionLabel(kind, clickedText);
             const detected = detectPageTypeFromSnapshot(topUrlBefore, beforeFrames);
-            const ev: CapturedFlicaActionEvent = {
+            const now = new Date().toISOString();
+            const extra = buildRecorderExtraFromFrames({
+              frames: beforeFrames,
+              topUrl: topUrlBefore,
+              detectedPageType: detected,
+              actionKind: kind,
+              clickedText,
+              href: String(data.href ?? ""),
+              onclick: String(data.onclick ?? ""),
+              destinationUrl: String(data.destinationUrl ?? ""),
+              formMethod: nearestForm?.method,
+              eventType: "click",
+              nearestForm,
+              capturedAt: now,
+            });
+            const ev: FlicaActionRecorderEvent = {
               eventId,
-              timestamp: new Date().toISOString(),
+              timestamp: now,
               actionLabel: label,
               actionKind: kind,
               clickedText,
@@ -1658,8 +2116,10 @@ export default function FlicaActionsWebView({
               buttonsAfter3000ms: "",
               linksAfter3000ms: "",
               previewsAfter3000ms: "",
+              ...extra,
             };
             setCapturedActionEvents((p) => [...p, ev]);
+            mergePairingCatalog(extra.pairingLinks);
             setLastActionLabel(label);
             fcDevMirrorScheduleLogToFile(
               "FC_FLICA_ACTIONS_CLICK_CAPTURE",
@@ -1681,7 +2141,7 @@ export default function FlicaActionsWebView({
               const afterFrames = Array.isArray(data.afterFrames)
                 ? (data.afterFrames as CapturedFrame[])
                 : [];
-              let finalized: CapturedFlicaActionEvent | null = null;
+              let finalized: FlicaActionRecorderEvent | null = null;
               const next = prev.map((e) => {
                 if (e.eventId !== eventId) return e;
                 if (phase === "after500")
@@ -1728,6 +2188,8 @@ export default function FlicaActionsWebView({
               lastInteraction,
               captureReason,
             });
+            const at = new Date().toISOString();
+            mergePairingCatalog(extractPairingLinksFromFrames(frames, topUrl, at));
           }
 
           return;
@@ -1811,17 +2273,39 @@ export default function FlicaActionsWebView({
         /* ignore non-JSON messages */
       }
     },
-    [captureCookiesAndFinalize, captureMode, addCapturedSnapshot, injectDeepCaptureOnly, compactEmbedded],
+    [
+      captureCookiesAndFinalize,
+      captureMode,
+      addCapturedSnapshot,
+      injectDeepCaptureOnly,
+      compactEmbedded,
+      mergePairingCatalog,
+      handleFlicaWindowOpen,
+    ],
   );
 
   const onLoadEnd = useCallback(() => {
     webViewRef.current?.injectJavaScript(INJECT_CHECK_STATE);
+    if (recorderActive) {
+      appendNavigationLog({
+        phase: "load_end",
+        url: currentUrl,
+        loading: false,
+      });
+    }
     if (captureMode) {
       injectCaptureBridge();
-      setTimeout(() => injectDeepCaptureOnly(), 400);
-      setTimeout(() => injectDeepCaptureOnly(), 1200);
+      setTimeout(() => injectDeepCaptureOnly("post_navigation"), 400);
+      setTimeout(() => injectDeepCaptureOnly("post_navigation_late"), 1200);
     }
-  }, [captureMode, injectCaptureBridge, injectDeepCaptureOnly]);
+  }, [
+    captureMode,
+    injectCaptureBridge,
+    injectDeepCaptureOnly,
+    recorderActive,
+    appendNavigationLog,
+    currentUrl,
+  ]);
 
   const handleOpen = () => {
     cookiesCapturedRef.current = false;
@@ -1842,6 +2326,119 @@ export default function FlicaActionsWebView({
     if (currentUrl) {
       void Share.share({ message: redactSensitiveString(currentUrl), title: "FLICA URL" });
     }
+  };
+
+  const handleCopyCapturedPopupUrl = () => {
+    const url = capturedPopupUrl ?? latestEvent?.popupAbsoluteUrl;
+    if (!url) return;
+    void Share.share({ message: url, title: "FLICA Captured Popup URL" });
+  };
+
+  const handleNavBack = () => {
+    const stack = wrapperHistoryRef.current;
+    const prev = stack.pop();
+    if (prev) navigateWebViewTo(prev, { pushHistory: false });
+    else setLastActionLabel("nav: no previous URL in stack");
+  };
+
+  const handleClosePopupReturn = () => handleNavBack();
+
+  const handleReturnTradeboard = () => {
+    navigateWebViewTo(FLICA_TRADEBOARD_FRAME_URL);
+    setLastActionLabel("nav: TradeBoard frame");
+  };
+
+  const handleReturnOpenTime = () => {
+    const ot = findLatestOpenTimeFrameUrl(navigationLog);
+    if (ot) {
+      navigateWebViewTo(ot);
+      setLastActionLabel("nav: Open Time frame");
+    } else {
+      setLastActionLabel("nav: no otframe URL in history yet");
+    }
+  };
+
+  const handleOpenCapturedPopupInWebView = () => {
+    const url = capturedPopupUrl ?? latestEvent?.popupAbsoluteUrl;
+    if (!url) return;
+    navigateWebViewTo(url);
+    setLastActionLabel(`opened popup: ${url.split("/").pop() ?? "page"}`);
+  };
+
+  const buildReplayInspectFromFetch = useCallback(
+    async (url: string, referer: string, hints: string[]) => {
+      setReplayStatus("Replaying GET…");
+      setReplayInspect(null);
+      setParsedReplayPairing(null);
+      try {
+        const { status, html, url: finalUrl } = await fetchFlicaHtmlUsingWebViewSession(url, {
+          referer,
+        });
+        const snap = buildReplayInspectSnapshot({
+          requestedUrl: url,
+          status,
+          finalUrl: finalUrl || url,
+          title: "",
+          html,
+          pairingIdHints: hints,
+          error: status >= 200 && status < 400 && html.length > 0 ? undefined : `HTTP ${status}`,
+        });
+        if (snap.ok) setReplayInspect(snap);
+        const msg = snap.ok
+          ? `GET ok status=${status} htmlLen=${snap.htmlLen} pairingDetail=${snap.isPairingDetailHtml}`
+          : `GET failed status=${status} htmlLen=${html.length}`;
+        setReplayStatus(msg);
+        return { snap, html };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setReplayStatus(`GET error: ${msg}`);
+        return null;
+      }
+    },
+    [],
+  );
+
+  const handleReplayCapturedPopupGet = async () => {
+    const url = capturedPopupUrl ?? latestEvent?.popupAbsoluteUrl;
+    if (!url) return;
+    const hints = [
+      ...catalogPairingLinks.map((p) => p.pairingId),
+      latestEvent?.clickedText ?? "",
+    ].filter(Boolean) as string[];
+    await buildReplayInspectFromFetch(
+      url,
+      latestEvent?.replayReferer || latestEvent?.topUrlBefore || currentUrl,
+      hints,
+    );
+  };
+
+  const handleParseReplayAsPairingDetail = () => {
+    if (!replayInspect?.html) return;
+    const result = parseReplayHtmlAsPairingDetail(replayInspect.html, {
+      pairingId: replayInspect.detectedPairingId ?? undefined,
+    });
+    setParsedReplayPairing(result);
+    setReplayStatus(
+      result.ok
+        ? `Parsed ${result.summary?.pairingId ?? "pairing"} · legs=${result.summary?.legCount ?? 0}`
+        : `Parse failed: ${result.error ?? "unknown"}`,
+    );
+  };
+
+  const handleCopyParsedPairingJson = () => {
+    if (!parsedReplayPairing?.pairing) return;
+    void Share.share({
+      message: JSON.stringify(parsedReplayPairing.pairing, null, 2),
+      title: "FLICA Parsed Pairing JSON",
+    });
+  };
+
+  const handleCopyPairingDetailParseProbe = () => {
+    if (!parsedReplayPairing) return;
+    void Share.share({
+      message: formatPairingDetailParseProbe(parsedReplayPairing),
+      title: "FLICA Pairing Detail Parse Probe",
+    });
   };
 
   const handleCopyCapturedJson = () => {
@@ -1870,6 +2467,110 @@ export default function FlicaActionsWebView({
     });
   };
 
+  const handleExportActionEvents = () => {
+    const json = JSON.stringify(
+      redactForExport({
+        events: capturedActionEvents,
+        navigationLog,
+        pairingLinks: catalogPairingLinks,
+        snapshots: capturedPages,
+      }),
+      null,
+      2,
+    );
+    void Share.share({ message: json, title: "FLICA Action Recorder Export" });
+  };
+
+  const handleCopyFullDebugReport = () => {
+    const body = formatFullActionLog({
+      events: capturedActionEvents,
+      navigationLog,
+      pairingLinks: catalogPairingLinks,
+    });
+    void Share.share({ message: body, title: "FLICA Full Debug Report" });
+  };
+
+  const handleCopyLatestActionEvent = () => {
+    if (!latestEvent) return;
+    void Share.share({
+      message: formatFlicaActionEventDebugReport(latestEvent),
+      title: "FLICA Latest Action Event",
+    });
+  };
+
+  const handleCopyReplayPayload = () => {
+    if (!latestEvent) return;
+    const payload = buildReplayDryRunPayload(latestEvent);
+    void Share.share({
+      message: formatReplayDryRunText(payload),
+      title: "FLICA Replay Payload",
+    });
+  };
+
+  const handleReplayCapturedGet = async () => {
+    if (!latestEvent) return;
+    setParsedReplayPairing(null);
+    const result = await replayCapturedGet(latestEvent);
+    const hints = [
+      ...latestEvent.pairingLinks.map((p) => p.pairingId),
+      latestEvent.clickedText,
+    ].filter(Boolean) as string[];
+    const snap = buildReplayInspectSnapshot({
+      requestedUrl: result.requestedUrl ?? latestEvent.replayGetUrl,
+      status: result.status,
+      finalUrl: result.finalUrl ?? result.requestedUrl ?? latestEvent.replayGetUrl,
+      title: result.title,
+      html: result.html ?? "",
+      pairingIdHints: hints,
+      error: result.ok ? undefined : result.error,
+    });
+    if (result.ok || snap.isPairingDetailHtml) {
+      setReplayInspect(snap);
+    }
+    const msg = result.ok
+      ? `GET ok status=${result.status} htmlLen=${snap.htmlLen} pairingDetail=${snap.isPairingDetailHtml} reason=${latestEvent.replayTargetReason}`
+      : `GET failed: ${result.error ?? "unknown"}`;
+    setReplayStatus(msg);
+    void Share.share({ message: msg, title: "FLICA Replay GET Result" });
+  };
+
+  const handleClearReplayResult = () => {
+    setReplayInspect(null);
+    setParsedReplayPairing(null);
+    setReplayStatus(null);
+  };
+
+  const handleCopyReplayHtml = () => {
+    if (!replayInspect?.html) return;
+    void Share.share({ message: replayInspect.html, title: "FLICA Replay HTML" });
+  };
+
+  const handleCopyReplayTextPreview = () => {
+    if (!replayInspect) return;
+    void Share.share({
+      message: replayInspect.bodyTextPreview || replayInspect.bodyText.slice(0, 3000),
+      title: "FLICA Replay Text Preview",
+    });
+  };
+
+  const handleCopyReplayParseProbe = () => {
+    if (!replayInspect) return;
+    void Share.share({
+      message: formatReplayParseProbe(replayInspect),
+      title: "FLICA Replay Parse Probe",
+    });
+  };
+
+  const handleReplayPostDryRun = () => {
+    if (!latestEvent) return;
+    const payload = replayCapturedPostDryRun(latestEvent);
+    setReplayStatus("POST dry run (not sent)");
+    void Share.share({
+      message: formatReplayDryRunText(payload),
+      title: "FLICA Replay POST Dry Run",
+    });
+  };
+
   const webViewEl = (
     <WebView
       key={loadUri}
@@ -1877,12 +2578,14 @@ export default function FlicaActionsWebView({
       source={{ uri: showWebView ? loadUri : FLICA_ORIGIN }}
       style={embedded ? styles.webViewEmbedded : styles.webView}
       userAgent={FLICA_WEBVIEW_USER_AGENT}
-      injectedJavaScriptBeforeContentLoaded={FLICA_POC_INJECT_BEFORE_CONTENT}
+      injectedJavaScriptBeforeContentLoaded={FLICA_ACTIONS_BEFORE_CONTENT}
       onNavigationStateChange={onNavigation}
+      onLoadStart={onLoadStart}
       onLoadEnd={onLoadEnd}
       onMessage={onMessage}
       javaScriptEnabled
       domStorageEnabled
+      javaScriptCanOpenWindowsAutomatically
       sharedCookiesEnabled
       thirdPartyCookiesEnabled
       originWhitelist={["https://*", "http://*"]}
@@ -1956,83 +2659,236 @@ export default function FlicaActionsWebView({
             </Pressable>
             {currentUrl ? (
               <Pressable style={styles.copyUrlBtn} onPress={handleCopyUrl}>
-                <Text style={styles.copyUrlBtnText}>Copy URL</Text>
+                <Text style={styles.copyUrlBtnText}>Copy Current URL</Text>
               </Pressable>
             ) : null}
           </View>
 
-          <View style={styles.captureRow}>
-            {!captureMode ? (
+          {showWebView ? (
+            <View style={styles.navToolbar}>
+              <Pressable style={styles.navBtn} onPress={handleNavBack}>
+                <Text style={styles.navBtnText}>Back</Text>
+              </Pressable>
+              <Pressable style={styles.navBtn} onPress={handleClosePopupReturn}>
+                <Text style={styles.navBtnText}>Close Popup</Text>
+              </Pressable>
+              <Pressable style={styles.navBtn} onPress={handleReturnTradeboard}>
+                <Text style={styles.navBtnText}>TradeBoard</Text>
+              </Pressable>
+              <Pressable style={styles.navBtn} onPress={handleReturnOpenTime}>
+                <Text style={styles.navBtnText}>Open Time</Text>
+              </Pressable>
+              <Pressable style={styles.navBtn} onPress={handleCopyCapturedPopupUrl}>
+                <Text style={styles.navBtnText}>Copy Popup URL</Text>
+              </Pressable>
+              <Pressable style={styles.navBtn} onPress={handleOpenCapturedPopupInWebView}>
+                <Text style={styles.navBtnText}>Open Popup</Text>
+              </Pressable>
               <Pressable
-                style={styles.captureBtn}
-                onPress={() => setCaptureMode(true)}
+                style={styles.navBtn}
+                onPress={() => void handleReplayCapturedPopupGet()}
               >
-                <Text style={styles.captureBtnText}>Start Link Capture</Text>
+                <Text style={styles.navBtnText}>Replay Popup GET</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          <Text style={styles.recorderHint}>
+            Action Recorder: tap controls in the WebView manually. Nothing is auto-submitted.
+          </Text>
+          <View style={styles.captureRow}>
+            {!recorderActive ? (
+              <Pressable style={styles.captureBtn} onPress={() => setRecorderActive(true)}>
+                <Text style={styles.captureBtnText}>Start FLICA Action Recorder</Text>
               </Pressable>
             ) : (
               <Pressable
                 style={[styles.captureBtn, styles.captureBtnActive]}
-                onPress={() => setCaptureMode(false)}
+                onPress={() => setRecorderActive(false)}
               >
                 <Text style={[styles.captureBtnText, styles.captureBtnTextActive]}>
-                  Stop Link Capture
+                  Stop FLICA Action Recorder
                 </Text>
               </Pressable>
-            )}
-            <Pressable
-              style={styles.captureBtn}
-              onPress={() => {
-                setCapturedPages([]);
-                setLastCapture(null);
-              }}
-            >
-              <Text style={styles.captureBtnText}>Clear Snapshots</Text>
-            </Pressable>
-            {capturedPages.length > 0 && (
-              <>
-                <Pressable style={styles.captureBtn} onPress={handleCopyCapturedJson}>
-                  <Text style={styles.captureBtnText}>Link JSON</Text>
-                </Pressable>
-                <Pressable style={styles.captureBtn} onPress={handleCopyCapturedSummary}>
-                  <Text style={styles.captureBtnText}>Link Summary</Text>
-                </Pressable>
-              </>
             )}
             <Pressable
               style={styles.actionCaptureBtn}
               onPress={() => {
                 setCapturedActionEvents([]);
                 setLastActionLabel(null);
+                setReplayStatus(null);
               }}
             >
-              <Text style={styles.actionCaptureBtnText}>Clear Actions</Text>
+              <Text style={styles.actionCaptureBtnText}>Clear Action Events</Text>
             </Pressable>
-            {capturedActionEvents.length > 0 && (
+            <Pressable style={styles.actionCaptureBtn} onPress={handleExportActionEvents}>
+              <Text style={styles.actionCaptureBtnText}>Export Action Events</Text>
+            </Pressable>
+            <Pressable
+              style={styles.captureBtn}
+              onPress={() => {
+                setCapturedPages([]);
+                setLastCapture(null);
+                setCatalogPairingLinks([]);
+              }}
+            >
+              <Text style={styles.captureBtnText}>Clear Snapshots</Text>
+            </Pressable>
+            {recorderActive ? (
               <>
-                <Pressable style={styles.actionCaptureBtn} onPress={handleCopyActionEventsJson}>
-                  <Text style={styles.actionCaptureBtnText}>Actions JSON</Text>
+                <Pressable style={styles.captureBtn} onPress={recordManualDomSnapshot}>
+                  <Text style={styles.captureBtnText}>Capture DOM Snapshot</Text>
                 </Pressable>
-                <Pressable style={styles.actionCaptureBtn} onPress={handleCopyActionEventsSummary}>
-                  <Text style={styles.actionCaptureBtnText}>Actions Summary</Text>
+                <Pressable style={styles.captureBtn} onPress={recordFramesFormsSnapshot}>
+                  <Text style={styles.captureBtnText}>Capture Frames/Forms</Text>
                 </Pressable>
               </>
-            )}
+            ) : null}
           </View>
 
-          {captureMode && (
+          {recorderActive ? (
+            <View style={styles.captureRow}>
+              <Pressable
+                style={styles.actionCaptureBtn}
+                onPress={handleCopyLatestActionEvent}
+                disabled={!latestEvent}
+              >
+                <Text style={styles.actionCaptureBtnText}>Copy Latest Action Event</Text>
+              </Pressable>
+              <Pressable style={styles.actionCaptureBtn} onPress={handleCopyFullDebugReport}>
+                <Text style={styles.actionCaptureBtnText}>Copy Full Debug Report</Text>
+              </Pressable>
+              <Pressable style={styles.actionCaptureBtn} onPress={handleCopyActionEventsJson}>
+                <Text style={styles.actionCaptureBtnText}>Copy Action Log JSON</Text>
+              </Pressable>
+              {capturedPages.length > 0 ? (
+                <>
+                  <Pressable style={styles.captureBtn} onPress={handleCopyCapturedJson}>
+                    <Text style={styles.captureBtnText}>Link JSON</Text>
+                  </Pressable>
+                  <Pressable style={styles.captureBtn} onPress={handleCopyCapturedSummary}>
+                    <Text style={styles.captureBtnText}>Link Summary</Text>
+                  </Pressable>
+                </>
+              ) : null}
+            </View>
+          ) : null}
+
+          {recorderActive && latestEvent ? (
+            <View style={styles.latestEventCard}>
+              <Text style={styles.latestEventTitle}>Latest event</Text>
+              <Text style={styles.latestEventLine}>
+                {latestEvent.eventType} · {latestEvent.safetyClassification}
+              </Text>
+              <Text style={styles.latestEventLine} numberOfLines={2}>
+                {latestEvent.pageLabel} · {latestEvent.topUrlBefore}
+              </Text>
+              <Text style={styles.latestEventLine} numberOfLines={2}>
+                {latestEvent.clickedText || "(no label)"} → {latestEvent.href || latestEvent.nearestFormAction || "—"}
+              </Text>
+              <Text style={styles.latestEventLine}>
+                {latestEvent.formMethod} · fields={latestEvent.formFieldCount} hidden=
+                {latestEvent.hiddenFieldCount} frames={latestEvent.frameCount}
+              </Text>
+              <Text style={styles.latestEventLine} numberOfLines={3}>
+                replay target ({latestEvent.replayTargetReason || "—"}):{" "}
+                {latestEvent.replayGetUrl || "(none)"}
+              </Text>
+              {latestEvent.popupAbsoluteUrl ? (
+                <Text style={styles.latestEventLine} numberOfLines={2}>
+                  popup: {latestEvent.popupAbsoluteUrl}
+                </Text>
+              ) : null}
+              {latestEvent.replayWarning ? (
+                <Text style={styles.latestEventWarn}>{latestEvent.replayWarning}</Text>
+              ) : null}
+              <View style={styles.captureRow}>
+                <Pressable style={styles.replayBtn} onPress={() => void handleReplayCapturedGet()}>
+                  <Text style={styles.replayBtnText}>Replay Captured GET</Text>
+                </Pressable>
+                <Pressable style={styles.replayBtn} onPress={handleReplayPostDryRun}>
+                  <Text style={styles.replayBtnText}>Replay POST Dry Run</Text>
+                </Pressable>
+                <Pressable style={styles.replayBtn} onPress={handleCopyReplayPayload}>
+                  <Text style={styles.replayBtnText}>Copy Replay Payload</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
+          {replayInspect ? (
+            <View style={styles.replayResultCard}>
+              <Text style={styles.replayResultTitle}>Replay result</Text>
+              <Text style={styles.replayResultLine}>status={replayInspect.status} ok={String(replayInspect.ok)}</Text>
+              <Text style={styles.replayResultLine} numberOfLines={2}>
+                finalUrl={replayInspect.finalUrl}
+              </Text>
+              <Text style={styles.replayResultLine} numberOfLines={1}>
+                title={replayInspect.title || "(empty)"}
+              </Text>
+              <Text style={styles.replayResultLine}>
+                htmlLen={replayInspect.htmlLen} textLen={replayInspect.textLen}
+              </Text>
+              <Text style={styles.replayResultLine}>
+                pairingId={replayInspect.detectedPairingId ?? "(none)"}
+              </Text>
+              <Text style={styles.replayResultLine}>
+                pairingDetailHtml={String(replayInspect.isPairingDetailHtml)} markers=
+                {replayInspect.pairingDetailHints.join(",") || "(none)"}
+              </Text>
+              {parsedReplayPairing?.summary ? (
+                <Text style={styles.replayResultLine}>
+                  parsed: {parsedReplayPairing.summary.pairingId} legs=
+                  {parsedReplayPairing.summary.legCount} crew=
+                  {parsedReplayPairing.summary.crewCount} hotels=
+                  {parsedReplayPairing.summary.hotelCount} dEnd=
+                  {parsedReplayPairing.summary.dEnd} tafb={parsedReplayPairing.summary.tafb}
+                </Text>
+              ) : null}
+              <Text style={styles.replayResultPreview} selectable>
+                {replayInspect.bodyTextPreview || "(empty body text)"}
+              </Text>
+              <View style={styles.captureRow}>
+                <Pressable style={styles.replayBtn} onPress={handleCopyReplayHtml}>
+                  <Text style={styles.replayBtnText}>Copy Replay HTML</Text>
+                </Pressable>
+                <Pressable style={styles.replayBtn} onPress={handleCopyReplayTextPreview}>
+                  <Text style={styles.replayBtnText}>Copy Replay Text Preview</Text>
+                </Pressable>
+                <Pressable style={styles.replayBtn} onPress={handleCopyReplayParseProbe}>
+                  <Text style={styles.replayBtnText}>Copy Replay Parse Probe</Text>
+                </Pressable>
+                <Pressable style={styles.replayBtn} onPress={handleParseReplayAsPairingDetail}>
+                  <Text style={styles.replayBtnText}>Parse As Pairing Detail</Text>
+                </Pressable>
+                <Pressable style={styles.replayBtn} onPress={handleCopyParsedPairingJson}>
+                  <Text style={styles.replayBtnText}>Copy Parsed JSON</Text>
+                </Pressable>
+                <Pressable style={styles.replayBtn} onPress={handleCopyPairingDetailParseProbe}>
+                  <Text style={styles.replayBtnText}>Copy Pairing Parse Probe</Text>
+                </Pressable>
+                <Pressable style={styles.replayBtn} onPress={handleClearReplayResult}>
+                  <Text style={styles.replayBtnText}>Clear Replay Result</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
+          {recorderActive ? (
             <View style={styles.captureInfo}>
               <Text style={styles.captureInfoText}>
-                Snapshots: {capturedPages.length}
-                {lastCapture
-                  ? ` | Last page: ${lastCapture.title || lastCapture.url.split("/").pop()}`
-                  : ""}
+                Snapshots: {capturedPages.length} · Pairing links: {catalogPairingLinks.length} · Nav log:{" "}
+                {navigationLog.length}
               </Text>
               <Text style={[styles.captureInfoText, { marginTop: 4 }]}>
                 Action events: {capturedActionEvents.length}
                 {lastActionLabel ? ` | Last: ${lastActionLabel}` : ""}
               </Text>
+              {replayStatus ? (
+                <Text style={[styles.captureInfoText, { marginTop: 4 }]}>{replayStatus}</Text>
+              ) : null}
             </View>
-          )}
+          ) : null}
 
           {state === "loading" && (
             <ActivityIndicator
@@ -2110,6 +2966,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   copyUrlBtnText: { fontSize: 12, fontWeight: "600", color: colors.accentBlue },
+  navToolbar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  navBtn: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: "#5d4037",
+    backgroundColor: "#efebe9",
+  },
+  navBtnText: { fontSize: 10, fontWeight: "700", color: "#4e342e" },
   captureRow: {
     flexDirection: "row",
     gap: spacing.xs,
@@ -2145,6 +3016,67 @@ const styles = StyleSheet.create({
   captureInfoText: {
     fontSize: 10,
     color: colors.textSecondary,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+  },
+  recorderHint: {
+    fontSize: 10,
+    color: colors.textSecondary,
+    marginBottom: spacing.xs,
+    lineHeight: 14,
+  },
+  latestEventCard: {
+    marginBottom: spacing.xs,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: "#00695c",
+    backgroundColor: "#e0f2f1",
+  },
+  latestEventTitle: { fontSize: 11, fontWeight: "800", color: "#004d40", marginBottom: 4 },
+  latestEventLine: {
+    fontSize: 10,
+    color: "#004d40",
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+    marginBottom: 2,
+  },
+  latestEventWarn: {
+    fontSize: 10,
+    color: "#b45309",
+    fontWeight: "700",
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  replayBtn: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: "#1565c0",
+    backgroundColor: "#e3f2fd",
+  },
+  replayBtnText: { fontSize: 10, fontWeight: "700", color: "#1565c0" },
+  replayResultCard: {
+    marginBottom: spacing.xs,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: "#1565c0",
+    backgroundColor: "#e8f4fc",
+  },
+  replayResultTitle: { fontSize: 11, fontWeight: "800", color: "#0d47a1", marginBottom: 4 },
+  replayResultLine: {
+    fontSize: 10,
+    color: "#0d47a1",
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+    marginBottom: 2,
+  },
+  replayResultPreview: {
+    marginTop: 6,
+    marginBottom: 6,
+    fontSize: 9,
+    color: "#1e3a5f",
+    lineHeight: 12,
+    maxHeight: 200,
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
   },
   webViewContainer: {

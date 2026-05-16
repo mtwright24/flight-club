@@ -931,28 +931,27 @@ export default function CalendarMonthView({
         <Pressable
           onPress={onPrevMonth}
           disabled={!canPrevMonth}
-          style={[styles.monthArrow, !canPrevMonth && styles.monthArrowOff]}
+          style={[styles.monthCircleNav, !canPrevMonth && styles.monthCircleNavOff]}
           accessibilityLabel="Previous month"
         >
           <Ionicons
             name="chevron-back"
-            size={18}
+            size={16}
             color={canPrevMonth ? T.text : T.line}
           />
         </Pressable>
-        <View style={styles.monthTitleWrap}>
-          <Ionicons name="calendar-clear-outline" size={15} color="#64748B" />
-          <Text style={styles.monthTitle}>{monthLabel}</Text>
-        </View>
+        <Text style={styles.monthNavTitle} numberOfLines={1}>
+          {monthLabel}
+        </Text>
         <Pressable
           onPress={onNextMonth}
           disabled={!canNextMonth}
-          style={[styles.monthArrow, !canNextMonth && styles.monthArrowOff]}
+          style={[styles.monthCircleNav, !canNextMonth && styles.monthCircleNavOff]}
           accessibilityLabel="Next month"
         >
           <Ionicons
             name="chevron-forward"
-            size={18}
+            size={16}
             color={canNextMonth ? T.text : T.line}
           />
         </Pressable>
@@ -1340,31 +1339,24 @@ const styles = StyleSheet.create({
   monthNav: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "center",
+    paddingTop: 12,
+    paddingBottom: 8,
+    gap: 14,
     marginBottom: 10,
   },
-  monthArrow: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#FFFFFF",
+  monthCircleNav: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#E2E8F0",
   },
-  monthArrowOff: { opacity: 0.45 },
-  monthTitleWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-  },
-  monthTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: T.text,
-    letterSpacing: -0.2,
-  },
+  monthCircleNavOff: { opacity: 0.45 },
+  monthNavTitle: { fontSize: 14, fontWeight: "500", color: T.text },
   gridCard: {
     backgroundColor: "#FFFFFF",
     borderRadius: 18,

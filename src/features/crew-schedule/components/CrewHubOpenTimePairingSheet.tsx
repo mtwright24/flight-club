@@ -33,6 +33,9 @@ type Props = {
   trip: OpenTimeTrip | null;
   onClose: () => void;
   onOpenFlica: (uri: string) => void;
+  /** FLICA session fetch → native pairing detail (parsed HTML). */
+  onOpenNativeDetail?: () => void;
+  nativeDetailLoading?: boolean;
 };
 
 function daysLabel(d: number | null): string {
@@ -40,7 +43,14 @@ function daysLabel(d: number | null): string {
   return `${d} day${d === 1 ? "" : "s"}`;
 }
 
-export default function CrewHubOpenTimePairingSheet({ visible, trip, onClose, onOpenFlica }: Props) {
+export default function CrewHubOpenTimePairingSheet({
+  visible,
+  trip,
+  onClose,
+  onOpenFlica,
+  onOpenNativeDetail,
+  nativeDetailLoading = false,
+}: Props) {
   if (!trip) return null;
   const dateLine = [trip.date, trip.dates, trip.dateLabel].filter(Boolean).join(META).trim() || "—";
   const bid = trip.bidPos?.trim() || "—";
@@ -135,6 +145,17 @@ export default function CrewHubOpenTimePairingSheet({ visible, trip, onClose, on
             >
               <Text style={styles.btnGhostText}>Swap</Text>
             </Pressable>
+            {onOpenNativeDetail ? (
+              <Pressable
+                style={[styles.btnGhost, nativeDetailLoading && styles.btnDisabled]}
+                onPress={() => void onOpenNativeDetail()}
+                disabled={nativeDetailLoading}
+              >
+                <Text style={styles.btnGhostText}>
+                  {nativeDetailLoading ? "Loading…" : "Full detail"}
+                </Text>
+              </Pressable>
+            ) : null}
             <Pressable style={styles.btnSecondary} onPress={onClose}>
               <Text style={styles.btnSecondaryText}>Close</Text>
             </Pressable>
@@ -289,6 +310,7 @@ const styles = StyleSheet.create({
     borderColor: CREW_HUB_CARD_RIM,
   },
   btnGhostText: { color: SCHEDULE_MOCK_HEADER_RED, fontSize: 13, fontWeight: "900" },
+  btnDisabled: { opacity: 0.55 },
   btnSecondary: {
     flexBasis: "100%",
     alignItems: "center",

@@ -1,4 +1,9 @@
 import type { OpenTimeTrip, TradeboardPost, TradeboardPostType } from "./flicaCrewHubTypes";
+import {
+  buildOpenTimePairingDetailUrl,
+  buildTradeboardPairingDetailUrl,
+  parseFlicaPairOnclick,
+} from "../flica-actions/flicaPairingDetailUrl";
 
 /** Pairing + report date token as shown on Tradeboard (e.g. J3717:12MAY). */
 const TRADEBOARD_PAIRING_DATE_RE = /\b(J[A-Z0-9]{3,5}):(\d{1,2}[A-Z]{3})\b/i;
@@ -130,6 +135,30 @@ function collapseWhitespace(s: string): string {
 
 function normalizeRowCells(cells: string[]): string[] {
   return cells.map((c) => collapseWhitespace(String(c ?? ""))).filter((c) => c.length > 0);
+}
+
+function openTimePairingFieldsFromOnclickBlob(onclickBlob: string): {
+  pairingDetailUrl?: string;
+  dateYmd?: string;
+  pairingDetailUrlFromLiveHtml?: boolean;
+} {
+  const oc = parseFlicaPairOnclick(onclickBlob);
+  if (!oc) return {};
+  return {
+    pairingDetailUrl: buildOpenTimePairingDetailUrl(oc.pid, oc.dateYmd),
+    dateYmd: oc.dateYmd,
+    pairingDetailUrlFromLiveHtml: true,
+  };
+}
+
+function openTimePairingDetailUrlFromOnclickBlob(blob: string): string | undefined {
+  return openTimePairingFieldsFromOnclickBlob(blob).pairingDetailUrl;
+}
+
+function tradeboardPairingDetailUrlFromOnclickBlob(blob: string): string | undefined {
+  const p = parseFlicaPairOnclick(blob);
+  if (!p) return undefined;
+  return buildTradeboardPairingDetailUrl(p.pid, p.dateYmd);
 }
 
 function parseTradeboardPairing(
@@ -407,6 +436,10 @@ export function mapTradeboardRowsToPosts(
       type,
       rawCells.join("|"),
     ]);
+    const onclickBlob = [line, ...rawCells].join(" ");
+    const ocTb = parseFlicaPairOnclick(onclickBlob);
+    const tbUrl = ocTb ? buildTradeboardPairingDetailUrl(ocTb.pid, ocTb.dateYmd) : undefined;
+    const tbLive = Boolean(ocTb && tbUrl);
 
     out.push({
       id: `tb-${id}`,
@@ -440,6 +473,9 @@ export function mapTradeboardRowsToPosts(
       rawCells,
       rawText: line,
       offerCount: extractOffers(line),
+      pairingDetailUrl: tbUrl,
+      pairingDetailUrlFromLiveHtml: tbLive,
+      dateYmd: ocTb?.dateYmd,
     });
   }
   return out;
@@ -551,6 +587,8 @@ function tryMapOpenTimeStructuredColumns(rawCells: string[], sourceUrl: string):
   const worth = extractMoney(line);
   const dateDisplay = datesCol || dateLabel;
   const dollarM = line.match(/\$(\d+)\s*\/\s*(?:CR\s*)?HR/i);
+  const onclickBlob = [line, ...rawCells].join(" ");
+  const otPair = openTimePairingFieldsFromOnclickBlob(onclickBlob);
 
   return {
     pairingId,
@@ -572,6 +610,7 @@ function tryMapOpenTimeStructuredColumns(rawCells: string[], sourceUrl: string):
     legalityStatus: "",
     sourceUrl,
     rawCells: rawCells.map((c) => collapseWhitespace(String(c ?? ""))),
+    ...otPair,
   };
 }
 
@@ -629,6 +668,8 @@ export function mapRowsToOpenTimeTrips(rows: string[][], sourceUrl: string): Ope
       "";
 
     const dateDisplay = dateRange || dateHuman || dateTok;
+    const onclickBlob = [line, ...rawCells].join(" ");
+    const otPair = openTimePairingFieldsFromOnclickBlob(onclickBlob);
 
     out.push({
       pairingId,
@@ -653,6 +694,7 @@ export function mapRowsToOpenTimeTrips(rows: string[][], sourceUrl: string): Ope
       legalityStatus: "",
       sourceUrl,
       rawCells: cells.map((c) => collapseWhitespace(String(c ?? ""))),
+      ...otPair,
     });
   }
   return out;

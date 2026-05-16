@@ -1,6 +1,23 @@
+/** FLICA Open Time pot/frame identity for a row (required for live pairing detail fetch). */
+export type OpenTimeRowSourceContext = {
+  sourceBcid: string;
+  /** Final URL after redirects for `otframe.cgi?…&ViewOT=1`. */
+  sourceOtFrameUrl: string;
+  /** Pot list URL used to parse this row. */
+  sourceOpenTimePotUrl: string;
+  /** `otopentimepot.cgi` token query value when present. */
+  sourceToken: string;
+  /** `YYYY-MM` from crew hub month strip or inferred from row. */
+  sourceMonthKey?: string;
+  /** e.g. MainFrame when known from FLICA frameset (optional). */
+  sourceFrameName?: string;
+};
+
 /** Normalized Open Time pot row (FLICA native parse → UI). */
 export type OpenTimeTrip = {
   pairingId: string;
+  /** `YYYYMMDD` from live `pair("PID","YYYYMMDD",…)` when extracted. */
+  dateYmd?: string;
   /** Human-readable date range or single date from FLICA. */
   date: string;
   /** Same as `date` when a range is shown; optional duplicate for clarity in payloads. */
@@ -23,7 +40,18 @@ export type OpenTimeTrip = {
   legalityStatus: string;
   sourceUrl: string;
   rawCells: string[];
-};
+  /**
+   * Full FLICA pairing detail URL (`rbcpair.cgi`), from onclick `pair("PID","YYYYMMDD",…)` when present.
+   */
+  pairingDetailUrl?: string;
+  /**
+   * True when `pairingDetailUrl` was resolved from live pot HTML (`pair(...)` / same-document enrichment)
+   * during a hub refresh — never synthetic PID/DATE build for marketplace.
+   */
+  pairingDetailUrlFromLiveHtml?: boolean;
+  /** Stable order within the source pot list (0-based). */
+  originalDisplayOrder?: number;
+} & Partial<OpenTimeRowSourceContext>;
 
 export type TradeboardPostType =
   | "swap"
@@ -68,4 +96,12 @@ export type TradeboardPost = {
   rawCells: string[];
   rawText: string;
   offerCount: number | null;
+  /**
+   * Full FLICA pairing detail URL (`RBCPair.cgi`), from onclick or normalized pairing+date when present.
+   */
+  pairingDetailUrl?: string;
+  /** `YYYYMMDD` when resolved from live onclick / enrichment. */
+  dateYmd?: string;
+  /** True when URL came from live Tradeboard HTML row/onclick enrichment (hub refresh). */
+  pairingDetailUrlFromLiveHtml?: boolean;
 };

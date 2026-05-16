@@ -4,6 +4,7 @@ import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useSt
 import { Ionicons } from "@expo/vector-icons";
 import {
   ActivityIndicator,
+  Alert,
   Platform,
   Pressable,
   RefreshControl,
@@ -28,16 +29,17 @@ import {
   nativeFetchTradeBoardMyRequests,
   nativeFetchTradeBoardMyResponses,
 } from "../../flica-actions/flicaActionsNativeService";
-import CrewHubTradeboardPairingSheet from "../components/CrewHubTradeboardPairingSheet";
+import FlicaMarketplacePairingDetailSheet from "../components/FlicaMarketplacePairingDetailSheet";
 import { CrewHubSwipeActionRail, type CrewHubSwipeRailAction } from "../components/CrewHubSwipeActionRail";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
-import { hubLayoverDisplayWithDots } from "../crewHubLayoverDisplay";
+import { hubLayoverDisplayForHubListRow } from "../crewHubLayoverDisplay";
 import { FlicaCrewHubScheduleSessionRunner } from "../components/FlicaCrewHubScheduleSessionRunner";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
 import {
   loadTradeboardHubCache,
   upsertTradeboardHubCache,
 } from "../crewHubFlicaCache";
+import { resolveCrewHubTradeboardPairingDetailUrl } from "../crewHubFlicaDetailUrl";
 import { useCrewScheduleHeaderBridge } from "../crewScheduleHeaderBridge";
 import { mapTradeboardPostsWithHtmlFallback } from "../flicaCrewHubHtmlFallbackParse";
 import { tradeboardDisplayScheduleFields, tradeboardTypeLabel } from "../flicaCrewHubMappers";
@@ -48,6 +50,8 @@ import {
 } from "../flicaCrewHubParseDebug";
 import type { TradeboardPost } from "../flicaCrewHubTypes";
 import { useCrewScheduleMonthStrip } from "../hooks/useCrewScheduleMonthStrip";
+import type { FlicaMarketplacePairingDetail } from "../flicaMarketplacePairingDetailTypes";
+import { fetchFlicaMarketplacePairingDetail } from "../openFlicaMarketplacePairingDetail";
 import {
   CREW_HUB_CARD_RIM,
   CREW_HUB_DATE_HEADER_BG,
@@ -484,10 +488,12 @@ function TradeboardFeedRowInner({
   p,
   router,
   onOpen,
+  onTradeboardMutateWeb,
 }: {
   p: TradeboardPost;
   router: ReturnType<typeof useRouter>;
   onOpen: (post: TradeboardPost) => void;
+  onTradeboardMutateWeb: (uri: string) => void;
 }) {
   const handlePress = useCallback(() => {
     onOpen(p);
@@ -504,7 +510,7 @@ function TradeboardFeedRowInner({
     {
       key: "primary",
       label: tradeboardSwipePrimaryLabel(p.type),
-      onPress: () => pushFlicaWeb(router, primaryUri),
+      onPress: () => onTradeboardMutateWeb(primaryUri),
       variant: "primary",
     },
     ...(p.type === "trade_drop"
@@ -512,7 +518,7 @@ function TradeboardFeedRowInner({
           {
             key: "pickup",
             label: "Pickup",
-            onPress: () => pushFlicaWeb(router, FLICA_NATIVE_URLS.tradeFrame),
+            onPress: () => onTradeboardMutateWeb(FLICA_NATIVE_URLS.tradeFrame),
             variant: "secondary",
           } satisfies CrewHubSwipeRailAction,
         ]
@@ -560,7 +566,7 @@ function TradeboardFeedRowInner({
                 adjustsFontSizeToFit
                 minimumFontScale={0.72}
               >
-                {hubLayoverDisplayWithDots(p.layover)}
+                {hubLayoverDisplayForHubListRow(p.layover)}
               </Text>
             </View>
           </View>
@@ -642,6 +648,7 @@ type TradeboardDeferredGroupedListProps = {
   loading: boolean;
   listHeadingDate: string;
   openTradeboardDetail: (p: TradeboardPost) => void;
+  onTradeboardMutateWeb: (uri: string) => void;
 };
 
 /**
@@ -659,6 +666,7 @@ const TradeboardDeferredGroupedList = React.memo(function TradeboardDeferredGrou
   loading,
   listHeadingDate,
   openTradeboardDetail,
+  onTradeboardMutateWeb,
 }: TradeboardDeferredGroupedListProps) {
   const router = useRouter();
 
@@ -760,7 +768,13 @@ const TradeboardDeferredGroupedList = React.memo(function TradeboardDeferredGrou
                 </View>
               </View>
               {grp.items.map((p) => (
-                <TradeboardFeedRow key={p.id} p={p} router={router} onOpen={openTradeboardDetail} />
+                <TradeboardFeedRow
+                  key={p.id}
+                  p={p}
+                  router={router}
+                  onOpen={openTradeboardDetail}
+                  onTradeboardMutateWeb={onTradeboardMutateWeb}
+                />
               ))}
             </View>
           </View>
@@ -776,7 +790,7 @@ export default function TradeboardTabScreen() {
   const { session } = useAuth();
   const isFocused = useIsFocused();
   const { setCrewScheduleHeaderSubtitle, bumpCrewHubSharedDataRefresh } = useCrewScheduleHeaderBridge();
-  const { stripValues, monthTrips } = useCrewScheduleMonthStrip();
+  const { stripValues, monthTrips, year, month } = useCrewScheduleMonthStrip();
 
   const [profileBase, setProfileBase] = useState<string | null>(null);
   const [profileRole, setProfileRole] = useState<string | null>(null);
@@ -789,10 +803,15 @@ export default function TradeboardTabScreen() {
   const [myPosts, setMyPosts] = useState<TradeboardPost[]>([]);
   const [responsePosts, setResponsePosts] = useState<TradeboardPost[]>([]);
   const [tradeFeedTab, setTradeFeedTab] = useState<TradeFeedTab>("all");
-  const [detailPost, setDetailPost] = useState<TradeboardPost | null>(null);
-  const openTradeboardDetail = useCallback((p: TradeboardPost) => {
-    setDetailPost(p);
-  }, []);
+  const [marketplaceDetail, setMarketplaceDetail] = useState<FlicaMarketplacePairingDetail | null>(null);
+  const [hubMarketplaceLoading, setHubMarketplaceLoading] = useState(false);
+  const [hubLiveMarketplaceSyncAt, setHubLiveMarketplaceSyncAt] = useState<string | null>(null);
+
+  const tradeboardMonthFallback = useMemo(
+    () => `${year}-${String(month).padStart(2, "0")}`,
+    [year, month],
+  );
+
   const [toast, setToast] = useState<string | null>(null);
   const [pullSessionRunnerActive, setPullSessionRunnerActive] = useState(false);
   const pullSessionWaitersRef = useRef<{
@@ -968,6 +987,7 @@ export default function TradeboardTabScreen() {
           context: "tradeboard",
           afterPullSession: reason === "pull",
         });
+        setHubLiveMarketplaceSyncAt(null);
         if (reason === "focus") {
           setError(null);
         } else {
@@ -979,6 +999,14 @@ export default function TradeboardTabScreen() {
 
       const mappedAll = mappedAllPre;
       const mappedMy = mappedMyPre;
+      const refreshOk =
+        allR.ok &&
+        myR.ok &&
+        respR.ok &&
+        !flicaFetchNeedsWebVerification(allR.htmlState) &&
+        !flicaFetchNeedsWebVerification(myR.htmlState) &&
+        !flicaFetchNeedsWebVerification(respR.htmlState);
+      setHubLiveMarketplaceSyncAt(refreshOk ? new Date().toISOString() : null);
       logCrewHubAuth("parse_done", {
         context: "tradeboard",
         allMappedRows: mappedAll.length,
@@ -1012,14 +1040,6 @@ export default function TradeboardTabScreen() {
         setError(null);
       }
 
-      const refreshOk =
-        allR.ok &&
-        myR.ok &&
-        respR.ok &&
-        !flicaFetchNeedsWebVerification(allR.htmlState) &&
-        !flicaFetchNeedsWebVerification(myR.htmlState) &&
-        !flicaFetchNeedsWebVerification(respR.htmlState);
-
       if (refreshOk && session?.user?.id) {
         void upsertTradeboardHubCache(session.user.id, {
           v: 1,
@@ -1036,12 +1056,84 @@ export default function TradeboardTabScreen() {
         setAllPosts([]);
         setMyPosts([]);
         setResponsePosts([]);
+        setHubLiveMarketplaceSyncAt(null);
       }
     } finally {
       setLoading(false);
       bumpCrewHubSharedDataRefresh();
     }
   }, [bumpCrewHubSharedDataRefresh, session?.user?.id, profileBase, profileRole]);
+
+  const runTradeboardMutatingWeb = useCallback(
+    (uri: string) => {
+      if (!hubLiveMarketplaceSyncAt) {
+        Alert.alert(
+          "Sync live FLICA first",
+          "Pull to refresh Tradeboard before using Post, Pickup, Swap, or other marketplace actions.",
+        );
+        return;
+      }
+      pushFlicaWeb(router, uri);
+    },
+    [hubLiveMarketplaceSyncAt, router],
+  );
+
+  const openTradeboardMarketplace = useCallback(
+    async (p: TradeboardPost) => {
+      const url = resolveCrewHubTradeboardPairingDetailUrl(p, year)?.trim();
+      if (!url) {
+        Alert.alert(
+          "Cannot open pairing detail",
+          "This row does not have enough pairing and date information to build a FLICA detail link.",
+        );
+        return;
+      }
+      console.log(
+        "[FC_TRADEBOARD_ROW_TAP_DETAIL]",
+        JSON.stringify({
+          selectedRowPairingId: p.pairingId,
+          selectedRowPairingDetailUrl: p.pairingDetailUrl,
+          pairingDetailUrlFromLiveHtml: p.pairingDetailUrlFromLiveHtml,
+          finalFetchUrl: url,
+        }),
+      );
+      setHubMarketplaceLoading(true);
+      try {
+        const d = await fetchFlicaMarketplacePairingDetail(url, "tradeboard", {
+          referer: p.sourceUrl?.trim() || undefined,
+          monthFallback: tradeboardMonthFallback,
+          debugRow: {
+            pairingId: p.pairingId,
+            date: p.pairingDateLabel,
+            pairingDetailUrl: p.pairingDetailUrl,
+            dateYmd: p.dateYmd,
+            pairingDetailUrlFromLiveHtml: p.pairingDetailUrlFromLiveHtml,
+            urlIsSyntheticFallback: !p.pairingDetailUrl?.trim(),
+          },
+        });
+        setMarketplaceDetail(d);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/FLICA_APPLICATION_OR_SESSION_ERROR/i.test(msg)) {
+          Alert.alert(
+            "Tradeboard detail",
+            "This Tradeboard detail needs a fresh FLICA refresh. Pull to refresh and try again.",
+            [
+              { text: "OK", style: "cancel" },
+              { text: "Refresh", onPress: () => void load("pull") },
+            ],
+          );
+        } else {
+          Alert.alert("Pairing detail failed", msg);
+        }
+      } finally {
+        setHubMarketplaceLoading(false);
+      }
+    },
+    [load, tradeboardMonthFallback, year],
+  );
+
+  const openTradeboardDetail = openTradeboardMarketplace;
 
   useFocusEffect(
     useCallback(() => {
@@ -1135,7 +1227,7 @@ export default function TradeboardTabScreen() {
             })}
             <Pressable
               style={[styles.tbSeg, styles.tbSegPost]}
-              onPress={() => pushFlicaWeb(router, FLICA_NATIVE_URLS.tradePostRequest)}
+              onPress={() => runTradeboardMutatingWeb(FLICA_NATIVE_URLS.tradePostRequest)}
             >
               <Ionicons name="add-circle-outline" size={14} color={SCHEDULE_MOCK_HEADER_RED} />
               <Text style={styles.tbSegPostTxt} numberOfLines={2}>
@@ -1170,7 +1262,7 @@ export default function TradeboardTabScreen() {
                 }
                 onPress={() => {
                   if (k === "post_trade") {
-                    pushFlicaWeb(router, FLICA_NATIVE_URLS.tradePostRequest);
+                    runTradeboardMutatingWeb(FLICA_NATIVE_URLS.tradePostRequest);
                     return;
                   }
                   setPrimaryTab(k);
@@ -1334,7 +1426,7 @@ export default function TradeboardTabScreen() {
                 <Pressable
                   style={styles.btnRequest}
                   onPress={() => {
-                    pushFlicaWeb(router, FLICA_NATIVE_URLS.tradeMyResponses);
+                    runTradeboardMutatingWeb(FLICA_NATIVE_URLS.tradeMyResponses);
                   }}
                 >
                   <Text style={styles.btnRequestText}>Request Trade</Text>
@@ -1366,14 +1458,20 @@ export default function TradeboardTabScreen() {
           loading={loading}
           listHeadingDate={listHeadingDate}
           openTradeboardDetail={openTradeboardDetail}
+          onTradeboardMutateWeb={runTradeboardMutatingWeb}
         />
       </ScrollView>
 
-      <CrewHubTradeboardPairingSheet
-        visible={detailPost != null}
-        post={detailPost}
-        posterFirstName={tradeboardPosterFirstName(detailPost?.posterName)}
-        onClose={() => setDetailPost(null)}
+      {hubMarketplaceLoading ? (
+        <View style={styles.hubMarketplaceLoading} pointerEvents="auto">
+          <ActivityIndicator size="large" color={SCHEDULE_MOCK_HEADER_RED} />
+        </View>
+      ) : null}
+
+      <FlicaMarketplacePairingDetailSheet
+        visible={marketplaceDetail != null}
+        detail={marketplaceDetail}
+        onClose={() => setMarketplaceDetail(null)}
       />
     </View>
   );
@@ -1381,6 +1479,13 @@ export default function TradeboardTabScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#f1f0f0" },
+  hubMarketplaceLoading: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 50,
+  },
   scroll: { flex: 1 },
   tbTypePillsRow: {
     flexDirection: "row",

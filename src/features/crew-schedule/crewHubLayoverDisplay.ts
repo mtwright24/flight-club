@@ -19,3 +19,10 @@ export function hubLayoverDisplayWithDots(layover: string | null | undefined): s
   if (!s.length) return "—";
   return s.split(/\s+/).filter(Boolean).join(" · ");
 }
+
+/** Open Time / Tradeboard list rows only — no layover shows as TURN instead of em dash. */
+export function hubLayoverDisplayForHubListRow(layover: string | null | undefined): string {
+  const s = hubLayoverRawText(layover);
+  if (!s.length) return "TURN";
+  return s.split(/\s+/).filter(Boolean).join(" · ");
+}

@@ -533,8 +533,8 @@ type OtGate =
     }
   | { ok: false; result: FlicaActionsFetchResult };
 
-async function openTimeFrameAndToken(): Promise<OtGate> {
-  const frameUrl = FLICA_NATIVE_URLS.otFrameView;
+async function openTimeFrameTokenForBcid(bcid: string): Promise<OtGate> {
+  const frameUrl = `${BASE}/full/otframe.cgi?BCID=${encodeURIComponent(bcid)}&ViewOT=1`;
   try {
     const frame = await fetchFlicaHtmlUsingWebViewSession(frameUrl, {
       referer: WEBVIEW_TRUSTED_REFERER,
@@ -544,7 +544,7 @@ async function openTimeFrameAndToken(): Promise<OtGate> {
       return {
         ok: false,
         result: toResult(frameUrl, frame.status, frame.html, frame.url, {
-          error: `OpenTime frame: ${st}`,
+          error: `OpenTime frame (${bcid}): ${st}`,
           okOverride: false,
         }),
       };
@@ -554,7 +554,7 @@ async function openTimeFrameAndToken(): Promise<OtGate> {
       return {
         ok: false,
         result: toResult(frameUrl, frame.status, frame.html, frame.url, {
-          error: "Token not found in otframe HTML.",
+          error: `Token not found in otframe HTML (BCID=${bcid}).`,
           okOverride: false,
         }),
       };
@@ -573,35 +573,71 @@ async function openTimeFrameAndToken(): Promise<OtGate> {
   }
 }
 
-export async function nativeFetchOpenTimePot(): Promise<FlicaActionsFetchResult> {
-  const gate = await openTimeFrameAndToken();
+async function openTimeFrameAndToken(): Promise<OtGate> {
+  return openTimeFrameTokenForBcid(FLICA_NATIVE_OT_BCID);
+}
+
+/** Known alternate Open Time BCIDs (multi-month pots); merged with HTML discovery. */
+export const FLICA_NATIVE_OT_BCID_EXTRA_CANDIDATES = ["029.056", "029.054"] as const;
+
+/** Frame + token + pot fetch for one BCID (for attaching `sourceOtFrameUrl` / `sourceOpenTimePotUrl` to rows). */
+export async function nativeFetchOpenTimePotBundleForBcid(bcid: string): Promise<
+  | { ok: false; bcid: string; error: string; frameResult?: FlicaActionsFetchResult }
+  | {
+      ok: true;
+      bcid: string;
+      sourceOtFrameUrl: string;
+      sourceToken: string;
+      sourceOpenTimePotUrl: string;
+      pot: FlicaActionsFetchResult;
+    }
+> {
+  const gate = await openTimeFrameTokenForBcid(bcid);
   if (!gate.ok) {
-    logNative({ label: "ot_pot", ok: false, error: gate.result.error });
-    return gate.result;
+    return { ok: false, bcid, error: gate.result.error ?? "OpenTime frame failed", frameResult: gate.result };
   }
-  const potUrl = FLICA_NATIVE_URLS.otPot(gate.token);
+  const potUrl = `${BASE}/full/otopentimepot.cgi?token=${encodeURIComponent(gate.token)}&BCID=${encodeURIComponent(bcid)}&GO=1`;
   try {
     const pot = await fetchFlicaHtmlUsingWebViewSession(potUrl, {
       referer: gate.referer,
     });
     const r = toResult(potUrl, pot.status, pot.html, pot.url);
     logNative({
-      label: "ot_pot",
+      label: "ot_pot_bundle",
       ok: r.ok,
+      bcid,
       pageType: r.nativeParse?.pageType,
       rowCount: r.rowCount,
     });
-    return r;
+    return {
+      ok: true,
+      bcid,
+      sourceOtFrameUrl: gate.referer,
+      sourceToken: gate.token,
+      sourceOpenTimePotUrl: String(pot.url ?? potUrl),
+      pot: r,
+    };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    logNative({ label: "ot_pot", ok: false, error: msg });
-    return {
-      ok: false,
-      requestedUrl: potUrl,
-      url: potUrl,
-      error: msg,
-    };
+    return { ok: false, bcid, error: msg };
   }
+}
+
+export async function nativeFetchOpenTimePotForBcid(bcid: string): Promise<FlicaActionsFetchResult> {
+  const b = await nativeFetchOpenTimePotBundleForBcid(bcid);
+  if (!b.ok) {
+    return b.frameResult ?? { ok: false, requestedUrl: "", url: "", error: b.error, htmlLength: 0 };
+  }
+  return b.pot;
+}
+
+export async function nativeFetchOpenTimePot(): Promise<FlicaActionsFetchResult> {
+  const b = await nativeFetchOpenTimePotBundleForBcid(FLICA_NATIVE_OT_BCID);
+  if (!b.ok) {
+    logNative({ label: "ot_pot", ok: false, error: b.error });
+    return b.frameResult ?? { ok: false, requestedUrl: "", url: "", error: b.error, htmlLength: 0 };
+  }
+  return b.pot;
 }
 
 export async function nativeFetchOpenTimeMyRequests(): Promise<FlicaActionsFetchResult> {

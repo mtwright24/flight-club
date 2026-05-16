@@ -28,6 +28,7 @@ import {
 } from "./pairingRenderableGate";
 import { monthCalendarKey } from "./scheduleMonthCache";
 import { pairingNavigationSessionKey } from "./scheduleStableSnapshots";
+import type { PairingDetailDbHotelRow } from "./scheduleApi";
 import type { CrewScheduleTrip } from "./types";
 
 const UUID_RE_STASH =
@@ -45,6 +46,8 @@ type StashEntry = {
   pointer: DetailHandoffPointer;
   /** Month list at tap (same as grid source). */
   overlayTrips: CrewScheduleTrip[];
+  /** FLICA HTML pairing-detail hotels (Crew Hub native fetch) — no `schedule_pairings` row. */
+  crewHubPrefetchedHotels?: PairingDetailDbHotelRow[];
 };
 
 const stashByTripId = new Map<string, StashEntry>();
@@ -119,6 +122,35 @@ export function stashTripForDetailNavigation(
 
 }
 
+/**
+ * Crew Hub: stash a FLICA-parsed trip + optional hotel rows for {@link TripDetailScreen}
+ * (no calendar grid handoff).
+ */
+export function stashCrewHubFlicaPairingForTripDetail(params: {
+  trip: CrewScheduleTrip;
+  prefetchedHotels?: PairingDetailDbHotelRow[];
+}): void {
+  const { trip, prefetchedHotels } = params;
+  const start = normIsoDate(trip.startDate);
+  const mk = monthCalendarKey(trip.year, trip.month);
+  const pointer: DetailHandoffPointer = {
+    pairingCode: normCodeRaw(trip.pairingCode),
+    selectedDateIso: start,
+    selectedMonthKey: mk,
+  };
+  stashByTripId.set(trip.id, {
+    pointer,
+    overlayTrips: [deepCloneTrip(trip)],
+    crewHubPrefetchedHotels: prefetchedHotels,
+  });
+}
+
+export function peekStashedCrewHubPrefetchedHotels(
+  tripId: string,
+): PairingDetailDbHotelRow[] | undefined {
+  return stashByTripId.get(tripId)?.crewHubPrefetchedHotels;
+}
+
 /** Pointer + overlay for DB/detail resolution (pairing row is not render-ready). */
 export function getDetailNavigationStashForResolve(
   tripId: string,
@@ -128,6 +160,9 @@ export function getDetailNavigationStashForResolve(
   return {
     pointer: { ...e.pointer },
     overlayTrips: e.overlayTrips.map((t) => deepCloneTrip(t)),
+    crewHubPrefetchedHotels: e.crewHubPrefetchedHotels
+      ? e.crewHubPrefetchedHotels.map((h) => ({ ...h }))
+      : undefined,
   };
 }
 

@@ -18,6 +18,8 @@ type Props = {
   post: TradeboardPost | null;
   posterFirstName: string;
   onClose: () => void;
+  onOpenNativeDetail?: () => void;
+  nativeDetailLoading?: boolean;
 };
 
 function firstIataFromText(s: string): string {
@@ -30,6 +32,8 @@ export default function CrewHubTradeboardPairingSheet({
   post,
   posterFirstName,
   onClose,
+  onOpenNativeDetail,
+  nativeDetailLoading = false,
 }: Props) {
   if (!post) return null;
   const typeLine = tradeboardTypeLabel(post.type);
@@ -185,6 +189,17 @@ export default function CrewHubTradeboardPairingSheet({
           </View>
 
           <View style={styles.footer}>
+            {onOpenNativeDetail ? (
+              <Pressable
+                style={[styles.btnSecondary, nativeDetailLoading && styles.btnDisabled]}
+                onPress={() => void onOpenNativeDetail()}
+                disabled={nativeDetailLoading}
+              >
+                <Text style={styles.btnSecondaryText}>
+                  {nativeDetailLoading ? "Loading…" : "Full pairing detail"}
+                </Text>
+              </Pressable>
+            ) : null}
             <Pressable style={styles.btnPrimary} onPress={onClose}>
               <Text style={styles.btnPrimaryText}>Close</Text>
             </Pressable>
@@ -420,6 +435,7 @@ const styles = StyleSheet.create({
   commentsEmpty: { color: "#a8a29e", fontStyle: "italic" },
   footer: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
     paddingHorizontal: 10,
     paddingTop: 6,
@@ -428,8 +444,24 @@ const styles = StyleSheet.create({
     borderTopColor: "#e7e5e4",
     backgroundColor: "#fafaf9",
   },
+  btnDisabled: { opacity: 0.55 },
+  btnSecondary: {
+    flexBasis: "100%",
+    backgroundColor: "#fff",
+    paddingVertical: 8,
+    borderRadius: 10,
+    alignItems: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: SCHEDULE_MOCK_HEADER_RED,
+  },
+  btnSecondaryText: {
+    color: SCHEDULE_MOCK_HEADER_RED,
+    fontSize: 11,
+    fontWeight: "900",
+  },
   btnPrimary: {
     flex: 1,
+    minWidth: 120,
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     paddingVertical: 8,
     borderRadius: 10,

@@ -36,6 +36,7 @@ import { getMockTripById } from '../mockScheduleData';
 import { tradePostPrefillParams } from '../tradePostPrefillParams';
 import {
   getDetailNavigationStashForResolve,
+  peekStashedCrewHubPrefetchedHotels,
   peekStashedDetailPointer,
   peekStashedPairingSnapshotKey,
   peekStashedTripForDetail,
@@ -1040,7 +1041,12 @@ export default function TripDetailScreen() {
   }, [display, vm?.days, selectedDayIndex]);
 
   useEffect(() => {
-    setPairingHotels([]);
+    const stashHotels = tripId ? peekStashedCrewHubPrefetchedHotels(tripId) : undefined;
+    if (stashHotels?.length) {
+      setPairingHotels(stashHotels);
+    } else {
+      setPairingHotels([]);
+    }
     const pid = trip?.schedulePairingId?.trim();
     if (!pid || !UUID_RE.test(pid)) return;
     const sessionAtStart = detailSessionKeyRef.current;

@@ -568,30 +568,30 @@ export default function ScheduleTabScreen() {
         >
           <Pressable
             onPress={goPrevMonth}
-            style={styles.iconHit}
             disabled={!canPrevMonth}
+            style={[styles.monthCircleNav, !canPrevMonth && styles.monthCircleNavOff]}
             accessibilityLabel="Previous month"
             accessibilityState={{ disabled: !canPrevMonth }}
           >
             <Ionicons
               name="chevron-back"
-              size={22}
+              size={16}
               color={canPrevMonth ? T.text : T.line}
             />
           </Pressable>
-          <View style={styles.monthTitleRow}>
-            <Text style={styles.monthText}>{monthLabel}</Text>
-          </View>
+          <Text style={styles.monthNavTitle} numberOfLines={1}>
+            {monthLabel}
+          </Text>
           <Pressable
             onPress={goNextMonth}
-            style={styles.iconHit}
             disabled={!canNextMonth}
+            style={[styles.monthCircleNav, !canNextMonth && styles.monthCircleNavOff]}
             accessibilityLabel="Next month"
             accessibilityState={{ disabled: !canNextMonth }}
           >
             <Ionicons
               name="chevron-forward"
-              size={22}
+              size={16}
               color={canNextMonth ? T.text : T.line}
             />
           </Pressable>
@@ -706,33 +706,28 @@ const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: T.bg },
   scrollModern: { backgroundColor: T.bg },
   scrollContent: { flexGrow: 1, paddingBottom: 8 },
+  /** Classic list month navigator — matches `ModernScheduleChrome` / Open Time (no card bar). */
   monthRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "center",
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: "#FFFFFF",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: T.line,
-    gap: 4,
+    paddingTop: 12,
+    paddingBottom: 8,
+    gap: 14,
   },
-  monthText: { fontSize: 16, fontWeight: "800", color: T.text },
-  monthTitleRow: {
-    flex: 1,
-    flexDirection: "row",
+  monthCircleNav: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#E2E8F0",
   },
-  monthRowCenter: { flex: 1, textAlign: "center", marginHorizontal: 4 },
-  monthSide: {
-    width: 32,
-    height: 32,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  iconHit: { paddingHorizontal: 6, paddingVertical: 4 },
+  monthCircleNavOff: { opacity: 0.45 },
+  monthNavTitle: { fontSize: 14, fontWeight: "500", color: T.text },
   readingArea: { paddingHorizontal: 0, paddingTop: 0, position: "relative" },
   readingAreaModern: { backgroundColor: T.bg },
   monthTransitionOverlay: {

@@ -3,7 +3,16 @@
  * or display-only rows, while real data still exists in page HTML / scripts.
  */
 import type { FlicaActionsFetchResult } from "../flica-actions/flicaActionsTypes";
+import {
+  buildOpenTimePairingDetailUrl,
+  buildTradeboardPairingDetailUrl,
+  extractPairOnclickPidYmdsFromHtml,
+  normalizeFlicaDdMmmToken,
+  parseFlicaPairOnclick,
+  ymdToDdMmmToken,
+} from "../flica-actions/flicaPairingDetailUrl";
 import type { OpenTimeTrip, TradeboardPost, TradeboardPostType } from "./flicaCrewHubTypes";
+import { dateYmdFromRbcpairDetailUrl } from "./crewHubFlicaLiveGate";
 import {
   djb2Hex,
   detectTradeboardType,
@@ -389,20 +398,47 @@ function openTimeTripFromTaskArgs(
 ): { trip: OpenTimeTrip | null; rejectReason?: string } {
   const args = argsRaw.map(normalizeTaskArg);
   const blob = args.join(" ");
-  if (!/\bJ[A-Z0-9]{3,5}\b/i.test(blob)) {
-    return { trip: null, rejectReason: "no_j_pairing_literal_in_args" };
-  }
+
+  /** `new Task(docOrder, "PID","DDMMM","YYYYMMDD", …)` — real OT rows from TAry script. */
   let pairingId = "";
   let dateTok = "";
-  const mColon = blob.match(/\b(J[A-Z0-9]{3,5})\s*:\s*(\d{1,2}[A-Z]{3})\b/i);
-  if (mColon) {
-    pairingId = mColon[1]!.toUpperCase();
-    dateTok = mColon[2]!.toUpperCase();
-  } else {
-    const mJ = blob.match(/\b(J[A-Z0-9]{3,5})\b/i);
-    const mD = blob.match(/\b(\d{1,2}[A-Z]{3})\b/i);
-    if (mJ) pairingId = mJ[1]!.toUpperCase();
-    if (mD) dateTok = mD[1]!.toUpperCase();
+  let taryDateYmd: string | undefined;
+
+  if (args.length >= 4) {
+    const a1 = args[1]!.trim().toUpperCase();
+    const a2 = args[2]!.trim();
+    const a3 = args[3]!.trim();
+    if (/^J[A-Z0-9]{3,5}$/.test(a1) && /^\d{1,2}[A-Z]{3}$/i.test(a2) && /^\d{8}$/.test(a3)) {
+      pairingId = a1;
+      dateTok = a2.toUpperCase();
+      taryDateYmd = a3;
+    }
+  }
+  if (!pairingId && args.length >= 3) {
+    const a0 = args[0]!.trim().toUpperCase();
+    const a1 = args[1]!.trim();
+    const a2 = args[2]!.trim();
+    if (/^J[A-Z0-9]{3,5}$/.test(a0) && /^\d{1,2}[A-Z]{3}$/i.test(a1) && /^\d{8}$/.test(a2)) {
+      pairingId = a0;
+      dateTok = a1.toUpperCase();
+      taryDateYmd = a2;
+    }
+  }
+
+  if (!pairingId) {
+    if (!/\bJ[A-Z0-9]{3,5}\b/i.test(blob)) {
+      return { trip: null, rejectReason: "no_j_pairing_literal_in_args" };
+    }
+    const mColon = blob.match(/\b(J[A-Z0-9]{3,5})\s*:\s*(\d{1,2}[A-Z]{3})\b/i);
+    if (mColon) {
+      pairingId = mColon[1]!.toUpperCase();
+      dateTok = mColon[2]!.toUpperCase();
+    } else {
+      const mJ = blob.match(/\b(J[A-Z0-9]{3,5})\b/i);
+      const mD = blob.match(/\b(\d{1,2}[A-Z]{3})\b/i);
+      if (mJ) pairingId = mJ[1]!.toUpperCase();
+      if (mD) dateTok = mD[1]!.toUpperCase();
+    }
   }
   if (!pairingId.startsWith("J")) {
     return { trip: null, rejectReason: "pairing_unparsed" };
@@ -459,12 +495,11 @@ function openTimeTripFromTaskArgs(
     layFromArgs,
   ];
   const mapped = mapRowsToOpenTimeTrips([syntheticCells], sourceUrl);
+  let trip: OpenTimeTrip;
   if (mapped.length === 1) {
-    return { trip: mapped[0]! };
-  }
-
-  return {
-    trip: {
+    trip = mapped[0]!;
+  } else {
+    trip = {
       pairingId,
       date: dateTok,
       dates: dateTok,
@@ -487,8 +522,14 @@ function openTimeTripFromTaskArgs(
       legalityStatus: "",
       sourceUrl,
       rawCells: args.slice(0, 24),
-    },
-  };
+    };
+  }
+
+  if (taryDateYmd && /^\d{8}$/.test(taryDateYmd)) {
+    trip = applyOpenTimeTaryTaskPairingDetail(trip, pairingId, taryDateYmd);
+  }
+
+  return { trip };
 }
 
 type TaskBody = { start: number; openParenIdx: number; inner: string; source: string };
@@ -957,6 +998,7 @@ function openTimeTripFromPotObjectBody(body: string, sourceUrl: string): OpenTim
 
   const dateLabel = dateTok || dateAlt;
   const dateDisplay = dateAlt || dateTok;
+  const oc = parseFlicaPairOnclick(body);
 
   return {
     pairingId,
@@ -981,6 +1023,7 @@ function openTimeTripFromPotObjectBody(body: string, sourceUrl: string): OpenTim
     legalityStatus: otFieldString(body, "legal") || otFieldString(body, "legality") || "",
     sourceUrl,
     rawCells,
+    pairingDetailUrl: oc ? buildOpenTimePairingDetailUrl(oc.pid, oc.dateYmd) : undefined,
   };
 }
 
@@ -1149,6 +1192,7 @@ function mergePrimaryScheduleIntoPosts(primary: TradeboardPost[], posts: Tradebo
       block: p.block?.trim() || src.block?.trim() || "",
       credit: p.credit?.trim() || src.credit?.trim() || "",
       comments: p.comments?.trim() || src.comments?.trim() || "",
+      pairingDetailUrl: p.pairingDetailUrl?.trim() || src.pairingDetailUrl?.trim() || undefined,
     };
   });
 }
@@ -1163,6 +1207,123 @@ function dedupeTrips(trips: OpenTimeTrip[]): OpenTimeTrip[] {
     out.push(t);
   }
   return out;
+}
+
+/** TAry `new Task(_, "PID","DDMMM","YYYYMMDD", …)` — same rbcpair shape as FLICA `pair()` for Open Time. */
+function applyOpenTimeTaryTaskPairingDetail(trip: OpenTimeTrip, pairingId: string, dateYmd: string): OpenTimeTrip {
+  const pid = pairingId.trim().toUpperCase();
+  const y = dateYmd.trim();
+  if (!/^J[A-Z0-9]{3,5}$/i.test(pid) || !/^\d{8}$/.test(y)) return trip;
+  return {
+    ...trip,
+    pairingId: pid,
+    dateYmd: y,
+    pairingDetailUrl: buildOpenTimePairingDetailUrl(pid, y),
+    pairingDetailUrlFromLiveHtml: true,
+  };
+}
+
+function logOpenTimeMapDiagnostics(trips: OpenTimeTrip[], label: string): void {
+  const rowsWithDateYmd = trips.filter((t) => /^\d{8}$/.test(String(t.dateYmd ?? "").trim())).length;
+  const rowsWithPairingDetailUrl = trips.filter((t) => Boolean(t.pairingDetailUrl?.trim())).length;
+  const rowsWithPairingDetailUrlFromLiveHtml = trips.filter((t) => t.pairingDetailUrlFromLiveHtml === true).length;
+  const sample = trips.slice(0, 5).map((t) => ({
+    pairingId: t.pairingId,
+    dateLabel: t.dateLabel ?? t.date,
+    dateYmd: t.dateYmd,
+    sourceBcid: t.sourceBcid,
+    pairingDetailUrl: t.pairingDetailUrl?.trim(),
+    pairingDetailUrlFromLiveHtml: t.pairingDetailUrlFromLiveHtml,
+  }));
+  console.log(
+    "[FC_OPENTIME_MAP_DIAG]",
+    JSON.stringify({
+      label,
+      tripCount: trips.length,
+      rowsWithDateYmd,
+      rowsWithPairingDetailUrl,
+      rowsWithPairingDetailUrlFromLiveHtml,
+      sample,
+    }),
+  );
+}
+
+function enrichOpenTimeTripsWithPairingDetailUrlsFromHtml(html: string, trips: OpenTimeTrip[]): OpenTimeTrip[] {
+  const h = String(html ?? "").trim();
+  if (!h || trips.length === 0) return trips;
+  const hits = extractPairOnclickPidYmdsFromHtml(h);
+  if (!hits.length) return trips;
+  const byPidDdmm = new Map<string, string>();
+  for (const { pid, dateYmd } of hits) {
+    const tok = ymdToDdMmmToken(dateYmd);
+    if (!tok) continue;
+    byPidDdmm.set(`${pid}|${normalizeFlicaDdMmmToken(tok)}`, buildOpenTimePairingDetailUrl(pid, dateYmd));
+  }
+  return trips.map((t) => {
+    if (t.pairingDetailUrl?.trim() && t.pairingDetailUrlFromLiveHtml && t.dateYmd?.trim()) return t;
+    const existingYmd = t.dateYmd?.trim() || dateYmdFromRbcpairDetailUrl(t.pairingDetailUrl ?? "");
+    if (t.pairingDetailUrl?.trim() && existingYmd && /^\d{8}$/.test(existingYmd)) {
+      return {
+        ...t,
+        dateYmd: existingYmd,
+        pairingDetailUrlFromLiveHtml: true,
+      };
+    }
+    if (t.pairingDetailUrl?.trim()) return t;
+    const tok = t.dateLabel ? normalizeFlicaDdMmmToken(t.dateLabel) : "";
+    if (tok) {
+      const u = byPidDdmm.get(`${t.pairingId}|${tok}`);
+      if (u) {
+        const ymd = dateYmdFromRbcpairDetailUrl(u);
+        return { ...t, pairingDetailUrl: u, dateYmd: ymd, pairingDetailUrlFromLiveHtml: true };
+      }
+    }
+    const forPid = hits.filter((x) => x.pid === t.pairingId);
+    if (forPid.length === 1) {
+      const { pid, dateYmd } = forPid[0]!;
+      const u = buildOpenTimePairingDetailUrl(pid, dateYmd);
+      return { ...t, pairingDetailUrl: u, dateYmd, pairingDetailUrlFromLiveHtml: true };
+    }
+    return t;
+  });
+}
+
+function enrichTradeboardPostsWithPairingDetailUrlsFromHtml(html: string, posts: TradeboardPost[]): TradeboardPost[] {
+  const h = String(html ?? "").trim();
+  if (!h || posts.length === 0) return posts;
+  const hits = extractPairOnclickPidYmdsFromHtml(h);
+  if (!hits.length) return posts;
+  const byPidDdmm = new Map<string, string>();
+  for (const { pid, dateYmd } of hits) {
+    const tok = ymdToDdMmmToken(dateYmd);
+    if (!tok) continue;
+    byPidDdmm.set(`${pid}|${normalizeFlicaDdMmmToken(tok)}`, buildTradeboardPairingDetailUrl(pid, dateYmd));
+  }
+  return posts.map((p) => {
+    if (p.pairingDetailUrl?.trim() && p.pairingDetailUrlFromLiveHtml) return p;
+    const tok = normalizeFlicaDdMmmToken(p.pairingDateLabel);
+    const u = byPidDdmm.get(`${p.pairingId}|${tok}`);
+    if (u) return { ...p, pairingDetailUrl: u, pairingDetailUrlFromLiveHtml: true };
+    const forPid = hits.filter((x) => x.pid === p.pairingId);
+    if (forPid.length === 1) {
+      const { pid, dateYmd } = forPid[0]!;
+      return {
+        ...p,
+        pairingDetailUrl: buildTradeboardPairingDetailUrl(pid, dateYmd),
+        pairingDetailUrlFromLiveHtml: true,
+      };
+    }
+    if (p.pairingDetailUrl?.trim() && !p.pairingDetailUrlFromLiveHtml) {
+      for (const x of hits) {
+        if (x.pid !== p.pairingId) continue;
+        const cand = buildTradeboardPairingDetailUrl(x.pid, x.dateYmd);
+        if (cand === p.pairingDetailUrl.trim()) {
+          return { ...p, pairingDetailUrlFromLiveHtml: true };
+        }
+      }
+    }
+    return p;
+  });
 }
 
 export function mapOpenTimeTripsWithHtmlFallback(
@@ -1189,8 +1350,10 @@ export function mapOpenTimeTripsWithHtmlFallback(
   );
 
   if (primary.length > 0 && !templatey && hasPairingInRows) {
+    const enriched = enrichOpenTimeTripsWithPairingDetailUrlsFromHtml(html, primary);
+    logOpenTimeMapDiagnostics(enriched, "native_parse_rows");
     return {
-      trips: primary,
+      trips: enriched,
       meta: {
         ...emptyMeta(htmlLen, rawRows),
         markersFound: ["nativeParse.rows"],
@@ -1203,6 +1366,7 @@ export function mapOpenTimeTripsWithHtmlFallback(
 
   if (html && openTimePageSaysNoPot(html)) {
     markersFound.push("no_opentime_message");
+    logOpenTimeMapDiagnostics([], "no_opentime_pot_message");
     return {
       trips: [],
       meta: {
@@ -1281,7 +1445,11 @@ export function mapOpenTimeTripsWithHtmlFallback(
     "";
 
   return {
-    trips,
+    trips: (() => {
+      const enriched = enrichOpenTimeTripsWithPairingDetailUrlsFromHtml(html, trips);
+      logOpenTimeMapDiagnostics(enriched, "fallback_html_script");
+      return enriched;
+    })(),
     meta: {
       htmlLength: htmlLen,
       rawRowsCount: rawRows,
@@ -1758,6 +1926,7 @@ function mergeCompactPostWithMapperRow(compact: TradeboardPost, m: TradeboardPos
     block: pick(compact.block, m.block),
     credit: pick(compact.credit, m.credit),
     comments: pick(compact.comments, m.comments),
+    pairingDetailUrl: compact.pairingDetailUrl?.trim() || m.pairingDetailUrl?.trim() || undefined,
   };
 }
 
@@ -1829,6 +1998,8 @@ function parseCompactTradeboardRowBlock(
 
   const rawCells = line.split(/\s+/).filter(Boolean).slice(0, 48);
   const id = djb2Hex([sourcePageType, pairingId, pairingDateLabel, posterName, type, line.slice(0, 240)]);
+  const oc = parseFlicaPairOnclick(line);
+  const pairingDetailUrl = oc ? buildTradeboardPairingDetailUrl(oc.pid, oc.dateYmd) : undefined;
 
   return {
     id: `tb-${id}`,
@@ -1862,6 +2033,7 @@ function parseCompactTradeboardRowBlock(
     rawCells,
     rawText: line,
     offerCount: null,
+    pairingDetailUrl,
   };
 }
 
@@ -2013,6 +2185,8 @@ function tradeboardBuildPostFromNewAArgs(
   rawCells.push(`seat=${seat}`);
   const rawText = rawInnerPreview.slice(0, 520);
   const id = djb2Hex(["tb-a", pairingId, dateLabel, codeRaw, posterName, type, rawText.slice(0, 160)]);
+  const oc = parseFlicaPairOnclick(rawInnerPreview);
+  const pairingDetailUrl = oc ? buildTradeboardPairingDetailUrl(oc.pid, oc.dateYmd) : undefined;
 
   return {
     id: `tb-${id}`,
@@ -2046,6 +2220,7 @@ function tradeboardBuildPostFromNewAArgs(
     rawCells,
     rawText,
     offerCount: null,
+    pairingDetailUrl,
   };
 }
 
@@ -2553,7 +2728,7 @@ export function mapTradeboardPostsWithHtmlFallback(
 
   if (primary.length > 0 && !templatey && hasPairing) {
     return {
-      posts: primary,
+      posts: enrichTradeboardPostsWithPairingDetailUrlsFromHtml(html, primary),
       meta: {
         ...emptyMeta(htmlLen, rawRows),
         markersFound: ["nativeParse.rows"],
@@ -2569,6 +2744,7 @@ export function mapTradeboardPostsWithHtmlFallback(
 
   let posts = dedupePosts([...tbExtract.posts]);
   posts = mergePrimaryScheduleIntoPosts(primary, posts);
+  posts = enrichTradeboardPostsWithPairingDetailUrlsFromHtml(html, posts);
   if (posts.length) markersFound.push(`html_fallback_posts:${posts.length}`);
 
   const fallbackUsed =
@@ -2589,7 +2765,7 @@ export function mapTradeboardPostsWithHtmlFallback(
     "";
 
   return {
-    posts: posts.length ? posts : primary,
+    posts: enrichTradeboardPostsWithPairingDetailUrlsFromHtml(html, posts.length ? posts : primary),
     meta: {
       htmlLength: htmlLen,
       rawRowsCount: rawRows,

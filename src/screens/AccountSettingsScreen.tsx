@@ -273,8 +273,10 @@ function FlicaActionsTestCard() {
     <View style={flicaActionsStyles.card}>
       <Text style={flicaActionsStyles.title}>FLICA Actions Test</Text>
       <Text style={flicaActionsStyles.helper}>
-        Read-only tests for Open Time and Tradeboard using your saved FLICA
-        session.
+        Authenticate in the WebView, then use the Action Recorder to capture clicks,
+        dropdown changes, forms, frames, and pairing links while you navigate FLICA
+        manually (no auto-submit). Native GET tests below stay read-only unless you
+        explicitly replay a SAFE_READ capture.
       </Text>
       <FlicaActionsWebView />
       <View style={flicaActionsStyles.btnRow}>
