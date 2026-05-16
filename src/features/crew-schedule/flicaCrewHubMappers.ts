@@ -501,6 +501,7 @@ const OT_JUNK_SUBSTRINGS = [
 function openTimeRowLooksLikeJunk(line: string, cells: string[]): boolean {
   const u = line.toUpperCase();
   if (!u.trim()) return true;
+  if (/^PAIRING\b/i.test(cells[0] ?? "") && /\bBID\b/i.test(u)) return true;
   if (cells.length <= 1 && u.length < 12) return true;
   if (/^PAIRING\b/i.test(cells[0] ?? "") && /\bBLOCK\b/i.test(u) && cells.length < 5) return true;
   for (const j of OT_JUNK_SUBSTRINGS) {
@@ -557,31 +558,299 @@ function guessLayoverFromLooseCells(rawCells: string[], pairingId: string): stri
   return "";
 }
 
-/** FLICA pot row: Pairing | Dates | Bid Pos | Days | Report | Depart | Arrive | Blk Hrs | Credit | Layover | Prem */
-function tryMapOpenTimeStructuredColumns(rawCells: string[], sourceUrl: string): OpenTimeTrip | null {
-  if (rawCells.length < 10) return null;
-  const { pairingId, dateLabel } = parseOpenTimePairingColumn(rawCells[0] ?? "");
-  if (!pairingId.startsWith("J")) return null;
-  const blk = collapseWhitespace(rawCells[7] ?? "");
-  const cr = collapseWhitespace(rawCells[8] ?? "");
-  if (!blk && !cr) return null;
-  if (!/^\d/.test(blk) && !/^\d{1,2}:\d{2}/.test(blk)) return null;
+/** JetBlue FA open time: FLICA shows bid pos as F1–F9 (slot index → F + digit). */
+const JETBLUE_FA_BID_POS_LITERAL = /^F[1-9]$/;
 
-  const datesCol = collapseWhitespace(rawCells[1] ?? "");
-  const bidPos = collapseWhitespace(rawCells[2] ?? "");
-  const daysStr = collapseWhitespace(rawCells[3] ?? "");
+function looksLikeOpenTimeBlkOrCreditCell(raw: string): boolean {
+  const s = collapseWhitespace(raw);
+  if (!s) return false;
+  if (/^\d{1,2}:\d{2}$/.test(s)) return true;
+  if (/^\d{3,4}$/.test(s)) {
+    const mm = parseInt(s.slice(-2), 10);
+    return mm < 60;
+  }
+  return false;
+}
+
+/** `PosList[n]=new PosMap('3','F3')` from JetBlue FA open time pot HTML. */
+export function parseJetBlueFlicaPosList(html: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const re =
+    /PosList\s*\[\s*\d+\s*\]\s*=\s*new\s+PosMap\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(String(html ?? ""))) !== null) {
+    const id = collapseWhitespace(m[1] ?? "");
+    const label = collapseWhitespace(m[2] ?? "").toUpperCase();
+    if (id && label) map.set(id, label);
+  }
+  return map;
+}
+
+/**
+ * JetBlue FA: FLICA stores bid slot as a number (e.g. `3`); display as `F3`.
+ * Uses PosList when present, otherwise `F` + slot digit.
+ */
+export function formatJetBlueFaBidPosition(
+  slotRaw: string,
+  posList?: ReadonlyMap<string, string>,
+): string {
+  const slot = collapseWhitespace(slotRaw);
+  if (!slot || !/^\d{1,2}$/.test(slot)) return "";
+  const fromList = posList?.get(slot)?.toUpperCase() ?? "";
+  if (fromList && JETBLUE_FA_BID_POS_LITERAL.test(fromList)) return fromList;
+  const n = parseInt(slot, 10);
+  if (n >= 1 && n <= 9) return `F${n}`;
+  return "";
+}
+
+/**
+ * JetBlue FA multi-open: FLICA concatenates slot ids before `FA` (e.g. `13` → F1 + F3).
+ */
+function jetBlueFaBidLabelsFromConcatenatedSlotDigits(
+  slot: string,
+  posList?: ReadonlyMap<string, string>,
+): string {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const ch of slot) {
+    const p = formatJetBlueFaBidPosition(ch, posList);
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      parts.push(p);
+    }
+  }
+  return parts.join(" ");
+}
+
+export function formatJetBlueFaBidPositionsFromSlotField(
+  slotRaw: string,
+  posList?: ReadonlyMap<string, string>,
+): string {
+  const slot = collapseWhitespace(slotRaw).toUpperCase();
+  if (!slot) return "";
+
+  if (JETBLUE_FA_BID_POS_LITERAL.test(slot)) return slot;
+
+  const tokens = slot.split(/\s+/).filter(Boolean);
+  if (tokens.length > 1 && tokens.every((t) => JETBLUE_FA_BID_POS_LITERAL.test(t))) {
+    return tokens.join(" ");
+  }
+
+  if (/^[1-9]$/.test(slot)) {
+    return formatJetBlueFaBidPosition(slot, posList);
+  }
+
+  if (/^[1-9]{2,}$/.test(slot)) {
+    return jetBlueFaBidLabelsFromConcatenatedSlotDigits(slot, posList);
+  }
+
+  return formatJetBlueFaBidPosition(slot, posList);
+}
+
+/** Normalize stored/display bid pos (F1–F9, space-separated when multi-open). */
+export function normalizeOpenTimeBidPosition(raw: string): string {
+  const trimmed = collapseWhitespace(raw).toUpperCase();
+  if (!trimmed) return "";
+
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length > 1) {
+    const labels: string[] = [];
+    const seen = new Set<string>();
+    for (const tok of tokens) {
+      const n = tok.replace(/[\s._-]+/g, "");
+      if (JETBLUE_FA_BID_POS_LITERAL.test(n) && !seen.has(n)) {
+        seen.add(n);
+        labels.push(n);
+      }
+    }
+    if (labels.length > 0) return labels.join(" ");
+  }
+
+  const compact = trimmed.replace(/[\s._-]+/g, "");
+  if (!compact) return "";
+  if (JETBLUE_FA_BID_POS_LITERAL.test(compact)) return compact;
+  if (/^[1-9]{2,}$/.test(compact)) {
+    return jetBlueFaBidLabelsFromConcatenatedSlotDigits(compact);
+  }
+  return "";
+}
+
+export function isOpenTimeBidPositionToken(raw: string): boolean {
+  return normalizeOpenTimeBidPosition(raw) !== "";
+}
+
+/** Column holding JetBlue FA bid pos (F1–F9), not layover or trip days. */
+export function detectOpenTimeBidPosColumnIndex(cells: string[]): number {
+  for (let i = 1; i < cells.length; i++) {
+    if (normalizeOpenTimeBidPosition(cells[i] ?? "")) return i;
+  }
+  for (let i = 1; i < cells.length; i++) {
+    const s = collapseWhitespace(cells[i] ?? "");
+    if (/^[1-9]{2,}$/.test(s) && formatJetBlueFaBidPositionsFromSlotField(s)) return i;
+  }
+  for (let i = 1; i < cells.length; i++) {
+    const s = collapseWhitespace(cells[i] ?? "");
+    if (!/^[1-9]$/.test(s)) continue;
+    const next = collapseWhitespace(cells[i + 1] ?? "");
+    if (i === 2 && /:\d{1,2}[A-Z]{3}$/i.test(cells[0] ?? "") && /^\d{1,2}:\d{2}$/.test(next)) {
+      continue;
+    }
+    if (formatJetBlueFaBidPosition(s)) return i;
+  }
+  return -1;
+}
+
+/** Trip length in days (1–14), excluding bid-position column. */
+function detectOpenTimeDaysColumnIndex(cells: string[], bidIdx: number): number {
+  for (let i = 1; i < cells.length; i++) {
+    if (i === bidIdx) continue;
+    const s = collapseWhitespace(cells[i] ?? "");
+    if (/^\d{1,2}$/.test(s)) {
+      const n = parseInt(s, 10);
+      if (n >= 1 && n <= 14) return i;
+    }
+  }
+  if (bidIdx >= 0 && bidIdx + 1 < cells.length) return bidIdx + 1;
+  return -1;
+}
+
+function openTimeFirstTimeColumnIndex(cells: string[], afterIdx: number): number {
+  for (let i = Math.max(1, afterIdx + 1); i < cells.length; i++) {
+    const s = collapseWhitespace(cells[i] ?? "");
+    if (/^\d{1,2}:\d{2}$/.test(s)) return i;
+  }
+  return Math.max(1, afterIdx + 1);
+}
+
+/** Scan row cells for JetBlue FA bid pos (F1–F9). */
+export function extractOpenTimeBidPosFromCells(
+  cells: string[],
+  preferredIdx?: number,
+  posList?: ReadonlyMap<string, string>,
+): string {
+  if (preferredIdx != null && preferredIdx >= 0 && preferredIdx < cells.length) {
+    const direct = normalizeOpenTimeBidPosition(cells[preferredIdx] ?? "");
+    if (direct) return direct;
+    const slot = formatJetBlueFaBidPositionsFromSlotField(cells[preferredIdx] ?? "", posList);
+    if (slot) return slot;
+  }
+  for (const c of cells) {
+    const p = normalizeOpenTimeBidPosition(c);
+    if (p) return p;
+  }
+  const bidIdx = detectOpenTimeBidPosColumnIndex(cells);
+  if (bidIdx >= 0) {
+    return (
+      normalizeOpenTimeBidPosition(cells[bidIdx] ?? "") ||
+      formatJetBlueFaBidPositionsFromSlotField(cells[bidIdx] ?? "", posList)
+    );
+  }
+  return "";
+}
+
+/**
+ * JetBlue FA `new Task(…, slotIndex, "FA", …)` — bid pos is the numeric arg before `FA`.
+ */
+export function extractOpenTimeBidPosFromTaskArgs(
+  args: string[],
+  posList?: ReadonlyMap<string, string>,
+): string {
+  const normed = args.map((a) => collapseWhitespace(normalizeTaskArgForOpenTime(a)));
+  for (let i = 5; i < normed.length; i++) {
+    if (normed[i] !== "FA") continue;
+    const beforeFa = formatJetBlueFaBidPositionsFromSlotField(normed[i - 1] ?? "", posList);
+    if (beforeFa) return beforeFa;
+    for (let j = i + 1; j < Math.min(i + 8, normed.length); j++) {
+      const s = normed[j] ?? "";
+      if (/^[1-9]{2,}$/.test(s)) {
+        const alt = formatJetBlueFaBidPositionsFromSlotField(s, posList);
+        if (alt) return alt;
+      }
+    }
+  }
+  for (let i = 4; i < normed.length; i++) {
+    const p = normalizeOpenTimeBidPosition(normed[i] ?? "");
+    if (p) return p;
+  }
+  return "";
+}
+
+function normalizeTaskArgForOpenTime(a: string): string {
+  let s = String(a ?? "").trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1);
+  }
+  return s;
+}
+
+/** First data column after pairing (and optional standalone dates column). */
+function openTimeMetricColumnStart(cells: string[]): number {
+  if (cells.length < 8) return -1;
+  if (/^\d{1,2}[A-Z]{3}$/i.test(collapseWhitespace(cells[1] ?? ""))) return 2;
+  return 1;
+}
+
+/** FLICA pot row: Pairing [| Dates] | Bid Pos | Days | Report | Depart | Arrive | Blk Hrs | Credit | Layover [| Prem] */
+function tryMapOpenTimeStructuredColumns(rawCells: string[], sourceUrl: string): OpenTimeTrip | null {
+  const cells = rawCells.map((c) => collapseWhitespace(String(c ?? "")));
+  if (cells.length < 8) return null;
+  const { pairingId, dateLabel } = parseOpenTimePairingColumn(cells[0] ?? "");
+  if (!pairingId.startsWith("J")) return null;
+
+  const bidIdx = detectOpenTimeBidPosColumnIndex(cells);
+  const start = openTimeMetricColumnStart(cells);
+  if (bidIdx < 0 && start < 0) return null;
+
+  const datesCol = (() => {
+    const c1 = collapseWhitespace(cells[1] ?? "");
+    if (bidIdx !== 1 && start !== 1 && /^\d{1,2}[A-Z]{3}$/i.test(c1)) return c1;
+    return "";
+  })();
+
+  const bidPos = extractOpenTimeBidPosFromCells(cells, bidIdx >= 0 ? bidIdx : undefined, undefined);
+
+  const daysIdx =
+    bidIdx >= 0
+      ? detectOpenTimeDaysColumnIndex(cells, bidIdx)
+      : start >= 0
+        ? start + 1
+        : -1;
+  const daysStr = daysIdx >= 0 ? collapseWhitespace(cells[daysIdx] ?? "") : "";
   const daysN = parseInt(daysStr.replace(/\D/g, ""), 10);
-  const daysGuess = guessDays(rawCells.join(" "));
+  const daysGuess = guessDays(cells.join(" "));
   const days =
     Number.isFinite(daysN) && daysN >= 1 && daysN <= 14 ? daysN : daysGuess;
 
-  const reportTime = collapseWhitespace(rawCells[4] ?? "");
-  const departTime = collapseWhitespace(rawCells[5] ?? "");
-  const arriveTime = collapseWhitespace(rawCells[6] ?? "");
-  const block = formatOpenTimeBlkCr(blk);
-  const credit = formatOpenTimeBlkCr(cr);
-  const layover = collapseWhitespace(rawCells[9] ?? "");
-  const premium = rawCells.length > 10 ? collapseWhitespace(rawCells[10] ?? "") : "";
+  const metricAfter =
+    bidIdx >= 0
+      ? Math.max(bidIdx, daysIdx >= 0 ? daysIdx : bidIdx)
+      : start >= 0
+        ? start + 1
+        : 1;
+  const timeStart =
+    bidIdx >= 0
+      ? openTimeFirstTimeColumnIndex(cells, metricAfter)
+      : start >= 0
+        ? start + 2
+        : openTimeFirstTimeColumnIndex(cells, metricAfter);
+  const reportTime = collapseWhitespace(cells[timeStart] ?? "");
+  const departTime = collapseWhitespace(cells[timeStart + 1] ?? "");
+  const arriveTime = collapseWhitespace(cells[timeStart + 2] ?? "");
+  const blkRaw = collapseWhitespace(cells[timeStart + 3] ?? "");
+  const crRaw = collapseWhitespace(cells[timeStart + 4] ?? "");
+  const block = formatOpenTimeBlkCr(blkRaw);
+  const credit = formatOpenTimeBlkCr(crRaw);
+  if (!block && !credit) return null;
+  if (!looksLikeOpenTimeBlkOrCreditCell(blkRaw) && !looksLikeOpenTimeBlkOrCreditCell(crRaw)) {
+    return null;
+  }
+
+  const layover = collapseWhitespace(cells[timeStart + 5] ?? "");
+  const premium =
+    cells.length > timeStart + 6 ? collapseWhitespace(cells[timeStart + 6] ?? "") : "";
 
   const line = rawCells.join(" ");
   const worth = extractMoney(line);
@@ -655,7 +924,7 @@ export function mapRowsToOpenTimeTrips(rows: string[][], sourceUrl: string): Ope
         line,
       ) || dateHuman;
 
-    const bidPos = firstMatch(/\b(?:BID|POS)\s*[:\s]+([A-Z]{2,4})\b/i, line) || "";
+    const bidPos = extractOpenTimeBidPosFromCells(rawCells);
 
     const blockRaw =
       firstMatch(/\bBLK\s*HRS?\D*(\d{1,2}:\d{2}|\d{3,4})\b/i, line) ||
@@ -663,6 +932,7 @@ export function mapRowsToOpenTimeTrips(rows: string[][], sourceUrl: string): Ope
       times[3] ||
       "";
     const creditRaw =
+      firstMatch(/\b(?:T-?)?CRED(?:IT)?\D*(\d{1,2}:\d{2}|\d{3,4})\b/i, line) ||
       firstMatch(/\bCR(?:EDIT)?\D*(\d{1,2}:\d{2}|\d{3,4})\b/i, line) ||
       times[4] ||
       "";

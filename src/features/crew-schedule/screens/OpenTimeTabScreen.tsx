@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import {
   ActivityIndicator,
   Alert,
+  InteractionManager,
   PanResponder,
   Platform,
   Pressable,
@@ -35,6 +36,10 @@ import {
   hubLayoverDisplayForHubListRow,
   hubLayoverDisplayWithDots,
 } from "../crewHubLayoverDisplay";
+import {
+  extractOpenTimeBidPosFromCells,
+  normalizeOpenTimeBidPosition,
+} from "../flicaCrewHubMappers";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
 import { loadOpenTimeHubCache, upsertOpenTimeHubCache } from "../crewHubFlicaCache";
 import {
@@ -64,8 +69,8 @@ import type { FlicaMarketplacePairingDetail } from "../flicaMarketplacePairingDe
 import { fetchFlicaMarketplacePairingDetail } from "../openFlicaMarketplacePairingDetail";
 import {
   CREW_HUB_CARD_RIM,
-  CREW_HUB_DATE_HEADER_BG,
   SCHEDULE_MOCK_HEADER_RED,
+  SCHEDULE_MOCK_STATS_STRIP_RED,
 } from "../scheduleMockPalette";
 import { scheduleTheme as scheduleT } from "../scheduleTheme";
 import type { CrewScheduleTrip } from "../types";
@@ -168,6 +173,56 @@ function openTimeBucketKey(t: OpenTimeTrip): string {
   return (t.dateLabel?.trim() || t.date?.trim() || t.dates?.trim() || "Other") as string;
 }
 
+const OT_DATE_DDMMM_RE = /\b(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/i;
+
+const OT_DATE_MONTH_INDEX: Record<string, number> = {
+  JAN: 0,
+  FEB: 1,
+  MAR: 2,
+  APR: 3,
+  MAY: 4,
+  JUN: 5,
+  JUL: 6,
+  AUG: 7,
+  SEP: 8,
+  OCT: 9,
+  NOV: 10,
+  DEC: 11,
+};
+
+function openTimeFirstDdMmmToken(s: string): string | null {
+  const m = String(s ?? "")
+    .trim()
+    .toUpperCase()
+    .match(OT_DATE_DDMMM_RE);
+  if (!m) return null;
+  return `${m[1]}${m[2]}`;
+}
+
+function openTimeReportDateMsFromLabel(labelOrDate: string, now: Date): number {
+  const compact = openTimeFirstDdMmmToken(labelOrDate);
+  if (!compact) return Number.MAX_SAFE_INTEGER - 1024;
+  const m = compact.match(/^(\d{1,2})([A-Z]{3})$/);
+  if (!m) return Number.MAX_SAFE_INTEGER - 1024;
+  const day = Number(m[1]);
+  const mon = OT_DATE_MONTH_INDEX[m[2]!];
+  if (!Number.isFinite(day) || mon == null) return Number.MAX_SAFE_INTEGER - 1024;
+  const y0 = now.getFullYear();
+  const candidates = [y0 - 1, y0, y0 + 1].map((year) => new Date(year, mon, day, 12, 0, 0, 0).getTime());
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const onOrAfter = candidates.filter((t) => t >= startOfToday);
+  if (onOrAfter.length) return Math.min(...onOrAfter);
+  return Math.max(...candidates);
+}
+
+/** Same heading format as Tradeboard date pills (`Wed, May 16`). */
+function formatOpenTimeDatePillHeading(dateKey: string, anchor: Date): string {
+  const ms = openTimeReportDateMsFromLabel(dateKey, anchor);
+  if (!Number.isFinite(ms) || ms >= Number.MAX_SAFE_INTEGER - 10_000) return dateKey;
+  const d = new Date(ms);
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
 /** Preserve FLICA list order: first-seen date section keys, rows appended in trip order (no alphabetical resort). */
 function groupOpenTimeByBucketPreserveOrder(trips: OpenTimeTrip[]): { key: string; items: OpenTimeTrip[] }[] {
   const m = new Map<string, OpenTimeTrip[]>();
@@ -182,38 +237,11 @@ function groupOpenTimeByBucketPreserveOrder(trips: OpenTimeTrip[]): { key: strin
   return keyOrder.map((key) => ({ key, items: m.get(key)! }));
 }
 
-const OT_HUB_AIRPORT_RE =
-  /^(JFK|LAX|BOS|FLL|MCO|MIA|ATL|SEA|SLC|DEN|ORD|DFW|PHX|LAS|SAN|PDX|BUR|PBI|STT|SJU)$/i;
-
-function openTimeRowBidPosLooksValid(s: string): boolean {
-  const x = String(s ?? "").trim().toUpperCase();
-  if (!x || x.length > 6) return false;
-  if (/^\d{1,2}[A-Z]{3}$/.test(x)) return false;
-  if (/^J[A-Z0-9]{3,5}/.test(x)) return false;
-  if (OT_HUB_AIRPORT_RE.test(x)) return false;
-  if (/^\d{1,2}:\d{2}$/.test(x)) return false;
-  if (/^\d{3,4}$/.test(x)) return false;
-  if (/^\$/.test(x)) return false;
-  if (/^[1-9]$/.test(x)) return false;
-  return /^[A-Z0-9]{2,6}$/.test(x);
-}
-
 function openTimeRowBidPos(t: OpenTimeTrip): string {
-  const direct = t.bidPos?.trim();
-  if (direct && openTimeRowBidPosLooksValid(direct)) return direct.toUpperCase();
   const cells = t.rawCells ?? [];
-  if (cells.length >= 3) {
-    const c2 = cells[2]?.trim() ?? "";
-    if (openTimeRowBidPosLooksValid(c2)) return c2.toUpperCase();
-  }
-  const line = cells.join(" ");
-  const m = line.match(/\b(?:BID|POS)\s*[:\s]+([A-Z0-9]{2,6})\b/i);
-  if (m?.[1] && openTimeRowBidPosLooksValid(m[1])) return m[1].toUpperCase();
-  for (const c of cells) {
-    const x = c.trim();
-    if (openTimeRowBidPosLooksValid(x)) return x.toUpperCase();
-  }
-  return "";
+  const fromCells = extractOpenTimeBidPosFromCells(cells);
+  if (fromCells) return fromCells;
+  return normalizeOpenTimeBidPosition(t.bidPos ?? "");
 }
 
 function openTimeRowTripDays(t: OpenTimeTrip): number | null {
@@ -245,16 +273,6 @@ function openTimeRowTripDays(t: OpenTimeTrip): number | null {
     if (n >= 1 && n <= 9) return n;
   }
   return null;
-}
-
-/** Row subline under pairing id: bid position + trip length only (date lives in section header). */
-function openTimeRowSubline(t: OpenTimeTrip): string {
-  const parts: string[] = [];
-  const bid = openTimeRowBidPos(t);
-  if (bid) parts.push(`Bid ${bid}`);
-  const d = openTimeRowTripDays(t);
-  if (d != null) parts.push(`${d}D`);
-  return parts.join(META_DOT) || "—";
 }
 
 function dollarPerHourLabel(t: OpenTimeTrip): string {
@@ -479,16 +497,18 @@ const tc = StyleSheet.create({
   addBtnText: { color: "#fff", fontSize: 10, fontWeight: "900" },
 });
 
-function HubOtNumCell({ lab, val, narrow }: { lab: string; val: string; narrow?: boolean }) {
-  return (
-    <View style={[styles.hubCell, narrow ? styles.hubCellNarrow : null]}>
-      <Text style={styles.hubCellLab}>{lab}</Text>
-      <Text style={[styles.hubCellVal, OPEN_TIME_STATS_VALUE_FONT]} numberOfLines={1}>
-        {val}
-      </Text>
-    </View>
-  );
-}
+const OT_DIGITAL = Platform.OS === "ios" ? "Menlo" : "monospace";
+
+/** Same column grid as Tradeboard: fixed pairing + $, flex lay/bid/sched, fixed days. */
+const OT_COL = {
+  pairing: 52,
+  days: 34,
+  worth: 19,
+} as const;
+
+const OT_FLEX_LAY = { flexGrow: 15, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
+const OT_FLEX_BID = { flexGrow: 6, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
+const OT_FLEX_SCHED = { flexGrow: 22, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
 
 function OpenTimeHubRow({
   t,
@@ -505,9 +525,15 @@ function OpenTimeHubRow({
   onOpenDetail: (x: OpenTimeTrip) => void;
   onMutateSwap: (x: OpenTimeTrip) => void;
 }) {
-  const per = dollarPerHourLabel(t);
+  const pairingIdDisp = t.pairingId?.trim() || "—";
+  const bidDisp = openTimeRowBidPos(t) || "—";
   const tripDays = openTimeRowTripDays(t);
-  const daysVal = tripDays != null ? String(tripDays) : "—";
+  const daysLine = tripDays != null ? String(tripDays) : "—";
+  const rpt = t.reportTime?.trim() || "—";
+  const cr = t.credit?.trim() || "—";
+  const dep = t.departTime?.trim() || "—";
+  const arr = t.arriveTime?.trim() || "—";
+  const worthDisp = t.worth?.trim() ? t.worth : "—";
 
   const swipeActions: CrewHubSwipeRailAction[] = [
     {
@@ -531,49 +557,92 @@ function OpenTimeHubRow({
       rightThreshold={48}
       renderRightActions={(progress) => <CrewHubSwipeActionRail progress={progress} actions={swipeActions} />}
     >
-      <Pressable
-        onPress={() => onOpenDetail(t)}
-        style={[styles.hubRowCard, isLast && styles.hubRowLast]}
-      >
-        <View style={styles.hubRowInner}>
-          <View style={styles.hubColPair}>
-            <View style={styles.hubIdRow}>
-              <Text style={styles.hubPid}>{t.pairingId}</Text>
+      <Pressable onPress={() => onOpenDetail(t)} style={[styles.otRowCard, isLast && styles.otRowLast]}>
+        <View style={styles.otRowInner}>
+          <View style={[styles.otRowCell, { width: OT_COL.pairing }]}>
+            <View style={styles.otPairCol}>
+              <Text style={styles.otPairingId} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                {pairingIdDisp}
+              </Text>
               {showBestTag ? (
-                <View style={styles.bestTag}>
-                  <Text style={styles.bestTagText}>BEST</Text>
+                <View style={styles.otBestTag}>
+                  <Text style={styles.otBestTagText}>BEST</Text>
                 </View>
               ) : null}
             </View>
-            <Text style={styles.hubSubMeta} numberOfLines={2}>
-              {openTimeRowSubline(t)}
-            </Text>
           </View>
-          <View style={styles.hubColLay}>
-            <Text style={styles.hubFieldCap}>Layover</Text>
-            <Text style={styles.hubLayover} numberOfLines={2}>
-              {hubLayoverDisplayForHubListRow(t.layover)}
-            </Text>
-          </View>
-          <View style={styles.hubMetrics}>
-            <HubOtNumCell lab="DAYS" val={daysVal} narrow />
-            <HubOtNumCell lab="RPT" val={t.reportTime?.trim() || "—"} />
-            <HubOtNumCell lab="DEP" val={t.departTime?.trim() || "—"} />
-            <HubOtNumCell lab="ARR" val={t.arriveTime?.trim() || "—"} />
-            <HubOtNumCell lab="CR" val={t.credit?.trim() || "—"} narrow />
-            <View style={styles.hubCellWorth}>
-              <Text style={styles.hubWorthLab}>WORTH</Text>
-              <Text style={[styles.hubWorthVal, OPEN_TIME_STATS_VALUE_FONT]} numberOfLines={1}>
-                {t.worth?.trim() ? t.worth : "—"}
+          <View style={[styles.otRowCell, OT_FLEX_LAY]}>
+            <View style={styles.otLayCol}>
+              <Text
+                style={styles.otLay}
+                numberOfLines={3}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+              >
+                {hubLayoverDisplayForHubListRow(t.layover)}
               </Text>
-              {per ? (
-                <Text style={[styles.hubWorthPer, OPEN_TIME_STATS_VALUE_FONT]} numberOfLines={1}>
-                  {per}
-                </Text>
-              ) : null}
             </View>
           </View>
-          <Text style={styles.hubChev}>›</Text>
+          <View style={[styles.otRowCell, OT_FLEX_BID]}>
+            <View style={styles.otBidCol}>
+              <Text style={styles.otBid} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.68}>
+                {bidDisp}
+              </Text>
+            </View>
+          </View>
+          <View style={[styles.otRowCell, { width: OT_COL.days }]}>
+            <View style={styles.otDaysCol}>
+              <Text style={styles.otDays} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.65}>
+                {daysLine}
+              </Text>
+            </View>
+          </View>
+          <View style={[styles.otRowCell, OT_FLEX_SCHED]}>
+            <View style={styles.otSchedCol}>
+              <View style={styles.otStackPairBox}>
+                <View style={styles.otSchedRow}>
+                  <View style={styles.otPairTim} accessibilityLabel={`Report ${rpt} credit ${cr}`}>
+                    <View style={styles.otTimPairLine}>
+                      <Text style={styles.otTimIni}>R</Text>
+                      <Text style={styles.otTimVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                        {rpt}
+                      </Text>
+                    </View>
+                    <View style={styles.otHeadStackDividerH} />
+                    <View style={styles.otTimPairLine}>
+                      <Text style={styles.otTimIni}>C</Text>
+                      <Text style={styles.otTimVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                        {cr}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.otSchedStackDivider} />
+                  <View style={styles.otPairTim} accessibilityLabel={`Depart ${dep} arrive ${arr}`}>
+                    <View style={styles.otTimPairLine}>
+                      <Text style={styles.otTimIni}>D</Text>
+                      <Text style={styles.otTimVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                        {dep}
+                      </Text>
+                    </View>
+                    <View style={styles.otHeadStackDividerH} />
+                    <View style={styles.otTimPairLine}>
+                      <Text style={styles.otTimIni}>A</Text>
+                      <Text style={styles.otTimVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+                        {arr}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            </View>
+          </View>
+          <View style={[styles.otRowCell, styles.otRowCellLast, { width: OT_COL.worth }]}>
+            <View style={styles.otWorthCol}>
+              <Text style={styles.otWorth} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.55}>
+                {worthDisp}
+              </Text>
+            </View>
+          </View>
         </View>
       </Pressable>
     </Swipeable>
@@ -588,8 +657,7 @@ export default function OpenTimeTabScreen() {
   const { stripValues, monthTrips, year, month } = useCrewScheduleMonthStrip();
 
   const [chip, setChip] = useState("All");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [pullRefreshing, setPullRefreshing] = useState(false);
   const [openTimeBuckets, setOpenTimeBuckets] = useState<OpenTimeMonthBucket[]>([]);
   const [openTimePotIndex, setOpenTimePotIndex] = useState(0);
   const [marketplaceDetail, setMarketplaceDetail] = useState<FlicaMarketplacePairingDetail | null>(null);
@@ -602,12 +670,14 @@ export default function OpenTimeTabScreen() {
     resolve: () => void;
     reject: (e: Error) => void;
   } | null>(null);
+  const loadRef = useRef<(reason: "pull" | "focus") => Promise<void>>(async () => {});
+  const focusLoadGenRef = useRef(0);
+  const focusLoadInFlightRef = useRef(false);
   const cacheHydratedForUser = useRef<string | null>(null);
   const selectedOtMonthKeyRef = useRef<string | null>(null);
   /** `${sourceMonthKey}|${sourceBcid}|${sourceOpenTimePotUrl}` — preserves exact pot after refresh when possible. */
   const selectedOpenTimeBucketKeyRef = useRef<string | null>(null);
   const openTimePotIndexRef = useRef(0);
-
   const monthFallback = useMemo(() => `${year}-${String(month).padStart(2, "0")}`, [year, month]);
 
   const potTrips = useMemo(
@@ -661,9 +731,19 @@ export default function OpenTimeTabScreen() {
     setPullSessionRunnerActive(false);
   }, []);
 
-  const load = useCallback(async (reason: "focus" | "pull" = "focus") => {
-    setLoading(true);
-    setError(null);
+  /**
+   * Pull: FLICA session runner + toast. Focus: silent background refresh — update list only on success.
+   */
+  const load = useCallback(async (reason: "pull" | "focus" = "focus") => {
+    const focusGen = reason === "focus" ? ++focusLoadGenRef.current : 0;
+    if (reason === "focus") {
+      if (focusLoadInFlightRef.current) return;
+      focusLoadInFlightRef.current = true;
+    }
+    if (reason === "pull") {
+      setPullRefreshing(true);
+    }
+    let didUpdate = false;
     try {
       if (reason === "pull") {
         logCrewHubAuth("schedule_import_session_flow_start", { context: "opentime" });
@@ -695,7 +775,7 @@ export default function OpenTimeTabScreen() {
 
       logCrewHubAuth("native_fetch_done", {
         context: "opentime",
-        phase: "first",
+        phase: reason,
         htmlLen: potR.htmlLength ?? agg.diag.seedFrameHtmlLen,
         htmlState: potR.htmlState,
         rowCount: agg.diag.rowsTotal,
@@ -731,9 +811,8 @@ export default function OpenTimeTabScreen() {
           myReqR,
           myReqR.url,
         );
-        const myTrips = myFb.trips;
         fetches.push(
-          buildCrewHubParseDebugFetchEntry("Open Time My Requests", myReqR, myTrips),
+          buildCrewHubParseDebugFetchEntry("Open Time My Requests", myReqR, myFb.trips),
         );
       }
       const pl: FlicaCrewHubParseDebugPayload = {
@@ -753,20 +832,24 @@ export default function OpenTimeTabScreen() {
       }
 
       const needVerification = crewHubNativeFetchNeedsVerificationSheet(potR);
+      const noPotPage =
+        tripsPre.length === 0 && openTimePageSaysNoPot(String(potR.pageHtml ?? ""));
+      const refreshFailed =
+        needVerification ||
+        flicaFetchNeedsWebVerification(potR.htmlState) ||
+        (tripsPre.length === 0 &&
+          !noPotPage &&
+          (agg.diag.errors.length > 0 || !potR.ok));
 
-      if (needVerification) {
+      if (refreshFailed) {
         logCrewHubAuth("native_needs_verification", {
           context: "opentime",
           afterPullSession: reason === "pull",
         });
-        setHubLiveMarketplaceSyncAt(null);
-        setOpenTimeBuckets([]);
-        setOpenTimePotIndex(0);
-        if (reason === "focus") {
-          setError(null);
-        } else {
-          setError(potR.error ?? "FLICA verification still required.");
-        }
+        return;
+      }
+
+      if (reason === "focus" && focusGen !== focusLoadGenRef.current) {
         return;
       }
 
@@ -792,51 +875,39 @@ export default function OpenTimeTabScreen() {
       }
       setOpenTimeBuckets(bucketsSorted);
       setOpenTimePotIndex(nextIdx);
+      didUpdate = true;
 
       logCrewHubAuth("parse_done", { context: "opentime", mappedRows: trips.length });
-      if (flicaFetchNeedsWebVerification(potR.htmlState)) {
-        setError(potR.error ?? "FLICA verification still required.");
-      } else if (!potR.ok && potR.error && trips.length === 0) {
-        setError(potR.error);
-      } else if (
-        trips.length === 0 &&
-        potFb.meta.markersMissing.length > 0 &&
-        !openTimePageSaysNoPot(String(potR.pageHtml ?? ""))
-      ) {
-        setError(
-          `No Open Time trips parsed from FLICA HTML. Missing markers: ${potFb.meta.markersMissing.join(
-            "; ",
-          )}. Found: ${potFb.meta.markersFound.join("; ") || "(none)"}.`,
-        );
-      } else {
-        setError(null);
-      }
 
-      if (
-        !flicaFetchNeedsWebVerification(potR.htmlState) &&
-        session?.user?.id &&
-        trips.length > 0
-      ) {
+      if (session?.user?.id && trips.length > 0) {
         void upsertOpenTimeHubCache(session.user.id, {
           v: 1,
           trips,
           refreshedAt: new Date().toISOString(),
         });
-        if (reason === "pull") setToast("Open Time refreshed");
+      }
+      if (reason === "pull") {
+        setToast("Open Time refreshed");
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
       if (!msg.toLowerCase().includes("cancelled")) {
-        setOpenTimeBuckets([]);
-        setOpenTimePotIndex(0);
-        setHubLiveMarketplaceSyncAt(null);
+        logCrewHubAuth("native_fetch_failed", { context: "opentime", phase: reason, message: msg });
       }
     } finally {
-      setLoading(false);
-      bumpCrewHubSharedDataRefresh();
+      if (reason === "focus") {
+        focusLoadInFlightRef.current = false;
+      }
+      if (reason === "pull") {
+        setPullRefreshing(false);
+      }
+      if (didUpdate && reason === "pull") {
+        bumpCrewHubSharedDataRefresh();
+      }
     }
   }, [bumpCrewHubSharedDataRefresh, session?.user?.id, monthFallback]);
+
+  loadRef.current = load;
 
   const openOpenTimeMarketplace = useCallback(
     async (trip: OpenTimeTrip) => {
@@ -980,40 +1051,23 @@ export default function OpenTimeTabScreen() {
     [canNextOpenTimeMonth, canPrevOpenTimeMonth, goNextOpenTimeMonth, goPrevOpenTimeMonth],
   );
 
-  const canMutateOpenTimeRow = useCallback(
-    (t: OpenTimeTrip): boolean => {
-      if (!hubLiveMarketplaceSyncAt) {
-        Alert.alert(
-          "Sync live FLICA first",
-          "Pull to refresh Open Time so FLICA actions use a current session.",
-        );
-        return false;
-      }
-      if (!openTimeTripHasLiveHubActionContext(t)) {
-        Alert.alert(
-          "Sync live FLICA first",
-          "This row does not have a current live FLICA action context. Pull to refresh Open Time and try again.",
-        );
-        return false;
-      }
-      return true;
-    },
-    [hubLiveMarketplaceSyncAt],
-  );
-
-  const onMutateSwap = useCallback(
-    (t: OpenTimeTrip) => {
-      if (!canMutateOpenTimeRow(t)) return;
-      pushFlicaWeb(router, FLICA_NATIVE_URLS.otSwapPreview);
-    },
-    [canMutateOpenTimeRow, router],
-  );
+  const onMutateSwap = useCallback(() => {
+    pushFlicaWeb(router, FLICA_NATIVE_URLS.otSwapPreview);
+  }, [router]);
 
   useFocusEffect(
     useCallback(() => {
-      void load("focus");
-      return () => setCrewScheduleHeaderSubtitle(null);
-    }, [load, setCrewScheduleHeaderSubtitle]),
+      let cancelled = false;
+      const task = InteractionManager.runAfterInteractions(() => {
+        if (!cancelled) void loadRef.current("focus");
+      });
+      return () => {
+        cancelled = true;
+        task.cancel();
+        focusLoadGenRef.current += 1;
+        setCrewScheduleHeaderSubtitle(null);
+      };
+    }, [setCrewScheduleHeaderSubtitle]),
   );
 
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -1144,7 +1198,6 @@ export default function OpenTimeTabScreen() {
   const chips = ["All", "Turns", "2 Days", "3 Days", "Red-eye", "≥$1k"];
 
   const onAdd = (t: OpenTimeTrip) => {
-    if (!canMutateOpenTimeRow(t)) return;
     Alert.alert(
       "Add open time trip?",
       `You will complete this in FLICA. Pairing ${t.pairingId}.`,
@@ -1173,7 +1226,7 @@ export default function OpenTimeTabScreen() {
       />
       <View {...openTimeMonthSwipePan.panHandlers} collapsable={false} style={styles.otMonthSwipeChrome}>
         <MonthlyStatsStrip values={stripValues} />
-        {openTimeBuckets.length > 0 || loading ? (
+        {openTimeBuckets.length > 0 || pullRefreshing ? (
           <View
             style={styles.otMonthRow}
             accessibilityLabel="Open Time month — swipe left or right to change month"
@@ -1215,7 +1268,7 @@ export default function OpenTimeTabScreen() {
         directionalLockEnabled
         keyboardShouldPersistTaps="handled"
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={() => void load("pull")} />
+          <RefreshControl refreshing={pullRefreshing} onRefresh={() => void load("pull")} />
         }
       >
         <View style={styles.otFilterShell}>
@@ -1235,9 +1288,7 @@ export default function OpenTimeTabScreen() {
           </ScrollView>
         </View>
 
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-        {!loading && totalOpenTimeRows === 0 ? (
+        {!pullRefreshing && totalOpenTimeRows === 0 ? (
           <Text style={styles.emptyText}>No Open Time trips found.</Text>
         ) : null}
 
@@ -1290,12 +1341,8 @@ export default function OpenTimeTabScreen() {
           </Text>
         ) : null}
 
-        {listedTrips.length === 0 && !loading && potTrips.length > 0 ? (
+        {listedTrips.length === 0 && !pullRefreshing && potTrips.length > 0 ? (
           <Text style={styles.filterEmpty}>No trips match this filter.</Text>
-        ) : null}
-
-        {loading && listedTrips.length === 0 && potTrips.length === 0 ? (
-          <ActivityIndicator style={{ marginTop: 14 }} color={SCHEDULE_MOCK_HEADER_RED} />
         ) : null}
 
         {dateGroups.map((grp) => {
@@ -1304,9 +1351,19 @@ export default function OpenTimeTabScreen() {
             <View key={grp.key} style={styles.otDateSection}>
               <View style={styles.otDateHeadRow}>
                 <View style={styles.otDatePill}>
-                  <Text style={styles.otDatePillIcon}>📅</Text>
-                  <Text style={styles.otDatePillText} numberOfLines={1}>
-                    {grp.key}
+                  <Ionicons
+                    name="calendar-outline"
+                    size={11}
+                    color="#FFFFFF"
+                    style={styles.otDatePillIon}
+                  />
+                  <Text
+                    style={styles.otDatePillText}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.85}
+                  >
+                    {formatOpenTimeDatePillHeading(grp.key, new Date())}
                   </Text>
                 </View>
                 <View style={styles.otDateHeadTrail}>
@@ -1318,14 +1375,61 @@ export default function OpenTimeTabScreen() {
               </View>
               <View style={styles.otCardShell}>
                 <View style={styles.otColHead}>
-                  <Text style={[styles.otColH, { flex: 1.12 }]}>PAIRING</Text>
-                  <Text style={[styles.otColH, { flex: 0.95 }]}>LAYOVER</Text>
-                  <Text style={[styles.otColH, { width: 24 }]}>DAYS</Text>
-                  <Text style={[styles.otColH, { width: 30 }]}>RPT</Text>
-                  <Text style={[styles.otColH, { width: 30 }]}>DEP</Text>
-                  <Text style={[styles.otColH, { width: 30 }]}>ARR</Text>
-                  <Text style={[styles.otColH, { width: 28 }]}>CR</Text>
-                  <Text style={[styles.otColH, { width: 40, textAlign: "right" }]}>$</Text>
+                  <View style={[styles.otColHeadCell, { width: OT_COL.pairing }]}>
+                    <Text style={styles.otBarColTitle} numberOfLines={1}>
+                      PAIRING
+                    </Text>
+                  </View>
+                  <View style={[styles.otColHeadCell, OT_FLEX_LAY]}>
+                    <Text style={styles.otBarColTitle} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.78}>
+                      LAYOVER
+                    </Text>
+                  </View>
+                  <View style={[styles.otColHeadCell, OT_FLEX_BID]}>
+                    <Text style={styles.otBarColTitle} numberOfLines={1}>
+                      POS
+                    </Text>
+                  </View>
+                  <View style={[styles.otColHeadCell, { width: OT_COL.days }]}>
+                    <Text
+                      style={styles.otBarColTitle}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.85}
+                    >
+                      DAYS
+                    </Text>
+                  </View>
+                  <View style={[styles.otColHeadCell, OT_FLEX_SCHED]}>
+                    <View style={styles.otSchedHeadInset}>
+                      <View style={styles.otSchedHeadRow}>
+                        <View style={styles.otSchedHeadCell}>
+                          <Text style={styles.otBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                            Report
+                          </Text>
+                          <View style={styles.otHeadStackDividerH} />
+                          <Text style={styles.otBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                            Credit
+                          </Text>
+                        </View>
+                        <View style={styles.otSchedHeadColDivider} />
+                        <View style={styles.otSchedHeadCell}>
+                          <Text style={styles.otBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                            Depart
+                          </Text>
+                          <View style={styles.otHeadStackDividerH} />
+                          <Text style={styles.otBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                            Arrival
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                  <View style={[styles.otColHeadCell, styles.otColHeadCellLast, styles.otColHeadWorth, { width: OT_COL.worth }]}>
+                    <Text style={styles.otBarColTitle} numberOfLines={1}>
+                      $
+                    </Text>
+                  </View>
                 </View>
                 {grp.items.map((t, idx) => (
                   <OpenTimeHubRow
@@ -1469,26 +1573,35 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
     flexShrink: 0,
-    backgroundColor: CREW_HUB_DATE_HEADER_BG,
+    backgroundColor: SCHEDULE_MOCK_STATS_STRIP_RED,
     paddingVertical: 8,
     paddingHorizontal: 14,
-    borderRadius: 10,
-    maxWidth: "72%",
+    borderRadius: 999,
+    maxWidth: "70%",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255,255,255,0.12)",
     ...Platform.select({
       ios: {
         shadowColor: "#2a0a0c",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.18,
-        shadowRadius: 5,
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.14,
+        shadowRadius: 4,
       },
-      android: { elevation: 3 },
+      android: { elevation: 2 },
       default: {},
     }),
   },
-  otDatePillIcon: { fontSize: 12 },
-  otDatePillText: { fontSize: 12, fontWeight: "800", color: "#fff7f7", flexShrink: 1, letterSpacing: 0.2 },
+  otDatePillIon: { marginRight: -1 },
+  otDatePillText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "800",
+    flexShrink: 1,
+    letterSpacing: 0.2,
+    lineHeight: 14,
+    textAlign: "center",
+    textTransform: "uppercase",
+  },
   otDateHeadTrail: {
     flex: 1,
     flexDirection: "row",
@@ -1512,69 +1625,279 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   otCardShell: {
+    alignSelf: "stretch",
+    width: "100%",
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: CREW_HUB_CARD_RIM,
+    borderColor: "rgba(15, 23, 42, 0.16)",
     overflow: "hidden",
     ...Platform.select({
       ios: {
-        shadowColor: "#2a0a0c",
+        shadowColor: "#000000",
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.07,
+        shadowOpacity: 0.1,
         shadowRadius: 8,
       },
-      android: { elevation: 2 },
+      android: { elevation: 3 },
       default: {},
     }),
   },
   otColHead: {
     flexDirection: "row",
+    alignItems: "stretch",
+    alignSelf: "stretch",
+    width: "100%",
+    gap: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    backgroundColor: "#F4F4F5",
+  },
+  otColHeadCell: {
+    justifyContent: "center",
     alignItems: "center",
-    paddingVertical: 6,
-    paddingHorizontal: 5,
-    backgroundColor: "rgba(176, 24, 26, 0.06)",
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(92, 16, 24, 0.12)",
+    paddingHorizontal: 3,
+    minWidth: 0,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: "rgba(120, 113, 108, 0.32)",
   },
-  otColH: { fontSize: 6, fontWeight: "800", color: "#78716c", letterSpacing: 0.25 },
-  hubRowCard: {
+  otColHeadCellLast: { borderRightWidth: 0 },
+  otColHeadWorth: {
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 0,
+    flexShrink: 0,
+  },
+  otBarColTitle: {
+    width: "100%",
+    fontSize: 7,
+    fontWeight: "800",
+    color: "#57534E",
+    letterSpacing: 0.15,
+    textAlign: "center",
+    textTransform: "uppercase",
+    lineHeight: 9,
+  },
+  otHeadStackDividerH: {
+    height: StyleSheet.hairlineWidth,
+    minHeight: 1,
+    width: "88%",
+    maxWidth: 56,
+    backgroundColor: "rgba(120, 113, 108, 0.32)",
+    marginVertical: 2,
+    alignSelf: "center",
+  },
+  otSchedHeadRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    width: "100%",
+    minWidth: 0,
+    gap: 0,
+  },
+  otSchedHeadInset: {
+    width: "100%",
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+  },
+  otSchedHeadCell: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 0,
+    paddingHorizontal: 0,
+  },
+  otSchedHeadColDivider: {
+    width: StyleSheet.hairlineWidth,
+    minWidth: 1,
+    alignSelf: "stretch",
+    backgroundColor: "rgba(120, 113, 108, 0.32)",
+    marginVertical: 3,
+  },
+  otRowCard: {
+    width: "100%",
     backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(15, 23, 42, 0.08)",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(176, 24, 26, 0.1)",
   },
-  hubRowLast: { borderBottomWidth: 0 },
-  hubRowInner: { flexDirection: "row", alignItems: "stretch", paddingVertical: 5, paddingHorizontal: 4 },
-  hubColPair: { flex: 1.12, minWidth: 0, paddingRight: 3 },
-  hubColLay: { flex: 0.95, minWidth: 0, paddingRight: 2, justifyContent: "flex-start" },
-  hubFieldCap: {
-    fontSize: 6,
+  otRowLast: { borderBottomWidth: 0 },
+  otRowInner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    alignSelf: "stretch",
+    width: "100%",
+    gap: 0,
+    paddingVertical: 5,
+    paddingHorizontal: 4,
+    minHeight: 50,
+  },
+  otRowCell: {
+    justifyContent: "flex-start",
+    alignItems: "stretch",
+    paddingHorizontal: 3,
+    minWidth: 0,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: "rgba(120, 113, 108, 0.32)",
+  },
+  otRowCellLast: { borderRightWidth: 0 },
+  otPairCol: {
+    justifyContent: "flex-start",
+    alignItems: "center",
+    paddingTop: 1,
+    width: "100%",
+    alignSelf: "stretch",
+  },
+  otPairingId: {
+    fontSize: 8,
     fontWeight: "900",
-    color: "#a8a29e",
-    letterSpacing: 0.5,
-    marginBottom: 2,
+    color: "#0f172a",
+    lineHeight: 12,
+    textAlign: "center",
+    width: "100%",
   },
-  hubIdRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 },
-  hubPid: { fontSize: 10, fontWeight: "800", color: SCHEDULE_MOCK_HEADER_RED },
-  hubLayover: { fontSize: 9, fontWeight: "600", color: "#44403c", lineHeight: 12 },
-  hubSubMeta: { marginTop: 3, fontSize: 7, fontWeight: "600", color: "#78716c", lineHeight: 10 },
-  hubMetrics: { flexDirection: "row", alignItems: "flex-end", flexShrink: 0, paddingBottom: 1 },
-  hubCell: { width: 30, alignItems: "center" },
-  hubCellNarrow: { width: 22 },
-  hubCellLab: { fontSize: 6, fontWeight: "800", color: "#78716c", marginBottom: 2 },
-  hubCellVal: { fontSize: 8, fontWeight: "700", color: "#1c1917" },
-  hubCellWorth: { width: 40, alignItems: "flex-end", marginLeft: 1 },
-  hubWorthLab: { fontSize: 6, fontWeight: "800", color: "#78716c", marginBottom: 2 },
-  hubWorthVal: { fontSize: 8, fontWeight: "700", color: "#15803d" },
-  hubWorthPer: { fontSize: 6, fontWeight: "500", color: "#78716c", marginTop: 1 },
-  hubChev: { alignSelf: "center", fontSize: 12, color: "#d6d3d1", paddingLeft: 1, fontWeight: "300" },
-  bestTag: {
+  otBestTag: {
+    marginTop: 2,
     backgroundColor: SCHEDULE_MOCK_HEADER_RED,
     paddingHorizontal: 4,
     paddingVertical: 1,
     borderRadius: 3,
   },
-  bestTagText: { color: "#fff", fontSize: 6, fontWeight: "900" },
+  otBestTagText: { color: "#fff", fontSize: 6, fontWeight: "900" },
+  otLayCol: {
+    justifyContent: "flex-start",
+    paddingRight: 0,
+    alignItems: "center",
+    alignSelf: "stretch",
+    paddingTop: 1,
+    width: "100%",
+  },
+  otLay: {
+    fontSize: 8,
+    fontWeight: "700",
+    color: "#0f172a",
+    lineHeight: 12,
+    textAlign: "center",
+    alignSelf: "stretch",
+    width: "100%",
+  },
+  otBidCol: {
+    justifyContent: "flex-start",
+    alignItems: "center",
+    paddingTop: 1,
+    alignSelf: "stretch",
+    width: "100%",
+  },
+  otBid: {
+    fontSize: 8,
+    fontWeight: "700",
+    color: "#0f172a",
+    lineHeight: 12,
+    textAlign: "center",
+    width: "100%",
+    textTransform: "uppercase",
+  },
+  otDaysCol: {
+    justifyContent: "flex-start",
+    alignItems: "center",
+    paddingTop: 1,
+    alignSelf: "stretch",
+    width: "100%",
+  },
+  otDays: {
+    fontSize: 8,
+    fontWeight: "900",
+    color: "#0f172a",
+    lineHeight: 12,
+    textAlign: "center",
+    width: "100%",
+  },
+  otSchedCol: {
+    justifyContent: "flex-start",
+    alignItems: "stretch",
+    paddingHorizontal: 0,
+    paddingTop: 1,
+    width: "100%",
+    alignSelf: "stretch",
+    flex: 1,
+    minWidth: 0,
+  },
+  otStackPairBox: {
+    alignSelf: "stretch",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(28, 25, 23, 0.12)",
+    borderRadius: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+    backgroundColor: "#fafaf9",
+  },
+  otSchedRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 0,
+  },
+  otSchedStackDivider: {
+    width: StyleSheet.hairlineWidth,
+    minWidth: 1,
+    alignSelf: "stretch",
+    backgroundColor: "rgba(120, 113, 108, 0.32)",
+    marginHorizontal: 0,
+    marginVertical: 1,
+  },
+  otPairTim: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: "center",
+    paddingVertical: 1,
+    alignItems: "center",
+  },
+  otTimPairLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 14,
+    gap: 3,
+    alignSelf: "stretch",
+    width: "100%",
+  },
+  otTimIni: {
+    width: 9,
+    fontSize: 7,
+    fontWeight: "800",
+    color: "#64748b",
+    textAlign: "center",
+    fontFamily: OT_DIGITAL,
+    fontVariant: ["tabular-nums"],
+  },
+  otTimVal: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#0f172a",
+    letterSpacing: -0.15,
+    fontFamily: OT_DIGITAL,
+    fontVariant: ["tabular-nums"],
+  },
+  otWorthCol: {
+    justifyContent: "flex-start",
+    alignItems: "center",
+    paddingHorizontal: 0,
+    paddingTop: 1,
+    flexShrink: 0,
+    width: "100%",
+    alignSelf: "stretch",
+  },
+  otWorth: {
+    fontSize: 6.5,
+    fontWeight: "800",
+    color: "#0f172a",
+    textAlign: "center",
+    width: "100%",
+    fontVariant: ["tabular-nums"],
+    fontFamily: OT_DIGITAL,
+    lineHeight: 11,
+  },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.4)",

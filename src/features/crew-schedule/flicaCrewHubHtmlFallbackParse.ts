@@ -18,7 +18,11 @@ import {
   detectTradeboardType,
   extractMoney,
   formatOpenTimeBlkCr,
+  extractOpenTimeBidPosFromCells,
+  extractOpenTimeBidPosFromTaskArgs,
   mapRowsToOpenTimeTrips,
+  parseJetBlueFlicaPosList,
+  normalizeOpenTimeBidPosition,
   mapTradeboardRowsToPosts,
   tradeboardSanitizeDisplayComment,
   tradeboardTypeLongLabel,
@@ -395,6 +399,7 @@ function openTimeTripFromTaskArgs(
   argsRaw: string[],
   rawPreview: string,
   sourceUrl: string,
+  posList?: ReadonlyMap<string, string>,
 ): { trip: OpenTimeTrip | null; rejectReason?: string } {
   const args = argsRaw.map(normalizeTaskArg);
   const blob = args.join(" ");
@@ -467,10 +472,7 @@ function openTimeTripFromTaskArgs(
     }
   }
 
-  const bidPosRaw =
-    args.find((a) => /^[A-Z]{2}$/i.test(a) && !/^(JFK|LAX|BOS|FLL|MCO|MIA|ATL|SEA|SLC)$/i.test(a)) ??
-    args.find((a) => /^[A-Z]{2,4}$/i.test(a) && a.length <= 4) ??
-    "";
+  const bidPosRaw = extractOpenTimeBidPosFromTaskArgs(args, posList);
 
   const layFromArgs =
     args.find((a) => {
@@ -478,8 +480,18 @@ function openTimeTripFromTaskArgs(
       return /^[A-Z]{3}(\s+[A-Z]{3})+$/.test(t);
     }) ?? "";
 
-  const blockRaw = times[3] ?? "";
-  const creditRaw = times[4] ?? "";
+  const timeLikeArgs = args.filter((a) => {
+    const x = a.trim();
+    return /^\d{1,2}:\d{2}$/.test(x) || /^\d{3,4}$/.test(x);
+  });
+  const blockRaw = timeLikeArgs[3] ?? times[3] ?? "";
+  const creditRaw =
+    timeLikeArgs[4] ??
+    times[4] ??
+    (() => {
+      const m = blob.match(/\b(?:T-?)?CRED(?:IT)?\D*(\d{1,2}:\d{2}|\d{3,4})\b/i);
+      return m?.[1] ?? "";
+    })();
 
   const pairingCol = dateTok ? `${pairingId}:${dateTok}` : pairingId;
   const syntheticCells = [
@@ -631,7 +643,7 @@ function isTaskNearTaryInit(taskOpenParenIdx: number, anchors: number[], window:
 }
 
 const OT_TEXT_LINE_RE =
-  /^\s*(\bJ[A-Z0-9]{3,5}\b)\s+(\d{1,2}[A-Z]{3})\s+([A-Z]{3})\s+([A-Z]{2})\s+_\s+(\d)\s+((?:\d{1,2}:\d{2}\s+){3,8})([A-Za-z][A-Za-z0-9\s]{2,80}?)\s*$/i;
+  /^\s*(\bJ[A-Z0-9]{3,5}\b)\s+(\d{1,2}[A-Z]{3})\s+([A-Z]{3})\s+(CA|FO|2O|F[1-5])\s+_\s+(\d)\s+((?:\d{1,2}:\d{2}\s+){3,8})([A-Za-z][A-Za-z0-9\s]{2,80}?)\s*$/i;
 
 function extractOpenTimeTripsFromScriptLines(src: string, sourceUrl: string): OpenTimeTrip[] {
   const trips: OpenTimeTrip[] = [];
@@ -679,6 +691,7 @@ function buildOpenTimeTaryExtractDebugAndTaskTrips(
   sourceUrl: string,
 ): { debug: OpenTimeTaryExtractDebug; taskTrips: OpenTimeTrip[]; textTrips: OpenTimeTrip[] } {
   const html = String(src ?? "");
+  const jetBluePosList = parseJetBlueFlicaPosList(html);
   const allTaryIdx = allRegexMatchIndexes(html, /TAry/gi);
   const taryOccurrenceIndexesAll = allTaryIdx.slice(0, 200);
   const taryOccurrenceIndexesSample = allTaryIdx.slice(0, 20);
@@ -788,7 +801,12 @@ function buildOpenTimeTaryExtractDebugAndTaskTrips(
       Math.max(0, doc.start - 30),
       Math.min(html.length, doc.start + Math.min(doc.inner.length + 60, 420)),
     );
-    const { trip, rejectReason } = openTimeTripFromTaskArgs(argsRaw, rawPreview, sourceUrl);
+    const { trip, rejectReason } = openTimeTripFromTaskArgs(
+      argsRaw,
+      rawPreview,
+      sourceUrl,
+      jetBluePosList,
+    );
     const accepted = trip != null;
     first10TaskMatches.push({
       argCount: argsRaw.length,
@@ -821,7 +839,12 @@ function buildOpenTimeTaryExtractDebugAndTaskTrips(
       Math.max(0, body.start - 40),
       Math.min(html.length, body.start + Math.min(body.inner.length + 80, 400)),
     );
-    const { trip, rejectReason } = openTimeTripFromTaskArgs(argsRaw, rawPreview, sourceUrl);
+    const { trip, rejectReason } = openTimeTripFromTaskArgs(
+      argsRaw,
+      rawPreview,
+      sourceUrl,
+      jetBluePosList,
+    );
     if (trip != null) {
       acceptedTaskCount++;
       const k = String(argsRaw.length);
@@ -842,7 +865,7 @@ function buildOpenTimeTaryExtractDebugAndTaskTrips(
   for (const body of taskBodies) {
     const argsRaw = splitJsCallArgs(body.inner);
     const rawPreview = html.slice(body.start, Math.min(html.length, body.start + 400));
-    const { trip } = openTimeTripFromTaskArgs(argsRaw, rawPreview, sourceUrl);
+    const { trip } = openTimeTripFromTaskArgs(argsRaw, rawPreview, sourceUrl, jetBluePosList);
     if (!trip) continue;
     const k = `${trip.pairingId}:${trip.date}:${trip.reportTime}`;
     if (seenTrip.has(k)) continue;
@@ -967,10 +990,11 @@ function openTimeTripFromPotObjectBody(body: string, sourceUrl: string): OpenTim
   if (!pairingId.startsWith("J")) return null;
   const dateTok = (pd?.[2] ?? "").toUpperCase();
 
-  const bidPos =
-    otFieldString(body, "fullBidPos") ||
-    otFieldString(body, "bidPos") ||
-    otFieldString(body, "bid") ||
+  let bidPos =
+    normalizeOpenTimeBidPosition(otFieldString(body, "fullBidPos")) ||
+    normalizeOpenTimeBidPosition(otFieldString(body, "bidPos")) ||
+    normalizeOpenTimeBidPosition(otFieldString(body, "bid")) ||
+    normalizeOpenTimeBidPosition(otFieldString(body, "position")) ||
     "";
   const daysStr = otFieldString(body, "days");
   let days: number | null = null;
@@ -982,15 +1006,22 @@ function openTimeTripFromPotObjectBody(body: string, sourceUrl: string): OpenTim
   const rpttime = otFieldString(body, "rpttime") || otFieldString(body, "rptTime");
   const dpttime = otFieldString(body, "dpttime") || otFieldString(body, "dptTime");
   const endtime = otFieldString(body, "endtime") || otFieldString(body, "endTime");
-  const hrs = otFieldString(body, "hrs") || otFieldString(body, "block");
-  const payRaw = otFieldString(body, "pay") || otFieldString(body, "credit");
+  const hrs = otFieldString(body, "hrs") || otFieldString(body, "block") || otFieldString(body, "blk");
+  const payRaw = otFieldString(body, "pay");
   const lay = otFieldString(body, "lay") || otFieldString(body, "layover");
   const premium = otFieldString(body, "premium") || otFieldString(body, "prem");
   const dateAlt = otFieldString(body, "date") || otFieldString(body, "dates") || otFieldString(body, "dispdate");
 
-  const creditOnly = otFieldString(body, "credit");
+  const creditOnly =
+    otFieldString(body, "credit") ||
+    otFieldString(body, "cr") ||
+    otFieldString(body, "cred") ||
+    otFieldString(body, "tcredit");
   const payForCredit =
-    creditOnly || payRaw.replace(/\$\s*[\d,]+(?:\.\d{2})?/g, "").replace(/\/\s*HR.*/i, "").trim();
+    creditOnly ||
+    (payRaw && !/^\$/.test(payRaw.trim())
+      ? payRaw.replace(/\$\s*[\d,]+(?:\.\d{2})?/g, "").replace(/\/\s*HR.*/i, "").trim()
+      : "");
 
   const worth = extractMoney(payRaw);
 

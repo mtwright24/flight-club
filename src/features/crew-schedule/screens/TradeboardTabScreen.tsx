@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import {
   ActivityIndicator,
   Alert,
+  InteractionManager,
   Platform,
   Pressable,
   RefreshControl,
@@ -54,7 +55,6 @@ import type { FlicaMarketplacePairingDetail } from "../flicaMarketplacePairingDe
 import { fetchFlicaMarketplacePairingDetail } from "../openFlicaMarketplacePairingDetail";
 import {
   CREW_HUB_CARD_RIM,
-  CREW_HUB_DATE_HEADER_BG,
   SCHEDULE_MOCK_HEADER_RED,
   SCHEDULE_MOCK_STATS_STRIP_RED,
 } from "../scheduleMockPalette";
@@ -800,7 +800,6 @@ export default function TradeboardTabScreen() {
   const [search, setSearch] = useState("");
   const [chip, setChip] = useState<string>("All");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [allPosts, setAllPosts] = useState<TradeboardPost[]>([]);
   const [myPosts, setMyPosts] = useState<TradeboardPost[]>([]);
   const [responsePosts, setResponsePosts] = useState<TradeboardPost[]>([]);
@@ -820,6 +819,9 @@ export default function TradeboardTabScreen() {
     resolve: () => void;
     reject: (e: Error) => void;
   } | null>(null);
+  const loadRef = useRef<(reason: "pull" | "focus") => Promise<void>>(async () => {});
+  const focusLoadGenRef = useRef(0);
+  const focusLoadInFlightRef = useRef(false);
   const cacheHydratedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -876,9 +878,19 @@ export default function TradeboardTabScreen() {
     setPullSessionRunnerActive(false);
   }, []);
 
-  const load = useCallback(async (reason: "focus" | "pull" = "focus") => {
-    setLoading(true);
-    setError(null);
+  /**
+   * Pull: FLICA session runner + toast. Focus: silent background refresh — update list only on success.
+   */
+  const load = useCallback(async (reason: "pull" | "focus" = "focus") => {
+    const focusGen = reason === "focus" ? ++focusLoadGenRef.current : 0;
+    if (reason === "focus") {
+      if (focusLoadInFlightRef.current) return;
+      focusLoadInFlightRef.current = true;
+    }
+    if (reason === "pull") {
+      setLoading(true);
+    }
+    let didUpdate = false;
     try {
       if (reason === "pull") {
         logCrewHubAuth("schedule_import_session_flow_start", { context: "tradeboard" });
@@ -914,7 +926,7 @@ export default function TradeboardTabScreen() {
       }
       logCrewHubAuth("native_fetch_done", {
         context: "tradeboard",
-        phase: "first",
+        phase: reason,
         allHtmlLen: allR.htmlLength ?? 0,
         myHtmlLen: myR.htmlLength ?? 0,
         allState: allR.htmlState,
@@ -989,13 +1001,6 @@ export default function TradeboardTabScreen() {
           context: "tradeboard",
           afterPullSession: reason === "pull",
         });
-        setHubLiveMarketplaceSyncAt(null);
-        if (reason === "focus") {
-          setError(null);
-        } else {
-          setError(allR.error ?? myR.error ?? "FLICA verification still required.");
-        }
-        setResponsePosts([]);
         return;
       }
 
@@ -1008,7 +1013,16 @@ export default function TradeboardTabScreen() {
         !flicaFetchNeedsWebVerification(allR.htmlState) &&
         !flicaFetchNeedsWebVerification(myR.htmlState) &&
         !flicaFetchNeedsWebVerification(respR.htmlState);
-      setHubLiveMarketplaceSyncAt(refreshOk ? new Date().toISOString() : null);
+
+      if (!refreshOk) {
+        return;
+      }
+
+      if (reason === "focus" && focusGen !== focusLoadGenRef.current) {
+        return;
+      }
+
+      setHubLiveMarketplaceSyncAt(new Date().toISOString());
       logCrewHubAuth("parse_done", {
         context: "tradeboard",
         allMappedRows: mappedAll.length,
@@ -1017,67 +1031,44 @@ export default function TradeboardTabScreen() {
       setAllPosts(mappedAll);
       setMyPosts(mappedMy);
       setResponsePosts(mappedRespPre);
+      didUpdate = true;
 
-      if (
-        flicaFetchNeedsWebVerification(allR.htmlState) ||
-        flicaFetchNeedsWebVerification(myR.htmlState) ||
-        flicaFetchNeedsWebVerification(respR.htmlState)
-      ) {
-        setError(allR.error ?? myR.error ?? respR.error ?? "FLICA verification still required.");
-      } else if (!allR.ok && allR.error) {
-        setError(allR.error);
-      } else if (!myR.ok && myR.error) {
-        setError(myR.error);
-      } else if (!respR.ok && respR.error) {
-        setError(respR.error);
-      } else if (
-        mappedAll.length === 0 &&
-        mappedMy.length === 0 &&
-        (allFb.meta.markersMissing.length > 0 || myFb.meta.markersMissing.length > 0)
-      ) {
-        setError(
-          `No Tradeboard posts parsed from FLICA HTML. All Requests missing: ${allFb.meta.markersMissing.join("; ") || "—"} · Found: ${allFb.meta.markersFound.join("; ") || "—"}. My Requests missing: ${myFb.meta.markersMissing.join("; ") || "—"} · Found: ${myFb.meta.markersFound.join("; ") || "—"}.`,
-        );
-      } else {
-        setError(null);
-      }
-
-      if (refreshOk && session?.user?.id) {
+      if (session?.user?.id) {
         void upsertTradeboardHubCache(session.user.id, {
           v: 1,
           myPosts: mappedMy,
           allPosts: mappedAll,
           refreshedAt: new Date().toISOString(),
         });
-        if (reason === "pull") setToast("Tradeboard refreshed");
+      }
+      if (reason === "pull") {
+        setToast("Tradeboard refreshed");
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
       if (!msg.toLowerCase().includes("cancelled")) {
-        setAllPosts([]);
-        setMyPosts([]);
-        setResponsePosts([]);
-        setHubLiveMarketplaceSyncAt(null);
+        logCrewHubAuth("native_fetch_failed", { context: "tradeboard", phase: reason, message: msg });
       }
     } finally {
-      setLoading(false);
-      bumpCrewHubSharedDataRefresh();
+      if (reason === "focus") {
+        focusLoadInFlightRef.current = false;
+      }
+      if (reason === "pull") {
+        setLoading(false);
+      }
+      if (didUpdate && reason === "pull") {
+        bumpCrewHubSharedDataRefresh();
+      }
     }
   }, [bumpCrewHubSharedDataRefresh, session?.user?.id, profileBase, profileRole]);
 
+  loadRef.current = load;
+
   const runTradeboardMutatingWeb = useCallback(
     (uri: string) => {
-      if (!hubLiveMarketplaceSyncAt) {
-        Alert.alert(
-          "Sync live FLICA first",
-          "Pull to refresh Tradeboard before using Post, Pickup, Swap, or other marketplace actions.",
-        );
-        return;
-      }
       pushFlicaWeb(router, uri);
     },
-    [hubLiveMarketplaceSyncAt, router],
+    [router],
   );
 
   const openTradeboardMarketplace = useCallback(
@@ -1139,9 +1130,17 @@ export default function TradeboardTabScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void load("focus");
-      return () => setCrewScheduleHeaderSubtitle(null);
-    }, [load, setCrewScheduleHeaderSubtitle]),
+      let cancelled = false;
+      const task = InteractionManager.runAfterInteractions(() => {
+        if (!cancelled) void loadRef.current("focus");
+      });
+      return () => {
+        cancelled = true;
+        task.cancel();
+        focusLoadGenRef.current += 1;
+        setCrewScheduleHeaderSubtitle(null);
+      };
+    }, [setCrewScheduleHeaderSubtitle]),
   );
 
   const activeCount = myPosts.length;
@@ -1324,10 +1323,6 @@ export default function TradeboardTabScreen() {
             </Pressable>
           ))}
         </View>
-
-        {error ? (
-          <Text style={styles.errorText}>{error}</Text>
-        ) : null}
 
         {activePost ? (
           <View style={styles.activeCard}>
@@ -1626,7 +1621,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
     flexShrink: 0,
-    backgroundColor: CREW_HUB_DATE_HEADER_BG,
+    backgroundColor: SCHEDULE_MOCK_STATS_STRIP_RED,
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 999,

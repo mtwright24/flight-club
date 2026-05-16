@@ -13,18 +13,23 @@ import { dateYmdFromRbcpairDetailUrl } from "./crewHubFlicaLiveGate";
 
 const FLICA_ORIGIN = "https://jetblue.flica.net";
 
+const OPEN_TIME_MAX_POT_FETCHES = 8;
+
 /**
- * BCIDs to fetch: primary OT BCID, known multi-month pot BCIDs from native constants, plus any
- * `BCID=` / `bcid=` links in the live seed HTML. Pots that return zero rows are still omitted later
- * so we do not add empty swipe pages.
+ * BCIDs to fetch: primary OT BCID, known multi-month candidates, and any `BCID=` links in HTML.
+ * Pots that return zero rows are omitted so we do not add empty month tabs.
  */
-function discoverOpenTimeBcidsFromHtml(html: string): string[] {
-  const s = new Set<string>();
-  s.add(FLICA_NATIVE_OT_BCID);
-  for (const c of FLICA_NATIVE_OT_BCID_EXTRA_CANDIDATES) s.add(c);
+function collectOpenTimeBcidsFromHtml(html: string, into: Set<string>): void {
+  into.add(FLICA_NATIVE_OT_BCID);
+  for (const c of FLICA_NATIVE_OT_BCID_EXTRA_CANDIDATES) into.add(c);
   const re = /(?:BCID|bcid)=([0-9]+\.[0-9]+)/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) s.add(m[1]!);
+  while ((m = re.exec(String(html ?? ""))) !== null) into.add(m[1]!);
+}
+
+function discoverOpenTimeBcidsFromHtml(html: string): string[] {
+  const s = new Set<string>();
+  collectOpenTimeBcidsFromHtml(html, s);
   return [...s].sort();
 }
 
@@ -222,56 +227,67 @@ export async function fetchAllOpenTimePotContextsMerged(hubMonthFallback: string
     referer: FLICA_ORIGIN,
   });
   const seedHtml = String(seed.html ?? "");
-  const bcids = discoverOpenTimeBcidsFromHtml(seedHtml);
-  const otFrameUrlsDiscovered = bcids.map(
-    (b) => `${FLICA_ORIGIN}/full/otframe.cgi?BCID=${encodeURIComponent(b)}&ViewOT=1`,
-  );
+  const bcidSet = new Set<string>();
+  collectOpenTimeBcidsFromHtml(seedHtml, bcidSet);
+  const fetched = new Set<string>();
   const potUrlsDiscovered: string[] = [];
   const rowsCountPerBcid: Record<string, number> = {};
   const rowsWithPairingDetailUrlPerBcid: Record<string, number> = {};
   const monthBucketsRaw: OpenTimeMonthBucket[] = [];
   let primaryPotResult: FlicaActionsFetchResult | null = null;
 
-  for (const bcid of bcids) {
-    const b = await nativeFetchOpenTimePotBundleForBcid(bcid);
-    if (!b.ok) {
-      errors.push(`${bcid}: ${b.error}`);
-      continue;
-    }
-    if (bcid === FLICA_NATIVE_OT_BCID) {
-      primaryPotResult = b.pot;
-    } else if (!primaryPotResult) {
-      primaryPotResult = b.pot;
-    }
+  while (fetched.size < bcidSet.size && fetched.size < OPEN_TIME_MAX_POT_FETCHES) {
+    const queue = [...bcidSet].filter((b) => !fetched.has(b)).sort();
+    for (const bcid of queue) {
+      if (fetched.size >= OPEN_TIME_MAX_POT_FETCHES) break;
+      fetched.add(bcid);
+      const b = await nativeFetchOpenTimePotBundleForBcid(bcid);
+      if (!b.ok) {
+        errors.push(`${bcid}: ${b.error}`);
+        continue;
+      }
+      collectOpenTimeBcidsFromHtml(String(b.pot.pageHtml ?? ""), bcidSet);
 
-    potUrlsDiscovered.push(b.sourceOpenTimePotUrl);
-    const ctxBase: OpenTimeRowSourceContext = {
-      sourceBcid: bcid,
-      sourceOtFrameUrl: b.sourceOtFrameUrl,
-      sourceOpenTimePotUrl: b.sourceOpenTimePotUrl,
-      sourceToken: b.sourceToken,
-    };
-    const fb = mapOpenTimeTripsWithHtmlFallback(b.pot.nativeParse?.rows ?? [], b.pot, b.pot.url);
-    const withOrder: OpenTimeTrip[] = fb.trips.map((trip, idx) => ({
-      ...trip,
-      originalDisplayOrder: idx,
-    }));
-    const attached = attachOpenTimePotSourceContext(withOrder, ctxBase);
-    const smk = inferOpenTimeBucketMonthKey(attached, hubMonthFallback);
-    const withSmk = attached.map((t) => ({ ...t, sourceMonthKey: smk }));
-    const tripsPot = dedupeOpenTimeTripsWithinPot(withSmk);
-    rowsCountPerBcid[bcid] = tripsPot.length;
-    rowsWithPairingDetailUrlPerBcid[bcid] = tripsPot.filter((x) => x.pairingDetailUrl?.trim()).length;
-    if (tripsPot.length === 0) continue;
-    monthBucketsRaw.push({
-      sourceMonthKey: smk,
-      sourceBcid: bcid,
-      sourceOtFrameUrl: b.sourceOtFrameUrl,
-      sourceOpenTimePotUrl: b.sourceOpenTimePotUrl,
-      sourceToken: b.sourceToken,
-      trips: tripsPot,
-    });
+      if (bcid === FLICA_NATIVE_OT_BCID) {
+        primaryPotResult = b.pot;
+      } else if (!primaryPotResult) {
+        primaryPotResult = b.pot;
+      }
+
+      potUrlsDiscovered.push(b.sourceOpenTimePotUrl);
+      const ctxBase: OpenTimeRowSourceContext = {
+        sourceBcid: bcid,
+        sourceOtFrameUrl: b.sourceOtFrameUrl,
+        sourceOpenTimePotUrl: b.sourceOpenTimePotUrl,
+        sourceToken: b.sourceToken,
+      };
+      const fb = mapOpenTimeTripsWithHtmlFallback(b.pot.nativeParse?.rows ?? [], b.pot, b.pot.url);
+      const withOrder: OpenTimeTrip[] = fb.trips.map((trip, idx) => ({
+        ...trip,
+        originalDisplayOrder: idx,
+      }));
+      const attached = attachOpenTimePotSourceContext(withOrder, ctxBase);
+      const smk = inferOpenTimeBucketMonthKey(attached, hubMonthFallback);
+      const withSmk = attached.map((t) => ({ ...t, sourceMonthKey: smk }));
+      const tripsPot = dedupeOpenTimeTripsWithinPot(withSmk);
+      rowsCountPerBcid[bcid] = tripsPot.length;
+      rowsWithPairingDetailUrlPerBcid[bcid] = tripsPot.filter((x) => x.pairingDetailUrl?.trim()).length;
+      if (tripsPot.length === 0) continue;
+      monthBucketsRaw.push({
+        sourceMonthKey: smk,
+        sourceBcid: bcid,
+        sourceOtFrameUrl: b.sourceOtFrameUrl,
+        sourceOpenTimePotUrl: b.sourceOpenTimePotUrl,
+        sourceToken: b.sourceToken,
+        trips: tripsPot,
+      });
+    }
   }
+
+  const bcids = [...bcidSet].sort();
+  const otFrameUrlsDiscovered = bcids.map(
+    (b) => `${FLICA_ORIGIN}/full/otframe.cgi?BCID=${encodeURIComponent(b)}&ViewOT=1`,
+  );
 
   const monthBuckets = sortOpenTimeMonthBucketsChronologically(monthBucketsRaw);
   const merged = flattenOpenTimeMonthBuckets(monthBuckets);
