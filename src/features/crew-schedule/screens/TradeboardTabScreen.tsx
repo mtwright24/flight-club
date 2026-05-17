@@ -46,7 +46,13 @@ import type {
 import FlicaMarketplacePairingDetailSheet from "../components/FlicaMarketplacePairingDetailSheet";
 import TradeBoardEditRequestComposerSheet from "../components/TradeBoardEditRequestComposerSheet";
 import TradeBoardPostRequestComposerSheet from "../components/TradeBoardPostRequestComposerSheet";
-import { attachMyRequestActionsToPosts } from "../tradeBoardMyRequestsMerge";
+import { attachMyRequestActionsToPostsFallback } from "../tradeBoardMyRequestsMerge";
+import {
+  logTradeboardMyRequestsRenderActions,
+  tradeboardPostMyRequestDeleteUrl,
+  tradeboardPostMyRequestReqId,
+  tradeboardPostShowsMyRequestActions,
+} from "../../flica-actions/flicaTradeBoardMyRequestsRowParse";
 import { CrewHubSwipeActionRail, type CrewHubSwipeRailAction } from "../components/CrewHubSwipeActionRail";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
 import { hubLayoverDisplayForHubListRow } from "../crewHubLayoverDisplay";
@@ -656,7 +662,7 @@ function TradeboardFeedRowInner({
           </View>
         </View>
         </Pressable>
-        {showMyRequestActions && p.myRequest?.reqId ? (
+        {showMyRequestActions && tradeboardPostShowsMyRequestActions(p) ? (
           <View style={styles.tbMyReqActions}>
             <Pressable
               style={styles.tbMyReqActionBtn}
@@ -898,6 +904,12 @@ export default function TradeboardTabScreen() {
   }, [session?.user?.id]);
 
   useEffect(() => {
+    if (tradeFeedTab === "my" && myPosts.length > 0) {
+      logTradeboardMyRequestsRenderActions(tradeFeedTab, myPosts);
+    }
+  }, [tradeFeedTab, myPosts]);
+
+  useEffect(() => {
     const uid = session?.user?.id;
     if (!uid) {
       setProfileBase(null);
@@ -1011,7 +1023,7 @@ export default function TradeboardTabScreen() {
       );
       const myActions = parseTradeboardMyRequestsActionsFromHtml(String(myR.pageHtml ?? ""));
       const mappedAllPre = allFb.posts;
-      const mappedMyPre = attachMyRequestActionsToPosts(myFb.posts, myActions.rows);
+      const mappedMyPre = attachMyRequestActionsToPostsFallback(myFb.posts, myActions.rows);
 
       const respFb = mapTradeboardPostsWithHtmlFallback(
         respR.nativeParse?.rows ?? [],
@@ -1185,7 +1197,7 @@ export default function TradeboardTabScreen() {
         "my_requests",
         fetch.url,
       );
-      setMyPosts(attachMyRequestActionsToPosts(myFb.posts, actions.rows));
+      setMyPosts(attachMyRequestActionsToPostsFallback(myFb.posts, actions.rows));
     } catch {
       /* list stays as-is */
     }
@@ -1219,29 +1231,30 @@ export default function TradeboardTabScreen() {
 
   const openEditComposer = useCallback(
     async (post: TradeboardPost) => {
-      const row = post.myRequest;
-      if (!row?.reqId) {
+      const reqId = tradeboardPostMyRequestReqId(post);
+      if (!reqId) {
         Alert.alert(
           "Edit request",
           "Could not find FLICA request id. Pull to refresh My Requests, then try again.",
         );
         return;
       }
+      const editUrl = post.myRequest?.editUrl ?? post.editUrl;
       fcDevMirrorScheduleLogToFile("FC_TB_EDIT_REQUEST_OPEN_NATIVE", {
-        reqId: row.reqId,
+        reqId,
         pairingId: post.pairingId,
-        editUrl: row.editUrl,
+        editUrl,
       });
       if (__DEV__) {
         console.log(
           "[FC_TB_EDIT_REQUEST_OPEN_NATIVE]",
-          JSON.stringify({ reqId: row.reqId, pairingId: post.pairingId }),
+          JSON.stringify({ reqId, pairingId: post.pairingId }),
         );
       }
-      setEditReqId(row.reqId);
-      setEditTreq(row.treq || undefined);
+      setEditReqId(reqId);
+      setEditTreq(post.myRequest?.treq || undefined);
       setEditComposerVisible(true);
-      await loadEditRequestForm(row.reqId);
+      await loadEditRequestForm(reqId);
     },
     [loadEditRequestForm],
   );
@@ -1250,15 +1263,16 @@ export default function TradeboardTabScreen() {
 
   const deleteMyRequest = useCallback(
     (post: TradeboardPost) => {
-      const row = post.myRequest;
-      if (!row?.reqId) {
+      const reqId = tradeboardPostMyRequestReqId(post);
+      if (!reqId) {
         Alert.alert(
           "Delete request",
           "Could not find FLICA request id. Pull to refresh My Requests, then try again.",
         );
         return;
       }
-      logDeleteRequestConfirm({ reqId: row.reqId, pairingId: post.pairingId });
+      const deleteUrl = tradeboardPostMyRequestDeleteUrl(post);
+      logDeleteRequestConfirm({ reqId, pairingId: post.pairingId });
       Alert.alert(
         "Delete Request",
         "Are you sure you want to remove this TradeBoard request?\n\nPlease Note: Deleting a message from TradeBoard does not affect any requests that have already been submitted for processing.",
@@ -1270,8 +1284,8 @@ export default function TradeboardTabScreen() {
             onPress: () => {
               void (async () => {
                 try {
-                  const result = await submitTradeboardMyRequestDelete(row.reqId, {
-                    deleteUrl: row.deleteUrl,
+                  const result = await submitTradeboardMyRequestDelete(reqId, {
+                    deleteUrl: deleteUrl || undefined,
                   });
                   if (result.ok) {
                     setToast("Request removed");

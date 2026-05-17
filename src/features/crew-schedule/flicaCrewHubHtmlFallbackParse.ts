@@ -4,6 +4,10 @@
  */
 import type { FlicaActionsFetchResult } from "../flica-actions/flicaActionsTypes";
 import {
+  enrichMyRequestsPostsFromPageHtml,
+  parseTradeboardMyRequestsPage,
+} from "../flica-actions/flicaTradeBoardMyRequestsRowParse";
+import {
   buildOpenTimePairingDetailUrl,
   buildTradeboardPairingDetailUrl,
   extractPairOnclickPidYmdsFromHtml,
@@ -1832,7 +1836,14 @@ function tradeboardCandidateHasRowContext(block: string, sourcePageType: Tradebo
     /\([0-9]{4,6}\)/.test(block) &&
     /\b[A-Z][A-Z'\-]+(?:\s+[A-Z][A-Z'\-]+)+\s*\(\s*\d{4,6}\s*\)/.test(block);
   const hasTs = POSTED_EDT_COMPACT.test(block);
-  if (sourcePageType === "my_requests") return hasTs || hasEmail || hasPhone || hasPoster;
+  const hasMyReqActions =
+    /\bEdit\b/i.test(block) ||
+    /\bDelete\b/i.test(block) ||
+    /TB_EditRequest\.cgi/i.test(block) ||
+    /DeleteMe\s*=/i.test(block);
+  if (sourcePageType === "my_requests") {
+    return hasMyReqActions || hasTs || hasEmail || hasPhone || hasPoster;
+  }
   return hasAction || hasTs || hasEmail || hasPhone || hasPoster;
 }
 
@@ -2466,7 +2477,21 @@ function extractTradeboardPostsFromPageHtml(
   let firstAcceptedRawBlock = "";
   let detectedExtractionMode = "none";
 
-  if (sourcePageType === "all_requests") {
+  if (sourcePageType === "my_requests") {
+    const myPage = parseTradeboardMyRequestsPage(pageHtml, sourceUrl);
+    requestRowCandidateCount += myPage.tableRowCount;
+    for (const p of myPage.posts) {
+      const k = `${p.pairingId}:${p.pairingDateLabel}:${p.reqId ?? ""}:${p.type}`;
+      if (seenPostKey.has(k)) continue;
+      seenPostKey.add(k);
+      posts.push(p);
+      acceptedRowCount++;
+      if (!firstAcceptedRawBlock) firstAcceptedRawBlock = p.rawText.slice(0, 900);
+    }
+    if (myPage.posts.length > 0) detectedExtractionMode = "my_requests_unified_table";
+  }
+
+  if (sourcePageType === "all_requests" || sourcePageType === "my_requests") {
     const ar = parseTradeboardAllRequestsFromNewARecords(pageHtml, sourceUrl);
     allRequestsARecordBodiesFound = ar.bodiesFound;
     allRequestsARecordPostsCount = ar.postsAccepted;
@@ -2480,7 +2505,10 @@ function extractTradeboardPostsFromPageHtml(
       acceptedRowCount++;
       if (!firstAcceptedRawBlock) firstAcceptedRawBlock = p.rawText.slice(0, 900);
     }
-    if (ar.posts.length > 0) detectedExtractionMode = "all_requests_new_a_records";
+    if (ar.posts.length > 0 && detectedExtractionMode === "none") {
+      detectedExtractionMode =
+        sourcePageType === "my_requests" ? "my_requests_new_a_records" : "all_requests_new_a_records";
+    }
   }
 
   const pushCandidateRow = (row: TradeboardRowCandidateDebug): void => {
@@ -2659,6 +2687,10 @@ function extractTradeboardPostsFromPageHtml(
       requestRowCandidateCount > 0 ? "failed_mapper_see_probe" : "failed_no_row_candidates_see_probe";
   }
 
+  if (sourcePageType === "my_requests" && posts.length > 0) {
+    posts = enrichMyRequestsPostsFromPageHtml(posts, pageHtml);
+  }
+
   if (typeof __DEV__ !== "undefined" && __DEV__) {
     console.log("[FLICA_TRADEBOARD_PARSE]", {
       mode: detectedExtractionMode,
@@ -2757,7 +2789,12 @@ export function mapTradeboardPostsWithHtmlFallback(
   const templatey = rowsContainJsTemplateTokens(rows);
   const hasPairing = rowsContainTradeboardPairing(rows);
 
-  if (primary.length > 0 && !templatey && hasPairing) {
+  if (
+    sourcePageType !== "my_requests" &&
+    primary.length > 0 &&
+    !templatey &&
+    hasPairing
+  ) {
     return {
       posts: enrichTradeboardPostsWithPairingDetailUrlsFromHtml(html, primary),
       meta: {

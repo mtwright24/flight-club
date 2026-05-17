@@ -104,6 +104,19 @@ export type TradeboardPost = {
   dateYmd?: string;
   /** True when URL came from live Tradeboard HTML row/onclick enrichment (hub refresh). */
   pairingDetailUrlFromLiveHtml?: boolean;
+  /** Hub list source tab when parsed from TB_MyRequests.cgi. */
+  sourceTab?: "my_requests";
+  isMyRequest?: boolean;
+  seat?: string;
+  /** `YYYYMMDD` alias for pairing date (My Requests rows). */
+  pairingDateYmd?: string;
+  reqId?: string;
+  editRequestId?: string;
+  deleteRequestId?: string;
+  editUrl?: string;
+  deleteUrl?: string;
+  canEdit?: boolean;
+  canDelete?: boolean;
   /** FLICA My Requests edit/delete targets when row is the user's own request. */
   myRequest?: import("../flica-actions/flicaTradeBoardPostRequestTypes").TradeboardMyRequestActionRow;
 };

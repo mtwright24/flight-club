@@ -108,6 +108,35 @@ export function parseTradeboardMyRequestsActionsFromHtml(
   const warnings: string[] = [];
   const map = new Map<string, TradeboardMyRequestActionRow>();
 
+  const controlRe = /<(?:input|button)\b([^>]*)>/gi;
+  let cm: RegExpExecArray | null;
+  while ((cm = controlRe.exec(h)) !== null) {
+    const attrs = cm[1] ?? "";
+    const onclick = getAttr(attrs, "onclick");
+    const value = getAttr(attrs, "value");
+    const hay = `${onclick} ${value} ${getAttr(attrs, "name")}`;
+    const ctx = h.slice(Math.max(0, cm.index - 350), Math.min(h.length, cm.index + 450));
+    const { pairingId, dateLabel } = extractPairingFromContext(ctx);
+    const editReqId = extractReqIdFromEditHref(hay);
+    if (editReqId) {
+      mergeRow(map, editReqId, {
+        pairingId,
+        dateLabel,
+        editUrl: tradeboardEditRequestUrl(editReqId),
+        rawPreview: collapseWs(ctx).slice(0, 200),
+      });
+    }
+    const deleteReqId = extractReqIdFromDeleteHref(hay);
+    if (deleteReqId) {
+      mergeRow(map, deleteReqId, {
+        pairingId,
+        dateLabel,
+        deleteUrl: tradeboardMyRequestDeleteUrl(deleteReqId),
+        rawPreview: collapseWs(ctx).slice(0, 200),
+      });
+    }
+  }
+
   const anchorRe = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   let m: RegExpExecArray | null;
   while ((m = anchorRe.exec(h)) !== null) {
@@ -188,18 +217,25 @@ export function parseTradeboardMyRequestsActionsFromHtml(
 
   fcDevMirrorScheduleLogToFile(LOG_TAG, {
     ok: rows.length > 0,
+    htmlLength: h.length,
     rowCount: rows.length,
     warnings,
-    sample: rows.slice(0, 5).map((r) => ({
-      reqId: r.reqId,
+    firstRows: rows.slice(0, 5).map((r) => ({
       pairingId: r.pairingId,
+      reqId: r.reqId,
       editUrl: r.editUrl,
       deleteUrl: r.deleteUrl,
+      hasEdit: Boolean(r.editUrl),
+      hasDelete: Boolean(r.deleteUrl),
+      rawText: r.rawPreview,
     })),
   });
 
   if (__DEV__) {
-    console.log(`[${LOG_TAG}]`, JSON.stringify({ rowCount: rows.length, warnings }));
+    console.log(
+      `[${LOG_TAG}]`,
+      JSON.stringify({ htmlLength: h.length, rowCount: rows.length, warnings }),
+    );
   }
 
   return { ok: rows.length > 0, rows, warnings };

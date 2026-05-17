@@ -476,6 +476,13 @@ export function mapTradeboardRowsToPosts(
       pairingDetailUrl: tbUrl,
       pairingDetailUrlFromLiveHtml: tbLive,
       dateYmd: ocTb?.dateYmd,
+      ...(sourcePageType === "my_requests"
+        ? {
+            isMyRequest: true,
+            sourceTab: "my_requests" as const,
+            pairingDateYmd: ocTb?.dateYmd,
+          }
+        : {}),
     });
   }
   return out;
