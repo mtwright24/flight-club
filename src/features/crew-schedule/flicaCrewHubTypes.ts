@@ -104,4 +104,6 @@ export type TradeboardPost = {
   dateYmd?: string;
   /** True when URL came from live Tradeboard HTML row/onclick enrichment (hub refresh). */
   pairingDetailUrlFromLiveHtml?: boolean;
+  /** FLICA My Requests edit/delete targets when row is the user's own request. */
+  myRequest?: import("../flica-actions/flicaTradeBoardPostRequestTypes").TradeboardMyRequestActionRow;
 };
