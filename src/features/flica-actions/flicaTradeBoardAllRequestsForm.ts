@@ -17,11 +17,19 @@ export function tradeBoardHtmlContainsNothingMatchesCriteria(html: string): bool
   return /nothing\s+matches\s+your\s+criteria/i.test(String(html ?? ""));
 }
 
-export function resolveFlicaAbsoluteUrl(raw: string): string {
+export function resolveFlicaAbsoluteUrl(raw: string, documentUrl?: string): string {
   const t = String(raw ?? "").trim();
   if (!t) return "";
   if (t.startsWith("http://") || t.startsWith("https://")) return t;
   if (t.startsWith("//")) return `https:${t}`;
+  const doc = String(documentUrl ?? "").trim();
+  if (doc) {
+    try {
+      return new URL(t, doc).href;
+    } catch {
+      /* fall through to origin-relative rules */
+    }
+  }
   if (t.startsWith("/")) return `${FLICA_ORIGIN}${t}`;
   return `${FLICA_ORIGIN}/${t.replace(/^\.\//, "")}`;
 }

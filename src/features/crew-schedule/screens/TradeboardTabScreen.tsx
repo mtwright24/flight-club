@@ -25,16 +25,30 @@ import {
 import { flicaFetchNeedsWebVerification } from "../../flica-actions/flicaActionsHttp";
 import {
   FLICA_NATIVE_URLS,
+  fetchTradeboardMyRequestsActions,
+  fetchTradeboardPostRequestForm,
   nativeFetchTradeBoardAllRequests,
   nativeFetchTradeBoardFavorites,
   nativeFetchTradeBoardMyRequests,
   nativeFetchTradeBoardMyResponses,
 } from "../../flica-actions/flicaActionsNativeService";
+import {
+  buildTradeboardDeleteRequestPayload,
+  dryRunTradeboardDeleteRequest,
+  submitTradeboardDeleteRequest,
+} from "../../flica-actions/flicaTradeBoardPostRequestPayload";
+import type {
+  TradeboardPostRequestActivity,
+  TradeboardPostRequestFormParse,
+} from "../../flica-actions/flicaTradeBoardPostRequestTypes";
 import FlicaMarketplacePairingDetailSheet from "../components/FlicaMarketplacePairingDetailSheet";
+import TradeBoardPostRequestComposerSheet from "../components/TradeBoardPostRequestComposerSheet";
 import { CrewHubSwipeActionRail, type CrewHubSwipeRailAction } from "../components/CrewHubSwipeActionRail";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
 import { hubLayoverDisplayForHubListRow } from "../crewHubLayoverDisplay";
 import { FlicaCrewHubScheduleSessionRunner } from "../components/FlicaCrewHubScheduleSessionRunner";
+import { FlicaTradeBoardActivitySelectorWebViewCaptureRunner } from "../components/FlicaTradeBoardActivitySelectorWebViewCaptureRunner";
+import { FlicaTradeBoardPostRequestWebViewActionRunner } from "../components/FlicaTradeBoardPostRequestWebViewActionRunner";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
 import {
   loadTradeboardHubCache,
@@ -807,6 +821,15 @@ export default function TradeboardTabScreen() {
   const [marketplaceDetail, setMarketplaceDetail] = useState<FlicaMarketplacePairingDetail | null>(null);
   const [hubMarketplaceLoading, setHubMarketplaceLoading] = useState(false);
   const [hubLiveMarketplaceSyncAt, setHubLiveMarketplaceSyncAt] = useState<string | null>(null);
+  const [postComposerVisible, setPostComposerVisible] = useState(false);
+  const [postFormParse, setPostFormParse] = useState<TradeboardPostRequestFormParse | null>(null);
+  const [postFormLoading, setPostFormLoading] = useState(false);
+  const [postFormError, setPostFormError] = useState<string | null>(null);
+  const [postSeedActivity, setPostSeedActivity] = useState<TradeboardPostRequestActivity | null>(
+    null,
+  );
+  const [postEditReqId, setPostEditReqId] = useState<string | undefined>();
+  const [postEditTreq, setPostEditTreq] = useState<string | undefined>();
 
   const tradeboardMonthFallback = useMemo(
     () => `${year}-${String(month).padStart(2, "0")}`,
@@ -1071,6 +1094,144 @@ export default function TradeboardTabScreen() {
     [router],
   );
 
+  const loadPostRequestForm = useCallback(async (editReqId?: string) => {
+    setPostFormLoading(true);
+    setPostFormError(null);
+    try {
+      const r = await fetchTradeboardPostRequestForm(
+        editReqId ? { editReqId } : undefined,
+      );
+      if (crewHubNativeFetchNeedsVerificationSheet(r)) {
+        setPostFormParse(null);
+        setPostFormError("Refresh FLICA first — session needs verification in WebView.");
+        return;
+      }
+      if (!r.postRequestFormParse?.ok) {
+        setPostFormParse(r.postRequestFormParse ?? null);
+        setPostFormError(
+          r.error ??
+            "Could not load Post Request form. Pull to refresh FLICA, then try again.",
+        );
+        return;
+      }
+      setPostFormParse(r.postRequestFormParse);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setPostFormParse(null);
+      setPostFormError(msg);
+    } finally {
+      setPostFormLoading(false);
+    }
+  }, []);
+
+  const openNativePostComposer = useCallback(
+    async (opts?: {
+      seedActivity?: TradeboardPostRequestActivity | null;
+      editReqId?: string;
+      editTreq?: string;
+    }) => {
+      setPostSeedActivity(opts?.seedActivity ?? null);
+      setPostEditReqId(opts?.editReqId);
+      setPostEditTreq(opts?.editTreq);
+      setPostComposerVisible(true);
+      await loadPostRequestForm(opts?.editReqId);
+    },
+    [loadPostRequestForm],
+  );
+
+  const onPostComposerSubmitted = useCallback(() => {
+    void load("pull");
+  }, [load]);
+
+  const editMyRequest = useCallback(
+    async (post: TradeboardPost) => {
+      try {
+        const { actions } = await fetchTradeboardMyRequestsActions();
+        const row =
+          actions.rows.find(
+            (r) =>
+              r.pairingId === post.pairingId &&
+              (!post.pairingDateLabel ||
+                r.dateLabel.toUpperCase() === post.pairingDateLabel.toUpperCase()),
+          ) ?? actions.rows.find((r) => r.pairingId === post.pairingId);
+        if (!row?.reqId) {
+          Alert.alert(
+            "Edit request",
+            "Could not find FLICA request id. Pull to refresh My Requests, then try again.",
+          );
+          return;
+        }
+        await openNativePostComposer({
+          editReqId: row.reqId,
+          editTreq: row.treq || undefined,
+        });
+      } catch (e) {
+        Alert.alert("Edit request", e instanceof Error ? e.message : String(e));
+      }
+    },
+    [openNativePostComposer],
+  );
+
+  const deleteMyRequest = useCallback(
+    (post: TradeboardPost) => {
+      Alert.alert(
+        "Delete / hide request",
+        `Remove your ${post.pairingId} request from Tradeboard?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: () => {
+              void (async () => {
+                try {
+                  const { actions } = await fetchTradeboardMyRequestsActions();
+                  const row =
+                    actions.rows.find((r) => r.pairingId === post.pairingId) ??
+                    actions.rows[0];
+                  if (!row?.reqId) {
+                    Alert.alert(
+                      "Delete failed",
+                      "Could not find FLICA request id. Refresh FLICA first.",
+                    );
+                    return;
+                  }
+                  const formR = await fetchTradeboardPostRequestForm({
+                    editReqId: row.reqId,
+                  });
+                  const form = formR.postRequestFormParse;
+                  if (!form?.ok) {
+                    Alert.alert(
+                      "Refresh FLICA first",
+                      "Could not load delete form. Pull to refresh FLICA session.",
+                    );
+                    return;
+                  }
+                  const payload = buildTradeboardDeleteRequestPayload(
+                    form,
+                    row.reqId,
+                    row.treq,
+                  );
+                  dryRunTradeboardDeleteRequest(payload);
+                  const result = await submitTradeboardDeleteRequest(payload);
+                  if (result.ok) {
+                    setToast("Request removed");
+                    void load("pull");
+                  } else {
+                    Alert.alert("Delete failed", result.message);
+                  }
+                } catch (e) {
+                  Alert.alert("Delete failed", e instanceof Error ? e.message : String(e));
+                }
+              })();
+            },
+          },
+        ],
+      );
+    },
+    [load],
+  );
+
   const openTradeboardMarketplace = useCallback(
     async (p: TradeboardPost) => {
       const url = resolveCrewHubTradeboardPairingDetailUrl(p, year)?.trim();
@@ -1190,6 +1351,8 @@ export default function TradeboardTabScreen() {
         onComplete={settlePullSessionSuccess}
         onError={settlePullSessionFailure}
       />
+      <FlicaTradeBoardPostRequestWebViewActionRunner />
+      <FlicaTradeBoardActivitySelectorWebViewCaptureRunner />
       <CrewHubRefreshToast
         message={toast ?? ""}
         visible={toast != null && toast.length > 0}
@@ -1228,7 +1391,7 @@ export default function TradeboardTabScreen() {
             })}
             <Pressable
               style={styles.tbSeg}
-              onPress={() => runTradeboardMutatingWeb(FLICA_NATIVE_URLS.tradePostRequest)}
+              onPress={() => void openNativePostComposer()}
             >
               <Ionicons name="add-circle-outline" size={14} color="#64748b" />
               <Text style={styles.tbSegTxt} numberOfLines={2}>
@@ -1263,7 +1426,7 @@ export default function TradeboardTabScreen() {
                 }
                 onPress={() => {
                   if (k === "post_trade") {
-                    runTradeboardMutatingWeb(FLICA_NATIVE_URLS.tradePostRequest);
+                    void openNativePostComposer();
                     return;
                   }
                   setPrimaryTab(k);
@@ -1345,6 +1508,20 @@ export default function TradeboardTabScreen() {
                   <Text style={styles.offersBoxText}>{activePost.offerCount} Offers</Text>
                 </View>
               ) : null}
+            </View>
+            <View style={styles.activeActionsRow}>
+              <Pressable
+                style={styles.activeActionBtn}
+                onPress={() => void editMyRequest(activePost)}
+              >
+                <Text style={styles.activeActionTxt}>Edit</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.activeActionBtn, styles.activeActionBtnDanger]}
+                onPress={() => deleteMyRequest(activePost)}
+              >
+                <Text style={[styles.activeActionTxt, styles.activeActionTxtDanger]}>Delete</Text>
+              </Pressable>
             </View>
           </View>
         ) : null}
@@ -1469,6 +1646,25 @@ export default function TradeboardTabScreen() {
         visible={marketplaceDetail != null}
         detail={marketplaceDetail}
         onClose={() => setMarketplaceDetail(null)}
+      />
+
+      <TradeBoardPostRequestComposerSheet
+        visible={postComposerVisible}
+        onClose={() => {
+          setPostComposerVisible(false);
+          setPostFormParse(null);
+          setPostFormError(null);
+        }}
+        onSubmitted={onPostComposerSubmitted}
+        formParse={postFormParse}
+        formLoading={postFormLoading}
+        formError={postFormError}
+        profileBase={profileBase}
+        profileRole={profileRole}
+        monthTrips={monthTrips}
+        seedActivity={postSeedActivity}
+        editReqId={postEditReqId}
+        editTreq={postEditTreq}
       />
     </View>
   );
@@ -1987,6 +2183,17 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   offersBoxText: { color: "#fff", fontSize: 10, fontWeight: "700" },
+  activeActionsRow: { flexDirection: "row", gap: 8, marginTop: 10 },
+  activeActionBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+  },
+  activeActionBtnDanger: { backgroundColor: "rgba(0,0,0,0.2)" },
+  activeActionTxt: { color: "#fff", fontSize: 11, fontWeight: "800" },
+  activeActionTxtDanger: { color: "#fecaca" },
   bestSection: { marginHorizontal: 10, marginTop: 12 },
   bestHeadingRow: {
     flexDirection: "row",

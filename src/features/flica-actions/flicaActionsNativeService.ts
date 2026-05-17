@@ -28,6 +28,17 @@ import {
   tradeBoardPairingMatchCount,
 } from "./flicaTradeBoardAllRequestsForm";
 import type { TradeBoardAllRequestsResetOptions } from "./flicaTradeBoardAllRequestsForm";
+import {
+  parseTradeboardPostRequestFormFromHtml,
+  parseTradeboardMyRequestsActionsFromHtml,
+} from "./flicaTradeBoardPostRequestForm";
+import type { TradeboardPostRequestFormParse } from "./flicaTradeBoardPostRequestTypes";
+import type { TbPostRequestCapturedFormWire } from "./flicaTradeBoardPostRequestCapturedForm";
+import {
+  requestTbPostWebViewCapture,
+  tradeboardPostRequestHtmlHasFormMarkers,
+} from "./flicaTradeBoardPostRequestWebViewCaptureBridge";
+import { getFlicaActionsWebViewSession } from "./flicaActionsWebViewSession";
 
 export type TradeBoardAllRequestsFetchOptions = TradeBoardAllRequestsResetOptions;
 
@@ -475,54 +486,244 @@ export async function nativeFetchTradeBoardMyResponses(): Promise<FlicaActionsFe
   );
 }
 
+export type TradeboardPostRequestFormFetchResult = FlicaActionsFetchResult & {
+  postRequestFormParse?: TradeboardPostRequestFormParse;
+};
+
+function nativePostRequestHtmlUsable(html: string): boolean {
+  return tradeboardPostRequestHtmlHasFormMarkers(html);
+}
+
 /**
- * TradeBoard Post Request: native GET returns empty HTML; use authenticated FLICA WebView.
- * GET attempts are intentionally not performed here.
+ * GET tb_postrequest.cgi using WebView session cookies (frame warmup + tab referer).
+ * Falls back to hidden WebView DOM capture when native body is empty or lacks form markers.
  */
-export async function nativeFetchTradeBoardPostRequest(): Promise<FlicaActionsFetchResult> {
+export async function fetchTradeboardPostRequestForm(
+  opts?: { editReqId?: string },
+): Promise<TradeboardPostRequestFormFetchResult> {
+  const frameUrl = FLICA_NATIVE_URLS.tradeFrame;
   const requestedUrl = String(FLICA_NATIVE_URLS.tradePostRequest ?? "");
-  const referer = String(TRADEBOARD_TAB_REFERER ?? "");
-  const explanation =
-    "Post Request loads correctly in the authenticated FLICA WebView, but native GET returns empty HTML. Use WebView bridge for this page.";
+  const fallbackUrl = String(FLICA_NATIVE_URLS.tradePostRequestFallbackGet ?? "");
+  const editReqId = String(opts?.editReqId ?? "").trim();
+  const primaryUrl = editReqId
+    ? `${requestedUrl}${requestedUrl.includes("?") ? "&" : "?"}reqId=${encodeURIComponent(editReqId)}`
+    : requestedUrl;
 
-  logNative({
-    label: "trade_post_request",
-    outcome: "webview_required",
-    requestedUrl,
-    referer,
-  });
+  let htmlSource: "native" | "native_fallback_get" | "webview" = "native";
+  let tabHtml = "";
+  let tabFinal = primaryUrl;
+  let tabStatus = 200;
+  let webviewCapturedForm: TbPostRequestCapturedFormWire | null = null;
 
-  const nativeParse: FlicaNativePageModel = {
-    pageTitle: null,
-    pageType: "tradeboard_post_request",
-    rows: [],
-    buttons: [],
-    forms: [],
-    hiddenFields: [],
-    actionEndpoints: [],
-    warningsErrors: [],
-  };
+  try {
+    const frame = await fetchFlicaHtmlUsingWebViewSession(frameUrl, {
+      referer: WEBVIEW_TRUSTED_REFERER,
+    });
+    const frameSt = detectFlicaHtmlState(String(frame.html ?? ""));
+    if (frame.status !== 200 || frameSt !== "ok") {
+      const r = toResult(primaryUrl, frame.status, String(frame.html ?? ""), frameUrl, {
+        error: `TradeBoard frame failed: ${frameSt}`,
+        okOverride: false,
+      });
+      fcDevMirrorScheduleLogToFile("FC_TB_POST_FORM_NATIVE_FETCH", {
+        ok: false,
+        step: "frame",
+        htmlState: frameSt,
+        status: frame.status,
+      });
+      return { ...r, postRequestFormParse: undefined };
+    }
 
-  return {
-    ok: true,
-    requestedUrl,
-    url: requestedUrl,
-    htmlLength: 0,
-    htmlState: "ok",
-    title: null,
-    rowCount: 0,
-    detectedLinks: [],
-    bodyPreview:
-      `${explanation}\n\nrequestedUrl: ${requestedUrl}\nreferer: ${referer}\npageType: tradeboard_post_request`,
-    nativeParse,
-    tradeBoardPostWebviewRequired: true,
-    tradeBoardPostRequestMeta: {
-      pageType: "tradeboard_post_request",
-      requestedUrl,
-      referer,
-      explanation,
-    },
-  };
+    let tab = await fetchFlicaHtmlUsingWebViewSession(primaryUrl, {
+      referer: TRADEBOARD_TAB_REFERER,
+    });
+    tabHtml = String(tab.html ?? "");
+    tabFinal = String(tab.url ?? primaryUrl);
+    tabStatus = tab.status;
+
+    fcDevMirrorScheduleLogToFile("FC_TB_POST_FORM_NATIVE_FETCH", {
+      ok: tab.status === 200,
+      requestedUrl: primaryUrl,
+      status: tab.status,
+      htmlLength: tabHtml.length,
+      hasFormMarkers: nativePostRequestHtmlUsable(tabHtml),
+      finalUrl: tabFinal,
+    });
+
+    if (!nativePostRequestHtmlUsable(tabHtml)) {
+      const fb = await fetchFlicaHtmlUsingWebViewSession(fallbackUrl, {
+        referer: TRADEBOARD_TAB_REFERER,
+      });
+      const fbHtml = String(fb.html ?? "");
+      fcDevMirrorScheduleLogToFile("FC_TB_POST_FORM_NATIVE_FETCH", {
+        ok: fb.status === 200,
+        step: "fallback_get",
+        requestedUrl: fallbackUrl,
+        status: fb.status,
+        htmlLength: fbHtml.length,
+        hasFormMarkers: nativePostRequestHtmlUsable(fbHtml),
+      });
+      if (nativePostRequestHtmlUsable(fbHtml) || fbHtml.length > tabHtml.length) {
+        tab = fb;
+        tabHtml = fbHtml;
+        tabFinal = String(fb.url ?? fallbackUrl);
+        tabStatus = fb.status;
+        htmlSource = "native_fallback_get";
+      }
+    }
+
+    if (!nativePostRequestHtmlUsable(tabHtml)) {
+      const wvSession = await getFlicaActionsWebViewSession();
+      if (!wvSession) {
+        const err =
+          "Refresh FLICA first — pull to refresh Tradeboard to establish session, then try Post a Request again.";
+        fcDevMirrorScheduleLogToFile("FC_TB_POST_FORM_WEBVIEW_FALLBACK_START", {
+          primaryUrl,
+          skipped: true,
+          reason: "no_webview_session",
+        });
+        const r = toResult(primaryUrl, tabStatus, tabHtml, tabFinal, {
+          error:
+            tabHtml.length === 0
+              ? `Empty FLICA response (no HTML body). ${err}`
+              : err,
+          okOverride: false,
+        });
+        return { ...r, postRequestFormParse: undefined };
+      }
+
+      fcDevMirrorScheduleLogToFile("FC_TB_POST_FORM_WEBVIEW_FALLBACK_START", {
+        primaryUrl,
+        frameWarmupUrl: frameUrl,
+        nativeHtmlLength: tabHtml.length,
+        nativeStatus: tabStatus,
+        sessionReadyAt: wvSession.readyAt,
+      });
+
+      try {
+        await new Promise<void>((r) => setTimeout(r, 120));
+        const cap = await requestTbPostWebViewCapture({
+          frameWarmupUrl: frameUrl,
+          targetUrl: primaryUrl,
+        });
+        tabHtml = cap.html;
+        tabFinal = cap.finalUrl;
+        webviewCapturedForm = cap.capturedForm ?? null;
+        htmlSource = "webview";
+      } catch (wvErr) {
+        const wvMsg = wvErr instanceof Error ? wvErr.message : String(wvErr);
+        fcDevMirrorScheduleLogToFile("FC_TB_POST_FORM_PARSE_RESULT", {
+          ok: false,
+          htmlSource: "none",
+          htmlLength: tabHtml.length,
+          error: wvMsg,
+        });
+        const r = toResult(primaryUrl, tabStatus, tabHtml, tabFinal, {
+          error:
+            tabHtml.length === 0
+              ? "Empty FLICA response (no HTML body). Native fetch and WebView capture both failed. Refresh FLICA first."
+              : `Post Request form unavailable: ${wvMsg}`,
+          okOverride: false,
+        });
+        return { ...r, postRequestFormParse: undefined };
+      }
+    }
+
+    const formParse = parseTradeboardPostRequestFormFromHtml(tabHtml, {
+      requestedUrl: primaryUrl,
+      finalUrl: tabFinal,
+      webviewCapturedForm: htmlSource === "webview" ? webviewCapturedForm : undefined,
+      htmlSource,
+    });
+
+    fcDevMirrorScheduleLogToFile("FC_TB_POST_FORM_PARSE_RESULT", {
+      ok: formParse.ok,
+      htmlSource,
+      htmlLength: tabHtml.length,
+      htmlState: formParse.htmlState,
+      formsCount: formParse.forms.length,
+      hasPrimaryForm: Boolean(formParse.primaryForm),
+      missingMappings: formParse.missingMappings,
+      warnings: formParse.warnings,
+    });
+
+    if (__DEV__) {
+      console.log(
+        "[FC_TB_POST_FORM_PARSE_RESULT]",
+        JSON.stringify({
+          ok: formParse.ok,
+          htmlSource,
+          htmlLength: tabHtml.length,
+        }),
+      );
+    }
+
+    const parseOk = formParse.ok;
+    const errMsg = !parseOk
+      ? tabHtml.length === 0
+        ? "Empty FLICA response (no HTML body). Native fetch and WebView capture both failed. Refresh FLICA first."
+        : "Post Request form could not be parsed from FLICA HTML. Refresh FLICA first."
+      : undefined;
+
+    const r = toResult(primaryUrl, tabStatus, tabHtml, tabFinal, {
+      okOverride: parseOk,
+      error: errMsg,
+    });
+
+    logNative({
+      label: "trade_post_request",
+      ok: parseOk,
+      htmlLength: tabHtml.length,
+      htmlSource,
+      missingMappings: formParse.missingMappings,
+    });
+
+    return {
+      ...r,
+      ok: parseOk,
+      pageHtml: tabHtml,
+      tradeBoardPostWebviewRequired: !parseOk,
+      tradeBoardPostRequestMeta: !parseOk
+        ? {
+            pageType: "tradeboard_post_request",
+            requestedUrl: primaryUrl,
+            referer: TRADEBOARD_TAB_REFERER,
+            explanation: errMsg ?? "Post form unavailable.",
+          }
+        : undefined,
+      postRequestFormParse: formParse,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    fcDevMirrorScheduleLogToFile("FC_TB_POST_FORM_PARSE_RESULT", {
+      ok: false,
+      htmlSource,
+      error: msg,
+    });
+    logNative({ label: "trade_post_request", ok: false, error: msg });
+    return {
+      ok: false,
+      requestedUrl: primaryUrl,
+      url: primaryUrl,
+      error: msg,
+      htmlLength: 0,
+      postRequestFormParse: undefined,
+    };
+  }
+}
+
+/** Dev/diagnostic wrapper — same as {@link fetchTradeboardPostRequestForm}. */
+export async function nativeFetchTradeBoardPostRequest(): Promise<TradeboardPostRequestFormFetchResult> {
+  return fetchTradeboardPostRequestForm();
+}
+
+export async function fetchTradeboardMyRequestsActions(): Promise<{
+  fetch: FlicaActionsFetchResult;
+  actions: ReturnType<typeof parseTradeboardMyRequestsActionsFromHtml>;
+}> {
+  const fetch = await nativeFetchTradeBoardMyRequests();
+  const actions = parseTradeboardMyRequestsActionsFromHtml(String(fetch.pageHtml ?? ""));
+  return { fetch, actions };
 }
 
 type OtGate =

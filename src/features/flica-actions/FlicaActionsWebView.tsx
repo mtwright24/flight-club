@@ -44,6 +44,11 @@ import {
   formatReplayDryRunText,
   type FlicaActionRecorderEvent,
 } from "./flicaActionRecorderFormat";
+import {
+  buildInjectTbActivityRecorderAssistNextScript,
+  evaluateFramesForPostForm,
+  frameUrlsStillOnOtTrade,
+} from "./flicaTradeBoardPostRequestActivityFlow";
 import { extractPairingLinksFromFrames } from "./flicaActionRecorderExtract";
 import {
   buildReplayDryRunPayload,
@@ -244,10 +249,23 @@ export type CapturedFlicaActionEvent = {
   frameUrlsAfter500ms: string[] | null;
   frameUrlsAfter1500ms: string[] | null;
   frameUrlsAfter3000ms: string[] | null;
+  frameUrlsAfter6000ms: string[] | null;
   formsAfter3000ms: string;
   buttonsAfter3000ms: string;
   linksAfter3000ms: string;
   previewsAfter3000ms: string;
+  formsAfter6000ms: string;
+  buttonsAfter6000ms: string;
+  linksAfter6000ms: string;
+  previewsAfter6000ms: string;
+  /** Set when ottrade Next >> did not return to populated Post Request form. */
+  activityNextNote: string;
+  /** FLICA “popup blocked” alert text on activity selector. */
+  activityPopupBlockNote: string;
+  /** TradeTask / goNext / Cancel / popup / window.open sources when blocked or on ottrade nav. */
+  flicaHandlerSources: string;
+  /** Known frame names seen (TB_body, tbAction, pairWin, …). */
+  popupFrameNames: string;
 };
 
 function aggregateFormsLines(frames: CapturedFrame[], maxFormsPerFrame = 10): string {
@@ -471,6 +489,73 @@ function buildActionLabel(kind: FlicaClickActionKind, clickedText: string): stri
   return c ? `${kind}: ${c}` : kind;
 }
 
+type FlicaHandlerSourcesWire = {
+  tradeTask?: string;
+  goNext?: string;
+  cancelFn?: string;
+  popupFn?: string;
+  windowOpenFn?: string;
+  frameNames?: string[];
+  frameUrls?: Array<{ name?: string; href?: string }>;
+};
+
+function formatFlicaHandlerSources(sources: FlicaHandlerSourcesWire | null | undefined): string {
+  if (!sources) return "";
+  const lines: string[] = [];
+  if (sources.tradeTask) lines.push(`TradeTask:\n${sources.tradeTask}`);
+  if (sources.goNext) lines.push(`goNext:\n${sources.goNext}`);
+  if (sources.cancelFn) lines.push(`Cancel:\n${sources.cancelFn}`);
+  if (sources.popupFn) lines.push(`popup():\n${sources.popupFn}`);
+  if (sources.windowOpenFn) lines.push(`window.open:\n${sources.windowOpenFn}`);
+  return lines.join("\n---\n").slice(0, 14_000);
+}
+
+function frameNamesFromHandlerSources(sources: FlicaHandlerSourcesWire | null | undefined): string {
+  const names = Array.isArray(sources?.frameNames) ? sources!.frameNames!.map(String) : [];
+  return names.filter(Boolean).join(", ");
+}
+
+function isTbOtTradeNextClick(input: {
+  clickedText: string;
+  frameUrlBefore: string;
+  topUrlBefore: string;
+}): boolean {
+  const tx = String(input.clickedText ?? "").toLowerCase();
+  if (!tx.includes("next")) return false;
+  const urls = `${input.frameUrlBefore} ${input.topUrlBefore}`.toLowerCase();
+  return urls.includes("ottrade.cgi");
+}
+
+function isTbOtTradeCancelClick(input: {
+  clickedText: string;
+  frameUrlBefore: string;
+  topUrlBefore: string;
+}): boolean {
+  const tx = String(input.clickedText ?? "").toLowerCase();
+  if (!tx.includes("cancel")) return false;
+  const urls = `${input.frameUrlBefore} ${input.topUrlBefore}`.toLowerCase();
+  return urls.includes("ottrade.cgi");
+}
+
+const EMPTY_AFTER_CAPTURE_FIELDS = {
+  frameUrlsAfter500ms: null as string[] | null,
+  frameUrlsAfter1500ms: null as string[] | null,
+  frameUrlsAfter3000ms: null as string[] | null,
+  frameUrlsAfter6000ms: null as string[] | null,
+  formsAfter3000ms: "",
+  buttonsAfter3000ms: "",
+  linksAfter3000ms: "",
+  previewsAfter3000ms: "",
+  formsAfter6000ms: "",
+  buttonsAfter6000ms: "",
+  linksAfter6000ms: "",
+  previewsAfter6000ms: "",
+  activityNextNote: "",
+  activityPopupBlockNote: "",
+  flicaHandlerSources: "",
+  popupFrameNames: "",
+} as const;
+
 function formatCapturedActionEventSummary(e: CapturedFlicaActionEvent): string {
   const r = redactForExport(e);
   const lines: string[] = [];
@@ -486,6 +571,11 @@ function formatCapturedActionEventSummary(e: CapturedFlicaActionEvent): string {
   lines.push(`After URLs (500ms): ${(r.frameUrlsAfter500ms ?? []).join(" | ") || "(none)"}`);
   lines.push(`After URLs (1500ms): ${(r.frameUrlsAfter1500ms ?? []).join(" | ") || "(none)"}`);
   lines.push(`After URLs (3000ms): ${(r.frameUrlsAfter3000ms ?? []).join(" | ") || "(none)"}`);
+  lines.push(`After URLs (6000ms): ${(r.frameUrlsAfter6000ms ?? []).join(" | ") || "(none)"}`);
+  if (r.activityNextNote) lines.push(`Activity Next: ${r.activityNextNote}`);
+  if (r.activityPopupBlockNote) lines.push(`Popup blocked: ${r.activityPopupBlockNote}`);
+  if (r.popupFrameNames) lines.push(`Popup frames: ${r.popupFrameNames}`);
+  if (r.flicaHandlerSources) lines.push(`FLICA handlers:\n${r.flicaHandlerSources}`);
   lines.push(`Generated forms (3s):\n${r.formsAfter3000ms || "(none)"}`);
   lines.push(`Generated buttons (3s):\n${r.buttonsAfter3000ms || "(none)"}`);
   lines.push(`Generated links (3s):\n${r.linksAfter3000ms || "(none)"}`);
@@ -1065,7 +1155,7 @@ const INJECT_LINK_CAPTURE_BRIDGE = `
           eventId: eventId,
           frameUrls: urls
         };
-        if (phase === 'after3000') {
+        if (isOtTradeNext || isOtTradeCancel) {
           var af = [];
           try {
             walkFrames(topWin, 0, af, { name: '(top)', index: -1, src: '' });
@@ -1073,15 +1163,59 @@ const INJECT_LINK_CAPTURE_BRIDGE = `
             af = [];
           }
           payload.afterFrames = truncateFramesLite(af);
+        } else if (phase === 'after3000' || phase === 'after6000') {
+          var af2 = [];
+          try {
+            walkFrames(topWin, 0, af2, { name: '(top)', index: -1, src: '' });
+          } catch (eG2) {
+            af2 = [];
+          }
+          payload.afterFrames = truncateFramesLite(af2);
         }
         try {
           window.ReactNativeWebView.postMessage(JSON.stringify(payload));
         } catch (eH) {}
       }, ms);
     }
+    var txLow = txt.toLowerCase();
+    var fhLow = (fh || '').toLowerCase();
+    var topLow = topHref().toLowerCase();
+    var isOtTradeNext =
+      txLow.indexOf('next') >= 0 &&
+      (fhLow.indexOf('ottrade.cgi') >= 0 || topLow.indexOf('ottrade.cgi') >= 0);
+    var isOtTradeCancel =
+      txLow.indexOf('cancel') >= 0 &&
+      (fhLow.indexOf('ottrade.cgi') >= 0 || topLow.indexOf('ottrade.cgi') >= 0);
+    function postOtTradeHandlerSnapshot(reason) {
+      try {
+        var collectFn = window.__flicaCollectHandlerSources;
+        if (typeof collectFn !== 'function') return;
+        var sources = collectFn();
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'flica_activity_handler_snapshot',
+          eventId: eventId,
+          reason: reason,
+          sources: sources,
+          frameUrlsBefore: (sources.frameUrls || []).map(function(f) { return f.href; })
+        }));
+      } catch (eSnap) {}
+    }
+    if (isOtTradeNext) {
+      postOtTradeHandlerSnapshot('next_click');
+      try {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'flica_actions_tb_assist_next',
+          eventId: eventId
+        }));
+      } catch (eAssist) {}
+    }
+    if (isOtTradeCancel) {
+      postOtTradeHandlerSnapshot('cancel_click');
+    }
     postPhase('after500', 500);
     postPhase('after1500', 1500);
     postPhase('after3000', 3000);
+    postPhase('after6000', 6000);
   }
 
   var DOC_FLAG = '__flicaCaptureDocListeners';
@@ -1668,10 +1802,46 @@ export default function FlicaActionsWebView({
     });
   }, []);
 
+  const patchEventWithHandlerDiagnostics = useCallback(
+    (
+      eventId: string,
+      patch: Partial<
+        Pick<
+          CapturedFlicaActionEvent,
+          | "activityPopupBlockNote"
+          | "flicaHandlerSources"
+          | "popupFrameNames"
+          | "frameUrlsAfter500ms"
+          | "frameUrlsAfter1500ms"
+          | "frameUrlsAfter3000ms"
+          | "frameUrlsAfter6000ms"
+          | "activityNextNote"
+        >
+      >,
+    ) => {
+      if (!eventId) return;
+      setCapturedActionEvents((prev) =>
+        prev.map((e) => {
+          if (e.eventId !== eventId) return e;
+          const merged: FlicaActionRecorderEvent = { ...e, ...patch };
+          if (patch.flicaHandlerSources && e.flicaHandlerSources) {
+            merged.flicaHandlerSources = `${e.flicaHandlerSources}\n---\n${patch.flicaHandlerSources}`.slice(
+              0,
+              14_000,
+            );
+          }
+          return merged;
+        }),
+      );
+    },
+    [],
+  );
+
   const handleFlicaWindowOpen = useCallback(
     (data: Record<string, unknown>) => {
       const absoluteUrl = String(data.absoluteUrl ?? "").trim();
       if (!absoluteUrl) return;
+      const navigatedInPlace = Boolean(data.navigatedInPlace);
       setCapturedPopupUrl(absoluteUrl);
       patchLatestEventWithPopup(absoluteUrl);
       const safety = classifyPopupNavigationSafety(absoluteUrl);
@@ -1679,9 +1849,16 @@ export default function FlicaActionsWebView({
         absoluteUrl,
         rawUrl: data.rawUrl,
         target: data.target,
+        strategy: data.strategy,
+        navigatedInPlace,
         safety,
         sourcePageUrl: data.sourcePageUrl,
+        frameUrlsBefore: data.frameUrlsBefore,
       });
+      if (navigatedInPlace) {
+        setLastActionLabel(`popup navigated in-place: ${absoluteUrl.split("/").pop() ?? "page"}`);
+        return;
+      }
       if (safety === "SAFE_READ" && isFlicaJetblueUrl(absoluteUrl)) {
         navigateWebViewTo(absoluteUrl);
         setLastActionLabel(`popup loaded: ${absoluteUrl.split("/").pop() ?? "page"}`);
@@ -1899,6 +2076,87 @@ export default function FlicaActionsWebView({
           return;
         }
 
+        if (data.type === "flica_window_open_after" && captureMode) {
+          const frameUrlsAfter = Array.isArray(data.frameUrlsAfter)
+            ? data.frameUrlsAfter.map(String)
+            : [];
+          fcDevMirrorScheduleLogToFile("FC_FLICA_WINDOW_OPEN_AFTER", {
+            absoluteUrl: data.absoluteUrl,
+            target: data.target,
+            strategy: data.strategy,
+            frameUrlsAfter,
+          });
+          setCapturedActionEvents((prev) => {
+            if (!prev.length) return prev;
+            const last = prev[prev.length - 1]!;
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...last,
+                frameUrlsAfter1500ms: frameUrlsAfter.length ? frameUrlsAfter : last.frameUrlsAfter1500ms,
+              },
+            ];
+          });
+          return;
+        }
+
+        if (data.type === "flica_popup_blocked" && captureMode) {
+          const sources = data.sources as FlicaHandlerSourcesWire | undefined;
+          const eventId = String(data.eventId ?? "");
+          const frameUrls = Array.isArray(data.frameUrlsBefore)
+            ? data.frameUrlsBefore.map(String)
+            : (sources?.frameUrls ?? []).map((f) => String(f.href ?? ""));
+          const diagPatch = {
+            activityPopupBlockNote: String(data.message ?? "FLICA popup blocked"),
+            flicaHandlerSources: formatFlicaHandlerSources(sources),
+            popupFrameNames: frameNamesFromHandlerSources(sources),
+            frameUrlsAfter500ms: frameUrls.length ? frameUrls : null,
+          };
+          if (eventId) {
+            patchEventWithHandlerDiagnostics(eventId, diagPatch);
+          } else {
+            setCapturedActionEvents((prev) => {
+              if (!prev.length) return prev;
+              const last = prev[prev.length - 1]!;
+              return [...prev.slice(0, -1), { ...last, ...diagPatch }];
+            });
+          }
+          setLastActionLabel("FLICA popup blocked — handler sources captured");
+          fcDevMirrorScheduleLogToFile("FC_FLICA_POPUP_BLOCKED", {
+            message: data.message,
+            frameNames: sources?.frameNames,
+            frameUrlsBefore: frameUrls,
+            tradeTaskLen: sources?.tradeTask?.length ?? 0,
+            goNextLen: sources?.goNext?.length ?? 0,
+          });
+          return;
+        }
+
+        if (data.type === "flica_activity_handler_snapshot" && captureMode) {
+          const sources = data.sources as FlicaHandlerSourcesWire | undefined;
+          const eventId = String(data.eventId ?? "");
+          const frameUrls = Array.isArray(data.frameUrlsBefore)
+            ? data.frameUrlsBefore.map(String)
+            : (sources?.frameUrls ?? []).map((f) => String(f.href ?? ""));
+          const reason = String(data.reason ?? "");
+          patchEventWithHandlerDiagnostics(eventId, {
+            flicaHandlerSources: `[${reason}]\n${formatFlicaHandlerSources(sources)}`,
+            popupFrameNames: frameNamesFromHandlerSources(sources),
+            frameUrlsAfter500ms: frameUrls.length ? frameUrls : null,
+          });
+          fcDevMirrorScheduleLogToFile("FC_FLICA_ACTIVITY_HANDLER_SNAPSHOT", {
+            eventId,
+            reason,
+            frameNames: sources?.frameNames,
+            frameUrlsBefore: frameUrls,
+            tradeTaskLen: sources?.tradeTask?.length ?? 0,
+            goNextLen: sources?.goNext?.length ?? 0,
+            cancelLen: sources?.cancelFn?.length ?? 0,
+            popupLen: sources?.popupFn?.length ?? 0,
+          });
+          return;
+        }
+
         if (data.type === "flica_actions_change" && captureMode) {
           const beforeFrames = Array.isArray(data.beforeFrames)
             ? (data.beforeFrames as CapturedFrame[])
@@ -1963,13 +2221,7 @@ export default function FlicaActionsWebView({
             formsBefore: aggregateFormsLines(beforeFrames),
             buttonsBefore: aggregateButtonsLines(beforeFrames),
             linksBefore: aggregateLinksLines(beforeFrames),
-            frameUrlsAfter500ms: null,
-            frameUrlsAfter1500ms: null,
-            frameUrlsAfter3000ms: null,
-            formsAfter3000ms: "",
-            buttonsAfter3000ms: "",
-            linksAfter3000ms: "",
-            previewsAfter3000ms: "",
+            ...EMPTY_AFTER_CAPTURE_FIELDS,
             ...extra,
           };
           setCapturedActionEvents((p) => [...p, ev]);
@@ -2027,17 +2279,18 @@ export default function FlicaActionsWebView({
             formsBefore: "",
             buttonsBefore: "",
             linksBefore: "",
-            frameUrlsAfter500ms: null,
-            frameUrlsAfter1500ms: null,
-            frameUrlsAfter3000ms: null,
-            formsAfter3000ms: "",
-            buttonsAfter3000ms: "",
-            linksAfter3000ms: "",
-            previewsAfter3000ms: "",
+            ...EMPTY_AFTER_CAPTURE_FIELDS,
             ...extra,
           };
           setCapturedActionEvents((p) => [...p, ev]);
           setLastActionLabel(ev.actionLabel);
+          return;
+        }
+
+        if (data.type === "flica_actions_tb_assist_next" && captureMode) {
+          setTimeout(() => {
+            webViewRef.current?.injectJavaScript(buildInjectTbActivityRecorderAssistNextScript());
+          }, 60);
           return;
         }
 
@@ -2109,18 +2362,23 @@ export default function FlicaActionsWebView({
               formsBefore: aggregateFormsLines(beforeFrames),
               buttonsBefore: aggregateButtonsLines(beforeFrames),
               linksBefore: aggregateLinksLines(beforeFrames),
-              frameUrlsAfter500ms: null,
-              frameUrlsAfter1500ms: null,
-              frameUrlsAfter3000ms: null,
-              formsAfter3000ms: "",
-              buttonsAfter3000ms: "",
-              linksAfter3000ms: "",
-              previewsAfter3000ms: "",
+              ...EMPTY_AFTER_CAPTURE_FIELDS,
               ...extra,
             };
             setCapturedActionEvents((p) => [...p, ev]);
             mergePairingCatalog(extra.pairingLinks);
             setLastActionLabel(label);
+            if (
+              isTbOtTradeNextClick({
+                clickedText,
+                frameUrlBefore: ev.frameUrlBefore,
+                topUrlBefore,
+              })
+            ) {
+              setTimeout(() => {
+                webViewRef.current?.injectJavaScript(buildInjectTbActivityRecorderAssistNextScript());
+              }, 80);
+            }
             fcDevMirrorScheduleLogToFile(
               "FC_FLICA_ACTIONS_CLICK_CAPTURE",
               redactForExport({
@@ -2135,7 +2393,12 @@ export default function FlicaActionsWebView({
             );
             return;
           }
-          if (phase === "after500" || phase === "after1500" || phase === "after3000") {
+          if (
+            phase === "after500" ||
+            phase === "after1500" ||
+            phase === "after3000" ||
+            phase === "after6000"
+          ) {
             setCapturedActionEvents((prev) => {
               const urls = Array.isArray(data.frameUrls) ? data.frameUrls.map(String) : [];
               const afterFrames = Array.isArray(data.afterFrames)
@@ -2148,13 +2411,43 @@ export default function FlicaActionsWebView({
                   return { ...e, frameUrlsAfter500ms: urls.length ? urls : null };
                 if (phase === "after1500")
                   return { ...e, frameUrlsAfter1500ms: urls.length ? urls : null };
+                if (phase === "after3000") {
+                  finalized = {
+                    ...e,
+                    frameUrlsAfter3000ms: urls.length ? urls : null,
+                    formsAfter3000ms: aggregateFormsLines(afterFrames),
+                    buttonsAfter3000ms: aggregateButtonsLines(afterFrames),
+                    linksAfter3000ms: aggregateLinksLines(afterFrames),
+                    previewsAfter3000ms: aggregatePreviewsLines(afterFrames),
+                  };
+                  return finalized;
+                }
+                const wasOtTradeNext = isTbOtTradeNextClick({
+                  clickedText: e.clickedText,
+                  frameUrlBefore: e.frameUrlBefore,
+                  topUrlBefore: e.topUrlBefore,
+                });
+                const wasOtTradeCancel = isTbOtTradeCancelClick({
+                  clickedText: e.clickedText,
+                  frameUrlBefore: e.frameUrlBefore,
+                  topUrlBefore: e.topUrlBefore,
+                });
+                const stillOt = frameUrlsStillOnOtTrade(urls);
+                const postOk = evaluateFramesForPostForm(afterFrames);
+                let activityNextNote = e.activityNextNote;
+                if (wasOtTradeNext && (stillOt || !postOk)) {
+                  activityNextNote = "Next did not return to post form.";
+                } else if (wasOtTradeCancel && stillOt) {
+                  activityNextNote = "Cancel did not return to post form.";
+                }
                 finalized = {
                   ...e,
-                  frameUrlsAfter3000ms: urls.length ? urls : null,
-                  formsAfter3000ms: aggregateFormsLines(afterFrames),
-                  buttonsAfter3000ms: aggregateButtonsLines(afterFrames),
-                  linksAfter3000ms: aggregateLinksLines(afterFrames),
-                  previewsAfter3000ms: aggregatePreviewsLines(afterFrames),
+                  frameUrlsAfter6000ms: urls.length ? urls : null,
+                  formsAfter6000ms: aggregateFormsLines(afterFrames),
+                  buttonsAfter6000ms: aggregateButtonsLines(afterFrames),
+                  linksAfter6000ms: aggregateLinksLines(afterFrames),
+                  previewsAfter6000ms: aggregatePreviewsLines(afterFrames),
+                  activityNextNote,
                 };
                 return finalized;
               });
@@ -2166,6 +2459,21 @@ export default function FlicaActionsWebView({
                     redactForExport(snap),
                   ),
                 );
+              }
+              if (phase === "after6000") {
+                const snap =
+                  finalized ?? next.find((row) => row.eventId === eventId) ?? null;
+                if (snap?.activityNextNote) {
+                  const note = snap.activityNextNote;
+                  queueMicrotask(() => {
+                    setLastActionLabel(note);
+                    fcDevMirrorScheduleLogToFile("FC_TB_ACTIVITY_NEXT_FAILED", {
+                      eventId: snap.eventId,
+                      note,
+                      frameUrlsAfter6000ms: snap.frameUrlsAfter6000ms,
+                    });
+                  });
+                }
               }
               return next;
             });
@@ -2281,6 +2589,7 @@ export default function FlicaActionsWebView({
       compactEmbedded,
       mergePairingCatalog,
       handleFlicaWindowOpen,
+      patchEventWithHandlerDiagnostics,
     ],
   );
 
@@ -2583,6 +2892,11 @@ export default function FlicaActionsWebView({
       onLoadStart={onLoadStart}
       onLoadEnd={onLoadEnd}
       onMessage={onMessage}
+      onOpenWindow={(e) => {
+        const targetUrl = String(e.nativeEvent.targetUrl ?? "").trim();
+        fcDevMirrorScheduleLogToFile("FC_FLICA_WEBVIEW_ON_OPEN_WINDOW", { targetUrl });
+        if (targetUrl && isFlicaJetblueUrl(targetUrl)) navigateWebViewTo(targetUrl);
+      }}
       javaScriptEnabled
       domStorageEnabled
       javaScriptCanOpenWindowsAutomatically
