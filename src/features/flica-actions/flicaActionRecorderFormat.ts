@@ -56,6 +56,11 @@ export function formatFlicaActionEventDebugReport(e: FlicaActionRecorderEvent): 
   lines.push(`frameUrlsAfter500ms=${(e.frameUrlsAfter500ms ?? []).join(" | ") || "(none)"}`);
   lines.push(`frameUrlsAfter1500ms=${(e.frameUrlsAfter1500ms ?? []).join(" | ") || "(none)"}`);
   lines.push(`frameUrlsAfter3000ms=${(e.frameUrlsAfter3000ms ?? []).join(" | ") || "(none)"}`);
+  lines.push(`frameUrlsAfter6000ms=${(e.frameUrlsAfter6000ms ?? []).join(" | ") || "(none)"}`);
+  if (e.activityNextNote) lines.push(`activityNextNote=${e.activityNextNote}`);
+  if (e.activityPopupBlockNote) lines.push(`activityPopupBlockNote=${e.activityPopupBlockNote}`);
+  if (e.popupFrameNames) lines.push(`popupFrameNames=${e.popupFrameNames}`);
+  if (e.flicaHandlerSources) lines.push(`flicaHandlerSources=\n${e.flicaHandlerSources}`);
   if (e.selectsSnapshot) {
     lines.push(`selects=\n${e.selectsSnapshot}`);
   }
@@ -79,6 +84,7 @@ export function formatFlicaActionEventDebugReport(e: FlicaActionRecorderEvent): 
   lines.push(`onclick=${e.onclick || "(none)"}`);
   lines.push(`--- formsBefore ---\n${e.formsBefore || "(none)"}`);
   lines.push(`--- previewsAfter3s ---\n${e.previewsAfter3000ms || "(none)"}`);
+  lines.push(`--- previewsAfter6s ---\n${e.previewsAfter6000ms || "(none)"}`);
   return lines.join("\n");
 }
 
