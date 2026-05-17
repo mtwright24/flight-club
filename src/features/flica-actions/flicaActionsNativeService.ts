@@ -28,10 +28,15 @@ import {
   tradeBoardPairingMatchCount,
 } from "./flicaTradeBoardAllRequestsForm";
 import type { TradeBoardAllRequestsResetOptions } from "./flicaTradeBoardAllRequestsForm";
+import { parseTradeboardPostRequestFormFromHtml } from "./flicaTradeBoardPostRequestForm";
 import {
-  parseTradeboardPostRequestFormFromHtml,
+  logEditRequestFetch,
+  parseTradeboardEditRequestFormFromHtml,
+} from "./flicaTradeBoardEditRequestForm";
+import {
   parseTradeboardMyRequestsActionsFromHtml,
-} from "./flicaTradeBoardPostRequestForm";
+  tradeboardEditRequestUrl,
+} from "./flicaTradeBoardMyRequestsActions";
 import type { TradeboardPostRequestFormParse } from "./flicaTradeBoardPostRequestTypes";
 import type { TbPostRequestCapturedFormWire } from "./flicaTradeBoardPostRequestCapturedForm";
 import {
@@ -724,6 +729,100 @@ export async function fetchTradeboardMyRequestsActions(): Promise<{
   const fetch = await nativeFetchTradeBoardMyRequests();
   const actions = parseTradeboardMyRequestsActionsFromHtml(String(fetch.pageHtml ?? ""));
   return { fetch, actions };
+}
+
+/** Targeted My Requests refresh after edit/delete (no full session runner). */
+export async function refreshTradeboardMyRequestsTargeted(): Promise<{
+  fetch: FlicaActionsFetchResult;
+  actions: ReturnType<typeof parseTradeboardMyRequestsActionsFromHtml>;
+}> {
+  const refreshUrl = FLICA_NATIVE_URLS.tradeMyRequests;
+  fcDevMirrorScheduleLogToFile("FC_TB_MY_REQUESTS_TARGETED_REFRESH", {
+    refreshUrl,
+    started: true,
+  });
+  if (__DEV__) {
+    console.log("[FC_TB_MY_REQUESTS_TARGETED_REFRESH]", JSON.stringify({ refreshUrl }));
+  }
+  const fetch = await nativeFetchTradeBoardMyRequests();
+  const actions = parseTradeboardMyRequestsActionsFromHtml(String(fetch.pageHtml ?? ""));
+  fcDevMirrorScheduleLogToFile("FC_TB_MY_REQUESTS_TARGETED_REFRESH", {
+    ok: fetch.ok,
+    rowCount: actions.rows.length,
+    htmlLength: fetch.htmlLength,
+    refreshUrl,
+  });
+  return { fetch, actions };
+}
+
+export type TradeboardEditRequestFormFetchResult = FlicaActionsFetchResult & {
+  postRequestFormParse?: TradeboardPostRequestFormParse;
+};
+
+/** GET TB_EditRequest.cgi for native edit composer. */
+export async function fetchTradeboardEditRequestForm(
+  reqId: string,
+): Promise<TradeboardEditRequestFormFetchResult> {
+  const frameUrl = FLICA_NATIVE_URLS.tradeFrame;
+  const id = String(reqId ?? "").trim();
+  const requestedUrl = tradeboardEditRequestUrl(id);
+
+  try {
+    const frame = await fetchFlicaHtmlUsingWebViewSession(frameUrl, {
+      referer: WEBVIEW_TRUSTED_REFERER,
+    });
+    const frameSt = detectFlicaHtmlState(String(frame.html ?? ""));
+    if (frame.status !== 200 || frameSt !== "ok") {
+      const r = toResult(requestedUrl, frame.status, String(frame.html ?? ""), frameUrl, {
+        error: `TradeBoard frame failed: ${frameSt}`,
+        okOverride: false,
+      });
+      return { ...r, postRequestFormParse: undefined };
+    }
+
+    const tab = await fetchFlicaHtmlUsingWebViewSession(requestedUrl, {
+      referer: TRADEBOARD_TAB_REFERER,
+    });
+    const tabHtml = String(tab.html ?? "");
+    const tabFinal = String(tab.url ?? requestedUrl);
+
+    logEditRequestFetch({
+      ok: tab.status === 200,
+      reqId: id,
+      requestedUrl,
+      status: tab.status,
+      htmlLength: tabHtml.length,
+      finalUrl: tabFinal,
+    });
+
+    const formParse = parseTradeboardEditRequestFormFromHtml(tabHtml, {
+      requestedUrl,
+      finalUrl: tabFinal,
+      reqId: id,
+      htmlSource: "native",
+    });
+
+    const parseOk = formParse.ok;
+    const r = toResult(requestedUrl, tab.status, tabHtml, tabFinal, {
+      okOverride: parseOk,
+      error: parseOk
+        ? undefined
+        : "Edit Request form could not be parsed from FLICA HTML.",
+    });
+
+    return { ...r, postRequestFormParse: formParse };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logEditRequestFetch({ ok: false, reqId: id, error: msg });
+    return {
+      ok: false,
+      requestedUrl,
+      url: requestedUrl,
+      error: msg,
+      htmlLength: 0,
+      postRequestFormParse: undefined,
+    };
+  }
 }
 
 type OtGate =

@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { Swipeable } from "react-native-gesture-handler";
 import { useAuth } from "../../../hooks/useAuth";
+import { fcDevMirrorScheduleLogToFile } from "../../../dev/fcDevFileLogger";
 import { supabase } from "../../../lib/supabaseClient";
 import {
   crewHubNativeFetchNeedsVerificationSheet,
@@ -25,24 +26,27 @@ import {
 import { flicaFetchNeedsWebVerification } from "../../flica-actions/flicaActionsHttp";
 import {
   FLICA_NATIVE_URLS,
-  fetchTradeboardMyRequestsActions,
+  fetchTradeboardEditRequestForm,
   fetchTradeboardPostRequestForm,
   nativeFetchTradeBoardAllRequests,
   nativeFetchTradeBoardFavorites,
   nativeFetchTradeBoardMyRequests,
   nativeFetchTradeBoardMyResponses,
+  refreshTradeboardMyRequestsTargeted,
 } from "../../flica-actions/flicaActionsNativeService";
+import { parseTradeboardMyRequestsActionsFromHtml } from "../../flica-actions/flicaTradeBoardMyRequestsActions";
 import {
-  buildTradeboardDeleteRequestPayload,
-  dryRunTradeboardDeleteRequest,
-  submitTradeboardDeleteRequest,
-} from "../../flica-actions/flicaTradeBoardPostRequestPayload";
+  logDeleteRequestConfirm,
+  submitTradeboardMyRequestDelete,
+} from "../../flica-actions/flicaTradeBoardMyRequestDelete";
 import type {
   TradeboardPostRequestActivity,
   TradeboardPostRequestFormParse,
 } from "../../flica-actions/flicaTradeBoardPostRequestTypes";
 import FlicaMarketplacePairingDetailSheet from "../components/FlicaMarketplacePairingDetailSheet";
+import TradeBoardEditRequestComposerSheet from "../components/TradeBoardEditRequestComposerSheet";
 import TradeBoardPostRequestComposerSheet from "../components/TradeBoardPostRequestComposerSheet";
+import { attachMyRequestActionsToPosts } from "../tradeBoardMyRequestsMerge";
 import { CrewHubSwipeActionRail, type CrewHubSwipeRailAction } from "../components/CrewHubSwipeActionRail";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
 import { hubLayoverDisplayForHubListRow } from "../crewHubLayoverDisplay";
@@ -503,11 +507,17 @@ function TradeboardFeedRowInner({
   router,
   onOpen,
   onTradeboardMutateWeb,
+  showMyRequestActions,
+  onEditMyRequest,
+  onDeleteMyRequest,
 }: {
   p: TradeboardPost;
   router: ReturnType<typeof useRouter>;
   onOpen: (post: TradeboardPost) => void;
   onTradeboardMutateWeb: (uri: string) => void;
+  showMyRequestActions?: boolean;
+  onEditMyRequest?: (post: TradeboardPost) => void;
+  onDeleteMyRequest?: (post: TradeboardPost) => void;
 }) {
   const handlePress = useCallback(() => {
     onOpen(p);
@@ -546,8 +556,9 @@ function TradeboardFeedRowInner({
       rightThreshold={48}
       renderRightActions={(progress) => <CrewHubSwipeActionRail progress={progress} actions={swipeActions} />}
     >
-      <Pressable onPress={handlePress} style={styles.tbRowCard}>
-        <View style={styles.tbRowInner}>
+      <View style={styles.tbRowCard}>
+        <Pressable onPress={handlePress} accessibilityRole="button">
+          <View style={styles.tbRowInner}>
           <View style={[styles.tbRowCell, { width: TB_COL.type }]}>
             <View style={styles.tbTypeCol}>
               <View
@@ -644,7 +655,24 @@ function TradeboardFeedRowInner({
             </View>
           </View>
         </View>
-      </Pressable>
+        </Pressable>
+        {showMyRequestActions && p.myRequest?.reqId ? (
+          <View style={styles.tbMyReqActions}>
+            <Pressable
+              style={styles.tbMyReqActionBtn}
+              onPress={() => onEditMyRequest?.(p)}
+            >
+              <Text style={styles.tbMyReqActionTxt}>Edit</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.tbMyReqActionBtn, styles.tbMyReqActionBtnDanger]}
+              onPress={() => onDeleteMyRequest?.(p)}
+            >
+              <Text style={[styles.tbMyReqActionTxt, styles.tbMyReqActionTxtDanger]}>Delete</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
     </Swipeable>
   );
 }
@@ -663,6 +691,8 @@ type TradeboardDeferredGroupedListProps = {
   listHeadingDate: string;
   openTradeboardDetail: (p: TradeboardPost) => void;
   onTradeboardMutateWeb: (uri: string) => void;
+  onEditMyRequest?: (p: TradeboardPost) => void;
+  onDeleteMyRequest?: (p: TradeboardPost) => void;
 };
 
 /**
@@ -681,6 +711,8 @@ const TradeboardDeferredGroupedList = React.memo(function TradeboardDeferredGrou
   listHeadingDate,
   openTradeboardDetail,
   onTradeboardMutateWeb,
+  onEditMyRequest,
+  onDeleteMyRequest,
 }: TradeboardDeferredGroupedListProps) {
   const router = useRouter();
 
@@ -790,6 +822,9 @@ const TradeboardDeferredGroupedList = React.memo(function TradeboardDeferredGrou
                   router={router}
                   onOpen={openTradeboardDetail}
                   onTradeboardMutateWeb={onTradeboardMutateWeb}
+                  showMyRequestActions={tradeFeedTab === "my"}
+                  onEditMyRequest={onEditMyRequest}
+                  onDeleteMyRequest={onDeleteMyRequest}
                 />
               ))}
             </View>
@@ -828,8 +863,12 @@ export default function TradeboardTabScreen() {
   const [postSeedActivity, setPostSeedActivity] = useState<TradeboardPostRequestActivity | null>(
     null,
   );
-  const [postEditReqId, setPostEditReqId] = useState<string | undefined>();
-  const [postEditTreq, setPostEditTreq] = useState<string | undefined>();
+  const [editComposerVisible, setEditComposerVisible] = useState(false);
+  const [editFormParse, setEditFormParse] = useState<TradeboardPostRequestFormParse | null>(null);
+  const [editFormLoading, setEditFormLoading] = useState(false);
+  const [editFormError, setEditFormError] = useState<string | null>(null);
+  const [editReqId, setEditReqId] = useState("");
+  const [editTreq, setEditTreq] = useState<string | undefined>();
 
   const tradeboardMonthFallback = useMemo(
     () => `${year}-${String(month).padStart(2, "0")}`,
@@ -970,8 +1009,9 @@ export default function TradeboardTabScreen() {
         "my_requests",
         myR.url,
       );
+      const myActions = parseTradeboardMyRequestsActionsFromHtml(String(myR.pageHtml ?? ""));
       const mappedAllPre = allFb.posts;
-      const mappedMyPre = myFb.posts;
+      const mappedMyPre = attachMyRequestActionsToPosts(myFb.posts, myActions.rows);
 
       const respFb = mapTradeboardPostsWithHtmlFallback(
         respR.nativeParse?.rows ?? [],
@@ -1094,13 +1134,11 @@ export default function TradeboardTabScreen() {
     [router],
   );
 
-  const loadPostRequestForm = useCallback(async (editReqId?: string) => {
+  const loadPostRequestForm = useCallback(async () => {
     setPostFormLoading(true);
     setPostFormError(null);
     try {
-      const r = await fetchTradeboardPostRequestForm(
-        editReqId ? { editReqId } : undefined,
-      );
+      const r = await fetchTradeboardPostRequestForm();
       if (crewHubNativeFetchNeedsVerificationSheet(r)) {
         setPostFormParse(null);
         setPostFormError("Refresh FLICA first — session needs verification in WebView.");
@@ -1125,16 +1163,10 @@ export default function TradeboardTabScreen() {
   }, []);
 
   const openNativePostComposer = useCallback(
-    async (opts?: {
-      seedActivity?: TradeboardPostRequestActivity | null;
-      editReqId?: string;
-      editTreq?: string;
-    }) => {
+    async (opts?: { seedActivity?: TradeboardPostRequestActivity | null }) => {
       setPostSeedActivity(opts?.seedActivity ?? null);
-      setPostEditReqId(opts?.editReqId);
-      setPostEditTreq(opts?.editTreq);
       setPostComposerVisible(true);
-      await loadPostRequestForm(opts?.editReqId);
+      await loadPostRequestForm();
     },
     [loadPostRequestForm],
   );
@@ -1143,80 +1175,107 @@ export default function TradeboardTabScreen() {
     void load("pull");
   }, [load]);
 
-  const editMyRequest = useCallback(
-    async (post: TradeboardPost) => {
-      try {
-        const { actions } = await fetchTradeboardMyRequestsActions();
-        const row =
-          actions.rows.find(
-            (r) =>
-              r.pairingId === post.pairingId &&
-              (!post.pairingDateLabel ||
-                r.dateLabel.toUpperCase() === post.pairingDateLabel.toUpperCase()),
-          ) ?? actions.rows.find((r) => r.pairingId === post.pairingId);
-        if (!row?.reqId) {
-          Alert.alert(
-            "Edit request",
-            "Could not find FLICA request id. Pull to refresh My Requests, then try again.",
-          );
-          return;
-        }
-        await openNativePostComposer({
-          editReqId: row.reqId,
-          editTreq: row.treq || undefined,
-        });
-      } catch (e) {
-        Alert.alert("Edit request", e instanceof Error ? e.message : String(e));
+  const refreshMyRequestsOnly = useCallback(async () => {
+    try {
+      const { fetch, actions } = await refreshTradeboardMyRequestsTargeted();
+      if (crewHubNativeFetchNeedsVerificationSheet(fetch)) return;
+      const myFb = mapTradeboardPostsWithHtmlFallback(
+        fetch.nativeParse?.rows ?? [],
+        fetch,
+        "my_requests",
+        fetch.url,
+      );
+      setMyPosts(attachMyRequestActionsToPosts(myFb.posts, actions.rows));
+    } catch {
+      /* list stays as-is */
+    }
+  }, []);
+
+  const loadEditRequestForm = useCallback(async (reqId: string) => {
+    setEditFormLoading(true);
+    setEditFormError(null);
+    try {
+      const r = await fetchTradeboardEditRequestForm(reqId);
+      if (crewHubNativeFetchNeedsVerificationSheet(r)) {
+        setEditFormParse(null);
+        setEditFormError("Refresh FLICA first — session needs verification in WebView.");
+        return;
       }
+      if (!r.postRequestFormParse?.ok) {
+        setEditFormParse(r.postRequestFormParse ?? null);
+        setEditFormError(
+          r.error ?? "Could not load Edit Request form. Pull to refresh FLICA, then try again.",
+        );
+        return;
+      }
+      setEditFormParse(r.postRequestFormParse);
+    } catch (e) {
+      setEditFormParse(null);
+      setEditFormError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEditFormLoading(false);
+    }
+  }, []);
+
+  const openEditComposer = useCallback(
+    async (post: TradeboardPost) => {
+      const row = post.myRequest;
+      if (!row?.reqId) {
+        Alert.alert(
+          "Edit request",
+          "Could not find FLICA request id. Pull to refresh My Requests, then try again.",
+        );
+        return;
+      }
+      fcDevMirrorScheduleLogToFile("FC_TB_EDIT_REQUEST_OPEN_NATIVE", {
+        reqId: row.reqId,
+        pairingId: post.pairingId,
+        editUrl: row.editUrl,
+      });
+      if (__DEV__) {
+        console.log(
+          "[FC_TB_EDIT_REQUEST_OPEN_NATIVE]",
+          JSON.stringify({ reqId: row.reqId, pairingId: post.pairingId }),
+        );
+      }
+      setEditReqId(row.reqId);
+      setEditTreq(row.treq || undefined);
+      setEditComposerVisible(true);
+      await loadEditRequestForm(row.reqId);
     },
-    [openNativePostComposer],
+    [loadEditRequestForm],
   );
+
+  const editMyRequest = openEditComposer;
 
   const deleteMyRequest = useCallback(
     (post: TradeboardPost) => {
+      const row = post.myRequest;
+      if (!row?.reqId) {
+        Alert.alert(
+          "Delete request",
+          "Could not find FLICA request id. Pull to refresh My Requests, then try again.",
+        );
+        return;
+      }
+      logDeleteRequestConfirm({ reqId: row.reqId, pairingId: post.pairingId });
       Alert.alert(
-        "Delete / hide request",
-        `Remove your ${post.pairingId} request from Tradeboard?`,
+        "Delete Request",
+        "Are you sure you want to remove this TradeBoard request?\n\nPlease Note: Deleting a message from TradeBoard does not affect any requests that have already been submitted for processing.",
         [
-          { text: "Cancel", style: "cancel" },
+          { text: "No", style: "cancel" },
           {
-            text: "Delete",
+            text: "Yes",
             style: "destructive",
             onPress: () => {
               void (async () => {
                 try {
-                  const { actions } = await fetchTradeboardMyRequestsActions();
-                  const row =
-                    actions.rows.find((r) => r.pairingId === post.pairingId) ??
-                    actions.rows[0];
-                  if (!row?.reqId) {
-                    Alert.alert(
-                      "Delete failed",
-                      "Could not find FLICA request id. Refresh FLICA first.",
-                    );
-                    return;
-                  }
-                  const formR = await fetchTradeboardPostRequestForm({
-                    editReqId: row.reqId,
+                  const result = await submitTradeboardMyRequestDelete(row.reqId, {
+                    deleteUrl: row.deleteUrl,
                   });
-                  const form = formR.postRequestFormParse;
-                  if (!form?.ok) {
-                    Alert.alert(
-                      "Refresh FLICA first",
-                      "Could not load delete form. Pull to refresh FLICA session.",
-                    );
-                    return;
-                  }
-                  const payload = buildTradeboardDeleteRequestPayload(
-                    form,
-                    row.reqId,
-                    row.treq,
-                  );
-                  dryRunTradeboardDeleteRequest(payload);
-                  const result = await submitTradeboardDeleteRequest(payload);
                   if (result.ok) {
                     setToast("Request removed");
-                    void load("pull");
+                    await refreshMyRequestsOnly();
                   } else {
                     Alert.alert("Delete failed", result.message);
                   }
@@ -1229,7 +1288,7 @@ export default function TradeboardTabScreen() {
         ],
       );
     },
-    [load],
+    [refreshMyRequestsOnly],
   );
 
   const openTradeboardMarketplace = useCallback(
@@ -1509,20 +1568,6 @@ export default function TradeboardTabScreen() {
                 </View>
               ) : null}
             </View>
-            <View style={styles.activeActionsRow}>
-              <Pressable
-                style={styles.activeActionBtn}
-                onPress={() => void editMyRequest(activePost)}
-              >
-                <Text style={styles.activeActionTxt}>Edit</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.activeActionBtn, styles.activeActionBtnDanger]}
-                onPress={() => deleteMyRequest(activePost)}
-              >
-                <Text style={[styles.activeActionTxt, styles.activeActionTxtDanger]}>Delete</Text>
-              </Pressable>
-            </View>
           </View>
         ) : null}
 
@@ -1633,6 +1678,8 @@ export default function TradeboardTabScreen() {
           listHeadingDate={listHeadingDate}
           openTradeboardDetail={openTradeboardDetail}
           onTradeboardMutateWeb={runTradeboardMutatingWeb}
+          onEditMyRequest={(p) => void editMyRequest(p)}
+          onDeleteMyRequest={deleteMyRequest}
         />
       </ScrollView>
 
@@ -1663,8 +1710,21 @@ export default function TradeboardTabScreen() {
         profileRole={profileRole}
         monthTrips={monthTrips}
         seedActivity={postSeedActivity}
-        editReqId={postEditReqId}
-        editTreq={postEditTreq}
+      />
+
+      <TradeBoardEditRequestComposerSheet
+        visible={editComposerVisible}
+        onClose={() => {
+          setEditComposerVisible(false);
+          setEditFormParse(null);
+          setEditFormError(null);
+        }}
+        onUpdated={() => void refreshMyRequestsOnly()}
+        formParse={editFormParse}
+        formLoading={editFormLoading}
+        formError={editFormError}
+        reqId={editReqId}
+        treq={editTreq}
       />
     </View>
   );
@@ -1976,6 +2036,32 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "rgba(176, 24, 26, 0.1)",
+  },
+  tbMyReqActions: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+    paddingTop: 2,
+  },
+  tbMyReqActionBtn: {
+    flex: 1,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: SCHEDULE_MOCK_HEADER_RED,
+    alignItems: "center",
+  },
+  tbMyReqActionBtnDanger: {
+    borderColor: "#dc2626",
+  },
+  tbMyReqActionTxt: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: SCHEDULE_MOCK_HEADER_RED,
+  },
+  tbMyReqActionTxtDanger: {
+    color: "#dc2626",
   },
   tbRowInner: {
     flexDirection: "row",
