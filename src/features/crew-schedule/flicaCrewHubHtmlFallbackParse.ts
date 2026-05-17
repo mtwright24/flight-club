@@ -4,8 +4,13 @@
  */
 import type { FlicaActionsFetchResult } from "../flica-actions/flicaActionsTypes";
 import {
-  enrichMyRequestsPostsFromPageHtml,
+  applyMyRequestFieldsToPost,
+  extractPageLevelReqIdActions,
+  finalizeMyRequestsPostsForHub,
+  isWeakMyRequestsFallbackPost,
+  myRequestsPostsReadyForHub,
   parseTradeboardMyRequestsPage,
+  tradeboardPostMyRequestReqId,
 } from "../flica-actions/flicaTradeBoardMyRequestsRowParse";
 import {
   buildOpenTimePairingDetailUrl,
@@ -2407,7 +2412,15 @@ function extractTradeboardPostsFromPageHtml(
     >,
   };
 
-  if (!tradeboardPageLooksLikeTradeboard(pageHtml)) {
+  const looksMyRequestsPage =
+    sourcePageType === "my_requests" &&
+    (/tb_myrequests\.cgi/i.test(pageHtml) ||
+      /\bmy\s+requests\b/i.test(pageHtml) ||
+      /TB_EditRequest\.cgi/i.test(pageHtml) ||
+      /DeleteMe\s*=\s*\d+/i.test(pageHtml) ||
+      /\bJ[A-Z0-9]{3,5}\s*:\s*\d{1,2}[A-Z]{3}\b/i.test(pageHtml));
+
+  if (!tradeboardPageLooksLikeTradeboard(pageHtml) && !looksMyRequestsPage) {
     return {
       posts: [],
       debug: {
@@ -2489,6 +2502,25 @@ function extractTradeboardPostsFromPageHtml(
       if (!firstAcceptedRawBlock) firstAcceptedRawBlock = p.rawText.slice(0, 900);
     }
     if (myPage.posts.length > 0) detectedExtractionMode = "my_requests_unified_table";
+
+    const aryRows = [
+      ...extractAryNewArrayRows(pageHtml, ["TAry", "QAry"]),
+      ...extractAryBracketArrayRows(pageHtml, ["TAry", "QAry"]),
+      ...extractAryPushNewArrayRows(pageHtml, ["TAry", "QAry"]),
+    ];
+    for (const cells of aryRows) {
+      if (!cells.some((c) => /\bJ[A-Z0-9]{3,5}\b/i.test(String(c)))) continue;
+      const mapped = mapTradeboardRowsToPosts([cells], "my_requests", sourceUrl);
+      for (const p of mapped) {
+        const k = `${p.pairingId}:${p.pairingDateLabel}:${p.type}`;
+        if (seenPostKey.has(k)) continue;
+        seenPostKey.add(k);
+        posts.push(p);
+        acceptedRowCount++;
+        if (!firstAcceptedRawBlock) firstAcceptedRawBlock = p.rawText.slice(0, 900);
+        if (detectedExtractionMode === "none") detectedExtractionMode = "my_requests_qary_script";
+      }
+    }
   }
 
   if (sourcePageType === "all_requests" || sourcePageType === "my_requests") {
@@ -2687,10 +2719,6 @@ function extractTradeboardPostsFromPageHtml(
       requestRowCandidateCount > 0 ? "failed_mapper_see_probe" : "failed_no_row_candidates_see_probe";
   }
 
-  if (sourcePageType === "my_requests" && posts.length > 0) {
-    posts = enrichMyRequestsPostsFromPageHtml(posts, pageHtml);
-  }
-
   if (typeof __DEV__ !== "undefined" && __DEV__) {
     console.log("[FLICA_TRADEBOARD_PARSE]", {
       mode: detectedExtractionMode,
@@ -2773,12 +2801,104 @@ function emptyTradeboardExtractDebug(
   };
 }
 
+/** My Requests only — never mix legacy_text_blocks / weak token rows with real desktop row. */
+function mapTradeboardMyRequestsPostsOnly(
+  r: Pick<FlicaActionsFetchResult, "htmlLength" | "bodyPreview" | "nativeParse" | "pageHtml" | "title">,
+  sourceUrl: string,
+): { posts: TradeboardPost[]; meta: FlicaCrewHubFallbackParseMeta } {
+  const rawPageHtml = String(r.pageHtml ?? "").trim();
+  const html = rawPageHtml || String(r.bodyPreview ?? "").trim();
+  const htmlLen = Number(r.htmlLength ?? rawPageHtml.length ?? html.length ?? 0);
+  const markersFound: string[] = [];
+  const markersMissing: string[] = [];
+
+  if (!html.length) {
+    markersMissing.push("my_requests_empty_html");
+    return {
+      posts: [],
+      meta: {
+        htmlLength: htmlLen,
+        rawRowsCount: r.nativeParse?.rows?.length ?? 0,
+        fallbackTextParserUsed: false,
+        extractedPostCount: 0,
+        extractedTripCount: 0,
+        firstExtractedRawBlock: "",
+        markersFound,
+        markersMissing,
+        tradeboardExtractDebug: emptyTradeboardExtractDebug(htmlLen, r, []),
+      },
+    };
+  }
+
+  const parsed = parseTradeboardMyRequestsPage(html, sourceUrl);
+  const pageActions = extractPageLevelReqIdActions(html);
+  let posts: TradeboardPost[] = [];
+
+  if (parsed.mode === "my_requests_desktop_compact" && parsed.posts.length > 0) {
+    posts = parsed.posts;
+    markersFound.push("my_requests_desktop_compact");
+  } else if (parsed.posts.some((p) => !isWeakMyRequestsFallbackPost(p))) {
+    posts = parsed.posts.filter((p) => !isWeakMyRequestsFallbackPost(p));
+    markersFound.push(`my_requests_parsed:${parsed.mode}`);
+  }
+
+  if (posts.length === 0 && rawPageHtml.length > 0) {
+    const ar = parseTradeboardAllRequestsFromNewARecords(html, sourceUrl);
+    if (ar.posts.length) {
+      markersFound.push(`my_requests_new_a_records:${ar.posts.length}`);
+      posts = ar.posts.map((p) =>
+        applyMyRequestFieldsToPost(
+          { ...p, isMyRequest: true, sourceTab: "my_requests" as const },
+          pageActions,
+          html,
+        ),
+      );
+    }
+  }
+
+  if (posts.length === 1 && pageActions.reqId && !tradeboardPostMyRequestReqId(posts[0]!)) {
+    posts = [applyMyRequestFieldsToPost(posts[0]!, pageActions, html)];
+  }
+
+  posts = finalizeMyRequestsPostsForHub(posts, rawPageHtml || html, sourceUrl);
+
+  if (!rawPageHtml.length && html.length > 0 && !myRequestsPostsReadyForHub(posts)) {
+    posts = [];
+    markersMissing.push("my_requests_body_preview_only");
+  }
+
+  if (parsed.mode) markersFound.push(`my_requests_parse_mode:${parsed.mode}`);
+  if (!myRequestsPostsReadyForHub(posts)) markersMissing.push("my_requests_no_complete_row");
+  if (myRequestsPostsReadyForHub(posts)) markersFound.push("my_requests_hub_ready");
+
+  posts = enrichTradeboardPostsWithPairingDetailUrlsFromHtml(rawPageHtml || html, posts);
+
+  return {
+    posts,
+    meta: {
+      htmlLength: htmlLen,
+      rawRowsCount: r.nativeParse?.rows?.length ?? 0,
+      fallbackTextParserUsed: false,
+      extractedPostCount: posts.length,
+      extractedTripCount: 0,
+      firstExtractedRawBlock: posts[0]?.rawText?.slice(0, 400) ?? "",
+      markersFound,
+      markersMissing,
+      tradeboardExtractDebug: emptyTradeboardExtractDebug(htmlLen, r, posts),
+    },
+  };
+}
+
 export function mapTradeboardPostsWithHtmlFallback(
   rows: string[][],
   r: Pick<FlicaActionsFetchResult, "htmlLength" | "bodyPreview" | "nativeParse" | "pageHtml" | "title">,
   sourcePageType: TradeboardSourcePageType,
   sourceUrl: string,
 ): { posts: TradeboardPost[]; meta: FlicaCrewHubFallbackParseMeta } {
+  if (sourcePageType === "my_requests") {
+    return mapTradeboardMyRequestsPostsOnly(r, sourceUrl);
+  }
+
   const html = String(r.pageHtml ?? "");
   const htmlLen = Number(r.htmlLength ?? html.length ?? 0);
   const rawRows = rows?.length ?? 0;
@@ -2789,12 +2909,7 @@ export function mapTradeboardPostsWithHtmlFallback(
   const templatey = rowsContainJsTemplateTokens(rows);
   const hasPairing = rowsContainTradeboardPairing(rows);
 
-  if (
-    sourcePageType !== "my_requests" &&
-    primary.length > 0 &&
-    !templatey &&
-    hasPairing
-  ) {
+  if (primary.length > 0 && !templatey && hasPairing) {
     return {
       posts: enrichTradeboardPostsWithPairingDetailUrlsFromHtml(html, primary),
       meta: {
@@ -2832,13 +2947,15 @@ export function mapTradeboardPostsWithHtmlFallback(
     primary[0]?.rawText ||
     "";
 
+  const finalPosts = posts.length ? posts : primary;
+
   return {
-    posts: enrichTradeboardPostsWithPairingDetailUrlsFromHtml(html, posts.length ? posts : primary),
+    posts: enrichTradeboardPostsWithPairingDetailUrlsFromHtml(html, finalPosts),
     meta: {
       htmlLength: htmlLen,
       rawRowsCount: rawRows,
       fallbackTextParserUsed: fallbackUsed && posts.length > 0,
-      extractedPostCount: (posts.length ? posts : primary).length,
+      extractedPostCount: finalPosts.length,
       extractedTripCount: 0,
       firstExtractedRawBlock: firstBlock.slice(0, 400),
       markersFound,

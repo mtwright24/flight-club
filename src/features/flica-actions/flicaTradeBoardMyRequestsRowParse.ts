@@ -4,14 +4,26 @@
 
 import { fcDevMirrorScheduleLogToFile } from "../../dev/fcDevFileLogger";
 import type { TradeboardPost } from "../crew-schedule/flicaCrewHubTypes";
-import { mapTradeboardRowsToPosts } from "../crew-schedule/flicaCrewHubMappers";
+import {
+  detectTradeboardType,
+  mapTradeboardRowsToPosts,
+  tradeboardTypeLongLabel,
+} from "../crew-schedule/flicaCrewHubMappers";
 import { resolveFlicaAbsoluteUrl } from "./flicaTradeBoardAllRequestsForm";
 import {
+  parseTradeboardMyRequestsActionsFromHtml,
   tradeboardEditRequestUrl,
   tradeboardMyRequestDeleteUrl,
 } from "./flicaTradeBoardMyRequestsActions";
-import type { TradeboardMyRequestActionRow } from "./flicaTradeBoardPostRequestTypes";
+import type {
+  TradeboardMyRequestActionRow,
+} from "./flicaTradeBoardPostRequestTypes";
 import { parseFlicaPairOnclick, buildTradeboardPairingDetailUrl } from "./flicaPairingDetailUrl";
+import {
+  extractMyRequestsDesktopRowLine,
+  pagePlainTextHasMyRequestsDesktopRow,
+  parseMyRequestsCompactDesktopRow,
+} from "./flicaTradeBoardMyRequestsCompactRow";
 
 const LOG_ACTIONS = "FC_TB_MY_REQUESTS_PARSE_ACTIONS";
 const LOG_FIELDS = "FC_TB_MY_REQUESTS_FIELD_PARSE";
@@ -96,6 +108,104 @@ export function stripMyRequestsActionCells(cells: string[]): string[] {
     break;
   }
   return out;
+}
+
+function pageHtmlLooksLikeMyRequests(html: string): boolean {
+  const h = String(html ?? "");
+  return (
+    /tb_myrequests\.cgi/i.test(h) ||
+    /\bmy\s+requests\b/i.test(h) ||
+    /TB_EditRequest\.cgi/i.test(h) ||
+    /DeleteMe\s*=\s*\d+/i.test(h) ||
+    /\bJ[A-Z0-9]{3,5}\s*:\s*\d{1,2}[A-Z]{3}\b/i.test(h)
+  );
+}
+
+type MyRequestPageCluster = {
+  pairingId: string;
+  dateLabel: string;
+  ctx: string;
+};
+
+/** Pairing windows that include Edit/Delete or reqId (FLICA often uses script rows, not `<table>`). */
+function extractMyRequestClustersFromPageHtml(html: string): MyRequestPageCluster[] {
+  const h = String(html ?? "");
+  const out: MyRequestPageCluster[] = [];
+  const seen = new Set<string>();
+  const re = /\b(J[A-Z0-9]{3,5})\s*(?::|&#58;|&#x3A;|&colon;)?\s*(\d{1,2}[A-Z]{3})\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(h)) !== null) {
+    const pairingId = m[1]!.toUpperCase();
+    const dateLabel = m[2]!.toUpperCase();
+    const key = `${pairingId}:${dateLabel}`;
+    if (seen.has(key)) continue;
+    const ctx = h.slice(Math.max(0, m.index - 700), Math.min(h.length, m.index + 4000));
+    if (
+      !/TB_EditRequest\.cgi/i.test(ctx) &&
+      !/DeleteMe\s*=\s*\d+/i.test(ctx) &&
+      !/reqId\s*=\s*\d+/i.test(ctx) &&
+      !/\bEdit\b/i.test(ctx)
+    ) {
+      continue;
+    }
+    seen.add(key);
+    out.push({ pairingId, dateLabel, ctx });
+  }
+  return out;
+}
+
+function buildPostFromPageCluster(
+  cluster: MyRequestPageCluster,
+  sourceUrl: string,
+): TradeboardPost | null {
+  const plain = tradeboardTdInnerToPlain(cluster.ctx);
+  const pipeHint = `${cluster.pairingId}:${cluster.dateLabel} ${plain}`.slice(0, 2400);
+  const fromMapper = mapTradeboardRowsToPosts([[pipeHint]], "my_requests", sourceUrl);
+  let post = fromMapper[0] ?? null;
+  if (!post) {
+    const type = detectTradeboardType(plain);
+    post = {
+      id: `tb-my-${cluster.pairingId}-${cluster.dateLabel}`,
+      type,
+      typeLabel: tradeboardTypeLongLabel(type),
+      posterName: "",
+      pairingId: cluster.pairingId,
+      pairingDateLabel: cluster.dateLabel,
+      routeSummary: `${cluster.pairingId}:${cluster.dateLabel}`,
+      base: "",
+      position: "",
+      date: cluster.dateLabel,
+      days: "",
+      reportTime: "",
+      departTime: "",
+      arriveTime: "",
+      block: "",
+      credit: "",
+      worth: null,
+      layover: "",
+      comments: "",
+      responseMethods: "",
+      responseMethodLabel: "",
+      postedAt: "",
+      postedAtLabel: "",
+      canPickup: false,
+      canProposeTrade: false,
+      matchScore: null,
+      legalCompatibility: null,
+      sourceUrl,
+      rawCells: [pipeHint.slice(0, 400)],
+      rawText: pipeHint.slice(0, 900),
+      offerCount: null,
+      isMyRequest: true,
+      sourceTab: "my_requests",
+    };
+  }
+  const actions = extractMyRequestActionsFromRowHtml(cluster.ctx);
+  return applyMyRequestFieldsToPost(
+    { ...post, isMyRequest: true, sourceTab: "my_requests", rawText: pipeHint.slice(0, 900) },
+    actions,
+    cluster.ctx,
+  );
 }
 
 /** Each data `<tr>` on TB_MyRequests.cgi → pipe line + raw HTML for action extraction. */
@@ -320,7 +430,56 @@ function buildPostFromTableRecord(
 export type TradeboardMyRequestsPageParse = {
   posts: TradeboardPost[];
   tableRowCount: number;
+  mode: string;
 };
+
+export function extractPageLevelReqIdActions(html: string): MyRequestRowActions {
+  const h = String(html ?? "");
+  const reqIds = [
+    ...new Set(
+      [...h.matchAll(/(?:reqId|DeleteMe)\s*=\s*(\d+)/gi)]
+        .map((m) => m[1]!.trim())
+        .filter(Boolean),
+    ),
+  ];
+  const reqId = reqIds.length === 1 ? reqIds[0]! : reqIds[0] ?? extractReqIdFromHaystack(h);
+  if (!reqId) {
+    return {
+      reqId: "",
+      editRequestId: "",
+      deleteRequestId: "",
+      editUrl: "",
+      deleteUrl: "",
+      hasEdit: false,
+      hasDelete: false,
+      treq: "",
+    };
+  }
+  return {
+    reqId,
+    editRequestId: reqId,
+    deleteRequestId: reqId,
+    editUrl: tradeboardEditRequestUrl(reqId),
+    deleteUrl: tradeboardMyRequestDeleteUrl(reqId),
+    hasEdit: true,
+    hasDelete: true,
+    treq: "",
+  };
+}
+
+function postReqId(p: TradeboardPost): string {
+  return (p.myRequest?.reqId ?? p.reqId ?? "").trim();
+}
+
+export function isCompleteMyRequestsPost(p: TradeboardPost): boolean {
+  return Boolean(
+    postReqId(p) && p.reportTime?.trim() && p.departTime?.trim() && p.pairingId?.trim(),
+  );
+}
+
+export function myRequestsPostsReadyForHub(posts: TradeboardPost[]): boolean {
+  return posts.some((p) => isCompleteMyRequestsPost(p));
+}
 
 /** Primary My Requests page parser — one object per visible FLICA row. */
 export function parseTradeboardMyRequestsPage(
@@ -328,6 +487,71 @@ export function parseTradeboardMyRequestsPage(
   sourceUrl: string,
 ): TradeboardMyRequestsPageParse {
   const h = String(html ?? "");
+  const pageActions = extractPageLevelReqIdActions(h);
+  let mode = "none";
+
+  const desktopLine = extractMyRequestsDesktopRowLine(h);
+  if (desktopLine) {
+    const compact = parseMyRequestsCompactDesktopRow(desktopLine, sourceUrl);
+    if (compact) {
+      const post = applyMyRequestFieldsToPost(compact, pageActions, h);
+      mode = "my_requests_desktop_compact";
+      const first = post;
+      fcDevMirrorScheduleLogToFile(LOG_FIELDS, {
+        tableRowCount: 1,
+        postCount: 1,
+        mode,
+        firstRow: {
+          type: first.type,
+          typeLabel: first.typeLabel,
+          pairingId: first.pairingId,
+          pairingDateLabel: first.pairingDateLabel,
+          base: first.base,
+          position: first.position,
+          days: first.days,
+          reportTime: first.reportTime,
+          departTime: first.departTime,
+          arriveTime: first.arriveTime,
+          block: first.block,
+          credit: first.credit,
+          layover: first.layover,
+          comments: first.comments,
+          postedAtLabel: first.postedAtLabel,
+          responseMethods: first.responseMethods,
+          reqId: first.reqId,
+          editUrl: first.editUrl,
+          deleteUrl: first.deleteUrl,
+          canEdit: first.canEdit,
+          canDelete: first.canDelete,
+        },
+      });
+      fcDevMirrorScheduleLogToFile(LOG_ACTIONS, {
+        htmlLength: h.length,
+        rowCount: 1,
+        tableRowCount: 1,
+        mode,
+        firstRows: [
+          {
+            pairingId: post.pairingId,
+            reqId: post.reqId,
+            editUrl: post.editUrl,
+            deleteUrl: post.deleteUrl,
+            hasEdit: post.canEdit,
+            hasDelete: post.canDelete,
+            rawText: post.rawText.slice(0, 160),
+          },
+        ],
+      });
+      return { posts: [post], tableRowCount: 1, mode };
+    }
+    fcDevMirrorScheduleLogToFile(LOG_ACTIONS, {
+      htmlLength: h.length,
+      mode: "my_requests_desktop_compact_failed",
+      desktopLinePreview: desktopLine.slice(0, 220),
+    });
+    return { posts: [], tableRowCount: 0, mode: "my_requests_desktop_compact_failed" };
+  }
+
   const records = extractMyRequestsTableRowRecords(h);
   const posts: TradeboardPost[] = [];
   const seen = new Set<string>();
@@ -338,7 +562,32 @@ export function parseTradeboardMyRequestsPage(
     const k = `${post.pairingId}:${post.pairingDateLabel}:${post.reqId ?? ""}:${post.type}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    posts.push(post);
+    posts.push(applyMyRequestFieldsToPost(post, pageActions, rec.rawTrHtml));
+    mode = "my_requests_table";
+  }
+
+  if (posts.length === 0 && pageHtmlLooksLikeMyRequests(h)) {
+    for (const cluster of extractMyRequestClustersFromPageHtml(h)) {
+      const desktopFromCluster = parseMyRequestsCompactDesktopRow(
+        tradeboardTdInnerToPlain(cluster.ctx),
+        sourceUrl,
+      );
+      const post = desktopFromCluster
+        ? applyMyRequestFieldsToPost(desktopFromCluster, pageActions, cluster.ctx)
+        : buildPostFromPageCluster(cluster, sourceUrl);
+      if (!post?.pairingId) continue;
+      const k = `${post.pairingId}:${post.pairingDateLabel}:${post.reqId ?? ""}:${post.type}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      posts.push(
+        postReqId(post) ? post : applyMyRequestFieldsToPost(post, pageActions, cluster.ctx),
+      );
+      mode = "my_requests_cluster";
+    }
+  }
+
+  if (posts.length === 1 && pageActions.reqId) {
+    posts[0] = applyMyRequestFieldsToPost(posts[0]!, pageActions, h);
   }
 
   const first = posts[0];
@@ -376,6 +625,8 @@ export function parseTradeboardMyRequestsPage(
     htmlLength: h.length,
     rowCount: posts.length,
     tableRowCount: records.length,
+    mode,
+    hasDesktopRowInPlainText: pagePlainTextHasMyRequestsDesktopRow(h),
     firstRows: posts.slice(0, 5).map((r) => ({
       pairingId: r.pairingId,
       reqId: r.reqId ?? r.myRequest?.reqId,
@@ -392,11 +643,22 @@ export function parseTradeboardMyRequestsPage(
     console.log(`[${LOG_FIELDS}]`, JSON.stringify({ postCount: posts.length }));
   }
 
-  return { posts, tableRowCount: records.length };
+  return { posts, tableRowCount: records.length, mode };
+}
+
+/** True when post is a token-only fallback, not a parsed My Requests row. */
+export function isWeakMyRequestsFallbackPost(p: TradeboardPost): boolean {
+  if (isCompleteMyRequestsPost(p)) return false;
+  const raw = collapseWs(p.rawText ?? "");
+  if (!raw) return true;
+  if (postReqId(p) && p.reportTime?.trim()) return false;
+  if (/^J[A-Z0-9]{3,5}\s*:\s*\d{1,2}[A-Z]{3}$/i.test(raw)) return true;
+  if (raw.length < 48 && !/\d{1,2}:\d{2}/.test(raw)) return true;
+  return !p.reportTime?.trim() && !p.departTime?.trim();
 }
 
 export function tradeboardPostMyRequestReqId(p: TradeboardPost): string {
-  return (p.myRequest?.reqId ?? p.reqId ?? "").trim();
+  return postReqId(p);
 }
 
 export function tradeboardPostMyRequestDeleteUrl(p: TradeboardPost): string {
@@ -415,45 +677,146 @@ export function tradeboardPostShowsMyRequestActions(p: TradeboardPost): boolean 
 
 const LOG_RENDER = "FC_TB_MY_REQUESTS_RENDER_ACTIONS";
 
-/** Log what the My Requests list will render for action buttons. */
+function attachActionsFromPairingWindow(
+  post: TradeboardPost,
+  html: string,
+): TradeboardPost {
+  const pid = post.pairingId.trim().toUpperCase();
+  if (!pid) return { ...post, isMyRequest: true, sourceTab: "my_requests" };
+  const date = post.pairingDateLabel.trim().toUpperCase();
+  const dateRe = date ? date.replace(/([A-Z]{3})/i, "$1") : "\\d{1,2}[A-Z]{3}";
+  const idx = html.search(
+    new RegExp(`\\b${pid}\\s*(?::|&#58;)?\\s*${date || dateRe}`, "i"),
+  );
+  const ctx =
+    idx >= 0
+      ? html.slice(Math.max(0, idx - 500), Math.min(html.length, idx + 3500))
+      : html;
+  const actions = extractMyRequestActionsFromRowHtml(ctx);
+  if (!actions.reqId && !actions.editUrl && !actions.deleteUrl) {
+    return { ...post, isMyRequest: true, sourceTab: "my_requests" };
+  }
+  return applyMyRequestFieldsToPost(
+    { ...post, isMyRequest: true, sourceTab: "my_requests" },
+    actions,
+    ctx,
+  );
+}
+
+/** Force reqId/edit/delete onto parsed posts using full page HTML (always run for My Requests). */
+export function applyMyRequestActionsFromFullHtml(
+  posts: TradeboardPost[],
+  html: string,
+): TradeboardPost[] {
+  const h = String(html ?? "");
+  if (!h.length) {
+    return posts.map((p) => ({ ...p, isMyRequest: true, sourceTab: "my_requests" as const }));
+  }
+
+  const actionRows = parseTradeboardMyRequestsActionsFromHtml(h).rows;
+  let out = posts.map((p) => ({ ...p, isMyRequest: true, sourceTab: "my_requests" as const }));
+
+  if (actionRows.length) {
+    out = out.map((p) => {
+      if (tradeboardPostShowsMyRequestActions(p)) return p;
+      const pid = p.pairingId.trim().toUpperCase();
+      const date = p.pairingDateLabel.trim().toUpperCase();
+      let row =
+        actionRows.find(
+          (r) =>
+            r.pairingId === pid &&
+            (!date || !r.dateLabel || r.dateLabel.toUpperCase() === date),
+        ) ?? actionRows.find((r) => r.pairingId === pid);
+      if (!row && out.length === 1 && actionRows.length === 1) row = actionRows[0]!;
+      if (!row?.reqId) return p;
+      const actions = extractMyRequestActionsFromRowHtml(
+        `${row.editUrl} ${row.deleteUrl} reqId=${row.reqId}`,
+      );
+      actions.reqId = row.reqId;
+      actions.editUrl = row.editUrl || actions.editUrl;
+      actions.deleteUrl = row.deleteUrl || actions.deleteUrl;
+      actions.editRequestId = row.reqId;
+      actions.deleteRequestId = row.reqId;
+      actions.hasEdit = Boolean(actions.editUrl || actions.reqId);
+      actions.hasDelete = Boolean(actions.deleteUrl || actions.reqId);
+      return applyMyRequestFieldsToPost(p, actions, h);
+    });
+  }
+
+  out = out.map((p) =>
+    tradeboardPostShowsMyRequestActions(p) ? p : attachActionsFromPairingWindow(p, h),
+  );
+
+  const reqIds = [
+    ...new Set(
+      [...h.matchAll(/(?:reqId|DeleteMe)\s*=\s*(\d+)/gi)].map((m) => m[1]!.trim()).filter(Boolean),
+    ),
+  ];
+  if (reqIds.length === 1) {
+    const reqId = reqIds[0]!;
+    const singleton: MyRequestRowActions = {
+      reqId,
+      editRequestId: reqId,
+      deleteRequestId: reqId,
+      editUrl: tradeboardEditRequestUrl(reqId),
+      deleteUrl: tradeboardMyRequestDeleteUrl(reqId),
+      hasEdit: true,
+      hasDelete: true,
+      treq: "",
+    };
+    out = out.map((p) =>
+      tradeboardPostShowsMyRequestActions(p)
+        ? p
+        : applyMyRequestFieldsToPost(
+            { ...p, isMyRequest: true, sourceTab: "my_requests" },
+            singleton,
+            h,
+          ),
+    );
+  }
+
+  return out;
+}
+
 /** Attach row-level edit/delete when fallback paths produced posts without reqId. */
 export function enrichMyRequestsPostsFromPageHtml(
   posts: TradeboardPost[],
   html: string,
 ): TradeboardPost[] {
-  const records = extractMyRequestsTableRowRecords(html);
-  if (!records.length) {
-    return posts.map((p) => ({ ...p, isMyRequest: true, sourceTab: "my_requests" as const }));
+  return applyMyRequestActionsFromFullHtml(posts, html);
+}
+
+/**
+ * Last gate before setMyPosts / cache: prefer desktop compact row; never keep token-only
+ * legacy fallbacks when the page plain text contains the real FLICA row.
+ */
+export function finalizeMyRequestsPostsForHub(
+  posts: TradeboardPost[],
+  html: string,
+  sourceUrl: string,
+): TradeboardPost[] {
+  const h = String(html ?? "").trim();
+  if (!h.length) {
+    return posts.filter((p) => !isWeakMyRequestsFallbackPost(p));
   }
 
-  return posts.map((p) => {
-    if (tradeboardPostShowsMyRequestActions(p)) {
-      return { ...p, isMyRequest: true, sourceTab: "my_requests" as const };
+  const pageActions = extractPageLevelReqIdActions(h);
+  if (pagePlainTextHasMyRequestsDesktopRow(h)) {
+    const line = extractMyRequestsDesktopRowLine(h);
+    if (line) {
+      const compact = parseMyRequestsCompactDesktopRow(line, sourceUrl);
+      if (compact) {
+        const ready = [applyMyRequestFieldsToPost(compact, pageActions, h)];
+        return applyMyRequestActionsFromFullHtml(ready, h);
+      }
     }
-    const pid = p.pairingId.trim().toUpperCase();
-    const date = p.pairingDateLabel.trim().toUpperCase();
-    const rec =
-      records.find((r) => {
-        const m = /\b(J[A-Z0-9]{3,5})\s*:?\s*(\d{1,2}[A-Z]{3})\b/i.exec(r.pipeLine);
-        if (!m) return false;
-        return (
-          m[1]!.toUpperCase() === pid &&
-          (!date || m[2]!.toUpperCase() === date)
-        );
-      }) ?? records.find((r) => r.pipeLine.toUpperCase().includes(pid));
-    if (!rec) {
-      return { ...p, isMyRequest: true, sourceTab: "my_requests" as const };
-    }
-    const actions = extractMyRequestActionsFromRowHtml(rec.rawTrHtml);
-    if (!actions.reqId && !actions.editUrl && !actions.deleteUrl) {
-      return { ...p, isMyRequest: true, sourceTab: "my_requests" as const };
-    }
-    return applyMyRequestFieldsToPost(
-      { ...p, isMyRequest: true, sourceTab: "my_requests" },
-      actions,
-      rec.rawTrHtml,
-    );
-  });
+    return [];
+  }
+
+  let out = applyMyRequestActionsFromFullHtml(posts, h);
+  const complete = out.filter(isCompleteMyRequestsPost);
+  if (complete.length > 0) return complete;
+  return out.filter((p) => !isWeakMyRequestsFallbackPost(p));
 }
 
 export function logTradeboardMyRequestsRenderActions(
@@ -461,16 +824,28 @@ export function logTradeboardMyRequestsRenderActions(
   posts: TradeboardPost[],
 ): void {
   if (tradeFeedTab !== "my") return;
+  const first = posts[0];
+  const reqId = first ? tradeboardPostMyRequestReqId(first) : "";
   const payload = {
     tradeFeedTab,
     postCount: posts.length,
+    hubReady: myRequestsPostsReadyForHub(posts),
     firstPosts: posts.slice(0, 5).map((p) => ({
       pairingId: p.pairingId,
       reqId: tradeboardPostMyRequestReqId(p),
-      hasMyRequest: Boolean(p.myRequest?.reqId),
-      canEdit: p.canEdit ?? Boolean(p.editUrl || p.reqId),
-      canDelete: p.canDelete ?? Boolean(p.deleteUrl || p.reqId),
+      hasMyRequest: Boolean(p.myRequest?.reqId || p.reqId),
+      canEdit: Boolean(p.canEdit ?? (p.editUrl || p.reqId)),
+      canDelete: Boolean(p.canDelete ?? (p.deleteUrl || p.reqId)),
+      type: p.type,
+      layover: p.layover,
+      reportTime: p.reportTime,
+      departTime: p.departTime,
+      arriveTime: p.arriveTime,
+      block: p.block,
+      credit: p.credit,
     })),
+    firstPostComplete: first ? isCompleteMyRequestsPost(first) : false,
+    reqIdPopulated: Boolean(reqId),
   };
   fcDevMirrorScheduleLogToFile(LOG_RENDER, payload);
   if (__DEV__) {

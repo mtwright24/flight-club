@@ -34,7 +34,6 @@ import {
   nativeFetchTradeBoardMyResponses,
   refreshTradeboardMyRequestsTargeted,
 } from "../../flica-actions/flicaActionsNativeService";
-import { parseTradeboardMyRequestsActionsFromHtml } from "../../flica-actions/flicaTradeBoardMyRequestsActions";
 import {
   logDeleteRequestConfirm,
   submitTradeboardMyRequestDelete,
@@ -46,9 +45,9 @@ import type {
 import FlicaMarketplacePairingDetailSheet from "../components/FlicaMarketplacePairingDetailSheet";
 import TradeBoardEditRequestComposerSheet from "../components/TradeBoardEditRequestComposerSheet";
 import TradeBoardPostRequestComposerSheet from "../components/TradeBoardPostRequestComposerSheet";
-import { attachMyRequestActionsToPostsFallback } from "../tradeBoardMyRequestsMerge";
 import {
   logTradeboardMyRequestsRenderActions,
+  myRequestsPostsReadyForHub,
   tradeboardPostMyRequestDeleteUrl,
   tradeboardPostMyRequestReqId,
   tradeboardPostShowsMyRequestActions,
@@ -899,7 +898,11 @@ export default function TradeboardTabScreen() {
     void loadTradeboardHubCache(uid).then((c) => {
       if (!c) return;
       setAllPosts((prev) => (prev.length === 0 && c.allPosts.length > 0 ? c.allPosts : prev));
-      setMyPosts((prev) => (prev.length === 0 && c.myPosts.length > 0 ? c.myPosts : prev));
+      setMyPosts((prev) => {
+        if (prev.length > 0) return prev;
+        if (!c.myPosts.length) return prev;
+        return myRequestsPostsReadyForHub(c.myPosts) ? c.myPosts : prev;
+      });
     });
   }, [session?.user?.id]);
 
@@ -1021,9 +1024,8 @@ export default function TradeboardTabScreen() {
         "my_requests",
         myR.url,
       );
-      const myActions = parseTradeboardMyRequestsActionsFromHtml(String(myR.pageHtml ?? ""));
       const mappedAllPre = allFb.posts;
-      const mappedMyPre = attachMyRequestActionsToPostsFallback(myFb.posts, myActions.rows);
+      const mappedMyPre = myFb.posts;
 
       const respFb = mapTradeboardPostsWithHtmlFallback(
         respR.nativeParse?.rows ?? [],
@@ -1081,15 +1083,20 @@ export default function TradeboardTabScreen() {
 
       const mappedAll = mappedAllPre;
       const mappedMy = mappedMyPre;
+      const myHasRows = mappedMy.length > 0;
       const refreshOk =
         allR.ok &&
-        myR.ok &&
         respR.ok &&
+        (myR.ok || myHasRows) &&
         !flicaFetchNeedsWebVerification(allR.htmlState) &&
         !flicaFetchNeedsWebVerification(myR.htmlState) &&
         !flicaFetchNeedsWebVerification(respR.htmlState);
 
       if (!refreshOk) {
+        if (myHasRows) {
+          logTradeboardMyRequestsRenderActions("my", mappedMy);
+          setMyPosts(mappedMy);
+        }
         return;
       }
 
@@ -1105,13 +1112,14 @@ export default function TradeboardTabScreen() {
       });
       setAllPosts(mappedAll);
       setMyPosts(mappedMy);
+      logTradeboardMyRequestsRenderActions("my", mappedMy);
       setResponsePosts(mappedRespPre);
       didUpdate = true;
 
       if (session?.user?.id) {
         void upsertTradeboardHubCache(session.user.id, {
           v: 1,
-          myPosts: mappedMy,
+          myPosts: myRequestsPostsReadyForHub(mappedMy) ? mappedMy : [],
           allPosts: mappedAll,
           refreshedAt: new Date().toISOString(),
         });
@@ -1189,7 +1197,7 @@ export default function TradeboardTabScreen() {
 
   const refreshMyRequestsOnly = useCallback(async () => {
     try {
-      const { fetch, actions } = await refreshTradeboardMyRequestsTargeted();
+      const { fetch } = await refreshTradeboardMyRequestsTargeted();
       if (crewHubNativeFetchNeedsVerificationSheet(fetch)) return;
       const myFb = mapTradeboardPostsWithHtmlFallback(
         fetch.nativeParse?.rows ?? [],
@@ -1197,7 +1205,8 @@ export default function TradeboardTabScreen() {
         "my_requests",
         fetch.url,
       );
-      setMyPosts(attachMyRequestActionsToPostsFallback(myFb.posts, actions.rows));
+      logTradeboardMyRequestsRenderActions("my", myFb.posts);
+      setMyPosts(myFb.posts);
     } catch {
       /* list stays as-is */
     }
