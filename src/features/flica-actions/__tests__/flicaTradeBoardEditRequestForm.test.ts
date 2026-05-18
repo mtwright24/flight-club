@@ -70,6 +70,25 @@ describe("TradeBoard edit request form parse", () => {
     expect(parsed.detected.comments).toBe(".hello world");
   });
 
+  it("does not throw when native fetch returns empty HTML", () => {
+    expect(() =>
+      parseTradeboardEditRequestFormFromHtml("", {
+        requestedUrl: "https://jetblue.flica.net/online/TB_EditRequest.cgi?reqId=1",
+        finalUrl: "https://jetblue.flica.net/online/TB_EditRequest.cgi?reqId=1",
+        reqId: "1",
+        htmlSource: "native",
+      }),
+    ).not.toThrow();
+    const parsed = parseTradeboardEditRequestFormFromHtml("", {
+      requestedUrl: "https://jetblue.flica.net/online/TB_EditRequest.cgi?reqId=1",
+      finalUrl: "https://jetblue.flica.net/online/TB_EditRequest.cgi?reqId=1",
+      reqId: "1",
+      htmlSource: "native",
+    });
+    expect(parsed.ok).toBe(false);
+    expect(parsed.primaryForm).toBeNull();
+  });
+
   it("parses activity from resAdded block", () => {
     const html = `
 <form name="editForm" method="POST">

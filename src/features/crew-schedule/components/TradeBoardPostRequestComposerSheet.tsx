@@ -25,7 +25,10 @@ import {
   dryRunTradeboardPostRequest,
   submitTradeboardPostRequest,
 } from "../../flica-actions/flicaTradeBoardPostRequestPayload";
-import { normalizeRequestTypeOptions } from "../../flica-actions/flicaTradeBoardPostRequestFieldMap";
+import {
+  isValidCompactTradeTypeCode,
+  mergeFlicaPostRequestTypeOptions,
+} from "../../flica-actions/flicaTradeBoardPostRequestFieldMap";
 import type {
   TradeboardPostRequestActivity,
   TradeboardPostRequestComposerState,
@@ -68,6 +71,8 @@ type Props = {
   profileRole: string | null;
   monthTrips: CrewScheduleTrip[];
   seedActivity?: TradeboardPostRequestActivity | null;
+  /** Pre-select compact FLICA code (e.g. R for Trade a Reserve Day). */
+  seedRequestType?: string;
   editReqId?: string;
   editTreq?: string;
 };
@@ -94,6 +99,7 @@ export default function TradeBoardPostRequestComposerSheet({
   profileRole,
   monthTrips: _monthTrips,
   seedActivity,
+  seedRequestType,
   editReqId,
   editTreq,
 }: Props) {
@@ -105,16 +111,21 @@ export default function TradeBoardPostRequestComposerSheet({
 
   const detected = formParse?.detected;
   const requestTypes = useMemo(
-    () => normalizeRequestTypeOptions(detected?.requestTypes ?? []),
+    () => mergeFlicaPostRequestTypeOptions(detected?.requestTypes ?? []),
     [detected?.requestTypes],
   );
 
   useEffect(() => {
     if (!visible || !detected) return;
+    const seedCode = String(seedRequestType ?? "").trim().toUpperCase();
+    const fromSeed =
+      seedCode && isValidCompactTradeTypeCode(seedCode)
+        ? requestTypes.find((o) => o.value.toUpperCase() === seedCode)?.value
+        : undefined;
     const fromDetected = requestTypes.find(
       (o) => o.value === detected.selectedRequestType,
     )?.value;
-    const initialRequestType = fromDetected ?? requestTypes[0]?.value ?? "T";
+    const initialRequestType = fromSeed ?? fromDetected ?? requestTypes[0]?.value ?? "T";
     setComposer({
       requestType: initialRequestType,
       base: detected.base || profileBase?.trim().toUpperCase() || "",
@@ -132,7 +143,17 @@ export default function TradeBoardPostRequestComposerSheet({
       treq: editTreq,
     });
     setPreview(null);
-  }, [visible, detected, profileBase, profileRole, seedActivity, editReqId, editTreq]);
+  }, [
+    visible,
+    detected,
+    profileBase,
+    profileRole,
+    requestTypes,
+    seedActivity,
+    seedRequestType,
+    editReqId,
+    editTreq,
+  ]);
 
   const requestTypeDisplay = useMemo(() => {
     if (!composer) return "";

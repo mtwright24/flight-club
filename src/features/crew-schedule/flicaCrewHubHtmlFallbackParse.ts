@@ -4,14 +4,11 @@
  */
 import type { FlicaActionsFetchResult } from "../flica-actions/flicaActionsTypes";
 import {
-  applyMyRequestFieldsToPost,
-  extractPageLevelReqIdActions,
-  finalizeMyRequestsPostsForHub,
   isWeakMyRequestsFallbackPost,
   myRequestsPostsReadyForHub,
   parseTradeboardMyRequestsPage,
-  tradeboardPostMyRequestReqId,
 } from "../flica-actions/flicaTradeBoardMyRequestsRowParse";
+import { setLatestMyRequestsRawHtml } from "../flica-actions/flicaTradeBoardMyRequestsHtmlStore";
 import {
   buildOpenTimePairingDetailUrl,
   buildTradeboardPairingDetailUrl,
@@ -1198,11 +1195,19 @@ function extractTradeboardTextBlocks(html: string): string[] {
   return blocks;
 }
 
+function tradeboardPostDedupeKey(p: TradeboardPost): string {
+  const reqId = (p.myRequest?.reqId ?? p.reqId ?? "").trim();
+  if (reqId) return `req:${reqId}`;
+  const flicaRowId = p.rawCells?.[0]?.trim();
+  if (/^\d{5,}$/.test(flicaRowId ?? "")) return `flica:${flicaRowId}`;
+  return `post:${p.id}`;
+}
+
 function dedupePosts(posts: TradeboardPost[]): TradeboardPost[] {
   const seen = new Set<string>();
   const out: TradeboardPost[] = [];
   for (const p of posts) {
-    const k = `${p.pairingId}:${p.pairingDateLabel}:${p.type}`;
+    const k = tradeboardPostDedupeKey(p);
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(p);
@@ -2490,47 +2495,14 @@ function extractTradeboardPostsFromPageHtml(
   let firstAcceptedRawBlock = "";
   let detectedExtractionMode = "none";
 
-  if (sourcePageType === "my_requests") {
-    const myPage = parseTradeboardMyRequestsPage(pageHtml, sourceUrl);
-    requestRowCandidateCount += myPage.tableRowCount;
-    for (const p of myPage.posts) {
-      const k = `${p.pairingId}:${p.pairingDateLabel}:${p.reqId ?? ""}:${p.type}`;
-      if (seenPostKey.has(k)) continue;
-      seenPostKey.add(k);
-      posts.push(p);
-      acceptedRowCount++;
-      if (!firstAcceptedRawBlock) firstAcceptedRawBlock = p.rawText.slice(0, 900);
-    }
-    if (myPage.posts.length > 0) detectedExtractionMode = "my_requests_unified_table";
-
-    const aryRows = [
-      ...extractAryNewArrayRows(pageHtml, ["TAry", "QAry"]),
-      ...extractAryBracketArrayRows(pageHtml, ["TAry", "QAry"]),
-      ...extractAryPushNewArrayRows(pageHtml, ["TAry", "QAry"]),
-    ];
-    for (const cells of aryRows) {
-      if (!cells.some((c) => /\bJ[A-Z0-9]{3,5}\b/i.test(String(c)))) continue;
-      const mapped = mapTradeboardRowsToPosts([cells], "my_requests", sourceUrl);
-      for (const p of mapped) {
-        const k = `${p.pairingId}:${p.pairingDateLabel}:${p.type}`;
-        if (seenPostKey.has(k)) continue;
-        seenPostKey.add(k);
-        posts.push(p);
-        acceptedRowCount++;
-        if (!firstAcceptedRawBlock) firstAcceptedRawBlock = p.rawText.slice(0, 900);
-        if (detectedExtractionMode === "none") detectedExtractionMode = "my_requests_qary_script";
-      }
-    }
-  }
-
-  if (sourcePageType === "all_requests" || sourcePageType === "my_requests") {
+  if (sourcePageType === "all_requests") {
     const ar = parseTradeboardAllRequestsFromNewARecords(pageHtml, sourceUrl);
     allRequestsARecordBodiesFound = ar.bodiesFound;
     allRequestsARecordPostsCount = ar.postsAccepted;
     allRequestsARecordFirst5ArgDiagnostics = ar.first5Diagnostics;
     requestRowCandidateCount += ar.bodiesFound;
     for (const p of ar.posts) {
-      const k = `${p.pairingId}:${p.pairingDateLabel}:${p.type}`;
+      const k = tradeboardPostDedupeKey(p);
       if (seenPostKey.has(k)) continue;
       seenPostKey.add(k);
       posts.push(p);
@@ -2538,8 +2510,7 @@ function extractTradeboardPostsFromPageHtml(
       if (!firstAcceptedRawBlock) firstAcceptedRawBlock = p.rawText.slice(0, 900);
     }
     if (ar.posts.length > 0 && detectedExtractionMode === "none") {
-      detectedExtractionMode =
-        sourcePageType === "my_requests" ? "my_requests_new_a_records" : "all_requests_new_a_records";
+      detectedExtractionMode = "all_requests_new_a_records";
     }
   }
 
@@ -2801,7 +2772,10 @@ function emptyTradeboardExtractDebug(
   };
 }
 
-/** My Requests only — never mix legacy_text_blocks / weak token rows with real desktop row. */
+/**
+ * My Requests — isolated pipeline: TB_MyRequests.cgi HTML → parse → render.
+ * No All Requests fallback, no cross-tab enrich, no second-stage row generation.
+ */
 function mapTradeboardMyRequestsPostsOnly(
   r: Pick<FlicaActionsFetchResult, "htmlLength" | "bodyPreview" | "nativeParse" | "pageHtml" | "title">,
   sourceUrl: string,
@@ -2830,48 +2804,35 @@ function mapTradeboardMyRequestsPostsOnly(
     };
   }
 
-  const parsed = parseTradeboardMyRequestsPage(html, sourceUrl);
-  const pageActions = extractPageLevelReqIdActions(html);
-  let posts: TradeboardPost[] = [];
-
-  if (parsed.mode === "my_requests_desktop_compact" && parsed.posts.length > 0) {
-    posts = parsed.posts;
-    markersFound.push("my_requests_desktop_compact");
-  } else if (parsed.posts.some((p) => !isWeakMyRequestsFallbackPost(p))) {
-    posts = parsed.posts.filter((p) => !isWeakMyRequestsFallbackPost(p));
-    markersFound.push(`my_requests_parsed:${parsed.mode}`);
-  }
-
-  if (posts.length === 0 && rawPageHtml.length > 0) {
-    const ar = parseTradeboardAllRequestsFromNewARecords(html, sourceUrl);
-    if (ar.posts.length) {
-      markersFound.push(`my_requests_new_a_records:${ar.posts.length}`);
-      posts = ar.posts.map((p) =>
-        applyMyRequestFieldsToPost(
-          { ...p, isMyRequest: true, sourceTab: "my_requests" as const },
-          pageActions,
-          html,
-        ),
-      );
-    }
-  }
-
-  if (posts.length === 1 && pageActions.reqId && !tradeboardPostMyRequestReqId(posts[0]!)) {
-    posts = [applyMyRequestFieldsToPost(posts[0]!, pageActions, html)];
-  }
-
-  posts = finalizeMyRequestsPostsForHub(posts, rawPageHtml || html, sourceUrl);
-
-  if (!rawPageHtml.length && html.length > 0 && !myRequestsPostsReadyForHub(posts)) {
-    posts = [];
+  if (!rawPageHtml.length && html.length > 0) {
     markersMissing.push("my_requests_body_preview_only");
+    return {
+      posts: [],
+      meta: {
+        htmlLength: htmlLen,
+        rawRowsCount: r.nativeParse?.rows?.length ?? 0,
+        fallbackTextParserUsed: false,
+        extractedPostCount: 0,
+        extractedTripCount: 0,
+        firstExtractedRawBlock: "",
+        markersFound,
+        markersMissing,
+        tradeboardExtractDebug: emptyTradeboardExtractDebug(htmlLen, r, []),
+      },
+    };
   }
+
+  const parsed = parseTradeboardMyRequestsPage(html, sourceUrl);
+  const posts = parsed.posts.filter(
+    (p) => Boolean(p.reqId?.trim() || p.myRequest?.reqId?.trim()) && !isWeakMyRequestsFallbackPost(p),
+  );
 
   if (parsed.mode) markersFound.push(`my_requests_parse_mode:${parsed.mode}`);
+  if (posts.length) markersFound.push(`my_requests_isolated:${posts.length}`);
   if (!myRequestsPostsReadyForHub(posts)) markersMissing.push("my_requests_no_complete_row");
   if (myRequestsPostsReadyForHub(posts)) markersFound.push("my_requests_hub_ready");
 
-  posts = enrichTradeboardPostsWithPairingDetailUrlsFromHtml(rawPageHtml || html, posts);
+  setLatestMyRequestsRawHtml(html, "native_fetch", sourceUrl);
 
   return {
     posts,

@@ -160,7 +160,7 @@ export function applyChromePostRequestOverrides(
 const COMPACT_TYPE_FIELDS = ["TradeType", "hdnType"] as const;
 
 function isValidCompactTradeTypeCode(code: string): boolean {
-  return /^[TDXP]$/i.test(String(code ?? "").trim());
+  return /^[TDXPR]$/i.test(String(code ?? "").trim());
 }
 
 function isPlaceholderRequestType(raw: string): boolean {

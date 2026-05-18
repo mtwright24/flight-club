@@ -31,8 +31,16 @@ import type { TradeBoardAllRequestsResetOptions } from "./flicaTradeBoardAllRequ
 import { parseTradeboardPostRequestFormFromHtml } from "./flicaTradeBoardPostRequestForm";
 import {
   logEditRequestFetch,
+  logEditRequestNativeResult,
+  logEditRequestParseMissingForm,
+  logEditRequestParseSuccess,
   parseTradeboardEditRequestFormFromHtml,
+  tradeboardEditFormParseIsReady,
 } from "./flicaTradeBoardEditRequestForm";
+import {
+  editRequestHtmlHasFormMarkers,
+  requestTbEditRequestWebViewCapture,
+} from "./flicaTradeBoardEditRequestWebViewCaptureBridge";
 import {
   parseTradeboardMyRequestsActionsFromHtml,
   tradeboardEditRequestUrl,
@@ -759,7 +767,7 @@ export type TradeboardEditRequestFormFetchResult = FlicaActionsFetchResult & {
   postRequestFormParse?: TradeboardPostRequestFormParse;
 };
 
-/** GET TB_EditRequest.cgi for native edit composer. */
+/** GET TB_EditRequest.cgi for native edit composer (WebView DOM fallback when native body is empty). */
 export async function fetchTradeboardEditRequestForm(
   reqId: string,
 ): Promise<TradeboardEditRequestFormFetchResult> {
@@ -783,8 +791,10 @@ export async function fetchTradeboardEditRequestForm(
     const tab = await fetchFlicaHtmlUsingWebViewSession(requestedUrl, {
       referer: TRADEBOARD_TAB_REFERER,
     });
-    const tabHtml = String(tab.html ?? "");
-    const tabFinal = String(tab.url ?? requestedUrl);
+    let tabHtml = String(tab.html ?? "");
+    let tabFinal = String(tab.url ?? requestedUrl);
+    let tabStatus = tab.status;
+    let htmlSource: "native" | "webview" = "native";
 
     logEditRequestFetch({
       ok: tab.status === 200,
@@ -795,25 +805,124 @@ export async function fetchTradeboardEditRequestForm(
       finalUrl: tabFinal,
     });
 
-    const formParse = parseTradeboardEditRequestFormFromHtml(tabHtml, {
+    logEditRequestNativeResult({
+      ok: tab.status === 200,
+      reqId: id,
+      requestedUrl,
+      status: tab.status,
+      htmlLength: tabHtml.length,
+      hasFormMarkers: editRequestHtmlHasFormMarkers(tabHtml),
+      finalUrl: tabFinal,
+    });
+
+    let formParse = parseTradeboardEditRequestFormFromHtml(tabHtml, {
       requestedUrl,
       finalUrl: tabFinal,
       reqId: id,
       htmlSource: "native",
     });
 
-    const parseOk = formParse.ok;
-    const r = toResult(requestedUrl, tab.status, tabHtml, tabFinal, {
+    if (!tradeboardEditFormParseIsReady(formParse)) {
+      const wvSession = await getFlicaActionsWebViewSession();
+      if (!wvSession) {
+        logEditRequestParseMissingForm({
+          reqId: id,
+          reason: "no_webview_session",
+          nativeHtmlLength: tabHtml.length,
+        });
+        const err =
+          "Refresh FLICA first — pull to refresh Tradeboard to establish session, then try Edit again.";
+        const r = toResult(requestedUrl, tabStatus, tabHtml, tabFinal, {
+          error:
+            tabHtml.length === 0
+              ? `Empty FLICA response (no HTML body). ${err}`
+              : err,
+          okOverride: false,
+        });
+        return { ...r, postRequestFormParse: formParse };
+      }
+
+      try {
+        await new Promise<void>((r) => setTimeout(r, 120));
+        const cap = await requestTbEditRequestWebViewCapture({
+          frameWarmupUrl: frameUrl,
+          targetUrl: requestedUrl,
+        });
+        tabHtml = cap.html;
+        tabFinal = cap.finalUrl;
+        htmlSource = "webview";
+
+        fcDevMirrorScheduleLogToFile("FC_TB_EDIT_REQUEST_WEBVIEW_CAPTURE_RESULT", {
+          ok: cap.ready,
+          reqId: id,
+          htmlLength: cap.htmlLength,
+          finalUrl: cap.finalUrl,
+          captureFrameCount: cap.captureFrameCount,
+          hasFormMarkers: editRequestHtmlHasFormMarkers(tabHtml),
+        });
+
+        formParse = parseTradeboardEditRequestFormFromHtml(tabHtml, {
+          requestedUrl,
+          finalUrl: tabFinal,
+          reqId: id,
+          htmlSource: "webview",
+        });
+      } catch (wvErr) {
+        const wvMsg = wvErr instanceof Error ? wvErr.message : String(wvErr);
+        fcDevMirrorScheduleLogToFile("FC_TB_EDIT_REQUEST_WEBVIEW_CAPTURE_RESULT", {
+          ok: false,
+          reqId: id,
+          error: wvMsg,
+          nativeHtmlLength: tabHtml.length,
+        });
+        logEditRequestParseMissingForm({
+          reqId: id,
+          reason: "webview_capture_failed",
+          error: wvMsg,
+          nativeHtmlLength: tabHtml.length,
+        });
+        const r = toResult(requestedUrl, tabStatus, tabHtml, tabFinal, {
+          error:
+            tabHtml.length === 0
+              ? "Empty FLICA response (no HTML body). Native fetch and WebView capture both failed. Refresh FLICA first."
+              : `Edit Request form unavailable: ${wvMsg}`,
+          okOverride: false,
+        });
+        return { ...r, postRequestFormParse: formParse };
+      }
+    }
+
+    const parseOk = tradeboardEditFormParseIsReady(formParse);
+    if (!parseOk) {
+      logEditRequestParseMissingForm({
+        reqId: id,
+        htmlSource,
+        htmlLength: tabHtml.length,
+        parseOk: formParse.ok,
+        hasPrimaryForm: Boolean(formParse.primaryForm),
+      });
+    } else {
+      logEditRequestParseSuccess({
+        reqId: id,
+        htmlSource,
+        htmlLength: tabHtml.length,
+      });
+    }
+
+    const r = toResult(requestedUrl, tabStatus, tabHtml, tabFinal, {
       okOverride: parseOk,
       error: parseOk
         ? undefined
-        : "Edit Request form could not be parsed from FLICA HTML.",
+        : tabHtml.length === 0
+          ? "Empty FLICA response (no HTML body). Native fetch and WebView capture both failed. Refresh FLICA first."
+          : "Edit Request form could not be parsed from FLICA HTML. Refresh FLICA first.",
     });
 
     return { ...r, postRequestFormParse: formParse };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logEditRequestFetch({ ok: false, reqId: id, error: msg });
+    logEditRequestParseMissingForm({ reqId: id, reason: "exception", error: msg });
     return {
       ok: false,
       requestedUrl,

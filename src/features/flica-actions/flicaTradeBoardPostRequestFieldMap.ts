@@ -201,10 +201,19 @@ export function isPlaceholderRequestType(raw: string): boolean {
   return PLACEHOLDER_REQUEST_TYPE_RE.test(s);
 }
 
-/** Compact FLICA request codes only (T, D, P, X). */
+/** Compact FLICA request codes (T, D, P, X, R). */
 export function isValidCompactTradeTypeCode(code: string): boolean {
-  return /^[TDXP]$/i.test(collapseWs(code));
+  return /^[TDXPR]$/i.test(collapseWs(code));
 }
+
+/** FLICA TB_postrequest.cgi request types — always show all five chips. */
+export const FLICA_CANONICAL_POST_REQUEST_TYPES: Array<{ value: string; label: string }> = [
+  { value: "T", label: "Trade Trip" },
+  { value: "D", label: "Drop Trip" },
+  { value: "P", label: "Pick Up Trip" },
+  { value: "X", label: "Trade/Drop" },
+  { value: "R", label: "Trade a Reserve Day" },
+];
 
 /** hdnType uses the same compact code as TradeType (T, D, P, X). */
 export function compactTradeTypeCode(raw: string): string {
@@ -214,6 +223,7 @@ export function compactTradeTypeCode(raw: string): string {
   if (v === "T" || (v.startsWith("TRADE") && !v.includes("/"))) return "T";
   if (v === "P" || v.startsWith("PICK")) return "P";
   if (v === "X" || v.includes("TRADE/DROP")) return "X";
+  if (v === "R" || (v.includes("RESERVE") && v.includes("TRADE"))) return "R";
   return v.length === 1 && isValidCompactTradeTypeCode(v) ? v : "";
 }
 
@@ -246,7 +256,25 @@ export function normalizeRequestTypeOptions(
   return out;
 }
 
-/** Resolve TradeType value (D/T/P/X) from composer + detected options. */
+/** Merge parsed FLICA TradeType options with canonical five-type chips (never drop Reserve). */
+export function mergeFlicaPostRequestTypeOptions(
+  options: TradeboardPostRequestDetectedFields["requestTypes"],
+): Array<{ value: string; label: string }> {
+  const parsed = normalizeRequestTypeOptions(options);
+  const byCode = new Map<string, { value: string; label: string }>();
+  for (const c of FLICA_CANONICAL_POST_REQUEST_TYPES) {
+    byCode.set(c.value, { ...c });
+  }
+  for (const o of parsed) {
+    byCode.set(o.value, {
+      value: o.value,
+      label: collapseWs(o.label) || byCode.get(o.value)?.label || o.value,
+    });
+  }
+  return FLICA_CANONICAL_POST_REQUEST_TYPES.map((c) => byCode.get(c.value)!);
+}
+
+/** Resolve TradeType value (D/T/P/X/R) from composer + detected options. */
 export function resolveTradeTypeValue(
   composerType: string,
   detected: TradeboardPostRequestDetectedFields,
@@ -299,6 +327,9 @@ export function resolveTradeTypeValue(
   }
   if (upper.includes("TRADE/DROP") || upper.includes("TRADE DROP")) {
     return { tradeTypeValue: "X", hdnTypeValue: "X" };
+  }
+  if (/^R\b/.test(raw) || upper.includes("RESERVE")) {
+    return { tradeTypeValue: "R", hdnTypeValue: "R" };
   }
 
   return { tradeTypeValue: "", hdnTypeValue: "" };

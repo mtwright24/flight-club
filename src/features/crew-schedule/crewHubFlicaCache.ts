@@ -37,6 +37,17 @@ export async function upsertTradeboardHubCache(
   }
 }
 
+/** Clear cached My Requests rows before a targeted TB_MyRequests.cgi refresh. */
+export async function invalidateTradeboardHubCacheMyPosts(userId: string): Promise<void> {
+  const existing = await loadTradeboardHubCache(userId);
+  if (!existing) return;
+  await upsertTradeboardHubCache(userId, {
+    ...existing,
+    myPosts: [],
+    refreshedAt: new Date().toISOString(),
+  });
+}
+
 export async function loadTradeboardHubCache(
   userId: string,
 ): Promise<TradeboardHubCachePayloadV1 | null> {

@@ -1,3 +1,4 @@
+import { parseTradeboardMyRequestsActionsFromHtml } from "../flica-actions/flicaTradeBoardMyRequestsActions";
 import {
   applyMyRequestFieldsToPost,
   extractMyRequestActionsFromRowHtml,
@@ -26,19 +27,8 @@ export function attachMyRequestActionsToPostsFallback(
   return posts.map((p) => {
     if (postAlreadyHasMyRequestActions(p)) return p;
 
-    const pid = p.pairingId.trim().toUpperCase();
-    const date = p.pairingDateLabel.trim().toUpperCase();
-    let row =
-      actionRows.find(
-        (r) =>
-          r.pairingId === pid &&
-          (!date || !r.dateLabel || r.dateLabel.toUpperCase() === date),
-      ) ?? actionRows.find((r) => r.pairingId === pid);
-
-    if (!row && posts.length === 1 && actionRows.length === 1) {
-      row = actionRows[0]!;
-    }
-
+    const rid = (p.myRequest?.reqId ?? p.reqId ?? "").trim();
+    const row = rid ? actionRows.find((r) => r.reqId === rid) : undefined;
     if (!row?.reqId) return p;
 
     const actions = extractMyRequestActionsFromRowHtml(
@@ -54,4 +44,16 @@ export function attachMyRequestActionsToPostsFallback(
 
     return applyMyRequestFieldsToPost(p, actions, p.rawText);
   });
+}
+
+/** Attach reqId/edit/delete from stored My Requests HTML after native fetch. */
+export function enrichMyRequestsPostsWithStoredHtml(
+  posts: TradeboardPost[],
+  html: string,
+): TradeboardPost[] {
+  const h = String(html ?? "").trim();
+  if (!h.length || !posts.length) return posts;
+
+  const actionRows = parseTradeboardMyRequestsActionsFromHtml(h).rows;
+  return attachMyRequestActionsToPostsFallback(posts, actionRows);
 }

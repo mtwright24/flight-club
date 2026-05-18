@@ -191,6 +191,41 @@ export function parseMyRequestsCompactDesktopRow(
   };
 }
 
+/** Every visible FLICA My Requests desktop row block (Edit Delete …), in order. */
+export function extractAllMyRequestsDesktopRowBlocks(html: string): string[] {
+  const plain = collapseWs(
+    String(html ?? "")
+      .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+      .replace(/<br\s*\/?>/gi, " ")
+      .replace(/<[^>]+>/g, " "),
+  );
+  if (!plain) return [];
+
+  const rowStartRe = new RegExp(
+    `\\bEdit\\s+Delete\\s+(?=(?:Drop|Trade\\s*\\/\\s*Drop|Trade|Pickup)\\s+J[A-Z0-9]{3,5}\\s*${PAIRING_COLON}\\s*\\d{1,2}[A-Z]{3}\\b)`,
+    "gi",
+  );
+  const starts: number[] = [];
+  for (const m of plain.matchAll(rowStartRe)) {
+    if (m.index != null) starts.push(m.index);
+  }
+
+  if (starts.length === 0) {
+    const line = extractMyRequestsDesktopRowLine(html);
+    return line ? [line] : [];
+  }
+
+  const blocks: string[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i]!;
+    const end = i + 1 < starts.length ? starts[i + 1]! : plain.length;
+    const slice = plain.slice(start, end).trim();
+    if ((slice.match(/\b\d{1,2}:\d{2}\b/g) ?? []).length >= 3) blocks.push(slice);
+  }
+  return blocks;
+}
+
 /** Locate the real FLICA My Requests desktop row in page plain text. */
 export function extractMyRequestsDesktopRowLine(html: string): string | null {
   const plain = collapseWs(

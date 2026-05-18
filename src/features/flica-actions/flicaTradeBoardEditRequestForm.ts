@@ -24,6 +24,7 @@ import {
   detectEditRequestFields,
   extractEditFormFieldsAll,
 } from "./flicaTradeBoardEditRequestDetect";
+import { editRequestHtmlHasFormMarkers } from "./flicaTradeBoardEditRequestWebViewCaptureBridge";
 import type {
   TradeboardPostRequestActivity,
   TradeboardPostRequestFormModel,
@@ -32,6 +33,14 @@ import type {
 
 const LOG_TAG = "FC_TB_EDIT_REQUEST_PARSE";
 const FETCH_LOG = "FC_TB_EDIT_REQUEST_FETCH";
+const PARSE_MISSING_LOG = "FC_TB_EDIT_REQUEST_PARSE_MISSING_FORM";
+const PARSE_SUCCESS_LOG = "FC_TB_EDIT_REQUEST_PARSE_SUCCESS";
+
+export function tradeboardEditFormParseIsReady(
+  parse: TradeboardPostRequestFormParse | null | undefined,
+): boolean {
+  return Boolean(parse?.ok && parse.primaryForm && parse.primaryForm.fields.length > 0);
+}
 
 function getAttr(tag: string, attr: string): string {
   const a = attr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -172,13 +181,34 @@ export function activityFromEditFormHtml(
   return null;
 }
 
+export function logEditRequestParseMissingForm(meta: Record<string, unknown>): void {
+  fcDevMirrorScheduleLogToFile(PARSE_MISSING_LOG, meta);
+  if (__DEV__) {
+    console.log(`[${PARSE_MISSING_LOG}]`, JSON.stringify(meta));
+  }
+}
+
+export function logEditRequestParseSuccess(meta: Record<string, unknown>): void {
+  fcDevMirrorScheduleLogToFile(PARSE_SUCCESS_LOG, meta);
+  if (__DEV__) {
+    console.log(`[${PARSE_SUCCESS_LOG}]`, JSON.stringify(meta));
+  }
+}
+
+export function logEditRequestNativeResult(meta: Record<string, unknown>): void {
+  fcDevMirrorScheduleLogToFile("FC_TB_EDIT_REQUEST_NATIVE_RESULT", meta);
+  if (__DEV__) {
+    console.log("[FC_TB_EDIT_REQUEST_NATIVE_RESULT]", JSON.stringify(meta));
+  }
+}
+
 export function parseTradeboardEditRequestFormFromHtml(
   html: string,
   meta: {
     requestedUrl: string;
     finalUrl: string;
     reqId: string;
-    htmlSource?: "native";
+    htmlSource?: "native" | "webview";
   },
 ): TradeboardPostRequestFormParse {
   const safeHtml = String(html ?? "");
@@ -215,14 +245,29 @@ export function parseTradeboardEditRequestFormFromHtml(
   const picked = findTradeBoardEditRequestForm(safeHtml, frameUrl);
   let primaryForm = picked?.form ?? forms[0] ?? null;
 
-  let capturedSubmit = capturedSubmitFromParsedForm(
-    primaryForm!,
-    frameUrl,
-    "html_parse",
-  );
-  if (primaryForm && capturedSubmit) {
-    primaryForm = applyCapturedSubmitToFormModel(primaryForm, capturedSubmit);
-    capturedSubmit = primaryForm.capturedSubmit;
+  const hasEditFormMarker =
+    editRequestHtmlHasFormMarkers(safeHtml) ||
+    (primaryForm != null && fieldsIncludeName(primaryForm.fields, "CommentField"));
+
+  if (!primaryForm || safeHtml.length === 0 || !hasEditFormMarker) {
+    logEditRequestParseMissingForm({
+      reqId: meta.reqId,
+      htmlLength: safeHtml.length,
+      htmlSource: meta.htmlSource ?? "native",
+      htmlState,
+      hasPrimaryForm: Boolean(primaryForm),
+      hasEditFormMarker,
+      formsCount: forms.length,
+    });
+  }
+
+  let capturedSubmit: TradeboardPostRequestFormParse["capturedSubmit"] = null;
+  if (primaryForm) {
+    capturedSubmit = capturedSubmitFromParsedForm(primaryForm, frameUrl, "html_parse");
+    if (capturedSubmit) {
+      primaryForm = applyCapturedSubmitToFormModel(primaryForm, capturedSubmit);
+      capturedSubmit = primaryForm.capturedSubmit;
+    }
   }
 
   const reqId = meta.reqId.trim();
@@ -290,7 +335,8 @@ export function parseTradeboardEditRequestFormFromHtml(
     htmlState === "ok" &&
     safeHtml.length > 400 &&
     primaryForm != null &&
-    primaryForm.fields.length > 0;
+    primaryForm.fields.length > 0 &&
+    hasEditFormMarker;
 
   const result: TradeboardPostRequestFormParse = {
     ok,
@@ -324,6 +370,16 @@ export function parseTradeboardEditRequestFormFromHtml(
     warnings,
     missingMappings,
   });
+
+  if (ok) {
+    logEditRequestParseSuccess({
+      reqId,
+      htmlLength: result.htmlLength,
+      htmlSource: meta.htmlSource ?? "native",
+      primaryAction: primaryForm?.actionUrl ?? "",
+      fieldCount: primaryForm?.fields.length ?? 0,
+    });
+  }
 
   if (__DEV__) {
     console.log(`[${LOG_TAG}]`, JSON.stringify({ ok: result.ok, reqId }));

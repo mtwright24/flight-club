@@ -5,6 +5,10 @@
 import { fcDevMirrorScheduleLogToFile } from "../../dev/fcDevFileLogger";
 import { FLICA_TRADEBOARD_BCID } from "./flicaActionsActionMap";
 import { resolveFlicaAbsoluteUrl } from "./flicaTradeBoardAllRequestsForm";
+import {
+  collectReqIdsFromMyRequestsOnclick,
+  extractReqIdFromMyRequestsOnclickHaystack,
+} from "./flicaTradeBoardMyRequestsOnclickReqId";
 import type {
   TradeboardMyRequestActionRow,
   TradeboardMyRequestsActionsParse,
@@ -117,6 +121,16 @@ export function parseTradeboardMyRequestsActionsFromHtml(
     const hay = `${onclick} ${value} ${getAttr(attrs, "name")}`;
     const ctx = h.slice(Math.max(0, cm.index - 350), Math.min(h.length, cm.index + 450));
     const { pairingId, dateLabel } = extractPairingFromContext(ctx);
+    const onclickReqId = extractReqIdFromMyRequestsOnclickHaystack(hay);
+    if (onclickReqId) {
+      mergeRow(map, onclickReqId, {
+        pairingId,
+        dateLabel,
+        editUrl: tradeboardEditRequestUrl(onclickReqId),
+        deleteUrl: tradeboardMyRequestDeleteUrl(onclickReqId),
+        rawPreview: collapseWs(ctx).slice(0, 200),
+      });
+    }
     const editReqId = extractReqIdFromEditHref(hay);
     if (editReqId) {
       mergeRow(map, editReqId, {
@@ -149,6 +163,20 @@ export function parseTradeboardMyRequestsActionsFromHtml(
     const { pairingId, dateLabel } = extractPairingFromContext(ctx);
     const requestType = extractRequestTypeFromContext(ctx);
 
+    const onclickReqId = extractReqIdFromMyRequestsOnclickHaystack(hay);
+    if (onclickReqId) {
+      const treqM = /treq\s*[=:]\s*['"]?(\d+)/i.exec(ctx);
+      mergeRow(map, onclickReqId, {
+        pairingId,
+        dateLabel,
+        requestType,
+        editUrl: tradeboardEditRequestUrl(onclickReqId),
+        deleteUrl: tradeboardMyRequestDeleteUrl(onclickReqId),
+        treq: treqM?.[1] ?? "",
+        rawPreview: collapseWs(ctx).slice(0, 200),
+      });
+    }
+
     const editReqId = extractReqIdFromEditHref(hay);
     if (editReqId) {
       const treqM = /treq\s*[=:]\s*['"]?(\d+)/i.exec(ctx);
@@ -172,6 +200,45 @@ export function parseTradeboardMyRequestsActionsFromHtml(
         rawPreview: collapseWs(ctx).slice(0, 200),
       });
     }
+  }
+
+  for (const reqId of collectReqIdsFromMyRequestsOnclick(h)) {
+    if (map.has(reqId)) continue;
+    const idx = h.search(
+      new RegExp(
+        `EditRequest\\s*\\(\\s*${reqId}\\s*\\)|DeleteRequest\\s*\\(\\s*${reqId}\\s*,|GetNumOfActiveResponses\\s*\\(\\s*${reqId}\\s*\\)`,
+        "i",
+      ),
+    );
+    const ctx =
+      idx >= 0
+        ? h.slice(Math.max(0, idx - 400), Math.min(h.length, idx + 1200))
+        : h.slice(0, 2000);
+    const { pairingId, dateLabel } = extractPairingFromContext(ctx);
+    mergeRow(map, reqId, {
+      pairingId,
+      dateLabel,
+      requestType: extractRequestTypeFromContext(ctx),
+      editUrl: tradeboardEditRequestUrl(reqId),
+      deleteUrl: tradeboardMyRequestDeleteUrl(reqId),
+      rawPreview: collapseWs(ctx).slice(0, 200),
+    });
+  }
+
+  const delCheckboxRe = /\bname\s*=\s*["']del(\d+)["']/gi;
+  let dcm: RegExpExecArray | null;
+  while ((dcm = delCheckboxRe.exec(h)) !== null) {
+    const reqId = dcm[1] ?? "";
+    if (!reqId) continue;
+    const ctx = h.slice(Math.max(0, dcm.index - 350), Math.min(h.length, dcm.index + 450));
+    const { pairingId, dateLabel } = extractPairingFromContext(ctx);
+    mergeRow(map, reqId, {
+      pairingId,
+      dateLabel,
+      editUrl: tradeboardEditRequestUrl(reqId),
+      deleteUrl: tradeboardMyRequestDeleteUrl(reqId),
+      rawPreview: collapseWs(ctx).slice(0, 200),
+    });
   }
 
   const deleteRe = /TB_MyRequests\.cgi[^"'>\s]*DeleteMe=(\d+)/gi;
@@ -215,10 +282,13 @@ export function parseTradeboardMyRequestsActionsFromHtml(
     warnings.push("No editable request rows with reqId found in My Requests HTML.");
   }
 
+  const reqIdsFromOnclick = collectReqIdsFromMyRequestsOnclick(h);
+
   fcDevMirrorScheduleLogToFile(LOG_TAG, {
     ok: rows.length > 0,
     htmlLength: h.length,
     rowCount: rows.length,
+    reqIdsFromOnclick,
     warnings,
     firstRows: rows.slice(0, 5).map((r) => ({
       pairingId: r.pairingId,
@@ -234,9 +304,35 @@ export function parseTradeboardMyRequestsActionsFromHtml(
   if (__DEV__) {
     console.log(
       `[${LOG_TAG}]`,
-      JSON.stringify({ htmlLength: h.length, rowCount: rows.length, warnings }),
+      JSON.stringify({
+        htmlLength: h.length,
+        rowCount: rows.length,
+        reqIdsFromOnclick,
+        warnings,
+      }),
     );
   }
 
   return { ok: rows.length > 0, rows, warnings };
+}
+
+/** Build action rows from native-parse href/action endpoints (Edit/Delete URLs). */
+export function buildMyRequestActionRowsFromEndpoints(
+  endpoints: string[] | undefined,
+): TradeboardMyRequestActionRow[] {
+  const map = new Map<string, TradeboardMyRequestActionRow>();
+  for (const raw of endpoints ?? []) {
+    const href = resolveFlicaAbsoluteUrl(String(raw ?? "").trim());
+    if (!href) continue;
+    const editReqId = extractReqIdFromEditHref(href);
+    const deleteReqId = extractReqIdFromDeleteHref(href);
+    const reqId = editReqId || deleteReqId;
+    if (!reqId) continue;
+    mergeRow(map, reqId, {
+      editUrl: editReqId && href.includes("EditRequest") ? href : tradeboardEditRequestUrl(reqId),
+      deleteUrl:
+        deleteReqId && href.includes("DeleteMe") ? href : tradeboardMyRequestDeleteUrl(reqId),
+    });
+  }
+  return [...map.values()];
 }

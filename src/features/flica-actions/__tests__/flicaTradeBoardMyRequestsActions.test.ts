@@ -39,6 +39,20 @@ describe("TradeBoard My Requests actions parse", () => {
     expect(row.dateLabel).toBe("11JUN");
   });
 
+  it("extracts reqId from FLICA del{reqId} checkbox name", () => {
+    const html = `
+      <tr>
+        <td><input type="checkbox" name="del28542564" /></td>
+        <td>Drop</td>
+        <td>J3379:11JUN</td>
+      </tr>
+    `;
+    const parsed = parseTradeboardMyRequestsActionsFromHtml(html);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]!.reqId).toBe("28542564");
+    expect(parsed.rows[0]!.deleteUrl).toContain("DeleteMe=28542564");
+  });
+
   it("builds canonical edit and delete URLs", () => {
     expect(tradeboardEditRequestUrl("123")).toContain("reqId=123");
     expect(tradeboardMyRequestDeleteUrl("123")).toContain("DeleteMe=123");

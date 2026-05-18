@@ -15,15 +15,23 @@ import {
   tradeboardEditRequestUrl,
   tradeboardMyRequestDeleteUrl,
 } from "./flicaTradeBoardMyRequestsActions";
+import { extractReqIdFromMyRequestsOnclickHaystack } from "./flicaTradeBoardMyRequestsOnclickReqId";
 import type {
   TradeboardMyRequestActionRow,
 } from "./flicaTradeBoardPostRequestTypes";
 import { parseFlicaPairOnclick, buildTradeboardPairingDetailUrl } from "./flicaPairingDetailUrl";
 import {
-  extractMyRequestsDesktopRowLine,
+  extractAllMyRequestsDesktopRowBlocks,
   pagePlainTextHasMyRequestsDesktopRow,
   parseMyRequestsCompactDesktopRow,
 } from "./flicaTradeBoardMyRequestsCompactRow";
+import {
+  findDesktopBlockHtmlContext,
+  findHtmlContextForReqId,
+  logFcTbMultirowParseResult,
+  logFcTbTabIsolationDebug,
+  mergeMyRequestsPostsByReqId,
+} from "./flicaTradeBoardMyRequestsMultirow";
 
 const LOG_ACTIONS = "FC_TB_MY_REQUESTS_PARSE_ACTIONS";
 const LOG_FIELDS = "FC_TB_MY_REQUESTS_FIELD_PARSE";
@@ -72,11 +80,14 @@ function getAttr(tag: string, attr: string): string {
 
 function extractReqIdFromHaystack(hay: string): string {
   const h = String(hay ?? "");
+  const fromOnclick = extractReqIdFromMyRequestsOnclickHaystack(h);
+  if (fromOnclick) return fromOnclick;
   const m =
     /(?:^|[?&])reqId=(\d+)/i.exec(h) ??
     /TB_EditRequest\.cgi[^"']*reqId=(\d+)/i.exec(h) ??
     /(?:^|[?&])DeleteMe=(\d+)/i.exec(h) ??
     /TB_MyRequests\.cgi[^"']*DeleteMe=(\d+)/i.exec(h) ??
+    /\bname\s*=\s*["']del(\d+)["']/i.exec(h) ??
     /reqId\s*[=:]\s*['"]?(\d+)/i.exec(h) ??
     /DeleteMe\s*[=:]\s*['"]?(\d+)/i.exec(h);
   return m?.[1]?.trim() ?? "";
@@ -110,102 +121,72 @@ export function stripMyRequestsActionCells(cells: string[]): string[] {
   return out;
 }
 
-function pageHtmlLooksLikeMyRequests(html: string): boolean {
-  const h = String(html ?? "");
-  return (
-    /tb_myrequests\.cgi/i.test(h) ||
-    /\bmy\s+requests\b/i.test(h) ||
-    /TB_EditRequest\.cgi/i.test(h) ||
-    /DeleteMe\s*=\s*\d+/i.test(h) ||
-    /\bJ[A-Z0-9]{3,5}\s*:\s*\d{1,2}[A-Z]{3}\b/i.test(h)
-  );
-}
-
-type MyRequestPageCluster = {
-  pairingId: string;
-  dateLabel: string;
-  ctx: string;
-};
-
-/** Pairing windows that include Edit/Delete or reqId (FLICA often uses script rows, not `<table>`). */
-function extractMyRequestClustersFromPageHtml(html: string): MyRequestPageCluster[] {
-  const h = String(html ?? "");
-  const out: MyRequestPageCluster[] = [];
-  const seen = new Set<string>();
-  const re = /\b(J[A-Z0-9]{3,5})\s*(?::|&#58;|&#x3A;|&colon;)?\s*(\d{1,2}[A-Z]{3})\b/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(h)) !== null) {
-    const pairingId = m[1]!.toUpperCase();
-    const dateLabel = m[2]!.toUpperCase();
-    const key = `${pairingId}:${dateLabel}`;
-    if (seen.has(key)) continue;
-    const ctx = h.slice(Math.max(0, m.index - 700), Math.min(h.length, m.index + 4000));
-    if (
-      !/TB_EditRequest\.cgi/i.test(ctx) &&
-      !/DeleteMe\s*=\s*\d+/i.test(ctx) &&
-      !/reqId\s*=\s*\d+/i.test(ctx) &&
-      !/\bEdit\b/i.test(ctx)
-    ) {
-      continue;
-    }
-    seen.add(key);
-    out.push({ pairingId, dateLabel, ctx });
-  }
-  return out;
-}
-
-function buildPostFromPageCluster(
-  cluster: MyRequestPageCluster,
+function buildPostFromActionRow(
+  row: TradeboardMyRequestActionRow,
+  ctx: string,
   sourceUrl: string,
 ): TradeboardPost | null {
-  const plain = tradeboardTdInnerToPlain(cluster.ctx);
-  const pipeHint = `${cluster.pairingId}:${cluster.dateLabel} ${plain}`.slice(0, 2400);
-  const fromMapper = mapTradeboardRowsToPosts([[pipeHint]], "my_requests", sourceUrl);
-  let post = fromMapper[0] ?? null;
-  if (!post) {
-    const type = detectTradeboardType(plain);
-    post = {
-      id: `tb-my-${cluster.pairingId}-${cluster.dateLabel}`,
-      type,
-      typeLabel: tradeboardTypeLongLabel(type),
-      posterName: "",
-      pairingId: cluster.pairingId,
-      pairingDateLabel: cluster.dateLabel,
-      routeSummary: `${cluster.pairingId}:${cluster.dateLabel}`,
-      base: "",
-      position: "",
-      date: cluster.dateLabel,
-      days: "",
-      reportTime: "",
-      departTime: "",
-      arriveTime: "",
-      block: "",
-      credit: "",
-      worth: null,
-      layover: "",
-      comments: "",
-      responseMethods: "",
-      responseMethodLabel: "",
-      postedAt: "",
-      postedAtLabel: "",
-      canPickup: false,
-      canProposeTrade: false,
-      matchScore: null,
-      legalCompatibility: null,
-      sourceUrl,
-      rawCells: [pipeHint.slice(0, 400)],
-      rawText: pipeHint.slice(0, 900),
-      offerCount: null,
-      isMyRequest: true,
-      sourceTab: "my_requests",
-    };
+  const plain = tradeboardTdInnerToPlain(ctx);
+  const compact = parseMyRequestsCompactDesktopRow(plain, sourceUrl);
+  const type = (compact?.type ??
+    row.requestType ??
+    detectTradeboardType(plain)) as TradeboardPost["type"];
+  const pairingId = (row.pairingId || compact?.pairingId || "").toUpperCase();
+  const dateLabel = (row.dateLabel || compact?.pairingDateLabel || "").toUpperCase();
+  if (!pairingId) return null;
+
+  const actions: MyRequestRowActions = {
+    reqId: row.reqId,
+    editRequestId: row.reqId,
+    deleteRequestId: row.reqId,
+    editUrl: row.editUrl || tradeboardEditRequestUrl(row.reqId),
+    deleteUrl: row.deleteUrl || tradeboardMyRequestDeleteUrl(row.reqId),
+    hasEdit: true,
+    hasDelete: true,
+    treq: row.treq ?? "",
+  };
+
+  if (compact) {
+    return applyMyRequestFieldsToPost(compact, actions, ctx);
   }
-  const actions = extractMyRequestActionsFromRowHtml(cluster.ctx);
-  return applyMyRequestFieldsToPost(
-    { ...post, isMyRequest: true, sourceTab: "my_requests", rawText: pipeHint.slice(0, 900) },
-    actions,
-    cluster.ctx,
-  );
+
+  const post: TradeboardPost = {
+    id: `tb-my-req-${row.reqId}`,
+    type: (type as TradeboardPost["type"]) || "trade",
+    typeLabel: tradeboardTypeLongLabel((type as TradeboardPost["type"]) || "trade"),
+    posterName: "",
+    pairingId,
+    pairingDateLabel: dateLabel,
+    routeSummary: `${pairingId}:${dateLabel}`,
+    base: row.base ?? "",
+    position: row.position ?? "",
+    date: dateLabel,
+    days: "",
+    reportTime: "",
+    departTime: "",
+    arriveTime: "",
+    block: "",
+    credit: "",
+    worth: null,
+    layover: "",
+    comments: row.comments ?? "",
+    responseMethods: row.responseMethods ?? "",
+    responseMethodLabel: row.responseMethods ?? "",
+    postedAt: row.postedAt ?? "",
+    postedAtLabel: row.postedAt ?? "",
+    canPickup: false,
+    canProposeTrade: false,
+    matchScore: null,
+    legalCompatibility: null,
+    sourceUrl,
+    rawCells: plain.split(/\s+/).filter(Boolean).slice(0, 48),
+    rawText: plain.slice(0, 900),
+    offerCount: null,
+    isMyRequest: true,
+    sourceTab: "my_requests",
+    pairingDetailUrl: row.pairingDetailUrl,
+  };
+  return applyMyRequestFieldsToPost(post, actions, ctx);
 }
 
 /** Each data `<tr>` on TB_MyRequests.cgi → pipe line + raw HTML for action extraction. */
@@ -286,8 +267,16 @@ export function extractMyRequestActionsFromRowHtml(rawRowHtml: string): MyReques
   let hasDelete = false;
 
   for (const hay of haystacks) {
-    if (/\bEdit\b/i.test(hay) || /TB_EditRequest\.cgi/i.test(hay)) hasEdit = true;
-    if (/\bDelete\b/i.test(hay) || /DeleteMe\s*=/i.test(hay)) hasDelete = true;
+    if (/\bEdit\b/i.test(hay) || /TB_EditRequest\.cgi/i.test(hay) || /EditRequest\s*\(\s*\d+/i.test(hay)) {
+      hasEdit = true;
+    }
+    if (
+      /\bDelete\b/i.test(hay) ||
+      /DeleteMe\s*=/i.test(hay) ||
+      /DeleteRequest\s*\(\s*\d+/i.test(hay)
+    ) {
+      hasDelete = true;
+    }
     const rid = extractReqIdFromHaystack(hay);
     if (rid && !reqId) reqId = rid;
     if (/TB_EditRequest\.cgi/i.test(hay) || /reqId\s*=/i.test(hay)) {
@@ -435,14 +424,30 @@ export type TradeboardMyRequestsPageParse = {
 
 export function extractPageLevelReqIdActions(html: string): MyRequestRowActions {
   const h = String(html ?? "");
-  const reqIds = [
-    ...new Set(
-      [...h.matchAll(/(?:reqId|DeleteMe)\s*=\s*(\d+)/gi)]
-        .map((m) => m[1]!.trim())
-        .filter(Boolean),
-    ),
-  ];
-  const reqId = reqIds.length === 1 ? reqIds[0]! : reqIds[0] ?? extractReqIdFromHaystack(h);
+  const reqIdSet = new Set<string>();
+  for (const m of h.matchAll(/(?:reqId|DeleteMe)\s*=\s*(\d+)/gi)) {
+    const id = m[1]?.trim();
+    if (id) reqIdSet.add(id);
+  }
+  for (const m of h.matchAll(/\bname\s*=\s*["']del(\d+)["']/gi)) {
+    const id = m[1]?.trim();
+    if (id) reqIdSet.add(id);
+  }
+  for (const m of h.matchAll(/EditRequest\s*\(\s*(\d+)\s*\)/gi)) {
+    const id = m[1]?.trim();
+    if (id) reqIdSet.add(id);
+  }
+  for (const m of h.matchAll(/DeleteRequest\s*\(\s*(\d+)\s*,/gi)) {
+    const id = m[1]?.trim();
+    if (id) reqIdSet.add(id);
+  }
+  for (const m of h.matchAll(/GetNumOfActiveResponses\s*\(\s*(\d+)\s*\)/gi)) {
+    const id = m[1]?.trim();
+    if (id) reqIdSet.add(id);
+  }
+  const reqIds = [...reqIdSet];
+  const reqId =
+    reqIds.length === 1 ? reqIds[0]! : reqIds.length === 0 ? extractReqIdFromHaystack(h) : "";
   if (!reqId) {
     return {
       reqId: "",
@@ -481,114 +486,145 @@ export function myRequestsPostsReadyForHub(posts: TradeboardPost[]): boolean {
   return posts.some((p) => isCompleteMyRequestsPost(p));
 }
 
-/** Primary My Requests page parser — one object per visible FLICA row. */
+function resolveActionRowForDesktopPost(
+  compact: TradeboardPost,
+  blockIndex: number,
+  desktopBlocks: string[],
+  actionRows: TradeboardMyRequestActionRow[],
+  sourceUrl: string,
+): TradeboardMyRequestActionRow | undefined {
+  const pid = compact.pairingId.trim().toUpperCase();
+  const date = compact.pairingDateLabel.trim().toUpperCase();
+  if (!pid) return undefined;
+  const candidates = actionRows.filter(
+    (r) =>
+      r.pairingId.toUpperCase() === pid &&
+      (!date || !r.dateLabel || r.dateLabel.toUpperCase() === date),
+  );
+  const priorSamePairing = desktopBlocks.slice(0, blockIndex).filter((b) => {
+    const c = parseMyRequestsCompactDesktopRow(b, sourceUrl);
+    return (
+      c &&
+      c.pairingId.toUpperCase() === pid &&
+      c.pairingDateLabel.toUpperCase() === date
+    );
+  }).length;
+  if (candidates.length) return candidates[priorSamePairing];
+  if (blockIndex >= 0 && blockIndex < actionRows.length) return actionRows[blockIndex];
+  return undefined;
+}
+
+function upsertMyRequestByReqId(
+  map: Map<string, TradeboardPost>,
+  post: TradeboardPost | null,
+): void {
+  if (!post) return;
+  const reqId = postReqId(post);
+  if (!reqId) return;
+  const existing = map.get(reqId);
+  if (!existing) {
+    map.set(reqId, post);
+    return;
+  }
+  const score = (p: TradeboardPost) =>
+    (p.reportTime?.trim() ? 4 : 0) +
+    (p.departTime?.trim() ? 2 : 0) +
+    (p.comments?.trim() ? 1 : 0) +
+    (p.postedAtLabel?.trim() ? 1 : 0);
+  if (score(post) >= score(existing)) map.set(reqId, post);
+}
+
+/** Primary My Requests page parser — one TB_MyRequests.cgi row per reqId, no cross-tab logic. */
 export function parseTradeboardMyRequestsPage(
   html: string,
   sourceUrl: string,
 ): TradeboardMyRequestsPageParse {
   const h = String(html ?? "");
-  const pageActions = extractPageLevelReqIdActions(h);
   let mode = "none";
-
-  const desktopLine = extractMyRequestsDesktopRowLine(h);
-  if (desktopLine) {
-    const compact = parseMyRequestsCompactDesktopRow(desktopLine, sourceUrl);
-    if (compact) {
-      const post = applyMyRequestFieldsToPost(compact, pageActions, h);
-      mode = "my_requests_desktop_compact";
-      const first = post;
-      fcDevMirrorScheduleLogToFile(LOG_FIELDS, {
-        tableRowCount: 1,
-        postCount: 1,
-        mode,
-        firstRow: {
-          type: first.type,
-          typeLabel: first.typeLabel,
-          pairingId: first.pairingId,
-          pairingDateLabel: first.pairingDateLabel,
-          base: first.base,
-          position: first.position,
-          days: first.days,
-          reportTime: first.reportTime,
-          departTime: first.departTime,
-          arriveTime: first.arriveTime,
-          block: first.block,
-          credit: first.credit,
-          layover: first.layover,
-          comments: first.comments,
-          postedAtLabel: first.postedAtLabel,
-          responseMethods: first.responseMethods,
-          reqId: first.reqId,
-          editUrl: first.editUrl,
-          deleteUrl: first.deleteUrl,
-          canEdit: first.canEdit,
-          canDelete: first.canDelete,
-        },
-      });
-      fcDevMirrorScheduleLogToFile(LOG_ACTIONS, {
-        htmlLength: h.length,
-        rowCount: 1,
-        tableRowCount: 1,
-        mode,
-        firstRows: [
-          {
-            pairingId: post.pairingId,
-            reqId: post.reqId,
-            editUrl: post.editUrl,
-            deleteUrl: post.deleteUrl,
-            hasEdit: post.canEdit,
-            hasDelete: post.canDelete,
-            rawText: post.rawText.slice(0, 160),
-          },
-        ],
-      });
-      return { posts: [post], tableRowCount: 1, mode };
-    }
-    fcDevMirrorScheduleLogToFile(LOG_ACTIONS, {
-      htmlLength: h.length,
-      mode: "my_requests_desktop_compact_failed",
-      desktopLinePreview: desktopLine.slice(0, 220),
-    });
-    return { posts: [], tableRowCount: 0, mode: "my_requests_desktop_compact_failed" };
-  }
+  const byReqId = new Map<string, TradeboardPost>();
+  const rawCollected: TradeboardPost[] = [];
 
   const records = extractMyRequestsTableRowRecords(h);
-  const posts: TradeboardPost[] = [];
-  const seen = new Set<string>();
+  const desktopBlocks = extractAllMyRequestsDesktopRowBlocks(h);
+  const actionRows = parseTradeboardMyRequestsActionsFromHtml(h).rows;
+
+  for (let blockIndex = 0; blockIndex < desktopBlocks.length; blockIndex++) {
+    const block = desktopBlocks[blockIndex]!;
+    const compact = parseMyRequestsCompactDesktopRow(block, sourceUrl);
+    if (!compact) continue;
+    const ctx = findDesktopBlockHtmlContext(h, block, compact);
+    const actions = extractMyRequestActionsFromRowHtml(ctx);
+    const actionRow = resolveActionRowForDesktopPost(
+      compact,
+      blockIndex,
+      desktopBlocks,
+      actionRows,
+      sourceUrl,
+    );
+    if (actionRow) {
+      actions.reqId = actionRow.reqId;
+      actions.editRequestId = actionRow.reqId;
+      actions.deleteRequestId = actionRow.reqId;
+      actions.editUrl = actionRow.editUrl || tradeboardEditRequestUrl(actionRow.reqId);
+      actions.deleteUrl = actionRow.deleteUrl || tradeboardMyRequestDeleteUrl(actionRow.reqId);
+      actions.hasEdit = true;
+      actions.hasDelete = true;
+    }
+    const post = applyMyRequestFieldsToPost(compact, actions, ctx);
+    rawCollected.push(post);
+    upsertMyRequestByReqId(byReqId, post);
+    mode = "my_requests_desktop";
+  }
 
   for (const rec of records) {
     const post = buildPostFromTableRecord(rec, sourceUrl);
-    if (!post?.pairingId) continue;
-    const k = `${post.pairingId}:${post.pairingDateLabel}:${post.reqId ?? ""}:${post.type}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    posts.push(applyMyRequestFieldsToPost(post, pageActions, rec.rawTrHtml));
-    mode = "my_requests_table";
-  }
-
-  if (posts.length === 0 && pageHtmlLooksLikeMyRequests(h)) {
-    for (const cluster of extractMyRequestClustersFromPageHtml(h)) {
-      const desktopFromCluster = parseMyRequestsCompactDesktopRow(
-        tradeboardTdInnerToPlain(cluster.ctx),
-        sourceUrl,
-      );
-      const post = desktopFromCluster
-        ? applyMyRequestFieldsToPost(desktopFromCluster, pageActions, cluster.ctx)
-        : buildPostFromPageCluster(cluster, sourceUrl);
-      if (!post?.pairingId) continue;
-      const k = `${post.pairingId}:${post.pairingDateLabel}:${post.reqId ?? ""}:${post.type}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      posts.push(
-        postReqId(post) ? post : applyMyRequestFieldsToPost(post, pageActions, cluster.ctx),
-      );
-      mode = "my_requests_cluster";
+    if (!post) continue;
+    rawCollected.push(post);
+    const rid = postReqId(post);
+    if (rid && !byReqId.has(rid)) {
+      upsertMyRequestByReqId(byReqId, post);
+      if (mode === "none") mode = "my_requests_table";
     }
   }
 
-  if (posts.length === 1 && pageActions.reqId) {
-    posts[0] = applyMyRequestFieldsToPost(posts[0]!, pageActions, h);
+  for (const row of actionRows) {
+    if (byReqId.has(row.reqId)) continue;
+    const ctx = findHtmlContextForReqId(h, row.reqId);
+    const post = buildPostFromActionRow(row, ctx, sourceUrl);
+    if (!post || !postReqId(post)) continue;
+    rawCollected.push(post);
+    upsertMyRequestByReqId(byReqId, post);
+    if (mode === "none") mode = "my_requests_action_row";
   }
+
+  const posts = [...byReqId.values()];
+  const fetchedRowCount = Math.max(desktopBlocks.length, actionRows.length, records.length);
+  const parsedRowCount = rawCollected.length;
+  const dedupedRowCount = Math.max(0, parsedRowCount - posts.length);
+  const syntheticRowCount = rawCollected.filter((p) => !postReqId(p)).length;
+  const detectedRowCount = fetchedRowCount;
+  const suppressedRowCount = Math.max(0, fetchedRowCount - posts.length);
+
+  logFcTbTabIsolationDebug({
+    sourceTab: "my_requests",
+    fetchedRowCount,
+    parsedRowCount,
+    renderedRowCount: posts.length,
+    syntheticRowCount,
+    dedupedRowCount,
+    reqIds: posts.map((p) => postReqId(p)).filter(Boolean),
+    pairingIds: posts.map((p) => p.pairingId).filter(Boolean),
+    parseMode: mode,
+  });
+  logFcTbMultirowParseResult({
+    detectedRowCount,
+    renderedRowCount: posts.length,
+    reqIds: posts.map((p) => postReqId(p)).filter(Boolean),
+    pairingIds: posts.map((p) => p.pairingId).filter(Boolean),
+    suppressedRowCount,
+    mode,
+    tableRowCount: records.length,
+  });
 
   const first = posts[0];
   fcDevMirrorScheduleLogToFile(LOG_FIELDS, {
@@ -661,6 +697,48 @@ export function tradeboardPostMyRequestReqId(p: TradeboardPost): string {
   return postReqId(p);
 }
 
+/** Copy reqId/edit/delete from a freshly parsed My Requests row onto a stale list row. */
+export function mergeMyRequestReqIdFromFreshPosts(
+  post: TradeboardPost,
+  freshPosts: TradeboardPost[],
+): TradeboardPost {
+  if (tradeboardPostMyRequestReqId(post)) return post;
+  const pid = post.pairingId.trim().toUpperCase();
+  const date = post.pairingDateLabel.trim().toUpperCase();
+  if (!pid) return post;
+
+  const hasReqId = (p: TradeboardPost) => Boolean(tradeboardPostMyRequestReqId(p));
+
+  const existingReqId = tradeboardPostMyRequestReqId(post);
+  let match: TradeboardPost | null = null;
+  if (existingReqId) {
+    match = freshPosts.find((p) => tradeboardPostMyRequestReqId(p) === existingReqId) ?? null;
+  }
+  if (!match) {
+    match =
+      freshPosts.find(
+        (p) =>
+          p.pairingId.trim().toUpperCase() === pid &&
+          hasReqId(p) &&
+          p.type === post.type &&
+          (!date || p.pairingDateLabel.trim().toUpperCase() === date),
+      ) ?? null;
+  }
+  if (!match) return post;
+
+  return {
+    ...post,
+    reqId: match.reqId ?? match.myRequest?.reqId ?? post.reqId,
+    editRequestId: match.editRequestId ?? post.editRequestId,
+    deleteRequestId: match.deleteRequestId ?? post.deleteRequestId,
+    editUrl: match.editUrl ?? post.editUrl,
+    deleteUrl: match.deleteUrl ?? post.deleteUrl,
+    canEdit: match.canEdit ?? post.canEdit,
+    canDelete: match.canDelete ?? post.canDelete,
+    myRequest: match.myRequest ?? post.myRequest,
+  };
+}
+
 export function tradeboardPostMyRequestDeleteUrl(p: TradeboardPost): string {
   return (p.myRequest?.deleteUrl ?? p.deleteUrl ?? "").trim();
 }
@@ -719,15 +797,8 @@ export function applyMyRequestActionsFromFullHtml(
   if (actionRows.length) {
     out = out.map((p) => {
       if (tradeboardPostShowsMyRequestActions(p)) return p;
-      const pid = p.pairingId.trim().toUpperCase();
-      const date = p.pairingDateLabel.trim().toUpperCase();
-      let row =
-        actionRows.find(
-          (r) =>
-            r.pairingId === pid &&
-            (!date || !r.dateLabel || r.dateLabel.toUpperCase() === date),
-        ) ?? actionRows.find((r) => r.pairingId === pid);
-      if (!row && out.length === 1 && actionRows.length === 1) row = actionRows[0]!;
+      const rid = tradeboardPostMyRequestReqId(p);
+      let row = rid ? actionRows.find((r) => r.reqId === rid) : undefined;
       if (!row?.reqId) return p;
       const actions = extractMyRequestActionsFromRowHtml(
         `${row.editUrl} ${row.deleteUrl} reqId=${row.reqId}`,
@@ -743,37 +814,22 @@ export function applyMyRequestActionsFromFullHtml(
     });
   }
 
-  out = out.map((p) =>
-    tradeboardPostShowsMyRequestActions(p) ? p : attachActionsFromPairingWindow(p, h),
-  );
-
-  const reqIds = [
-    ...new Set(
-      [...h.matchAll(/(?:reqId|DeleteMe)\s*=\s*(\d+)/gi)].map((m) => m[1]!.trim()).filter(Boolean),
-    ),
-  ];
-  if (reqIds.length === 1) {
-    const reqId = reqIds[0]!;
-    const singleton: MyRequestRowActions = {
-      reqId,
-      editRequestId: reqId,
-      deleteRequestId: reqId,
-      editUrl: tradeboardEditRequestUrl(reqId),
-      deleteUrl: tradeboardMyRequestDeleteUrl(reqId),
-      hasEdit: true,
-      hasDelete: true,
-      treq: "",
-    };
-    out = out.map((p) =>
-      tradeboardPostShowsMyRequestActions(p)
-        ? p
-        : applyMyRequestFieldsToPost(
-            { ...p, isMyRequest: true, sourceTab: "my_requests" },
-            singleton,
-            h,
-          ),
-    );
-  }
+  out = out.map((p) => {
+    if (tradeboardPostShowsMyRequestActions(p)) return p;
+    const rid = tradeboardPostMyRequestReqId(p);
+    if (rid) {
+      const ctx = findHtmlContextForReqId(h, rid);
+      const actions = extractMyRequestActionsFromRowHtml(ctx);
+      if (actions.reqId || actions.editUrl || actions.deleteUrl) {
+        return applyMyRequestFieldsToPost(
+          { ...p, isMyRequest: true, sourceTab: "my_requests" },
+          actions,
+          ctx,
+        );
+      }
+    }
+    return attachActionsFromPairingWindow(p, h);
+  });
 
   return out;
 }
@@ -786,37 +842,15 @@ export function enrichMyRequestsPostsFromPageHtml(
   return applyMyRequestActionsFromFullHtml(posts, html);
 }
 
-/**
- * Last gate before setMyPosts / cache: prefer desktop compact row; never keep token-only
- * legacy fallbacks when the page plain text contains the real FLICA row.
- */
+/** @deprecated Use parseTradeboardMyRequestsPage only — no second-stage hub merge. */
 export function finalizeMyRequestsPostsForHub(
-  posts: TradeboardPost[],
+  _posts: TradeboardPost[],
   html: string,
   sourceUrl: string,
 ): TradeboardPost[] {
   const h = String(html ?? "").trim();
-  if (!h.length) {
-    return posts.filter((p) => !isWeakMyRequestsFallbackPost(p));
-  }
-
-  const pageActions = extractPageLevelReqIdActions(h);
-  if (pagePlainTextHasMyRequestsDesktopRow(h)) {
-    const line = extractMyRequestsDesktopRowLine(h);
-    if (line) {
-      const compact = parseMyRequestsCompactDesktopRow(line, sourceUrl);
-      if (compact) {
-        const ready = [applyMyRequestFieldsToPost(compact, pageActions, h)];
-        return applyMyRequestActionsFromFullHtml(ready, h);
-      }
-    }
-    return [];
-  }
-
-  let out = applyMyRequestActionsFromFullHtml(posts, h);
-  const complete = out.filter(isCompleteMyRequestsPost);
-  if (complete.length > 0) return complete;
-  return out.filter((p) => !isWeakMyRequestsFallbackPost(p));
+  if (!h.length) return [];
+  return parseTradeboardMyRequestsPage(h, sourceUrl).posts;
 }
 
 export function logTradeboardMyRequestsRenderActions(

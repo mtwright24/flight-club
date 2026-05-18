@@ -1,6 +1,6 @@
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter, type Href } from "expo-router";
-import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import {
   ActivityIndicator,
@@ -9,11 +9,12 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  ScrollView,
+  SectionList,
   StyleSheet,
   Text,
   TextInput,
   View,
+  type SectionListData,
 } from "react-native";
 import { Swipeable } from "react-native-gesture-handler";
 import { useAuth } from "../../../hooks/useAuth";
@@ -50,8 +51,11 @@ import {
   myRequestsPostsReadyForHub,
   tradeboardPostMyRequestDeleteUrl,
   tradeboardPostMyRequestReqId,
-  tradeboardPostShowsMyRequestActions,
 } from "../../flica-actions/flicaTradeBoardMyRequestsRowParse";
+import { setLatestMyRequestsRawHtml } from "../../flica-actions/flicaTradeBoardMyRequestsHtmlStore";
+import { resolveMyRequestReqIdForPost } from "../../flica-actions/flicaTradeBoardMyRequestsReqIdResolve";
+import { FlicaTradeBoardEditRequestWebViewCaptureRunner } from "../components/FlicaTradeBoardEditRequestWebViewCaptureRunner";
+import { FlicaTradeBoardMyRequestsWebViewCaptureRunner } from "../components/FlicaTradeBoardMyRequestsWebViewCaptureRunner";
 import { CrewHubSwipeActionRail, type CrewHubSwipeRailAction } from "../components/CrewHubSwipeActionRail";
 import { CrewHubRefreshToast } from "../components/CrewHubRefreshToast";
 import { hubLayoverDisplayForHubListRow } from "../crewHubLayoverDisplay";
@@ -60,6 +64,7 @@ import { FlicaTradeBoardActivitySelectorWebViewCaptureRunner } from "../componen
 import { FlicaTradeBoardPostRequestWebViewActionRunner } from "../components/FlicaTradeBoardPostRequestWebViewActionRunner";
 import MonthlyStatsStrip from "../components/MonthlyStatsStrip";
 import {
+  invalidateTradeboardHubCacheMyPosts,
   loadTradeboardHubCache,
   upsertTradeboardHubCache,
 } from "../crewHubFlicaCache";
@@ -82,6 +87,11 @@ import {
   SCHEDULE_MOCK_STATS_STRIP_RED,
 } from "../scheduleMockPalette";
 import type { CrewScheduleTrip } from "../types";
+
+/** Skip silent focus refetch when hub cache was refreshed recently (pull still always runs). */
+const TRADEBOARD_FOCUS_RELOAD_MS = 60_000;
+
+const TRADEBOARD_TIME_CHIPS = ["All", "Today", "This Week", "This Month"] as const;
 
 function formatRoleForHeader(role: string): string {
   const raw = String(role).trim();
@@ -535,24 +545,39 @@ function TradeboardFeedRowInner({
     daysRaw && /\d/.test(daysRaw) ? `${daysRaw} Day` : daysRaw || "—";
   const { reportTime: rpt, departTime: dep, arriveTime: arr, credit: cr } = tradeboardDisplayScheduleFields(p);
 
-  const swipeActions: CrewHubSwipeRailAction[] = [
-    {
-      key: "primary",
-      label: tradeboardSwipePrimaryLabel(p.type),
-      onPress: () => onTradeboardMutateWeb(primaryUri),
-      variant: "primary",
-    },
-    ...(p.type === "trade_drop"
-      ? [
-          {
-            key: "pickup",
-            label: "Pickup",
-            onPress: () => onTradeboardMutateWeb(FLICA_NATIVE_URLS.tradeFrame),
-            variant: "secondary",
-          } satisfies CrewHubSwipeRailAction,
-        ]
-      : []),
-  ];
+  const swipeActions: CrewHubSwipeRailAction[] = showMyRequestActions
+    ? [
+        {
+          key: "edit",
+          label: "Edit",
+          onPress: () => onEditMyRequest?.(p),
+          variant: "primary",
+        },
+        {
+          key: "delete",
+          label: "Delete",
+          onPress: () => onDeleteMyRequest?.(p),
+          variant: "secondary",
+        },
+      ]
+    : [
+        {
+          key: "primary",
+          label: tradeboardSwipePrimaryLabel(p.type),
+          onPress: () => onTradeboardMutateWeb(primaryUri),
+          variant: "primary",
+        },
+        ...(p.type === "trade_drop"
+          ? [
+              {
+                key: "pickup",
+                label: "Pickup",
+                onPress: () => onTradeboardMutateWeb(FLICA_NATIVE_URLS.tradeFrame),
+                variant: "secondary",
+              } satisfies CrewHubSwipeRailAction,
+            ]
+          : []),
+      ];
 
   return (
     <Swipeable
@@ -661,28 +686,75 @@ function TradeboardFeedRowInner({
           </View>
         </View>
         </Pressable>
-        {showMyRequestActions && tradeboardPostShowsMyRequestActions(p) ? (
-          <View style={styles.tbMyReqActions}>
-            <Pressable
-              style={styles.tbMyReqActionBtn}
-              onPress={() => onEditMyRequest?.(p)}
-            >
-              <Text style={styles.tbMyReqActionTxt}>Edit</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.tbMyReqActionBtn, styles.tbMyReqActionBtnDanger]}
-              onPress={() => onDeleteMyRequest?.(p)}
-            >
-              <Text style={[styles.tbMyReqActionTxt, styles.tbMyReqActionTxtDanger]}>Delete</Text>
-            </Pressable>
-          </View>
-        ) : null}
       </View>
     </Swipeable>
   );
 }
 
 const TradeboardFeedRow = React.memo(TradeboardFeedRowInner);
+
+const TradeboardColumnHeadRow = React.memo(function TradeboardColumnHeadRow() {
+  return (
+    <View style={styles.tbColHead}>
+      <View style={[styles.tbColHeadCell, { width: TB_COL.type }]}>
+        <Text style={styles.tbBarColTitle} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.78}>
+          TYPE
+        </Text>
+      </View>
+      <View style={[styles.tbColHeadCell, TB_FLEX_LAY]}>
+        <Text style={styles.tbBarColTitle} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.78}>
+          LAYOVER
+        </Text>
+      </View>
+      <View style={[styles.tbColHeadCell, styles.tbColHeadPoster, TB_FLEX_POSTER]}>
+        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+          PAIRING
+        </Text>
+        <View style={styles.tbHeadStackDividerH} />
+        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+          POSTER
+        </Text>
+      </View>
+      <View style={[styles.tbColHeadCell, TB_FLEX_SCHED]}>
+        <View style={styles.tbSchedHeadInset}>
+          <View style={styles.tbSchedHeadRow}>
+            <View style={styles.tbSchedHeadCell}>
+              <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                Report
+              </Text>
+              <View style={styles.tbHeadStackDividerH} />
+              <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                Credit
+              </Text>
+            </View>
+            <View style={styles.tbSchedHeadColDivider} />
+            <View style={styles.tbSchedHeadCell}>
+              <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                Depart
+              </Text>
+              <View style={styles.tbHeadStackDividerH} />
+              <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                Arrival
+              </Text>
+            </View>
+          </View>
+        </View>
+      </View>
+      <View style={[styles.tbColHeadCell, styles.tbColHeadCellLast, styles.tbColHeadWorth, { width: TB_COL.worth }]}>
+        <Text style={styles.tbBarColTitle} numberOfLines={1}>
+          $
+        </Text>
+      </View>
+    </View>
+  );
+});
+
+type TradeboardListSection = {
+  key: string;
+  title: string;
+  count: number;
+  data: TradeboardPost[];
+};
 
 type TradeboardDeferredGroupedListProps = {
   allPosts: TradeboardPost[];
@@ -694,16 +766,16 @@ type TradeboardDeferredGroupedListProps = {
   search: string;
   loading: boolean;
   listHeadingDate: string;
+  listHeaderComponent: React.ReactElement | null;
+  refreshing: boolean;
+  onRefresh: () => void;
   openTradeboardDetail: (p: TradeboardPost) => void;
   onTradeboardMutateWeb: (uri: string) => void;
   onEditMyRequest?: (p: TradeboardPost) => void;
   onDeleteMyRequest?: (p: TradeboardPost) => void;
 };
 
-/**
- * Filter + group work runs off deferred copies of tab/chip/search so type and
- * time pills can paint before reconciling every Swipeable row.
- */
+/** Virtualized date-grouped tradeboard rows; filters apply immediately (no deferred tab/chip). */
 const TradeboardDeferredGroupedList = React.memo(function TradeboardDeferredGroupedList({
   allPosts,
   myPosts,
@@ -714,15 +786,16 @@ const TradeboardDeferredGroupedList = React.memo(function TradeboardDeferredGrou
   search,
   loading,
   listHeadingDate,
+  listHeaderComponent,
+  refreshing,
+  onRefresh,
   openTradeboardDetail,
   onTradeboardMutateWeb,
   onEditMyRequest,
   onDeleteMyRequest,
 }: TradeboardDeferredGroupedListProps) {
   const router = useRouter();
-
-  const deferredPrimaryTab = useDeferredValue(primaryTab);
-  const deferredChip = useDeferredValue(chip);
+  const anchorNow = useMemo(() => new Date(), [listHeadingDate]);
 
   const filtered = useMemo(
     () =>
@@ -731,113 +804,141 @@ const TradeboardDeferredGroupedList = React.memo(function TradeboardDeferredGrou
         myPosts,
         responsePosts,
         tradeFeedTab,
-        deferredPrimaryTab,
+        primaryTab,
         search,
-        deferredChip,
+        chip,
       ),
-    [allPosts, myPosts, responsePosts, tradeFeedTab, deferredPrimaryTab, search, deferredChip],
+    [allPosts, myPosts, responsePosts, tradeFeedTab, primaryTab, search, chip],
   );
 
-  const tbDateGroups = useMemo(() => groupTradeboardByDate(filtered, new Date()), [filtered]);
+  const sections = useMemo((): TradeboardListSection[] => {
+    const groups = groupTradeboardByDate(filtered, anchorNow);
+    return groups
+      .filter((g) => g.items.length > 0)
+      .map((g) => ({
+        key: g.key,
+        title: g.key,
+        count: g.items.length,
+        data: g.items,
+      }));
+  }, [filtered, anchorNow]);
 
-  return (
-    <>
+  const showMyRequestActions = tradeFeedTab === "my";
+
+  const listHead = useMemo(
+    () => (
       <View style={styles.listHead}>
         <Text style={styles.listHeadTitle}>Tradeboard · {listHeadingDate}</Text>
         <Text style={styles.listHeadCount}>{filtered.length} total</Text>
       </View>
+    ),
+    [filtered.length, listHeadingDate],
+  );
 
-      {loading && filtered.length === 0 ? (
-        <ActivityIndicator style={{ marginTop: 24 }} color={SCHEDULE_MOCK_HEADER_RED} />
-      ) : null}
+  const listEmpty = useMemo(() => {
+    if (loading && filtered.length === 0) {
+      return <ActivityIndicator style={{ marginTop: 24 }} color={SCHEDULE_MOCK_HEADER_RED} />;
+    }
+    if (!loading && filtered.length === 0) {
+      return (
+        <View style={styles.tbListEmpty}>
+          <Text style={styles.tbListEmptyTitle}>No trips match this filter</Text>
+          <Text style={styles.tbListEmptySub}>Try another type, time range, or search.</Text>
+        </View>
+      );
+    }
+    return null;
+  }, [filtered.length, loading]);
 
-      {tbDateGroups.map((grp) =>
-        grp.items.length === 0 ? null : (
-          <View key={grp.key} style={styles.tbDateSection}>
-            <View style={styles.tbDateHeadRow}>
-              <View style={styles.tbDatePill}>
-                <Ionicons name="calendar-outline" size={11} color="#FFFFFF" style={styles.tbDatePillIon} />
-                <Text style={styles.tbDatePillText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
-                  {formatTradeboardDatePillHeading(grp.key, new Date())}
-                </Text>
-              </View>
-              <View style={styles.tbDateHeadTrail}>
-                <View style={styles.tbDateRule} />
-                <Text style={styles.tbDateSectionCount}>
-                  {grp.items.length} trip{grp.items.length === 1 ? "" : "s"}
-                </Text>
-              </View>
+  const renderSectionHeader = useCallback(
+    ({ section }: { section: SectionListData<TradeboardPost, TradeboardListSection> }) => {
+      const s = section as TradeboardListSection;
+      return (
+        <View style={styles.tbDateSection}>
+          <View style={styles.tbDateHeadRow}>
+            <View style={styles.tbDatePill}>
+              <Ionicons name="calendar-outline" size={11} color="#FFFFFF" style={styles.tbDatePillIon} />
+              <Text style={styles.tbDatePillText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+                {formatTradeboardDatePillHeading(s.title, anchorNow)}
+              </Text>
             </View>
-            <View style={styles.tbCardShell}>
-              <View style={styles.tbColHead}>
-                <View style={[styles.tbColHeadCell, { width: TB_COL.type }]}>
-                  <Text style={styles.tbBarColTitle} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.78}>
-                    TYPE
-                  </Text>
-                </View>
-                <View style={[styles.tbColHeadCell, TB_FLEX_LAY]}>
-                  <Text style={styles.tbBarColTitle} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.78}>
-                    LAYOVER
-                  </Text>
-                </View>
-                <View style={[styles.tbColHeadCell, styles.tbColHeadPoster, TB_FLEX_POSTER]}>
-                  <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
-                    PAIRING
-                  </Text>
-                  <View style={styles.tbHeadStackDividerH} />
-                  <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
-                    POSTER
-                  </Text>
-                </View>
-                <View style={[styles.tbColHeadCell, TB_FLEX_SCHED]}>
-                  <View style={styles.tbSchedHeadInset}>
-                    <View style={styles.tbSchedHeadRow}>
-                      <View style={styles.tbSchedHeadCell}>
-                        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
-                          Report
-                        </Text>
-                        <View style={styles.tbHeadStackDividerH} />
-                        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
-                          Credit
-                        </Text>
-                      </View>
-                      <View style={styles.tbSchedHeadColDivider} />
-                      <View style={styles.tbSchedHeadCell}>
-                        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
-                          Depart
-                        </Text>
-                        <View style={styles.tbHeadStackDividerH} />
-                        <Text style={styles.tbBarColTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
-                          Arrival
-                        </Text>
-                      </View>
-                    </View>
-                  </View>
-                </View>
-                <View style={[styles.tbColHeadCell, styles.tbColHeadCellLast, styles.tbColHeadWorth, { width: TB_COL.worth }]}>
-                  <Text style={styles.tbBarColTitle} numberOfLines={1}>
-                    $
-                  </Text>
-                </View>
-              </View>
-              {grp.items.map((p) => (
-                <TradeboardFeedRow
-                  key={p.id}
-                  p={p}
-                  router={router}
-                  onOpen={openTradeboardDetail}
-                  onTradeboardMutateWeb={onTradeboardMutateWeb}
-                  showMyRequestActions={tradeFeedTab === "my"}
-                  onEditMyRequest={onEditMyRequest}
-                  onDeleteMyRequest={onDeleteMyRequest}
-                />
-              ))}
+            <View style={styles.tbDateHeadTrail}>
+              <View style={styles.tbDateRule} />
+              <Text style={styles.tbDateSectionCount}>
+                {s.count} trip{s.count === 1 ? "" : "s"}
+              </Text>
             </View>
           </View>
-        ),
-      )}
-      <View style={{ height: 24 }} />
-    </>
+          <View style={styles.tbCardShellTop}>
+            <TradeboardColumnHeadRow />
+          </View>
+        </View>
+      );
+    },
+    [anchorNow],
+  );
+
+  const renderItem = useCallback(
+    ({ item, index, section }: { item: TradeboardPost; index: number; section: TradeboardListSection }) => {
+      const isLast = index === section.data.length - 1;
+      return (
+        <View style={[styles.tbCardShellBody, isLast ? styles.tbCardShellBodyLast : null]}>
+          <TradeboardFeedRow
+            p={item}
+            router={router}
+            onOpen={openTradeboardDetail}
+            onTradeboardMutateWeb={onTradeboardMutateWeb}
+            showMyRequestActions={showMyRequestActions}
+            onEditMyRequest={onEditMyRequest}
+            onDeleteMyRequest={onDeleteMyRequest}
+          />
+        </View>
+      );
+    },
+    [
+      router,
+      openTradeboardDetail,
+      onTradeboardMutateWeb,
+      showMyRequestActions,
+      onEditMyRequest,
+      onDeleteMyRequest,
+    ],
+  );
+
+  const listFooter = useMemo(() => <View style={{ height: 24 }} />, []);
+
+  const combinedListHeader = useMemo(
+    () => (
+      <>
+        {listHeaderComponent}
+        {listHead}
+        {listEmpty}
+      </>
+    ),
+    [listHeaderComponent, listHead, listEmpty],
+  );
+
+  return (
+    <SectionList
+      style={styles.scroll}
+      sections={sections}
+      keyExtractor={(item) => item.id}
+      renderItem={renderItem}
+      renderSectionHeader={renderSectionHeader}
+      stickySectionHeadersEnabled={false}
+      ListHeaderComponent={combinedListHeader}
+      ListFooterComponent={listFooter}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+      }
+      initialNumToRender={14}
+      maxToRenderPerBatch={12}
+      windowSize={9}
+      updateCellsBatchingPeriod={32}
+      removeClippedSubviews={Platform.OS === "android"}
+      keyboardShouldPersistTaps="handled"
+      extraData={showMyRequestActions}
+    />
   );
 });
 
@@ -868,6 +969,7 @@ export default function TradeboardTabScreen() {
   const [postSeedActivity, setPostSeedActivity] = useState<TradeboardPostRequestActivity | null>(
     null,
   );
+  const [postSeedRequestType, setPostSeedRequestType] = useState("");
   const [editComposerVisible, setEditComposerVisible] = useState(false);
   const [editFormParse, setEditFormParse] = useState<TradeboardPostRequestFormParse | null>(null);
   const [editFormLoading, setEditFormLoading] = useState(false);
@@ -889,7 +991,10 @@ export default function TradeboardTabScreen() {
   const loadRef = useRef<(reason: "pull" | "focus") => Promise<void>>(async () => {});
   const focusLoadGenRef = useRef(0);
   const focusLoadInFlightRef = useRef(false);
+  const lastSuccessfulFocusLoadAtRef = useRef(0);
+  const cachedRowCountRef = useRef(0);
   const cacheHydratedRef = useRef<string | null>(null);
+  cachedRowCountRef.current = allPosts.length + myPosts.length + responsePosts.length;
 
   useEffect(() => {
     const uid = session?.user?.id;
@@ -907,7 +1012,7 @@ export default function TradeboardTabScreen() {
   }, [session?.user?.id]);
 
   useEffect(() => {
-    if (tradeFeedTab === "my" && myPosts.length > 0) {
+    if (__DEV__ && tradeFeedTab === "my" && myPosts.length > 0) {
       logTradeboardMyRequestsRenderActions(tradeFeedTab, myPosts);
     }
   }, [tradeFeedTab, myPosts]);
@@ -962,6 +1067,13 @@ export default function TradeboardTabScreen() {
     const focusGen = reason === "focus" ? ++focusLoadGenRef.current : 0;
     if (reason === "focus") {
       if (focusLoadInFlightRef.current) return;
+      const hasCachedRows = cachedRowCountRef.current > 0;
+      if (
+        hasCachedRows &&
+        Date.now() - lastSuccessfulFocusLoadAtRef.current < TRADEBOARD_FOCUS_RELOAD_MS
+      ) {
+        return;
+      }
       focusLoadInFlightRef.current = true;
     }
     if (reason === "pull") {
@@ -1063,9 +1175,16 @@ export default function TradeboardTabScreen() {
           myRequests: myFb.meta,
         },
       };
-      commitTradeboardParseDebugSnapshot(pl);
-      if (__DEV__) {
-        console.log("[FC_TRADEBOARD_PARSE_DEBUG]", JSON.stringify(pl));
+      const commitParseDebug = () => {
+        commitTradeboardParseDebugSnapshot(pl);
+        if (__DEV__) {
+          console.log("[FC_TRADEBOARD_PARSE_DEBUG]", JSON.stringify(pl));
+        }
+      };
+      if (reason === "pull") {
+        InteractionManager.runAfterInteractions(commitParseDebug);
+      } else if (__DEV__) {
+        InteractionManager.runAfterInteractions(commitParseDebug);
       }
 
       const needVerification =
@@ -1082,7 +1201,10 @@ export default function TradeboardTabScreen() {
       }
 
       const mappedAll = mappedAllPre;
-      const mappedMy = mappedMyPre;
+      let mappedMy = mappedMyPre;
+      if (String(myR.pageHtml ?? "").trim().length) {
+        setLatestMyRequestsRawHtml(String(myR.pageHtml ?? ""), "native_fetch", myR.url);
+      }
       const myHasRows = mappedMy.length > 0;
       const refreshOk =
         allR.ok &&
@@ -1110,11 +1232,16 @@ export default function TradeboardTabScreen() {
         allMappedRows: mappedAll.length,
         myMappedRows: mappedMy.length,
       });
-      setAllPosts(mappedAll);
       setMyPosts(mappedMy);
-      logTradeboardMyRequestsRenderActions("my", mappedMy);
       setResponsePosts(mappedRespPre);
+      setAllPosts(mappedAll);
+      if (__DEV__) {
+        logTradeboardMyRequestsRenderActions("my", mappedMy);
+      }
       didUpdate = true;
+      if (reason === "focus") {
+        lastSuccessfulFocusLoadAtRef.current = Date.now();
+      }
 
       if (session?.user?.id) {
         void upsertTradeboardHubCache(session.user.id, {
@@ -1183,20 +1310,23 @@ export default function TradeboardTabScreen() {
   }, []);
 
   const openNativePostComposer = useCallback(
-    async (opts?: { seedActivity?: TradeboardPostRequestActivity | null }) => {
+    async (opts?: {
+      seedActivity?: TradeboardPostRequestActivity | null;
+      seedRequestType?: string;
+    }) => {
       setPostSeedActivity(opts?.seedActivity ?? null);
+      setPostSeedRequestType(opts?.seedRequestType ?? "");
       setPostComposerVisible(true);
       await loadPostRequestForm();
     },
     [loadPostRequestForm],
   );
 
-  const onPostComposerSubmitted = useCallback(() => {
-    void load("pull");
-  }, [load]);
-
   const refreshMyRequestsOnly = useCallback(async () => {
     try {
+      if (session?.user?.id) {
+        await invalidateTradeboardHubCacheMyPosts(session.user.id);
+      }
       const { fetch } = await refreshTradeboardMyRequestsTargeted();
       if (crewHubNativeFetchNeedsVerificationSheet(fetch)) return;
       const myFb = mapTradeboardPostsWithHtmlFallback(
@@ -1205,84 +1335,126 @@ export default function TradeboardTabScreen() {
         "my_requests",
         fetch.url,
       );
+      if (String(fetch.pageHtml ?? "").trim().length) {
+        setLatestMyRequestsRawHtml(String(fetch.pageHtml ?? ""), "native_fetch", fetch.url);
+      }
       logTradeboardMyRequestsRenderActions("my", myFb.posts);
       setMyPosts(myFb.posts);
+      if (session?.user?.id && myRequestsPostsReadyForHub(myFb.posts)) {
+        const cached = await loadTradeboardHubCache(session.user.id);
+        void upsertTradeboardHubCache(session.user.id, {
+          v: 1,
+          myPosts: myFb.posts,
+          allPosts: cached?.allPosts ?? [],
+          refreshedAt: new Date().toISOString(),
+        });
+      }
     } catch {
       /* list stays as-is */
     }
+  }, [session?.user?.id]);
+
+  const onPostComposerSubmitted = useCallback(() => {
+    void refreshMyRequestsOnly();
+  }, [refreshMyRequestsOnly]);
+
+  const myPostsRef = useRef(myPosts);
+  myPostsRef.current = myPosts;
+
+  const persistResolvedMyRequestPost = useCallback((resolved: TradeboardPost) => {
+    setMyPosts((prev) => prev.map((p) => (p.id === resolved.id ? resolved : p)));
   }, []);
 
-  const loadEditRequestForm = useCallback(async (reqId: string) => {
-    setEditFormLoading(true);
-    setEditFormError(null);
-    try {
-      const r = await fetchTradeboardEditRequestForm(reqId);
-      if (crewHubNativeFetchNeedsVerificationSheet(r)) {
-        setEditFormParse(null);
-        setEditFormError("Refresh FLICA first — session needs verification in WebView.");
-        return;
-      }
-      if (!r.postRequestFormParse?.ok) {
-        setEditFormParse(r.postRequestFormParse ?? null);
-        setEditFormError(
-          r.error ?? "Could not load Edit Request form. Pull to refresh FLICA, then try again.",
-        );
-        return;
-      }
-      setEditFormParse(r.postRequestFormParse);
-    } catch (e) {
+  const loadEditRequestForm = useCallback(
+    async (reqId: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+      setEditFormLoading(true);
+      setEditFormError(null);
       setEditFormParse(null);
-      setEditFormError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setEditFormLoading(false);
-    }
-  }, []);
+      try {
+        const r = await fetchTradeboardEditRequestForm(reqId);
+        if (crewHubNativeFetchNeedsVerificationSheet(r)) {
+          const err = "Refresh FLICA first — session needs verification in WebView.";
+          setEditFormParse(null);
+          setEditFormError(err);
+          return { ok: false, error: err };
+        }
+        const parsed = r.postRequestFormParse ?? null;
+        if (!parsed?.ok || !parsed.primaryForm) {
+          const err =
+            r.error ?? "Could not load Edit Request form. Pull to refresh FLICA, then try again.";
+          setEditFormParse(parsed);
+          setEditFormError(err);
+          return { ok: false, error: err };
+        }
+        setEditFormParse(parsed);
+        return { ok: true };
+      } catch (e) {
+        const err = e instanceof Error ? e.message : String(e);
+        setEditFormParse(null);
+        setEditFormError(err);
+        return { ok: false, error: err };
+      } finally {
+        setEditFormLoading(false);
+      }
+    },
+    [],
+  );
 
   const openEditComposer = useCallback(
     async (post: TradeboardPost) => {
-      const reqId = tradeboardPostMyRequestReqId(post);
-      if (!reqId) {
-        Alert.alert(
-          "Edit request",
-          "Could not find FLICA request id. Pull to refresh My Requests, then try again.",
-        );
+      const result = await resolveMyRequestReqIdForPost(post, {
+        visiblePosts: myPostsRef.current,
+      });
+      if (!result.ok) {
+        Alert.alert("Edit request", result.error);
         return;
       }
-      const editUrl = post.myRequest?.editUrl ?? post.editUrl;
+      const resolved = result.post;
+      persistResolvedMyRequestPost(resolved);
+      const reqId = result.reqId;
+      const editUrl = resolved.myRequest?.editUrl ?? resolved.editUrl;
       fcDevMirrorScheduleLogToFile("FC_TB_EDIT_REQUEST_OPEN_NATIVE", {
         reqId,
-        pairingId: post.pairingId,
+        pairingId: resolved.pairingId,
         editUrl,
       });
       if (__DEV__) {
         console.log(
           "[FC_TB_EDIT_REQUEST_OPEN_NATIVE]",
-          JSON.stringify({ reqId, pairingId: post.pairingId }),
+          JSON.stringify({ reqId, pairingId: resolved.pairingId }),
         );
       }
       setEditReqId(reqId);
-      setEditTreq(post.myRequest?.treq || undefined);
+      setEditTreq(resolved.myRequest?.treq || undefined);
+      setEditComposerVisible(false);
+      const loaded = await loadEditRequestForm(reqId);
+      if (!loaded.ok) {
+        Alert.alert("Edit request", loaded.error);
+        return;
+      }
       setEditComposerVisible(true);
-      await loadEditRequestForm(reqId);
     },
-    [loadEditRequestForm],
+    [loadEditRequestForm, persistResolvedMyRequestPost],
   );
 
   const editMyRequest = openEditComposer;
 
   const deleteMyRequest = useCallback(
     (post: TradeboardPost) => {
-      const reqId = tradeboardPostMyRequestReqId(post);
-      if (!reqId) {
+      void (async () => {
+        const result = await resolveMyRequestReqIdForPost(post, {
+          visiblePosts: myPostsRef.current,
+        });
+        if (!result.ok) {
+          Alert.alert("Delete request", result.error);
+          return;
+        }
+        const resolved = result.post;
+        persistResolvedMyRequestPost(resolved);
+        const reqId = result.reqId;
+        const deleteUrl = tradeboardPostMyRequestDeleteUrl(resolved);
+        logDeleteRequestConfirm({ reqId, pairingId: resolved.pairingId });
         Alert.alert(
-          "Delete request",
-          "Could not find FLICA request id. Pull to refresh My Requests, then try again.",
-        );
-        return;
-      }
-      const deleteUrl = tradeboardPostMyRequestDeleteUrl(post);
-      logDeleteRequestConfirm({ reqId, pairingId: post.pairingId });
-      Alert.alert(
         "Delete Request",
         "Are you sure you want to remove this TradeBoard request?\n\nPlease Note: Deleting a message from TradeBoard does not affect any requests that have already been submitted for processing.",
         [
@@ -1308,10 +1480,11 @@ export default function TradeboardTabScreen() {
               })();
             },
           },
-        ],
-      );
+          ],
+        );
+      })();
     },
-    [refreshMyRequestsOnly],
+    [refreshMyRequestsOnly, persistResolvedMyRequestPost],
   );
 
   const openTradeboardMarketplace = useCallback(
@@ -1423,31 +1596,9 @@ export default function TradeboardTabScreen() {
     day: "numeric",
   });
 
-  const chips = ["All", "Today", "This Week", "This Month"];
-
-  return (
-    <View style={styles.screen}>
-      <FlicaCrewHubScheduleSessionRunner
-        active={pullSessionRunnerActive}
-        purposeLabel="Refreshing Tradeboard"
-        onComplete={settlePullSessionSuccess}
-        onError={settlePullSessionFailure}
-      />
-      <FlicaTradeBoardPostRequestWebViewActionRunner />
-      <FlicaTradeBoardActivitySelectorWebViewCaptureRunner />
-      <CrewHubRefreshToast
-        message={toast ?? ""}
-        visible={toast != null && toast.length > 0}
-        onDismiss={() => setToast(null)}
-      />
-      <MonthlyStatsStrip values={stripValues} />
-      <ScrollView
-        style={styles.scroll}
-        removeClippedSubviews={Platform.OS === "android"}
-        refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={() => void load("pull")} />
-        }
-      >
+  const tradeboardListHeader = useMemo(
+    () => (
+      <>
         <View style={styles.tbSubnavShell}>
           <View style={styles.tbSubnavRow}>
             {(
@@ -1491,7 +1642,7 @@ export default function TradeboardTabScreen() {
               ["trade", "Trade"],
               ["trade_drop", "T/Drop"],
               ["drops", "Drop"],
-              ["post_trade", "Propose"],
+              ["post_trade", "T/Reserve"],
             ] as const
           ).map(([k, label]) => {
             const active = primaryTab === k;
@@ -1501,14 +1652,14 @@ export default function TradeboardTabScreen() {
                 key={k}
                 accessibilityLabel={
                   k === "post_trade"
-                    ? "Propose trade"
+                    ? "Trade a Reserve Day"
                     : k === "trade_drop"
                       ? "Trade/Drop"
                       : label
                 }
                 onPress={() => {
                   if (k === "post_trade") {
-                    void openNativePostComposer();
+                    void openNativePostComposer({ seedRequestType: "R" });
                     return;
                   }
                   setPrimaryTab(k);
@@ -1551,7 +1702,7 @@ export default function TradeboardTabScreen() {
         </View>
 
         <View style={styles.timePillsRow}>
-          {chips.map((c) => (
+          {TRADEBOARD_TIME_CHIPS.map((c) => (
             <Pressable
               key={c}
               onPress={() => setChip(c)}
@@ -1688,23 +1839,62 @@ export default function TradeboardTabScreen() {
             </View>
           </View>
         ) : null}
+      </>
+    ),
+    [
+      activePost,
+      bestMatch,
+      chip,
+      giveDisplay,
+      openNativePostComposer,
+      openTradeboardDetail,
+      primaryTab,
+      runTradeboardMutatingWeb,
+      search,
+      tradeFeedTab,
+    ],
+  );
 
-        <TradeboardDeferredGroupedList
-          allPosts={allPosts}
-          myPosts={myPosts}
-          responsePosts={responsePosts}
-          tradeFeedTab={tradeFeedTab}
-          primaryTab={primaryTab}
-          chip={chip}
-          search={search}
-          loading={loading}
-          listHeadingDate={listHeadingDate}
-          openTradeboardDetail={openTradeboardDetail}
-          onTradeboardMutateWeb={runTradeboardMutatingWeb}
-          onEditMyRequest={(p) => void editMyRequest(p)}
-          onDeleteMyRequest={deleteMyRequest}
-        />
-      </ScrollView>
+  const onTradeboardPullRefresh = useCallback(() => {
+    void load("pull");
+  }, [load]);
+
+  return (
+    <View style={styles.screen}>
+      <FlicaCrewHubScheduleSessionRunner
+        active={pullSessionRunnerActive}
+        purposeLabel="Refreshing Tradeboard"
+        onComplete={settlePullSessionSuccess}
+        onError={settlePullSessionFailure}
+      />
+      <FlicaTradeBoardPostRequestWebViewActionRunner />
+      <FlicaTradeBoardMyRequestsWebViewCaptureRunner />
+      <FlicaTradeBoardEditRequestWebViewCaptureRunner />
+      <FlicaTradeBoardActivitySelectorWebViewCaptureRunner />
+      <CrewHubRefreshToast
+        message={toast ?? ""}
+        visible={toast != null && toast.length > 0}
+        onDismiss={() => setToast(null)}
+      />
+      <MonthlyStatsStrip values={stripValues} />
+      <TradeboardDeferredGroupedList
+        allPosts={allPosts}
+        myPosts={myPosts}
+        responsePosts={responsePosts}
+        tradeFeedTab={tradeFeedTab}
+        primaryTab={primaryTab}
+        chip={chip}
+        search={search}
+        loading={loading}
+        listHeadingDate={listHeadingDate}
+        listHeaderComponent={tradeboardListHeader}
+        refreshing={loading}
+        onRefresh={onTradeboardPullRefresh}
+        openTradeboardDetail={openTradeboardDetail}
+        onTradeboardMutateWeb={runTradeboardMutatingWeb}
+        onEditMyRequest={(p) => void editMyRequest(p)}
+        onDeleteMyRequest={deleteMyRequest}
+      />
 
       {hubMarketplaceLoading ? (
         <View style={styles.hubMarketplaceLoading} pointerEvents="auto">
@@ -1724,6 +1914,7 @@ export default function TradeboardTabScreen() {
           setPostComposerVisible(false);
           setPostFormParse(null);
           setPostFormError(null);
+          setPostSeedRequestType("");
         }}
         onSubmitted={onPostComposerSubmitted}
         formParse={postFormParse}
@@ -1733,6 +1924,7 @@ export default function TradeboardTabScreen() {
         profileRole={profileRole}
         monthTrips={monthTrips}
         seedActivity={postSeedActivity}
+        seedRequestType={postSeedRequestType}
       />
 
       <TradeBoardEditRequestComposerSheet
@@ -1971,6 +2163,70 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
+  tbCardShellTop: {
+    alignSelf: "stretch",
+    width: "100%",
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 10,
+    borderTopRightRadius: 10,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: "rgba(15, 23, 42, 0.16)",
+    overflow: "hidden",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 6,
+      },
+      android: { elevation: 2 },
+      default: {},
+    }),
+  },
+  tbCardShellBody: {
+    alignSelf: "stretch",
+    width: "100%",
+    backgroundColor: "#fff",
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: "rgba(15, 23, 42, 0.16)",
+    overflow: "hidden",
+  },
+  tbCardShellBodyLast: {
+    borderBottomWidth: 1,
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    marginBottom: 2,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: { elevation: 3 },
+      default: {},
+    }),
+  },
+  tbListEmpty: {
+    marginTop: 28,
+    marginHorizontal: 20,
+    alignItems: "center",
+  },
+  tbListEmptyTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#334155",
+    textAlign: "center",
+  },
+  tbListEmptySub: {
+    marginTop: 6,
+    fontSize: 13,
+    color: "#94a3b8",
+    textAlign: "center",
+    lineHeight: 18,
+  },
   tbColHead: {
     flexDirection: "row",
     alignItems: "stretch",
@@ -2059,32 +2315,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "rgba(176, 24, 26, 0.1)",
-  },
-  tbMyReqActions: {
-    flexDirection: "row",
-    gap: 8,
-    paddingHorizontal: 8,
-    paddingBottom: 8,
-    paddingTop: 2,
-  },
-  tbMyReqActionBtn: {
-    flex: 1,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: SCHEDULE_MOCK_HEADER_RED,
-    alignItems: "center",
-  },
-  tbMyReqActionBtnDanger: {
-    borderColor: "#dc2626",
-  },
-  tbMyReqActionTxt: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: SCHEDULE_MOCK_HEADER_RED,
-  },
-  tbMyReqActionTxtDanger: {
-    color: "#dc2626",
   },
   tbRowInner: {
     flexDirection: "row",
